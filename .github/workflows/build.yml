@@ -69,7 +69,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-arm64
           evict-old-files: 1d
@@ -105,7 +105,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-x64
           evict-old-files: 1d
@@ -141,7 +141,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-arm64-webgpu
           evict-old-files: 1d
@@ -195,7 +195,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
@@ -324,7 +324,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-24-webgpu
           evict-old-files: 1d
@@ -436,7 +436,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-22-hip
           evict-old-files: 1d
@@ -467,7 +467,7 @@ jobs:
           apt-get install -y build-essential git cmake libssl-dev
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-22-musa
           evict-old-files: 1d
@@ -513,7 +513,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-22-sycl
           evict-old-files: 1d
@@ -562,7 +562,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-22-sycl-fp16
           evict-old-files: 1d
@@ -605,7 +605,7 @@ jobs:
 
         - name: ccache
           if: runner.environment == 'github-hosted'
-          uses: ggml-org/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.21
           with:
             key: ubuntu-24-openvino-${{ matrix.variant }}-no-preset-v1
             evict-old-files: 1d
@@ -692,7 +692,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-${{ matrix.build }}
           variant: ccache
@@ -798,7 +798,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
 
         - name: ccache
-          uses: ggml-org/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.21
           with:
             key: ubuntu-latest-cuda
             evict-old-files: 1d
@@ -830,7 +830,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -883,7 +883,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-sycl
           variant: ccache
@@ -944,7 +944,7 @@ jobs:
           & $clangPath.FullName --version
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -1068,7 +1068,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ggml-ci-x64-cpu-low-perf
           evict-old-files: 1d
@@ -1094,7 +1094,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ggml-ci-arm64-cpu-low-perf
           evict-old-files: 1d
@@ -1120,7 +1120,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ggml-ci-x64-cpu-high-perf
           evict-old-files: 1d
@@ -1146,7 +1146,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ggml-ci-arm64-cpu-high-perf
           evict-old-files: 1d
@@ -1172,7 +1172,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ggml-ci-arm64-cpu-high-perf-sve
           evict-old-files: 1d
@@ -1198,7 +1198,7 @@ jobs:
          uses: actions/checkout@v6
 
        - name: ccache
-         uses: ggml-org/ccache-action@v1.2.16
+         uses: ggml-org/ccache-action@v1.2.21
          with:
            key: ggml-ci-arm64-cpu-kleidiai
            evict-old-files: 1d
@@ -1250,7 +1250,7 @@ jobs:
            sudo apt-get install -y cmake
 
        - name: ccache
-         uses: ggml-org/ccache-action@v1.2.16
+         uses: ggml-org/ccache-action@v1.2.21
          with:
            key: ggml-ci-arm64-cpu-kleidiai-graviton4
            evict-old-files: 1d
