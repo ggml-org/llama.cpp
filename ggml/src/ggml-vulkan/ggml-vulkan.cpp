@@ -7630,7 +7630,8 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         }
     case VK_VENDOR_ID_INTEL:
         if (device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            // Intel Windows proprietary driver does not like MMVQ
+            // Intel Windows proprietary driver MMVQ performance is worse than fp16, see
+            // https://github.com/ggml-org/llama.cpp/issues/17628
             return false;
         }
 
