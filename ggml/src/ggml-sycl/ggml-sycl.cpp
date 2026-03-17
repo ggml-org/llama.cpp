@@ -1671,7 +1671,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             g_moe_multi_gpu_active.load(std::memory_order_acquire) ? ggml_sycl_info().total_gpu_count : 1;
         for (int d = 0; d < n_gpu_devs && d < GGML_SYCL_MAX_DEVICES; d++) {
             size_t avail = unified_cache_available_for_compute(d);
-            GGML_SYCL_DEBUG("[MoE-init] device %d: available VRAM for expert cache = %.1f MB\n", d,
+            GGML_SYCL_DEBUG("[MOE-HYBRID] device %d: available VRAM for expert cache = %.1f MB\n", d,
                             avail / (1024.0 * 1024.0));
         }
     }

@@ -534,7 +534,7 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
     }
 
     GGML_LOG_INFO(
-        "sycl: expert cache pool: %zu/%d slots x %.1f KB = %.1f MB "
+        "[SYCL] Expert cache pool: %zu/%d slots x %.1f KB = %.1f MB "
         "(%.0f%% of %.1f MB available)\n",
         allocated, pool_capacity_, vram_slot_bytes_ / 1024.0, total_alloc_bytes / (1024.0 * 1024.0), budget_pct * 100.0,
         avail / (1024.0 * 1024.0));
