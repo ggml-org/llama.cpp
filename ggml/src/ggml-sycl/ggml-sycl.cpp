@@ -31542,8 +31542,73 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
+            // ----- Concurrent GPU+CPU dispatch -----
+            // For batch=1 TG: launch CPU expert dispatch on a background thread
+            // BEFORE GPU0 kernel submission so DDR5 AVX-VNNI compute overlaps
+            // with GPU MMVQ execution.  The TG path uses a pre-submitted D2H
+            // event (no queue submissions from the async thread), so concurrent
+            // access to the GPU queue is safe.
+            // For batch>1 (PP): CPU dispatch runs sequentially after GPU0 to
+            // avoid concurrent stream->memcpy submissions from two threads.
+            std::future<void> cpu_dispatch_future;
+            const bool        have_cpu_experts = !cpu_entries.empty();
+            const bool        cpu_async_safe   = have_cpu_experts && cpu_expert_tg_active;
+
+            // Helper: CPU dispatch with hot/cold deferral logic.
+            static std::atomic<int> moe_defer_count{ -1 };
+            auto                    do_cpu_dispatch = [&]() {
+                int defer_n = moe_defer_count.load(std::memory_order_acquire);
+                if (defer_n < 0) {
+                    const char * env     = getenv("GGML_SYCL_MOE_DEFER_COUNT");
+                    int          new_val = env ? std::atoi(env) : 1;
+                    if (new_val < 0) {
+                        new_val = 0;
+                    }
+                    if (new_val > 3) {
+                        new_val = 3;
+                    }
+                    moe_defer_count.compare_exchange_strong(defer_n, new_val, std::memory_order_release,
+                                                                               std::memory_order_acquire);
+                    defer_n = moe_defer_count.load(std::memory_order_acquire);
+                }
+
+                if (defer_n == 0 || static_cast<int>(cpu_entries.size()) <= defer_n) {
+                    dispatch_cpu_and_scatter(cpu_entries);
+                } else {
+                    const int64_t                      cold_threshold = n_ids - defer_n;
+                    std::vector<expert_dispatch_entry> hot_entries;
+                    std::vector<expert_dispatch_entry> cold_entries;
+                    hot_entries.reserve(cpu_entries.size());
+                    cold_entries.reserve(static_cast<size_t>(defer_n));
+
+                    for (const auto & e : cpu_entries) {
+                        if (e.id >= cold_threshold) {
+                            cold_entries.push_back(e);
+                        } else {
+                            hot_entries.push_back(e);
+                        }
+                    }
+
+                    GGML_SYCL_DEBUG("[MoE-DEFER] L%d: hot=%zu cold=%zu (defer_n=%d threshold=%lld)\n", layer_id,
+                                                       hot_entries.size(), cold_entries.size(), defer_n, (long long) cold_threshold);
+
+                    if (!hot_entries.empty()) {
+                        dispatch_cpu_and_scatter(hot_entries);
+                        flush_pending_cpu_scatter();
+                    }
+                    dispatch_cpu_and_scatter(cold_entries);
+                }
+            };
+
+            // TG path: launch CPU concurrently with GPU0.
+            // dispatch_cpu_and_scatter captures local refs (valid until
+            // we join the future below, before the enclosing scope exits).
+            if (cpu_async_safe) {
+                cpu_dispatch_future = std::async(std::launch::async, do_cpu_dispatch);
+            }
+
             // ----- GPU0 path (B580): batched MMVQ dispatch -----
-            // Runs IN PARALLEL with B50 secondary GPU compute submitted above.
+            // Runs IN PARALLEL with B50 secondary GPU and CPU DDR5 compute.
             // Q8_1 quantization of src1 runs once and is shared.
             if (!gpu_entries.empty()) {
                 // Build arrays for batched dispatch
@@ -31602,61 +31667,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 g_moe_profile.moe_gpu_compute_done();
             }
 
-            // ----- CPU path: dispatch cache-miss experts via shared helper -----
-            // Placed AFTER GPU0 dispatch: CPU tasks don't compete for GPU queues,
-            // and the shared activation is already on host from the event wait.
-            //
-            // Expert deferral (KTransformers-style): split CPU experts into
-            // "hot" (high-probability, compute+scatter immediately) and "cold"
-            // (low-probability, defer to overlap with next layer's GPU attention).
-            // The ids tensor is sorted descending by router probability, so the
-            // last entries (highest slot index) are the coldest experts.
+            // ----- Join / sequential CPU dispatch -----
+            // TG path: wait for async CPU thread (GPU0 kernels already
+            // submitted and executing on-device during this wait).
+            // PP path: run CPU dispatch sequentially after GPU0 submission.
+            if (cpu_async_safe && cpu_dispatch_future.valid()) {
+                cpu_dispatch_future.get();
+            } else if (have_cpu_experts) {
+                do_cpu_dispatch();
+            }
+
+            // ----- MoE layer cache hit diagnostic -----
             {
-                static std::atomic<int> moe_defer_count{ -1 };
-                int defer_n = moe_defer_count.load(std::memory_order_acquire);
-                if (defer_n < 0) {
-                    const char * env = getenv("GGML_SYCL_MOE_DEFER_COUNT");
-                    int new_val = env ? std::atoi(env) : 1;
-                    if (new_val < 0) new_val = 0;
-                    if (new_val > 3) new_val = 3;
-                    moe_defer_count.compare_exchange_strong(defer_n, new_val,
-                        std::memory_order_release, std::memory_order_acquire);
-                    defer_n = moe_defer_count.load(std::memory_order_acquire);
-                }
-
-                if (defer_n == 0 || static_cast<int>(cpu_entries.size()) <= defer_n) {
-                    // Deferral disabled or all CPU experts are cold — dispatch all together.
-                    // When all would be deferred, just use the normal deferred path.
-                    dispatch_cpu_and_scatter(cpu_entries);
-                } else {
-                    // Partition: entries with slot index >= (n_ids - defer_n) are cold.
-                    const int64_t cold_threshold = n_ids - defer_n;
-                    std::vector<expert_dispatch_entry> hot_entries;
-                    std::vector<expert_dispatch_entry> cold_entries;
-                    hot_entries.reserve(cpu_entries.size());
-                    cold_entries.reserve(static_cast<size_t>(defer_n));
-
-                    for (const auto & e : cpu_entries) {
-                        if (e.id >= cold_threshold) {
-                            cold_entries.push_back(e);
-                        } else {
-                            hot_entries.push_back(e);
-                        }
-                    }
-
-                    GGML_SYCL_DEBUG("[MoE-DEFER] L%d: hot=%zu cold=%zu (defer_n=%d threshold=%lld)\n",
-                                    layer_id, hot_entries.size(), cold_entries.size(),
-                                    defer_n, (long long) cold_threshold);
-
-                    // Hot experts: dispatch and flush immediately (blocking).
-                    if (!hot_entries.empty()) {
-                        dispatch_cpu_and_scatter(hot_entries);
-                        flush_pending_cpu_scatter();
-                    }
-
-                    // Cold experts: dispatch via deferred path — scatter overlaps
-                    // with next layer's GPU attention window (~381us).
-                    dispatch_cpu_and_scatter(cold_entries);
+                static std::atomic<int> moe_layer_count{ 0 };
+                const int               n_gpu = static_cast<int>(gpu_entries.size());
+                const int               n_cpu = static_cast<int>(cpu_entries.size());
+                int                     lc    = moe_layer_count.fetch_add(1, std::memory_order_relaxed);
+                if (lc < 36 || (lc % 1000 == 0)) {
+                    GGML_SYCL_DEBUG("[MOE] layer %d: %d GPU-cached + %d CPU experts (%.0f%% hit)\n", lc % 36, n_gpu,
+                                    n_cpu, n_gpu * 100.0 / (n_gpu + n_cpu + 0.001));
                 }
             }
 
