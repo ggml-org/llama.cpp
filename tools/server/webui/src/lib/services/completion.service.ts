@@ -1,6 +1,5 @@
 import { getJsonHeaders } from '$lib/utils';
 import { ChatService } from '$lib/services/chat.service';
-import { chatStore } from '$lib/stores/chat.svelte';
 
 import type { ApiCompletionRequest, ApiCompletionStreamChunk } from '$lib/types/api';
 import type { ChatMessageTimings } from '$lib/types/chat';

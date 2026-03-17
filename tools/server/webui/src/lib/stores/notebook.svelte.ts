@@ -230,7 +230,6 @@ export class NotebookStore {
 		}
 
 		if (state.tokensDecoded > 0) {
-			const currentConfig = config();
 			if (state.outputTokensMax <= 0) {
 				details.push(`Output: ${state.tokensDecoded}/∞`);
 			} else {

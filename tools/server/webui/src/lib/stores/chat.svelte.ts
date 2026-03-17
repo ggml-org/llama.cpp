@@ -17,7 +17,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelName, modelsStore, getContextSize } from '$lib/stores/models.svelte';
 import {
 	normalizeModelName,
