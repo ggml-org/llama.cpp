@@ -31572,6 +31572,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             }  // end else (standard hybrid path -- CPU-TG path skips to here)
 
+            // ----- 3-way triage diagnostic -----
+            {
+                int n_b580 = static_cast<int>(gpu_entries.size());
+                int n_b50  = 0;
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    n_b50 += static_cast<int>(per_gpu_entries[d].size());
+                }
+                int n_cpu_diag = static_cast<int>(cpu_entries.size());
+                GGML_SYCL_DEBUG("[MOE] 3-way: %d B580 + %d B50 + %d CPU experts\n",
+                                n_b580, n_b50, n_cpu_diag);
+            }
+
             // ----- Secondary GPU path (async): submit kernels FIRST for overlap -----
             // Submit B50 kernels BEFORE GPU0 dispatch so both GPUs compute in
             // parallel. With shared activation D2H (event wait, not stream->wait),
@@ -31736,11 +31748,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             {
                 static std::atomic<int> moe_layer_count{ 0 };
                 const int               n_gpu = static_cast<int>(gpu_entries.size());
+                int                     n_sec = 0;
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    n_sec += static_cast<int>(per_gpu_entries[d].size());
+                }
                 const int               n_cpu = static_cast<int>(cpu_entries.size());
+                const int               n_total = n_gpu + n_sec + n_cpu;
                 int                     lc    = moe_layer_count.fetch_add(1, std::memory_order_relaxed);
                 if (lc < 36 || (lc % 1000 == 0)) {
-                    GGML_SYCL_DEBUG("[MOE] layer %d: %d GPU-cached + %d CPU experts (%.0f%% hit)\n", lc % 36, n_gpu,
-                                    n_cpu, n_gpu * 100.0 / (n_gpu + n_cpu + 0.001));
+                    GGML_SYCL_DEBUG("[MOE] layer %d: %d B580 + %d B50 + %d CPU experts (%.0f%% GPU hit)\n",
+                                    lc % 36, n_gpu, n_sec, n_cpu,
+                                    (n_gpu + n_sec) * 100.0 / (n_total + 0.001));
                 }
             }
 
