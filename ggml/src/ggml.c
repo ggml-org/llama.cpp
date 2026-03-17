@@ -6837,6 +6837,13 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_exp(ctx, src0)));
                     }
                 } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    // d/dx sigmoid(x) = sigmoid(x) * (1 - sigmoid(x)) = tensor - tensor^2
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * dsigmoid = ggml_sub(ctx, tensor, ggml_sqr(ctx, tensor));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dsigmoid));
+                    }
+                } break;
                 case GGML_UNARY_OP_SOFTPLUS: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
