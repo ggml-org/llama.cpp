@@ -865,7 +865,7 @@ export class ChatService {
 	 * @param data - Raw response data from the Chat Completions API
 	 * @returns Model name string if found, undefined otherwise
 	 */
-	public static extractModelName(data: unknown): string | undefined {
+	private static extractModelName(data: unknown): string | undefined {
 		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
 			return typeof value === 'object' && value !== null
 				? (value as Record<string, unknown>)
