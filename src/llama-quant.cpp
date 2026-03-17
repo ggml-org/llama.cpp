@@ -1,4 +1,3 @@
-#include "llama-quant.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
@@ -18,7 +17,7 @@
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
 struct tensor_type_option {
     std::string name;
-    ggml_type   type = GGML_TYPE_COUNT;
+    ggml_type type = GGML_TYPE_COUNT;
 };
 
 // tensor categorization - used to avoid repeated string matching in quantization logic.
@@ -197,7 +196,6 @@ struct quantize_state_impl {
         }
     }
 };
-
 
 // per-tensor metadata, computed in the preliminary loop and used in the main loop
 struct tensor_metadata {
