@@ -28526,11 +28526,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                     if (!found_sec) {
                                         g_moe_fusion.cpu_indices.push_back(ci);
                                         // Async-promote this expert to VRAM for the next token.
-                                        // Uses SOA-correct caching via unified cache (Change 0+1).
-                                        // Skip hint on GPU0 when it has no expert cache budget
-                                        // (all VRAM used for dense weights + KV cache).
-                                        if (pf_gate.is_initialized()
-                                            && ggml_sycl::unified_cache_available_for_compute(ctx.device) > 0) {
+                                        // Uses SOA-correct caching via unified cache.
+                                        // Let hint() manage VRAM pressure internally — it can
+                                        // evict cold entries to make room for hot experts.
+                                        if (pf_gate.is_initialized()) {
                                             pf_gate.hint(cur_layer_hash, eid);
                                         }
                                     }
@@ -28910,6 +28909,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                     }
                                     if (!found_sec_up) {
                                         g_moe_fusion.cpu_indices.push_back(ci);
+                                        // Async-promote to VRAM for the next token.
+                                        if (pf_up.is_initialized()) {
+                                            pf_up.hint(cur_layer_hash, eid);
+                                        }
                                     }
                                 }
                             }
@@ -29773,6 +29776,37 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             n_gpu0++;
                             continue;
                         }
+                    }
+                    // Placement table entry exists but device_ptr was evicted (nil).
+                    // Check prefetcher cache — a prior hint() may have re-cached it.
+                    auto & pf_unfused = g_expert_prefetchers[ctx.device];
+                    if (pf_unfused.is_initialized() &&
+                        pf_unfused.get_cached_ptr(layer_hash_fast, expert_id)) {
+                        // Expert was re-cached by prefetcher — route to GPU0
+                        if (n_gpu0 >= STACK_GPU0 && heap_g0_eids.empty()) {
+                            heap_g0_eids.resize(n_cpu);
+                            heap_g0_iid1s.resize(n_cpu);
+                            heap_g0_ids.resize(n_cpu);
+                            memcpy(heap_g0_eids.data(), stack_g0_eids, STACK_GPU0 * sizeof(int32_t));
+                            memcpy(heap_g0_iid1s.data(), stack_g0_iid1s, STACK_GPU0 * sizeof(int64_t));
+                            memcpy(heap_g0_ids.data(), stack_g0_ids, STACK_GPU0 * sizeof(int64_t));
+                            g0_eids  = heap_g0_eids.data();
+                            g0_iid1s = heap_g0_iid1s.data();
+                            g0_ids   = heap_g0_ids.data();
+                        }
+                        g0_eids[n_gpu0]  = expert_id;
+                        g0_iid1s[n_gpu0] = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                        g0_ids[n_gpu0]   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                        n_gpu0++;
+                        continue;
+                    }
+                }
+
+                // CPU fallback — also hint the prefetcher to re-cache for next token
+                if (layer_hash_fast != 0) {
+                    auto & pf_unfused = g_expert_prefetchers[ctx.device];
+                    if (pf_unfused.is_initialized()) {
+                        pf_unfused.hint(layer_hash_fast, expert_id);
                     }
                 }
 
@@ -31228,13 +31262,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // get prefetched into that device's LRU pool.
                 auto & placement_tbl = ggml_sycl::get_expert_placement_table();
                 const int n_gpu_hint = ggml_sycl_info().total_gpu_count;
-                // Skip GPU0 expert hint() when GPU0 has no expert cache budget.
-                // All GPU0 VRAM is used for dense layer weights + KV cache.
-                // This avoids ~2-5us overhead per hint (mutex + hash lookups)
-                // for 36 MoE layers * N predicted experts per token.
+                // Check if GPU0 prefetcher is initialized for expert caching.
+                // Let hint() manage VRAM pressure internally — ensure_cached_layout
+                // can evict cold entries to make room for hot experts even when
+                // the static budget query reports zero available.
                 const bool gpu0_has_expert_budget =
-                    g_expert_prefetchers[ctx.device].is_initialized()
-                    && ggml_sycl::unified_cache_available_for_compute(ctx.device) > 0;
+                    g_expert_prefetchers[ctx.device].is_initialized();
                 auto route_hint_to_device = [&](int hint_layer_id, const std::vector<int> & experts) {
                     for (int eid : experts) {
                         // Route to GPU0's prefetcher only if it has expert cache budget.
