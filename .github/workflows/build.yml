@@ -195,6 +195,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
+        if: ${{ matrix.build != 's390x' }}
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
