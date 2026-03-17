@@ -974,12 +974,14 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   switch (op->op) {
   case GGML_OP_NONE:
           break;
+#if FEATURE_DISABLE
 #ifdef TMU_SUPPORTED
   case GGML_OP_MUL_MAT:
 	  if (!mul_mat_supported_size(op))
 		  return false;
     break;
 #endif /* TMU_SUPPORTED */
+#endif /* FEATURE_DISABLE */
 
 #ifdef TVU_SUPPORTED
   case GGML_OP_ADD:
@@ -993,7 +995,9 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_VIEW:
   case GGML_OP_PERMUTE:
   case GGML_OP_TRANSPOSE:
+#if FEATURE_DISABLE
   case GGML_OP_RMS_NORM:
+#endif /* FEATURE_DISABLE */
 #ifdef GGML_TARGET_POSIX_DEBUG
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
@@ -2873,12 +2877,14 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   switch (op->op) {
   case GGML_OP_NONE:
 	  break;
+#if FEATURE_DISABLE
 #ifdef TMU_SUPPORTED
   case GGML_OP_MUL_MAT:
 	  if (!mul_mat_supported_size(op))
 		  return false;
     break;
 #endif /* TMU_SUPPORTED */
+#endif /* FEATURE_DISABLE */
 
 #ifdef TVU_SUPPORTED
   case GGML_OP_ADD:
@@ -2892,7 +2898,9 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_VIEW:
   case GGML_OP_PERMUTE:
   case GGML_OP_TRANSPOSE:
+#if FEATURE_DISABLE
   case GGML_OP_RMS_NORM:
+#endif /* FEATURE_DISABLE */
 
 #ifdef GGML_TARGET_POSIX_DEBUG
   case GGML_OP_SOFT_MAX:
