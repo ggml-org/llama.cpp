@@ -302,12 +302,6 @@ json oaicompat_chat_params_parse(
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
 
-// convert OpenAI Responses API format to OpenAI Chat Completions API format
-json convert_responses_to_chatcmpl(const json & body);
-
-// convert Anthropic Messages API format to OpenAI Chat Completions API format
-json convert_anthropic_to_oai(const json & body);
-
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
     const json & request,
