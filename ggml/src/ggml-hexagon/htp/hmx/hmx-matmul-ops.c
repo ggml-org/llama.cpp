@@ -45,6 +45,19 @@ static inline void swap_ptr(void **p1, void **p2) {
   *p2     = t;
 }
 
+typedef struct {
+  uint8_t              *dst;
+  const uint8_t        *src;
+  size_t                n_rows;
+  size_t                src_stride;   // DDR row stride (full row_stride)
+  size_t                dst_stride;   // VTCM sub-block row stride
+  size_t                quant_off;    // quant byte offset in each DDR row
+  size_t                quant_width;  // quant bytes to copy per row
+  size_t                scale_off;    // scale byte offset in each DDR row
+  size_t                scale_width;  // scale bytes to copy per row
+  dma_queue            *dma;
+} qweight_fetch_task_state_t;
+
 // ---------------------------------------------------------------------------
 // Overflow-safe DMA push: all UDMA type1 descriptor fields (roiwidth,
 // roiheight, srcstride, dststride) are 16-bit, max 65535.  This helper
@@ -337,9 +350,9 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
   v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
   // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
-  out[0] = v_lo;                       // group0 already in [0:63]
+  out[0] = v_lo;                      // group0 already in [0:63]
   out[1] = Q6_V_vror_VR(v_lo, 64);    // group1 rotated to [0:63]
-  out[2] = v_hi;                       // group2 already in [0:63]
+  out[2] = v_hi;                      // group2 already in [0:63]
   out[3] = Q6_V_vror_VR(v_hi, 64);    // group3 rotated to [0:63]
 }
 
@@ -579,8 +592,7 @@ static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const 
   HAP_compute_res_hmx_unlock(vtcm_rctx);
 }
 
-static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows,
-                                               int n_cols, int n) {
+static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows, int n_cols, int n) {
   assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
   const int n_col_tiles = n_cols / HMX_FP16_TILE_N_COLS;
 
@@ -642,10 +654,10 @@ static void transfer_output_chunk_multithread(struct htp_context *ctx, float *ds
   state.n_tasks           = (n_tot_chunks + n_chunks_per_task - 1) / n_chunks_per_task;
   state.n_tot_chunks      = n_tot_chunks;
   state.n_chunks_per_task = n_chunks_per_task;
-  state.dst      = dst;
-  state.vtcm_src = vtcm_src;
-  state.n_cols   = n_cols;
-  state.n        = n;
+  state.dst               = dst;
+  state.vtcm_src          = vtcm_src;
+  state.n_cols            = n_cols;
+  state.n                 = n;
 
   worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, ctx->n_threads);
 }
@@ -1426,35 +1438,6 @@ void core_mma_chunk_fp16(__fp16 *c, const __fp16 *a, const __fp16 *b, const __fp
   HAP_compute_res_hmx_unlock(vtcm_rctx);
 }
 
-typedef struct {
-  uint8_t              *dst;
-  const uint8_t        *src;
-  size_t                n_rows;
-  size_t                src_stride;   // DDR row stride (full row_stride)
-  size_t                dst_stride;   // VTCM sub-block row stride
-  size_t                quant_off;    // quant byte offset in each DDR row
-  size_t                quant_width;  // quant bytes to copy per row
-  size_t                scale_off;    // scale byte offset in each DDR row
-  size_t                scale_width;  // scale bytes to copy per row
-  dma_queue            *dma;
-} qweight_fetch_task_state_t;
-
-static void qweight_fetch_worker_fn(unsigned int n, unsigned int i, void *data) {
-  (void) n; (void) i;
-  qweight_fetch_task_state_t *st = (qweight_fetch_task_state_t *) data;
-
-  // 2D DMA: quants sub-range
-  hmx_dma_push_safe(st->dma,
-                    dma_make_ptr(st->dst, st->src + st->quant_off),
-                    st->dst_stride, st->src_stride, st->quant_width, st->n_rows);
-  // 2D DMA: scales sub-range
-  hmx_dma_push_safe(st->dma,
-                    dma_make_ptr(st->dst + st->quant_width, st->src + st->scale_off),
-                    st->dst_stride, st->src_stride, st->scale_width, st->n_rows);
-  dma_queue_pop(st->dma);
-  dma_queue_pop(st->dma);
-}
-
 static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows,
                                            int k_block, int k_stride) {
   for (int r = 0; r < n_rows; r += 2) {
@@ -1588,8 +1571,6 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
   }
   hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
 
-  qweight_fetch_task_state_t fetch_task_state;
-
   TIMER_DEFINE(fetch);
   TIMER_DEFINE(act_load);
   TIMER_DEFINE(wt_dequant);
@@ -1617,12 +1598,11 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
                            k * sizeof(float),
                            k_blk_sz * sizeof(float),
                            m_blk_sz);
-          dma_queue_pop(ctx->dma[0]);
         }
 
         // fetch weight block into VTCM (x4x2 sub-block: quants + scales)
         {
-          qweight_fetch_task_state_t *s = &fetch_task_state;
+          qweight_fetch_task_state_t s;
 
           const bool is_q4 = (weight_type == HMX_TYPE_Q4_0 || weight_type == HMX_TYPE_IQ4_NL);
           const int blk_start = kk / HMX_QK_Q4x4x2;
@@ -1630,24 +1610,29 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
           const int full_qrow = is_q4 ? (k / 2) : k;
           const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
 
-          s->dst         = vtcm_scratch0;
-          s->src         = w + nc * row_stride;
-          s->n_rows      = n_blk_sz;
-          s->src_stride  = row_stride;
-          s->dst_stride  = sub_row_stride;
-          s->quant_off   = is_q4 ? (blk_start * (HMX_QK_Q4x4x2 / 2)) : (blk_start * HMX_QK_Q8x4x2);
-          s->quant_width = is_q4 ? (nb_sub * (HMX_QK_Q4x4x2 / 2)) : (nb_sub * HMX_QK_Q8x4x2);
-          s->scale_off   = full_qrow + blk_start * HMX_X4X2_DBLK_SIZE;
-          s->scale_width = nb_sub * HMX_X4X2_DBLK_SIZE;
-          s->dma         = ctx->dma[1];
+          s.dst         = vtcm_scratch0;
+          s.src         = w + nc * row_stride;
+          s.n_rows      = n_blk_sz;
+          s.src_stride  = row_stride;
+          s.dst_stride  = sub_row_stride;
+          s.quant_off   = is_q4 ? (blk_start * (HMX_QK_Q4x4x2 / 2)) : (blk_start * HMX_QK_Q8x4x2);
+          s.quant_width = is_q4 ? (nb_sub    * (HMX_QK_Q4x4x2 / 2)) : (nb_sub * HMX_QK_Q8x4x2);
+          s.scale_off   = full_qrow + blk_start * HMX_X4X2_DBLK_SIZE;
+          s.scale_width = nb_sub * HMX_X4X2_DBLK_SIZE;
 
-          worker_pool_run_func(ctx->worker_pool, qweight_fetch_worker_fn, s, 1);
+          // 2D DMA: quants sub-range
+          hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(s.dst, s.src + s.quant_off),
+                            s.dst_stride, s.src_stride, s.quant_width, s.n_rows);
+          // 2D DMA: scales sub-range
+          hmx_dma_push_safe(ctx->dma[0], dma_make_ptr(s.dst + s.quant_width, s.src + s.scale_off),
+                            s.dst_stride, s.src_stride, s.scale_width, s.n_rows);
         }
         TIMER_STOP(fetch);
 
         TIMER_START(act_load);
         // load activation block
         {
+          dma_queue_pop(ctx->dma[0]); // wait for act DNA
           transfer_activation_chunk_multithread(ctx, vtcm_activation, (float *) vtcm_scratch1, m_blk_sz, k_blk_sz, k_blk_sz);
         }
         TIMER_STOP(act_load);
@@ -1655,6 +1640,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
         TIMER_START(wt_dequant);
         // dequantize weight block
         {
+          dma_queue_pop(ctx->dma[0]);
+          dma_queue_pop(ctx->dma[0]);
           // vtcm_scratch0 is used to store the qweight chunk
           // worker_pool_run_func already returned, so fetch is done
           const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
