@@ -442,8 +442,21 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
                                                      ggml_tensor *         tensor,
                                                      ggml_op               op,
                                                      const buft_list_t &   buft_list,
-                                                     bool                  prefer_host_weights) {
+                                                     bool                  prefer_host_weights,
+                                                     bool                  moe_expert_host_pinned = false) {
     GGML_ASSERT(!buft_list.empty());
+    if (moe_expert_host_pinned) {
+#ifdef GGML_USE_SYCL
+        ggml_backend_dev_t dev = buft_list.front().first;
+        if (ggml_backend_dev_backend_reg(dev) == ggml_backend_sycl_reg()) {
+            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(dev);
+            if (host_buft && ggml_backend_buft_is_host(host_buft) &&
+                weight_buft_supported(hparams, tensor, op, host_buft, dev)) {
+                return host_buft;
+            }
+        }
+#endif
+    }
     if (prefer_host_weights) {
 #ifdef GGML_USE_SYCL
         ggml_backend_dev_t dev = buft_list.front().first;
@@ -3554,6 +3567,22 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 }
             }
 
+            // SYCL expert host-pinned: route MoE expert tensors to sycl::malloc_host buffers
+            // This frees device VRAM for the unified cache to use as expert SOA hot-cache
+            bool moe_expert_host_pinned = false;
+#ifdef GGML_USE_SYCL
+            if (!is_lazy_moe_tensor && !prefer_host_weights &&
+                is_expert_tensor && info.layer == LLM_TENSOR_LAYER_REPEATING &&
+                ggml_backend_dev_backend_reg(layer_dev) == ggml_backend_sycl_reg()) {
+                moe_expert_host_pinned = true;
+                static bool expert_pinned_logged = false;
+                if (!expert_pinned_logged) {
+                    LLAMA_LOG_INFO("sycl: expert tensors -> host-pinned (device VRAM freed for SOA cache)\n");
+                    expert_pinned_logged = true;
+                }
+            }
+#endif
+
             // check overrides
             if (ml.tensor_buft_overrides) {
                 std::string tensor_name = tn.str();
@@ -3562,7 +3591,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (std::regex_search(tensor_name, pattern)) {
                         if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                             // when overriding to a CPU buffer, consider the extra buffer types
-                            buft = select_weight_buft(hparams, t_meta, op, pimpl->cpu_buft_list, prefer_host_weights);
+                            buft = select_weight_buft(hparams, t_meta, op, pimpl->cpu_buft_list, prefer_host_weights, moe_expert_host_pinned);
                         } else {
                             buft = overrides->buft;
                         }
@@ -3576,7 +3605,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
 
             if (!buft) {
-                buft = select_weight_buft(hparams, t_meta, op, *buft_list, prefer_host_weights);
+                buft = select_weight_buft(hparams, t_meta, op, *buft_list, prefer_host_weights, moe_expert_host_pinned);
                 if (!buft) {
                     throw std::runtime_error(
                         format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
@@ -3588,7 +3617,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             auto * buft_dev                  = ggml_backend_buft_get_device(buft);
             bool   allow_host_buft_with_mmap = false;
 #ifdef GGML_USE_SYCL
-            if (prefer_host_weights && buft_dev && ggml_backend_dev_backend_reg(buft_dev) == ggml_backend_sycl_reg()) {
+            if ((prefer_host_weights || moe_expert_host_pinned) && buft_dev && ggml_backend_dev_backend_reg(buft_dev) == ggml_backend_sycl_reg()) {
                 // Keep SYCL host buffers for evictable weights so unified cache can manage residency/layouts.
                 allow_host_buft_with_mmap = true;
             }
