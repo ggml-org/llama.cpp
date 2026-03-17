@@ -1,5 +1,5 @@
 // HMX operation entry-point declarations.
-// Ported from htp-ops-lib/include/dsp/ops.h (renamed, benchmark kernels removed).
+// Ported from htp-ops-lib/include/dsp/ops.h (renamed, benchmark kernels removed). (https://github.com/haozixu/htp-ops-lib)
 
 #ifndef HMX_OPS_H
 #define HMX_OPS_H

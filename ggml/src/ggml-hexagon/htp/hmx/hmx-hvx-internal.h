@@ -1,5 +1,5 @@
 // HVX internal helpers used by HMX infrastructure (conversion, matmul, etc.).
-// Ported from htp-ops-lib/include/dsp/hvx_internal.h.
+// Ported from htp-ops-lib/include/dsp/hvx_internal.h. (https://github.com/haozixu/htp-ops-lib)
 //
 // Provides HVX_DV union, vmem macro, VLEN constants, and utility functions
 // that are prerequisites for hmx-hvx-convert.h and hmx-matmul-ops.c.

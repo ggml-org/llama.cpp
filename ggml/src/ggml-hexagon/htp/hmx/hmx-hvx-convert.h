@@ -1,5 +1,5 @@
 // HVX data-type conversion helpers used by HMX operations.
-// Ported from htp-ops-lib/include/dsp/hvx_convert.h.
+// Ported from htp-ops-lib/include/dsp/hvx_convert.h. (https://github.com/haozixu/htp-ops-lib)
 //
 // All public symbols prefixed with hmx_ to avoid collisions with the
 // existing hexagon hvx-*.h headers.

@@ -1,5 +1,5 @@
 // HMX tile-level inline helpers (FP16 32x32 tile operations).
-// Ported from htp-ops-lib/include/dsp/hmx_utils.h.
+// Ported from htp-ops-lib/include/dsp/hmx_utils.h. (https://github.com/haozixu/htp-ops-lib)
 
 #ifndef HMX_UTILS_H
 #define HMX_UTILS_H
