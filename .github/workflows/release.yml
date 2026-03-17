@@ -47,7 +47,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-arm64
           evict-old-files: 1d
@@ -94,7 +94,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-x64
           evict-old-files: 1d
@@ -153,7 +153,8 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        if: ${{ matrix.build != 's390x' }}
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
@@ -204,7 +205,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-22-vulkan
           evict-old-files: 1d
@@ -269,7 +270,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-24-openvino-release-no-preset-v1
           evict-old-files: 1d
@@ -342,7 +343,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-cpu-${{ matrix.arch }}
           variant: ccache
@@ -403,7 +404,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
@@ -473,7 +474,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -549,7 +550,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-sycl
           variant: ccache
@@ -629,7 +630,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
@@ -739,7 +740,7 @@ jobs:
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
