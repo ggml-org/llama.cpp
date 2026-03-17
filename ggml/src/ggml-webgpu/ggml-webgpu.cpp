@@ -513,8 +513,9 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     if (subs.empty()) {
         return;
     }
+    static int uint64_t LONG_TIMEOUT = 60ull * 60ull * 1000ull * 1000ull * 1000ull;
     while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, LONG_TIMEOUT);
         if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
@@ -530,7 +531,7 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     if (block) {
         for (auto & sub : subs) {
             while (!sub.submit_done.completed) {
-                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
+                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, LONG_TIMEOUT);
                 ggml_backend_webgpu_handle_wait_status(waitStatus);
             }
 #ifdef GGML_WEBGPU_GPU_PROFILE
