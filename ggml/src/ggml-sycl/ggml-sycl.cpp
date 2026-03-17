@@ -31601,7 +31601,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // avoid concurrent stream->memcpy submissions from two threads.
             std::future<cpu_dispatch_result> cpu_compute_future;
             const bool                       have_cpu_experts = !cpu_entries.empty();
-            const bool                       cpu_async_safe   = have_cpu_experts && cpu_expert_tg_active;
+            const bool                       cpu_async_safe   = have_cpu_experts && cpu_expert_tg_active && act_on_host;
 
             // Helper: CPU dispatch with hot/cold deferral logic.
             // Used ONLY for the synchronous (PP) path.  The async TG path
