@@ -1156,16 +1156,14 @@ private:
             try {
                 slot.smpl.reset(common_sampler_init(model, task.params.sampling));
             } catch (std::exception & e) {
-                LOG_ERR("%s: error initializing samplers. Grammar was:\n%s\n\nGrammar prefill:\n'%s'\n", __func__,
-                    task.params.sampling.grammar.c_str(), task.params.sampling.grammar_prefill.c_str());
                 std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
                 send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
 
             if (slot.smpl == nullptr) {
-                LOG_ERR("%s: error in parsing grammar. Grammar was:\n%s\n\nGrammar prefill:\n'%s'\n", __func__,
-                    task.params.sampling.grammar.c_str(), task.params.sampling.grammar_prefill.c_str());
+                LOG_ERR("%s: error in parsing grammar. Grammar was:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
+                    common_grammar_value(task.params.sampling.grammar).c_str(), task.params.sampling.generation_prompt.c_str());
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }

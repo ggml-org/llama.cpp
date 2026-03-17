@@ -1084,10 +1084,10 @@ json oaicompat_chat_params_parse(
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"]      = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
-        llama_params["grammar"] = chat_params.grammar;
+        llama_params["grammar"]      = chat_params.grammar;
+        llama_params["grammar_type"] = std::string("tool_calls");
     }
-    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    llama_params["grammar_external"] = body.contains("grammar");
+    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
     auto grammar_triggers        = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);

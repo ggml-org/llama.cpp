@@ -128,7 +128,7 @@ json task_params::to_json(bool only_metrics) const {
         {"logit_bias",                format_logit_bias(sampling.logit_bias)},
         {"n_probs",                   sampling.n_probs},
         {"min_keep",                  sampling.min_keep},
-        {"grammar",                   sampling.grammar},
+        {"grammar",                   common_grammar_value(sampling.grammar)},
         {"grammar_lazy",              sampling.grammar_lazy},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          sampling.preserved_tokens},
@@ -376,15 +376,25 @@ task_params server_task::params_from_json_cmpl(
         try {
             auto schema                  = json_value(data, "json_schema", json::object());
             SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
-            params.sampling.grammar      = json_schema_to_grammar(schema);
-            SRV_DBG("Converted grammar: %s\n", params.sampling.grammar.c_str());
+            std::string grammar_str      = json_schema_to_grammar(schema);
+            SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
+            params.sampling.grammar      = common_grammar_output_format{std::move(grammar_str)};
         } catch (const std::exception & e) {
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
-        params.sampling.grammar          = json_value(data, "grammar", defaults.sampling.grammar);
-        params.sampling.grammar_external = json_value(data, "grammar_external", defaults.sampling.grammar_external);
-        SRV_DBG("Grammar: %s\n", params.sampling.grammar.c_str());
+        std::string grammar_str = json_value(data, "grammar", std::string());
+        if (!grammar_str.empty()) {
+            // grammar_type key is set by the server when converting chat template grammars
+            std::string grammar_type = json_value(data, "grammar_type", std::string());
+            if (grammar_type == "tool_calls") {
+                params.sampling.grammar = common_grammar_tool_calls{std::move(grammar_str)};
+            } else {
+                // explicit grammar from the user (API field "grammar")
+                params.sampling.grammar = common_grammar_user{std::move(grammar_str)};
+            }
+            SRV_DBG("Grammar (%s): %s\n", grammar_type.c_str(), common_grammar_value(params.sampling.grammar).c_str());
+        }
         params.sampling.grammar_lazy = json_value(data, "grammar_lazy", defaults.sampling.grammar_lazy);
         SRV_DBG("Grammar lazy: %s\n", params.sampling.grammar_lazy ? "true" : "false");
     }
@@ -404,7 +414,7 @@ task_params server_task::params_from_json_cmpl(
         params.chat_parser_params.reasoning_format = reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         params.chat_parser_params.generation_prompt = json_value(data, "generation_prompt", std::string());
-        params.sampling.grammar_prefill = params.chat_parser_params.generation_prompt;
+        params.sampling.generation_prompt = params.chat_parser_params.generation_prompt;
         params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
@@ -481,8 +491,8 @@ task_params server_task::params_from_json_cmpl(
                 params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
             }
 
-            SRV_DBG("reasoning budget: tokens=%d, grammar_prefill='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
-                budget, params.sampling.grammar_prefill.c_str(),
+            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size());

@@ -191,9 +191,10 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
 
     std::vector<llama_sampler *> samplers;
 
-    if (params.grammar.compare(0, 11, "%llguidance") == 0) {
+    const std::string & grammar_str = common_grammar_value(params.grammar);
+    if (grammar_str.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE
-        grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
+        grmr = llama_sampler_init_llg(vocab, "lark", grammar_str.c_str());
 #else
         GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
 #endif // LLAMA_USE_LLGUIDANCE
@@ -242,34 +243,41 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             trigger_patterns_c.push_back(regex.c_str());
         }
 
-        if (!params.grammar.empty()) {
+        if (!grammar_str.empty()) {
              if (params.grammar_lazy) {
-                 grmr = llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
+                 grmr = llama_sampler_init_grammar_lazy_patterns(vocab, grammar_str.c_str(), "root",
                          trigger_patterns_c.data(), trigger_patterns_c.size(),
                          trigger_tokens.data(), trigger_tokens.size());
              } else {
-                 grmr = llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
+                 grmr = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
              }
         }
     }
 
-    // Feed grammar prefill tokens to the grammar sampler so it advances past
-    // reasoning markers that the template already placed in the prompt.
+    // Feed generation prompt tokens to the grammar sampler so it advances past
+    // tokens the template already placed in the prompt.
+    // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
     std::vector<llama_token> prefill_tokens;
-    if (!params.grammar_prefill.empty() && vocab && !params.grammar_external) {
-        prefill_tokens = common_tokenize(vocab, params.grammar_prefill, false, true);
+    if (!params.generation_prompt.empty() && vocab && common_grammar_needs_prefill(params.grammar)) {
+        prefill_tokens = common_tokenize(vocab, params.generation_prompt, false, true);
         if (!prefill_tokens.empty()) {
             std::string first_token = common_token_to_piece(vocab, prefill_tokens[0], true);
-            if (std::isspace(first_token[0]) && !std::isspace(params.grammar_prefill[0])) {
+            if (std::isspace(first_token[0]) && !std::isspace(params.generation_prompt[0])) {
                 // Some tokenizers will add a space before the first special token, need to remove
                 prefill_tokens = std::vector<llama_token>(prefill_tokens.begin() + 1, prefill_tokens.end());
             }
         }
 
         if (grmr) {
-            for (const auto & token : prefill_tokens) {
-                llama_sampler_accept(grmr, token);
-                LOG_DBG("%s: accepted prefill token (%d)\n", __func__, token);
+            try {
+                for (const auto & token : prefill_tokens) {
+                    llama_sampler_accept(grmr, token);
+                    LOG_DBG("%s: accepted prefill token (%d)\n", __func__, token);
+                }
+            } catch (std::exception &e) {
+                LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
+                    common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
+                throw e;
             }
         }
     }

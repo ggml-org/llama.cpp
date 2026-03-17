@@ -1830,25 +1830,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar"}, "GRAMMAR",
-        string_format("BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", params.sampling.grammar.c_str()),
+        "BNF-like grammar to constrain generations (see samples in grammars/ dir)",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = value;
-            params.sampling.grammar_external = true;
+            params.sampling.grammar = common_grammar_user{value};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar-file"}, "FNAME",
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = read_file(value);
-            params.sampling.grammar_external = true;
+            params.sampling.grammar = common_grammar_user{read_file(value)};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = json_schema_to_grammar(json::parse(value));
+            params.sampling.grammar = common_grammar_output_format{json_schema_to_grammar(json::parse(value))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1865,7 +1863,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::istreambuf_iterator<char>(),
                 std::back_inserter(schema)
             );
-            params.sampling.grammar = json_schema_to_grammar(json::parse(schema));
+            params.sampling.grammar = common_grammar_output_format{json_schema_to_grammar(json::parse(schema))};
         }
     ).set_sparam());
     add_opt(common_arg(
