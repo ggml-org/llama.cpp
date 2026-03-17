@@ -294,13 +294,26 @@ int main(int argc, char ** argv) {
 
         // Project-local skills (highest priority)
         skill_paths.push_back(working_dir + "/.llama-agent/skills");
-        skill_paths.push_back(working_dir + "/.agent/skills");
+        skill_paths.push_back(working_dir + "/.agents/skills");
 
         // User-global skills
         std::string config_dir = get_config_dir();
         if (!config_dir.empty()) {
             skill_paths.push_back(config_dir + "/skills");
         }
+
+        // User-global skills (alternative path: ~/.agents/skills)
+#ifdef _WIN32
+        const char * home_skills = std::getenv("APPDATA");
+        if (home_skills) {
+            skill_paths.push_back(std::string(home_skills) + "\\agents\\skills");
+        }
+#else
+        const char * home_skills = std::getenv("HOME");
+        if (home_skills) {
+            skill_paths.push_back(std::string(home_skills) + "/.agents/skills");
+        }
+#endif
 
         // Extra paths from --skills-path flags
         skill_paths.insert(skill_paths.end(),

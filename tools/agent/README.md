@@ -250,9 +250,10 @@ Skills are reusable prompt modules that extend the agent's capabilities. They fo
 
 Skills are discovered from:
 1. `./.llama-agent/skills/` - Project-local skills
-2. `./.agent/skills/` - Project-local skills (alternative path)
+2. `./.agents/skills/` - Project-local skills (alternative path)
 3. `~/.llama-agent/skills/` - User-global skills
-4. Custom paths via `--skills-path`
+4. `~/.agents/skills/` - User-global skills (alternative path)
+5. Custom paths via `--skills-path`
 
 <details>
 <summary><strong>Creating a skill</strong></summary>
