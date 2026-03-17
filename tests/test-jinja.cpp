@@ -1916,7 +1916,7 @@ env.globals["raise_exception"] = raise_exception
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
-print(result, end='')
+sys.stdout.buffer.write(result.encode())
 )";
 
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
