@@ -53,6 +53,7 @@ agent_session::agent_session(const std::string & id,
         // Default to "." if working_dir not set, matching CLI behavior
         std::string skills_working_dir = config_.working_dir.empty() ? "." : config_.working_dir;
         skill_paths.push_back(skills_working_dir + "/.llama-agent/skills");
+        skill_paths.push_back(skills_working_dir + "/.agent/skills");
 
         // User-global skills
         if (!config_dir.empty()) {

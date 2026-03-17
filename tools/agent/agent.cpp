@@ -294,6 +294,7 @@ int main(int argc, char ** argv) {
 
         // Project-local skills (highest priority)
         skill_paths.push_back(working_dir + "/.llama-agent/skills");
+        skill_paths.push_back(working_dir + "/.agent/skills");
 
         // User-global skills
         std::string config_dir = get_config_dir();
