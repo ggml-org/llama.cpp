@@ -25,6 +25,7 @@
 #if defined(GGML_WEBGPU_DEBUG) || defined(GGML_WEBGPU_CPU_PROFILE) || defined(GGML_WEBGPU_GPU_PROFILE)
 #    include <iostream>
 #endif
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -474,13 +475,13 @@ static bool ggml_backend_webgpu_handle_wait_status(wgpu::WaitStatus status, bool
     }
 }
 
-#ifdef GGML_WEBGPU_GPU_PROFILE
 static void ggml_backend_webgpu_erase_completed_futures(std::vector<wgpu::FutureWaitInfo> & futures) {
     futures.erase(std::remove_if(futures.begin(), futures.end(),
                                  [](const wgpu::FutureWaitInfo & info) { return info.completed; }),
                   futures.end());
 }
 
+#ifdef GGML_WEBGPU_GPU_PROFILE
 static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &             ctx,
                                                      std::vector<wgpu::FutureWaitInfo> & futures,
                                                      bool                                block) {
@@ -505,21 +506,37 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
 }
 #endif
 
+typedef struct wait_info {
+    wgpu::FutureWaitInfo future;
+    size_t               sub_idx;
+} wait_info;
+
+static void ggml_backend_webgpu_erase_completed_futures_wait_info(std::vector<wait_info> & wait_infos) {
+    wait_infos.erase(std::remove_if(wait_infos.begin(), wait_infos.end(),
+                                    [](const wait_info & info) { return info.future.completed; }),
+                     wait_infos.end());
+}
+
 // Wait for the queue to finish processing all submitted work
 static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
                                      std::vector<webgpu_submission> & subs,
                                      bool                             block = true) {
-    // If we have too many in-flight submissions, wait on the oldest one first.
     if (subs.empty()) {
         return;
     }
+    static uint64_t long_timeout = 60ull * 60ull * 1000ull * 1000ull * 1000ull;
+    uint64_t        timeout_ns   = block ? long_timeout : 0;
+    // If we have too many in-flight submissions, wait on the oldest one first.
     while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, long_timeout);
         if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
 #endif
             subs.erase(subs.begin());
+        } else {
+            // Error is returned when there is an issue with the WaitAny call, not the future.
+            GGML_ABORT("Invalid call to WaitAny in throttle case");
         }
     }
 
@@ -528,16 +545,38 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
     }
 
     if (block) {
-        for (auto & sub : subs) {
-            while (!sub.submit_done.completed) {
-                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
-                ggml_backend_webgpu_handle_wait_status(waitStatus);
-            }
+        std::vector<wgpu::FutureWaitInfo> pending;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
+        std::unordered_map<wgpu::FutureWaitInfo, std::vector<wgpu::FutureWaitInfo>> submission_to_profiling_futures;
+#endif
+        for (size_t i = 0; i < subs.size(); i++) {
+            pending.push_back(subs[i].submit_done);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+            submission_to_profiling_futures.emplace(subs[i].submit_done, subs[i].profile_futures);
 #endif
         }
+
+        while (!pending.empty()) {
+            auto waitStatus = ctx->instance.WaitAny(pending.size(), pending.data(), timeout_ns);
+            if (!ggml_backend_webgpu_handle_wait_status(waitStatus)) {
+                // Error is returned when there is an issue with the WaitAny call, not the future.
+                // Should not time out in the blocking case, so treat it as an error.
+                // We set it to a very high value, not UINT64_MAX since we suspect the UINT64_MAX path may be buggy in Dawn.
+                GGML_ABORT("Invalid call to WaitAny in blocking case");
+            } else {
+                for (auto & future : pending) {
+                    if (future.completed) {
+#ifdef GGML_WEBGPU_GPU_PROFILE
+                        ggml_backend_webgpu_wait_profile_futures(ctx, submission_to_profiling_futures[future], true);
+#endif
+                    }
+                }
+                ggml_backend_webgpu_erase_completed_futures(pending);
+            }
+        }
+
         subs.clear();
+
     } else {
         // Poll each submit future once and remove completed submissions.
         for (auto sub = subs.begin(); sub != subs.end();) {
