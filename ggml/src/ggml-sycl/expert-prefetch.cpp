@@ -498,16 +498,17 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
 
     vram_slot_bytes_ = expert_weight_bytes;
 
-    // Query available VRAM and use ~50% for expert cache.
+    // Query available VRAM and use ~80% for expert cache.
+    // After per-tensor host placement (T1), freed VRAM is available here.
     size_t avail = unified_cache_available_for_compute(device_id_);
-    const float budget_pct = 0.50f;
+    const float budget_pct = 0.80f;
     size_t budget = static_cast<size_t>(avail * budget_pct);
     int n_slots = (vram_slot_bytes_ > 0) ? static_cast<int>(budget / vram_slot_bytes_) : 0;
 
-    // Clamp to [8, 2048] slots.  B50 has ~13.5GB free → ~3375 slots at 4MB each.
-    // 2048 is a reasonable upper bound for demand-driven LRU (covers ~4x active set).
-    n_slots = std::max(n_slots, 8);
-    n_slots = std::min(n_slots, 2048);
+    // Clamp to [32, 8192] slots.  With ~9 GB freed VRAM and ~340 KB/expert,
+    // the 120B model can cache thousands of experts (128 experts × 36 MoE layers = 4608 total).
+    n_slots        = std::max(n_slots, 32);
+    n_slots        = std::min(n_slots, 8192);
     pool_capacity_ = n_slots;
 
     vram_pool_.resize(pool_capacity_);
@@ -532,11 +533,11 @@ bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
         unified_cache_add_runtime_bytes(device_id_, total_alloc_bytes, runtime_category::EXPERT_CACHE);
     }
 
-    GGML_LOG_INFO("[SYCL] Expert prefetch VRAM pool: %zu/%d slots (%.1f KB each, %.1f MB total, "
-                  "%.1f MB avail, %.0f%% budget)\n",
-                  allocated, pool_capacity_, vram_slot_bytes_ / 1024.0,
-                  total_alloc_bytes / (1024.0 * 1024.0),
-                  avail / (1024.0 * 1024.0), budget_pct * 100.0);
+    GGML_LOG_INFO(
+        "sycl: expert cache pool: %zu/%d slots x %.1f KB = %.1f MB "
+        "(%.0f%% of %.1f MB available)\n",
+        allocated, pool_capacity_, vram_slot_bytes_ / 1024.0, total_alloc_bytes / (1024.0 * 1024.0), budget_pct * 100.0,
+        avail / (1024.0 * 1024.0));
     if (allocated == 0) {
         GGML_LOG_WARN("[SYCL] Expert prefetch VRAM pool: ALL slots failed to allocate — "
                       "prefetching permanently disabled\n");
@@ -561,7 +562,7 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
     // All slots occupied — evict the LRU cached entry.
     // Only evict from cached_slots_ (not in-flight entries — those have active DMA).
     // NOTE: O(n) linear scan over cached_slots_ is intentional at the current
-    // pool cap of [8, 2048] slots. If the cap ever exceeds 2048, consider replacing
+    // pool cap of [32, 8192] slots. If the cap ever exceeds 8192, consider replacing
     // this with a min-heap keyed on last_used_token for O(log n) eviction.
     int    lru_slot  = -1;
     int64_t lru_time = INT64_MAX;

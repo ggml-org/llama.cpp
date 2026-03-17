@@ -1664,6 +1664,18 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                       expert_weight_bytes / 1024.0);
     }
 
+    // Log available VRAM per device for expert cache sizing diagnostics.
+    {
+        using namespace ggml_sycl;
+        const int n_gpu_devs =
+            g_moe_multi_gpu_active.load(std::memory_order_acquire) ? ggml_sycl_info().total_gpu_count : 1;
+        for (int d = 0; d < n_gpu_devs && d < GGML_SYCL_MAX_DEVICES; d++) {
+            size_t avail = unified_cache_available_for_compute(d);
+            GGML_SYCL_DEBUG("[MoE-init] device %d: available VRAM for expert cache = %.1f MB\n", d,
+                            avail / (1024.0 * 1024.0));
+        }
+    }
+
     // Initialize ExpertPrefetcher for primary device
     auto & prefetcher = g_expert_prefetchers[device];
     prefetcher.init(q);
