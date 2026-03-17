@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-24-vulkan-llvmpipe
           evict-old-files: 1d

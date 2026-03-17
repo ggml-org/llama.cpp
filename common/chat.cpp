@@ -1519,7 +1519,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         // map developer to system for all models except for GPT-OSS
         workaround::map_developer_role_to_system(params.messages);
     }
-    workaround::func_args_not_string(params.messages);
 
     if (!tmpl.original_caps().supports_system_role) {
         workaround::system_message_not_supported(params.messages);
@@ -1530,6 +1529,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         // to still be non-null, this puts an empty string everywhere where the
         // content field is null
         workaround::requires_non_null_content(params.messages);
+    }
+
+    if (tmpl.original_caps().supports_object_arguments) {
+        workaround::func_args_not_string(params.messages);
     }
 
     params.extra_context = common_chat_extra_context();
@@ -1557,6 +1560,21 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                 "Template supports tool calls but does not natively describe tools. The fallback behaviour used may "
                 "produce bad results, inspect prompt w/ --verbose & consider overriding the template.\n");
         }
+    }
+
+    if (inputs.force_pure_content) {
+        LOG_WRN("Forcing pure content template, will not render reasoning or tools separately.");
+        // Create the result structure
+        common_chat_params data;
+        auto params_copy               = params;
+        params_copy.reasoning_format   = COMMON_REASONING_FORMAT_NONE;
+        data.prompt                    = common_chat_template_direct_apply(tmpl, params_copy);
+        data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
+        auto parser                    = build_chat_peg_parser([](common_chat_peg_builder &p) {
+            return p.content(p.rest());
+        });
+        data.parser                    = parser.save();
+        return data;
     }
 
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
