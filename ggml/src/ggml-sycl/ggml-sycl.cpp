@@ -4467,6 +4467,22 @@ struct pending_cpu_scatter {
 
 static thread_local pending_cpu_scatter g_pending_scatter = {};
 
+// Result struct for async CPU expert dispatch.  Carries compute output and
+// metadata from the async thread back to the main thread so the main thread
+// can populate g_pending_scatter (which is thread_local and therefore not
+// visible from the async thread).
+struct cpu_dispatch_result {
+    std::future<void>                               future;  // CPU compute future (may still be running)
+    float *                                         out_pinned = nullptr;
+    float *                                         act_pinned = nullptr;
+    std::vector<cpu_expert_task>                    tasks;  // must outlive future
+    std::vector<pending_cpu_scatter::scatter_entry> entries;
+    int                                             device_id    = -1;
+    bool                                            from_pool    = false;
+    bool                                            owns_buffers = true;
+    bool                                            valid        = false;
+};
+
 // ---------------------------------------------------------------------------
 // MoE gate+up+SiLU fusion state
 // Tracks the three-phase gate->up->down sequence within each MoE layer.
@@ -30945,13 +30961,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // Shared CPU expert dispatch helper: alloc pinned buffers, D2H
-            // activations, build tasks, submit to CPU pool, wait, scatter
-            // results back to device dst, and release buffers.
-            // Used by both CPU-TG path (all experts) and hybrid path (cache misses).
-            auto dispatch_cpu_and_scatter = [&](const std::vector<expert_dispatch_entry> & entries) {
+            // CPU expert compute: alloc pinned buffers, D2H activations,
+            // build tasks, submit to CPU pool.  Returns a cpu_dispatch_result
+            // carrying the compute future and metadata — does NOT touch
+            // g_pending_scatter (which is thread_local and must only be
+            // written from the main thread).
+            auto dispatch_cpu_compute = [&](const std::vector<expert_dispatch_entry> & entries) -> cpu_dispatch_result {
+                cpu_dispatch_result result;
                 if (entries.empty()) {
-                    return;
+                    return result;
                 }
 
                 const size_t n_cpu = entries.size();
@@ -30980,10 +30998,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                    n_cpu * static_cast<size_t>(K) * sizeof(float),
                                    n_cpu * static_cast<size_t>(N) * sizeof(float));
                     if (!from_pool) {
-                        if (act_pinned) { sycl::free(act_pinned, stream->get_context()); }
-                        if (out_pinned) { sycl::free(out_pinned, stream->get_context()); }
+                        if (act_pinned) {
+                            sycl::free(act_pinned, stream->get_context());
+                        }
+                        if (out_pinned) {
+                            sycl::free(out_pinned, stream->get_context());
+                        }
                     }
-                    return;
+                    return result;
                 }
 
                 // Zero the output buffer
@@ -31028,11 +31050,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // Build CPU tasks from mmap host weight pointers.
-                // Tasks are stored in g_pending_scatter to keep the array
+                // Tasks are stored in the result struct to keep the array
                 // alive until flush — submit_batch captures a raw pointer.
                 GGML_ASSERT(use_expert_cache && "CPU dispatch requires host-accessible weights");
-                g_pending_scatter.tasks.clear();
-                g_pending_scatter.tasks.reserve(n_cpu);
+                result.tasks.clear();
+                result.tasks.reserve(n_cpu);
                 for (size_t ci = 0; ci < n_cpu; ci++) {
                     const auto & entry = entries[ci];
                     const void * host_weight =
@@ -31051,46 +31073,67 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     t.type        = src0->type;
                     t.K           = static_cast<int>(K);
                     t.N           = static_cast<int>(N);
-                    g_pending_scatter.tasks.push_back(t);
+                    result.tasks.push_back(t);
                 }
 
                 // Submit to CPU thread pool
-                auto * tasks_ptr = g_pending_scatter.tasks.data();
-                int    n_tasks   = static_cast<int>(g_pending_scatter.tasks.size());
+                auto * tasks_ptr = result.tasks.data();
+                int    n_tasks   = static_cast<int>(result.tasks.size());
                 auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
 
-                std::future<void> fut;
                 if (cpu_pool.is_active()) {
-                    fut = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                    result.future = cpu_pool.submit_batch(tasks_ptr, n_tasks);
                 } else {
-                    fut = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                    result.future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
                         ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
                     });
                 }
 
-                // Defer scatter: store future + metadata for later flush.
-                // The next MUL_MAT_ID entry (or graph boundary) will wait
-                // for CPU completion and scatter results H2D.
-                g_pending_scatter.future     = std::move(fut);
-                g_pending_scatter.out_pinned = out_pinned;
-                g_pending_scatter.act_pinned = act_pinned;
-                g_pending_scatter.stream     = stream;
-                g_pending_scatter.sycl_ctx   = stream->get_context();
-                g_pending_scatter.device_id  = ctx.device;
-                g_pending_scatter.from_pool  = from_pool;
-                g_pending_scatter.active     = true;
-                g_pending_scatter.dst_tensor = dst;  // track MUL_MAT_ID output for selective flush
-
-                g_pending_scatter.entries.clear();
-                g_pending_scatter.entries.reserve(entries.size());
+                // Build scatter entries (device destination pointers)
+                result.entries.clear();
+                result.entries.reserve(entries.size());
                 for (size_t ci = 0; ci < entries.size(); ci++) {
                     const auto &  entry = entries[ci];
                     const int64_t i1    = entry.id;
                     const int64_t i2    = entry.iid1;
                     char *        dst_d = dst_original + i1 * nb1 + i2 * nb2;
-                    g_pending_scatter.entries.push_back(
-                        { dst_d, static_cast<int>(N) });
+                    result.entries.push_back({ dst_d, static_cast<int>(N) });
                 }
+
+                result.out_pinned   = out_pinned;
+                result.act_pinned   = act_pinned;
+                result.device_id    = ctx.device;
+                result.from_pool    = from_pool;
+                result.owns_buffers = true;
+                result.valid        = true;
+                return result;
+            };
+
+            // Apply a cpu_dispatch_result to g_pending_scatter.  MUST be
+            // called on the main thread (g_pending_scatter is thread_local).
+            auto apply_cpu_result_to_scatter = [&](cpu_dispatch_result & r) {
+                if (!r.valid) {
+                    return;
+                }
+                g_pending_scatter.tasks        = std::move(r.tasks);
+                g_pending_scatter.future       = std::move(r.future);
+                g_pending_scatter.out_pinned   = r.out_pinned;
+                g_pending_scatter.act_pinned   = r.act_pinned;
+                g_pending_scatter.stream       = stream;
+                g_pending_scatter.sycl_ctx     = stream->get_context();
+                g_pending_scatter.device_id    = r.device_id;
+                g_pending_scatter.from_pool    = r.from_pool;
+                g_pending_scatter.owns_buffers = r.owns_buffers;
+                g_pending_scatter.active       = true;
+                g_pending_scatter.dst_tensor   = dst;
+                g_pending_scatter.entries      = std::move(r.entries);
+            };
+
+            // Synchronous dispatch + scatter setup: used by the sequential
+            // (PP) path and the hot/cold deferral path.
+            auto dispatch_cpu_and_scatter = [&](const std::vector<expert_dispatch_entry> & entries) {
+                auto r = dispatch_cpu_compute(entries);
+                apply_cpu_result_to_scatter(r);
             };
 
             // Secondary GPU expert dispatch: thin wrapper around the static
@@ -31545,16 +31588,26 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // ----- Concurrent GPU+CPU dispatch -----
             // For batch=1 TG: launch CPU expert dispatch on a background thread
             // BEFORE GPU0 kernel submission so DDR5 AVX-VNNI compute overlaps
-            // with GPU MMVQ execution.  The TG path uses a pre-submitted D2H
-            // event (no queue submissions from the async thread), so concurrent
-            // access to the GPU queue is safe.
+            // with GPU MMVQ execution.  The async thread ONLY does CPU compute
+            // (via dispatch_cpu_compute) and returns results; the main thread
+            // populates g_pending_scatter after joining.  This avoids:
+            //   Bug 1: g_pending_scatter is thread_local — async thread writes
+            //          to its own copy, main thread never sees it.
+            //   Bug 2: Hot/cold deferral calls flush_pending_cpu_scatter which
+            //          submits stream->memcpy from the async thread, racing with
+            //          the main thread's GPU0 kernel submissions on the same
+            //          in-order queue.
             // For batch>1 (PP): CPU dispatch runs sequentially after GPU0 to
             // avoid concurrent stream->memcpy submissions from two threads.
-            std::future<void> cpu_dispatch_future;
-            const bool        have_cpu_experts = !cpu_entries.empty();
-            const bool        cpu_async_safe   = have_cpu_experts && cpu_expert_tg_active;
+            std::future<cpu_dispatch_result> cpu_compute_future;
+            const bool                       have_cpu_experts = !cpu_entries.empty();
+            const bool                       cpu_async_safe   = have_cpu_experts && cpu_expert_tg_active;
 
             // Helper: CPU dispatch with hot/cold deferral logic.
+            // Used ONLY for the synchronous (PP) path.  The async TG path
+            // skips deferral entirely (batch=1 has few experts, splitting
+            // gains nothing, and deferral requires flush_pending_cpu_scatter
+            // which submits stream->memcpy — unsafe from an async thread).
             static std::atomic<int> moe_defer_count{ -1 };
             auto                    do_cpu_dispatch = [&]() {
                 int defer_n = moe_defer_count.load(std::memory_order_acquire);
@@ -31600,11 +31653,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             };
 
-            // TG path: launch CPU concurrently with GPU0.
-            // dispatch_cpu_and_scatter captures local refs (valid until
-            // we join the future below, before the enclosing scope exits).
+            // TG path: launch CPU compute on async thread, return results.
+            // The async thread calls dispatch_cpu_compute (no g_pending_scatter
+            // access, no queue submissions beyond the pre-submitted D2H event).
             if (cpu_async_safe) {
-                cpu_dispatch_future = std::async(std::launch::async, do_cpu_dispatch);
+                cpu_compute_future = std::async(
+                    std::launch::async, [&]() -> cpu_dispatch_result { return dispatch_cpu_compute(cpu_entries); });
             }
 
             // ----- GPU0 path (B580): batched MMVQ dispatch -----
@@ -31668,11 +31722,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // ----- Join / sequential CPU dispatch -----
-            // TG path: wait for async CPU thread (GPU0 kernels already
-            // submitted and executing on-device during this wait).
+            // TG path: wait for async CPU thread, then apply results to
+            // g_pending_scatter on the main thread (thread_local safety).
             // PP path: run CPU dispatch sequentially after GPU0 submission.
-            if (cpu_async_safe && cpu_dispatch_future.valid()) {
-                cpu_dispatch_future.get();
+            if (cpu_async_safe && cpu_compute_future.valid()) {
+                auto cpu_result = cpu_compute_future.get();
+                apply_cpu_result_to_scatter(cpu_result);
             } else if (have_cpu_experts) {
                 do_cpu_dispatch();
             }
