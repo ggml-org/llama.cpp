@@ -890,9 +890,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx,
             {
               float *output = hmx_matmul_dst_batch_ptr(params, b2_base + g, b3) +
                               mr * params->dst_stride + nc;
-              transfer_output_chunk_multithread(ctx, output, vtcm_output,
-                                                (int) n_rows, (int) n_cols,
-                                                params->dst_stride);
+              transfer_output_chunk_multithread(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride);
             }
             TIMER_STOP(output_store);
           }
@@ -1305,8 +1303,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
       {
         // B0
         dma_queue_pop(ctx->dma[0]);
-        dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight,
-                                                    n_cols_A0, k, row_stride, weight_type);
+        dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight, n_cols_A0, k, row_stride, weight_type);
 
         // A1
         const size_t n_cols_A1 = hmx_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
