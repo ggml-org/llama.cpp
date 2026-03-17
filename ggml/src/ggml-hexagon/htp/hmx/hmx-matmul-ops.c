@@ -106,16 +106,15 @@ static inline bool hmx_dma_push_safe(dma_queue *q,
         return false;
 
       rows_done += chunk;
-      // Synchronously complete all chunks except the last one, so the
+      // Complete all chunks without waiting except the last one, so the
       // caller's single dma_queue_pop drains the final descriptor.
       if (rows_done < sub_nrows)
-        dma_queue_pop(q);
+        dma_queue_pop_nowait(q);
     }
     return true;
   }
 
   // Case 3: stride overflow — fall back to row-by-row.
-  // Push+pop each row synchronously except the last, which stays async.
   {
     const uint8_t *src = (const uint8_t *)dptr.src;
     uint8_t       *dst = (uint8_t *)dptr.dst;
@@ -125,7 +124,7 @@ static inline bool hmx_dma_push_safe(dma_queue *q,
       if (!dma_queue_push(q, p, 0, 0, width, 1))
         return false;
       if (r + 1 < nrows)
-        dma_queue_pop(q);
+        dma_queue_pop_nowait(q);
     }
     return true;
   }
@@ -1448,11 +1447,11 @@ static void qweight_fetch_worker_fn(unsigned int n, unsigned int i, void *data) 
   hmx_dma_push_safe(st->dma,
                     dma_make_ptr(st->dst, st->src + st->quant_off),
                     st->dst_stride, st->src_stride, st->quant_width, st->n_rows);
-  dma_queue_pop(st->dma);
   // 2D DMA: scales sub-range
   hmx_dma_push_safe(st->dma,
                     dma_make_ptr(st->dst + st->quant_width, st->src + st->scale_off),
                     st->dst_stride, st->src_stride, st->scale_width, st->n_rows);
+  dma_queue_pop(st->dma);
   dma_queue_pop(st->dma);
 }
 
