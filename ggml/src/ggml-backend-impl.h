@@ -120,7 +120,7 @@ extern "C" {
     };
 
     struct ggml_backend {
-        ggml_guid_t guid;
+        const ggml_guid_t guid;
         struct ggml_backend_i iface;
         ggml_backend_dev_t device;
         void * context;

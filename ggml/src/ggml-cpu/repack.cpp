@@ -4723,54 +4723,42 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     return nullptr;
 }
 
-static enum ggml_status ggml_backend_cpu_repack_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
-    tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
+namespace ggml::cpu::repack {
 
-    GGML_UNUSED(buffer);
-    return GGML_STATUS_SUCCESS;
-}
+class buffer : public ggml::cpu::buffer {
+public:
+    buffer(std::size_t size) : ggml::cpu::buffer(size) { }
 
-static void ggml_backend_cpu_repack_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
-                                                       const void * data, size_t offset, size_t size) {
-    GGML_ASSERT(offset == 0);
-    GGML_ASSERT(size == ggml_nbytes(tensor));
+    virtual ~buffer() { }
 
-    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
-    auto OK            = tensor_traits->repack(tensor, data, size);
-
-    GGML_ASSERT(OK == 0);
-    GGML_UNUSED(buffer);
-}
-
-static const char * ggml_backend_cpu_repack_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    return "CPU_REPACK";
-
-    GGML_UNUSED(buft);
-}
-
-static ggml_backend_buffer_t ggml_backend_cpu_repack_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
-
-    if (buffer == nullptr) {
-        return nullptr;
+    ggml_status init_tensor(ggml_tensor & tensor) override {
+        tensor.extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(&tensor));
+        return GGML_STATUS_SUCCESS;
     }
 
-    buffer->buft              = buft;
-    buffer->iface.init_tensor = ggml_backend_cpu_repack_buffer_init_tensor;
-    buffer->iface.set_tensor  = ggml_backend_cpu_repack_buffer_set_tensor;
-    buffer->iface.get_tensor  = nullptr;
-    buffer->iface.cpy_tensor  = nullptr;
-    return buffer;
-}
+    void set_tensor(ggml_tensor & tensor, const void * data, std::size_t offset, std::size_t size) override {
+        GGML_ASSERT(offset == 0);
+        GGML_ASSERT(size == ggml_nbytes(&tensor));
 
-static size_t ggml_backend_cpu_repack_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    return TENSOR_ALIGNMENT;
+        auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor.extra;
+        auto OK            = tensor_traits->repack(&tensor, data, size);
 
-    GGML_UNUSED(buft);
-}
+        GGML_ASSERT(OK == 0);
+    }
+};
 
-namespace ggml::cpu::repack {
-class extra_buffer_type : ggml::cpu::extra_buffer_type {
+class extra_buffer_type : public ggml::cpu::extra_buffer_type {
+public:
+
+    const std::string& get_name() override {
+        static const std::string name {"CPU_REPACK"};
+        return name;
+    }
+
+    ggml::cpp::backend::buffer* alloc_buffer(std::size_t size) override {
+        return new buffer(size);
+    }
+
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         if (    op->op == GGML_OP_MUL_MAT &&
                 op->src[0]->buffer &&
@@ -4819,18 +4807,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 }  // namespace ggml::cpu::repack
 
 ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
-    static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_repack = {
-        /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cpu_repack_buffer_type_get_name,
-                           /* .alloc_buffer     = */ ggml_backend_cpu_repack_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_repack_buffer_type_get_alignment,
-                           /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
-                           /* .get_alloc_size   = */ nullptr,  // defaults to ggml_nbytes
-                           /* .is_host          = */ nullptr,
-                           },
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context = */ new ggml::cpu::repack::extra_buffer_type(),
-    };
-
-    return &ggml_backend_cpu_buffer_type_repack;
+    static auto* buffer_type = ggml::cpu::c_wrapper(new ggml::cpu::repack::extra_buffer_type());
+    return buffer_type;
 }
