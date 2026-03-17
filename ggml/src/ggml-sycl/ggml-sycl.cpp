@@ -13186,7 +13186,6 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 
             if (b.ptr != nullptr) {
                 ggml_sycl::alloc_registry::instance().unregister_alloc(b.ptr);
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, b.size);
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
                 pool_size -= b.size;
             }
@@ -13242,11 +13241,15 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         void * ptr;
 
-        ggml_sycl::unified_cache_add_runtime_bytes(device, rounded_size);
+        // NOTE: Compute pool allocations are NOT tracked via add_runtime_bytes.
+        // The pool is a fixed-size scratch area whose VRAM consumption is already
+        // reflected in driver-queried free memory.  Tracking pool entries against
+        // the cache budget would monotonically inflate reserved_ (pool entries are
+        // reused, not freed), eventually driving budget_ to 0 and disabling expert
+        // caching even with gigabytes of free VRAM.
         ptr = ggml_sycl_malloc_device(rounded_size, *qptr, "pool_leg");
 
         if (!ptr) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device, rounded_size);
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, rounded_size);
             return nullptr;
         }
@@ -13272,7 +13275,6 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
         ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, size);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
     }

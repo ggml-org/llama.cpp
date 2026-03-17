@@ -2847,32 +2847,23 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
         // Allocate new entry if not found or was cleaned up due to FAILED state
         if (it == entries_.end()) {
-            // Allocate new entry
-            const size_t base_budget    = budget_;
-            const size_t allowed_budget = base_budget;  // No overcommit; keep DMA headroom intact.
-
             // Determine allocation cost: pool may need a new chunk (256 MB) or can sub-allocate (0 cost)
             const bool   pool_can_fit = layout_pool_ && layout_pool_->can_fit(request.dst_size);
             const size_t alloc_cost   = (layout_pool_ && !pool_can_fit) ? layout_pool_->get_default_chunk_size() :
                                                                           (pool_can_fit ? 0 : request.dst_size);
 
-            while (alloc_cost > 0 && used_.load() + alloc_cost > base_budget) {
-                if (evict_one(alloc_cost) == 0) {
-                    break;
-                }
-            }
+            host_cache * hcache    = get_host_cache(queue_);
+            bool         force_host = false;
 
-            bool force_host = false;
-            if (alloc_cost > 0 && used_.load() + alloc_cost > allowed_budget) {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict for layout (used=%.1f MB, need=%.1f MB)\n",
-                                used_.load() / (1024.0f * 1024.0f), alloc_cost / (1024.0f * 1024.0f));
-                force_host = true;
-            }
-            host_cache * hcache = get_host_cache(queue_);
+            // 1. Honor explicit host preference
             if (request.prefer_host && hcache) {
                 force_host = true;
             }
-            if (!force_host && hcache) {
+
+            // 2. Check live VRAM FIRST — driver-queried free memory is ground truth.
+            //    The budget_ field can be stale (deflated by untracked runtime
+            //    reservations), but actual free VRAM is authoritative.
+            if (!force_host && alloc_cost > 0) {
                 size_t free_mem  = 0;
                 size_t total_mem = 0;
                 try {
@@ -2892,6 +2883,20 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                             "host\n",
                             free_mem / (1024.0f * 1024.0f), headroom / (1024.0f * 1024.0f),
                             request.dst_size / (1024.0f * 1024.0f));
+                        force_host = true;
+                    }
+                    // VRAM is sufficient — skip budget-based eviction/rejection
+                } else if (hcache) {
+                    // VRAM query failed — fall back to budget-based check
+                    const size_t base_budget = budget_;
+                    while (used_.load() + alloc_cost > base_budget) {
+                        if (evict_one(alloc_cost) == 0) {
+                            break;
+                        }
+                    }
+                    if (used_.load() + alloc_cost > base_budget) {
+                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict for layout (used=%.1f MB, need=%.1f MB)\n",
+                                        used_.load() / (1024.0f * 1024.0f), alloc_cost / (1024.0f * 1024.0f));
                         force_host = true;
                     }
                 }
