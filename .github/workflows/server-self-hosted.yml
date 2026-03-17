@@ -1,4 +1,4 @@
-name: Server-Metal
+name: Server (self-hosted)
 
 on:
   workflow_dispatch: # allows manual triggering
@@ -14,7 +14,19 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server-metal.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server-self-hosted.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
 
 env:
   LLAMA_LOG_COLORS: 1
@@ -28,7 +40,7 @@ concurrency:
 
 jobs:
   server-metal:
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, llama-server, macOS, ARM64]
 
     name: server-metal (${{ matrix.wf_name }})
     strategy:
@@ -45,6 +57,45 @@ jobs:
           - build_type: Release
             extra_args: "GGML_METAL_DEVICES=2 LLAMA_ARG_BACKEND_SAMPLING=1"
             wf_name:    "GPUx2, backend-sampling"
+      fail-fast: false
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config ${{ matrix.build_type }} -j $(sysctl -n hw.logicalcpu) --target llama-server
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
+        run: |
+          cd tools/server/tests
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
+
+  server-cuda:
+    runs-on: [self-hosted, llama-server, Linux, NVIDIA]
+
+    name: server-cuda (${{ matrix.wf_name }})
+    strategy:
+      matrix:
+        build_type: [Release]
+        wf_name: ["GPUx1"]
+        include:
+          - build_type: Release
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "GPUx1, backend-sampling"
       fail-fast: false
 
     steps:
