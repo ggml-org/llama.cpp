@@ -7629,20 +7629,13 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             return true;
         }
     case VK_VENDOR_ID_INTEL:
-        if (k < 2048) {
+        if (device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
+            // Intel Windows proprietary driver does not like MMVQ
             return false;
         }
 
-        if (device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            // Intel Windows proprietary driver tuning
-            switch (src0_type) {
-            case GGML_TYPE_MXFP4:
-            case GGML_TYPE_Q4_K:
-            case GGML_TYPE_Q5_K:
-                return false;
-            default:
-                return true;
-            }
+        if (k < 2048) {
+            return false;
         }
 
         switch (src0_type) {
