@@ -60,7 +60,7 @@ struct cli_context {
     int reasoning_budget = -1;
     std::string reasoning_budget_message;
     common_reasoning_format reasoning_format;
-    std::optional<std::ofstream *> file_out = std::nullopt;
+    std::optional<std::ofstream> file_out = std::nullopt;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -230,11 +230,11 @@ struct cli_context {
             return;
         }
         if (defaults.special_characters && special_characters_content.has_value()) {
-            *file_out.value() << special_characters_content.value();
+            file_out.value() << special_characters_content.value();
         } else {
-            *file_out.value() << content;
+            file_out.value() << content;
         }
-        file_out.value()->flush();
+        file_out.value().flush();
     }
 
     common_chat_params format_chat() {
@@ -403,14 +403,13 @@ int main(int argc, char ** argv) {
     atexit([]() { console::cleanup(); });
 
     // open output file early to fail fast
-    std::ofstream output_file;
     if (!params.out_file.empty()) {
-        output_file.open(params.out_file, std::ios::binary);
-        if (!output_file || !output_file.is_open()) {
+        ctx_cli.file_out.emplace(params.out_file, std::ios::binary);
+        
+        if (!ctx_cli.file_out.has_value() || !ctx_cli.file_out->is_open()) {
             console::error("Failed to open output file '%s'\n", params.out_file.c_str());
             return 1;
         }
-        ctx_cli.file_out = &output_file;
     }
     
     console::set_display(DISPLAY_TYPE_RESET);
