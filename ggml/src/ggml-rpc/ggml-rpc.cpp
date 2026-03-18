@@ -1201,7 +1201,6 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
     result->flags = tensor->flags;
     result->data = reinterpret_cast<void *>(tensor->data);
     ggml_set_name(result, tensor->name);
-    
     return result;
 }
 
