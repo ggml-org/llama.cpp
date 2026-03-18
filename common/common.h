@@ -105,6 +105,7 @@ enum llama_example {
     LLAMA_EXAMPLE_FINETUNE,
     LLAMA_EXAMPLE_FIT_PARAMS,
     LLAMA_EXAMPLE_RESULTS,
+    LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -234,6 +235,14 @@ struct common_params_sampling {
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
+
+    // reasoning budget sampler parameters
+    // these are populated by the server/CLI based on chat template params
+    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
+    bool                     reasoning_budget_activate_immediately = false;
+    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
+    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
+    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
 
     bool backend_sampling = false;
 
@@ -535,8 +544,11 @@ struct common_params {
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
     bool enable_chat_template = true;
+    bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     int reasoning_budget = -1;
+    std::string reasoning_budget_message; // message injected before end tag when budget exhausted
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
@@ -916,7 +928,7 @@ const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 // MoE utils
 //
 
-const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate)_(ch|)exps";
+const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
 
 inline std::string llm_ffn_exps_block_regex(int idx) {
     return string_format("blk\\.%d%s", idx, LLM_FFN_EXPS_REGEX);

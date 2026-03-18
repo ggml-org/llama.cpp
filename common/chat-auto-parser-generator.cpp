@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
+#include "log.h"
 #include "nlohmann/json.hpp"
 
 #include <stdexcept>
@@ -135,7 +136,9 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
     if (thinking_forced_open || thinking_forced_closed) {
         // Thinking is forced open OR forced closed with enable_thinking=true
         // In both cases, expect only the closing tag (opening was in template)
-        return p.reasoning(p.until(end)) + end;
+        // However, since we might have incorrectly detected the open/close pattern,
+        // we admit an optional starting marker
+        return p.optional(p.literal(start)) + p.reasoning(p.until(end)) + end;
     }
     if (mode == reasoning_mode::TAG_BASED || mode == reasoning_mode::TOOLS_ONLY) {
         // Standard tag-based reasoning OR tools-only mode (reasoning appears with tools)
@@ -180,7 +183,10 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
         case tool_format::TAG_WITH_TAGGED:
             return build_tool_parser_tag_tagged(ctx);
         default:
-            GGML_ABORT("Unable to create tool parser");
+            LOG_ERR("[ERROR] Template seems to support tool calls, but failed to determine tool format. Tool calling will not work properly. "
+                "Check for a fixed template for your model in the models/templates directory of your llama.cpp installation or "
+                "report an issue at https://github.com/ggml-org/llama.cpp/issues\n");
+            return ctx.p.eps();
     }
 }
 

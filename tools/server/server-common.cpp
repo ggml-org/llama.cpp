@@ -1065,6 +1065,7 @@ json oaicompat_chat_params_parse(
 
         inputs.add_generation_prompt = true;
     }
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
@@ -1099,6 +1100,22 @@ json oaicompat_chat_params_parse(
     }
     if (!chat_params.parser.empty()) {
         llama_params["chat_parser"] = chat_params.parser;
+    }
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_activate_immediately"] = chat_params.thinking_forced_open;
+        }
     }
 
     // Handle "logprobs" field
@@ -1257,17 +1274,27 @@ json convert_responses_to_chatcmpl(const json & response_body) {
 
                 for (const auto & output_text : item.at("content")) {
                     const std::string type = json_value(output_text, "type", std::string());
-                    if (type != "output_text") {
-                        throw std::invalid_argument("'type' must be 'output_text'");
+                    if (type == "output_text") {
+                        if (!exists_and_is_string(output_text, "text")) {
+                            throw std::invalid_argument("'Output text' requires 'text'");
+                            // Ignore annotations and logprobs for now
+                            chatcmpl_content.push_back({
+                                {"text", output_text.at("text")},
+                                {"type", "text"},
+                            });
+                        }
+                    } else if (type == "refusal") {
+                        if (!exists_and_is_string(output_text, "refusal")) {
+                            throw std::invalid_argument("'Refusal' requires 'refusal'");
+                            // Ignore annotations and logprobs for now
+                            chatcmpl_content.push_back({
+                                {"refusal", output_text.at("refusal")},
+                                {"type", "refusal"},
+                            });
+                        }
+                    } else {
+                        throw std::invalid_argument("'type' must be one of 'output_text' or 'refusal'");
                     }
-                    if (!exists_and_is_string(output_text, "text")) {
-                        throw std::invalid_argument("'Output text' requires 'text'");
-                    }
-                    // Ignore annotations and logprobs for now
-                    chatcmpl_content.push_back({
-                        {"text", output_text.at("text")},
-                        {"type", "text"},
-                    });
                 }
 
                 if (merge_prev) {

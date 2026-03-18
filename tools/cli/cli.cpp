@@ -57,6 +57,8 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
+    int reasoning_budget = -1;
+    std::string reasoning_budget_message;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -73,6 +75,8 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
+        reasoning_budget = params.reasoning_budget;
+        reasoning_budget_message = params.reasoning_budget_message;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -93,6 +97,24 @@ struct cli_context {
             task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
             if (!chat_params.parser.empty()) {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
+            }
+
+            // reasoning budget sampler
+            if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+                const llama_vocab * vocab = llama_model_get_vocab(
+                    llama_get_model(ctx_server.get_llama_context()));
+
+                task.params.sampling.reasoning_budget_tokens = reasoning_budget;
+                task.params.sampling.reasoning_budget_activate_immediately = chat_params.thinking_forced_open;
+
+                if (!chat_params.thinking_start_tag.empty()) {
+                    task.params.sampling.reasoning_budget_start =
+                        common_tokenize(vocab, chat_params.thinking_start_tag, false, true);
+                }
+                task.params.sampling.reasoning_budget_end =
+                    common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
+                task.params.sampling.reasoning_budget_forced =
+                    common_tokenize(vocab, reasoning_budget_message + chat_params.thinking_end_tag, false, true);
             }
 
             rd.post_task({std::move(task)});
@@ -193,7 +215,8 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
-        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
+        inputs.force_pure_content    = chat_params.force_pure_content;
+        inputs.enable_thinking       = chat_params.enable_thinking ? common_chat_templates_support_enable_thinking(chat_params.tmpls.get()) : false;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);

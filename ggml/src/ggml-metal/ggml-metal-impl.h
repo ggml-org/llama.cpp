@@ -35,7 +35,7 @@
 #define N_R0_Q4_K 2
 #define N_SG_Q4_K 2
 
-#define N_R0_Q5_K 2
+#define N_R0_Q5_K 1
 #define N_SG_Q5_K 2
 
 #define N_R0_Q6_K 2
@@ -84,6 +84,7 @@
 #define FC_BIN                         1300
 #define FC_SUM_ROWS                    1400
 #define FC_UPSCALE                     1500
+#define FC_GATED_DELTA_NET             1600
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -792,6 +793,44 @@ typedef struct {
     uint64_t nb53;
     uint64_t nb0;
 } ggml_metal_kargs_ssm_scan;
+
+typedef struct {
+    int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    int32_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  ne10;
+    int32_t  ne11;
+    int32_t  ne12;
+    int32_t  ne13;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    int32_t  ne20;
+    int32_t  ne21;
+    int32_t  ne22;
+    int32_t  ne23;
+    uint64_t nb20;
+    uint64_t nb21;
+    uint64_t nb22;
+    uint64_t nb23;
+    int32_t  ns02;
+    int32_t  ns12;
+    int32_t  ns22;
+    int32_t  ne0;
+    int32_t  ne1;
+    int32_t  ne2;
+    int32_t  ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+} ggml_metal_kargs_gated_delta_net;
 
 typedef struct {
     int32_t  ne00;
