@@ -47,6 +47,7 @@ class ServerProcess:
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
+    server_host_family: str | None = None
     model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
@@ -138,8 +139,10 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        if self.server_host_family:
+            server_args.extend(["--host-family", self.server_host_family])
         if self.offline:
-            server_args.append("--offline")
+            server_args.extend(["--offline"])
         if self.model_file:
             server_args.extend(["--model", self.model_file])
         if self.model_url:

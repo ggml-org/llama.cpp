@@ -2806,6 +2806,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HOST"));
     add_opt(common_arg(
+        {"--host-family"}, "FAMILY",
+        string_format("address family for TCP listen sockets: ipv4, ipv6, or auto (default: auto)"),
+        [](common_params & params, const std::string & value) {
+            if (value == "ipv4") {
+                params.host_family = COMMON_HOST_FAMILY_AF_INET;
+            } else if (value == "ipv6") {
+                params.host_family = COMMON_HOST_FAMILY_AF_INET6;
+            } else if (value == "auto") {
+                params.host_family = COMMON_HOST_FAMILY_AF_UNSPEC;
+            } else {
+                throw std::invalid_argument(string_format("error: unknown value for --host-family: '%s'", value.c_str()));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HOST_FAMILY"));
+    add_opt(common_arg(
         {"--port"}, "PORT",
         string_format("port to listen (default: %d)", params.port),
         [](common_params & params, int value) {
