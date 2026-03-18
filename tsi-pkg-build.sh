@@ -732,7 +732,7 @@ bundle_fpga() {
 
   log_info "creating tar bundle for fpga (${build_dir})"
 
-  local TSI_GGML_VERSION=0.2.8
+  local TSI_GGML_VERSION=0.2.9
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
