@@ -378,7 +378,7 @@ task_params server_task::params_from_json_cmpl(
             SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
             std::string grammar_str      = json_schema_to_grammar(schema);
             SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
-            params.sampling.grammar      = common_grammar_output_format{std::move(grammar_str)};
+            params.sampling.grammar      = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str)};
         } catch (const std::exception & e) {
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
@@ -388,10 +388,10 @@ task_params server_task::params_from_json_cmpl(
             // grammar_type key is set by the server when converting chat template grammars
             std::string grammar_type = json_value(data, "grammar_type", std::string());
             if (grammar_type == "tool_calls") {
-                params.sampling.grammar = common_grammar_tool_calls{std::move(grammar_str)};
+                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, std::move(grammar_str)};
             } else {
                 // explicit grammar from the user (API field "grammar")
-                params.sampling.grammar = common_grammar_user{std::move(grammar_str)};
+                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, std::move(grammar_str)};
             }
             SRV_DBG("Grammar (%s): %s\n", grammar_type.c_str(), common_grammar_value(params.sampling.grammar).c_str());
         }
