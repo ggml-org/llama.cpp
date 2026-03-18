@@ -11,7 +11,7 @@
 		iconSize?: string;
 		class?: string;
 		disabled?: boolean;
-		onclick: () => void;
+		onclick: (e?: MouseEvent) => void;
 		'aria-label'?: string;
 	}
 

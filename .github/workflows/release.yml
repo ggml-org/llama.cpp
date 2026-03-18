@@ -10,7 +10,22 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/release.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/release.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp',
+      '**/*.glsl'
+    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -32,9 +47,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-cmake-arm64
+          key: macOS-latest-arm64
           evict-old-files: 1d
 
       - name: Build
@@ -79,9 +94,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-cmake-x64
+          key: macOS-latest-x64
           evict-old-files: 1d
 
       - name: Build
@@ -138,9 +153,10 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        if: ${{ matrix.build != 's390x' }}
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-cpu-cmake-${{ matrix.build }}
+          key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -189,9 +205,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22-cmake-vulkan
+          key: ubuntu-22-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
@@ -238,7 +254,7 @@ jobs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
 
     env:
-      # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.0"
       OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
 
@@ -254,9 +270,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24-cmake-openvino-release-no-preset-v1
+          key: ubuntu-24-openvino-release-no-preset-v1
           evict-old-files: 1d
 
       - name: Dependencies
@@ -327,9 +343,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-cpu-${{ matrix.arch }}
+          key: windows-latest-cpu-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -388,9 +404,9 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
+          key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -458,7 +474,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -534,9 +550,9 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-sycl
+          key: windows-latest-sycl
           variant: ccache
           evict-old-files: 1d
 
@@ -614,9 +630,9 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -724,9 +740,9 @@ jobs:
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install ROCm
@@ -952,7 +968,7 @@ jobs:
     permissions:
         contents: write # for creating release
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     needs:
       - windows
