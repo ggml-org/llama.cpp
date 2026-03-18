@@ -183,7 +183,7 @@ static void interleave_fp16_weight_chunk_to_tiles(__fp16 *restrict vtcm_dst,
   assert(k % HMX_FP16_TILE_N_COLS == 0);
 
   const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
-  const HVX_Vector v_scat_base = hmx_vmem(weight_transpose_scatter_offsets);
+  const HVX_Vector v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
   const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);
   const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
 
@@ -201,9 +201,9 @@ static void interleave_fp16_weight_chunk_to_tiles(__fp16 *restrict vtcm_dst,
       int tile_idx = ct * n_k_tiles + kt;
       __fp16 *tile_base = vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS;
 
-      HVX_Vector v0 = hmx_vmemu(vtcm_src + r * k + c);
+      HVX_Vector v0 = hvx_vmemu(vtcm_src + r * k + c);
       HVX_Vector v1 = next_row_valid
-          ? hmx_vmemu(vtcm_src + (r + 1) * k + c)
+          ? hvx_vmemu(vtcm_src + (r + 1) * k + c)
           : Q6_V_vzero();
 
       Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off0, v0);
@@ -220,9 +220,9 @@ static void interleave_fp16_weight_chunk_to_tiles(__fp16 *restrict vtcm_dst,
 static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
     const uint8_t *packed_32, bool upper_nibbles,
     const __fp16 *scale, const HVX_Vector vlut_cvt) {
-  HVX_Vector vq = hmx_vmemu(packed_32);
+  HVX_Vector vq = hvx_vmemu(packed_32);
   const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-  HVX_Vector v_scales = Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)scale));
+  HVX_Vector v_scales = hvx_vec_splat_f16(*scale);
   // q4x4x2 stores two int4 values per byte. Keep only the selected nibble.
   HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
   v_quants = Q6_V_vand_VV(v_quants, mask_h4);
@@ -246,7 +246,7 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     const __fp16 *scales_4, const HVX_Vector vlut_cvt,
     HVX_Vector out[4]) {
   // Load all 128 packed bytes (4 contiguous 32-byte groups)
-  HVX_Vector vq = hmx_vmemu(packed_128);
+  HVX_Vector vq = hvx_vmemu(packed_128);
   const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
   HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
   v_quants = Q6_V_vand_VV(v_quants, mask_h4);
@@ -260,12 +260,8 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
 
   // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
   HVX_VectorPred q64 = Q6_Q_vsetq_R(64);
-  HVX_Vector v_sc01 = Q6_V_vmux_QVV(q64,
-      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[0])),
-      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[1])));
-  HVX_Vector v_sc23 = Q6_V_vmux_QVV(q64,
-      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[2])),
-      Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)&scales_4[3])));
+  HVX_Vector v_sc01 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[0]), hvx_vec_splat_f16(scales_4[1]));
+  HVX_Vector v_sc23 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[2]), hvx_vec_splat_f16(scales_4[3]));
 
   v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
   v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
@@ -280,8 +276,8 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
 static inline HVX_Vector dequantize_x4x2_q8_0_group_hvx(
     const int8_t *quants_32, const __fp16 *scale) {
-  HVX_Vector vq = hmx_vmemu(quants_32);
-  HVX_Vector v_scales = Q6_Vh_vsplat_R(hmx_fp16_to_bits((__fp16 *)scale));
+  HVX_Vector vq = hvx_vmemu(quants_32);
+  HVX_Vector v_scales = hvx_vec_splat_f16(*scale);
   HVX_Vector v0 = Q6_V_lo_W(Q6_Wh_vunpack_Vb(vq));
   HVX_Vector v_hf = Q6_Vhf_equals_Vh(v0);
   return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
@@ -302,12 +298,12 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
   const int qrow_size = is_q4 ? (k_block / 2) : k_block;
 
   const HVX_Vector vlut_cvt = (weight_type == HMX_TYPE_IQ4_NL)
-      ? hmx_vmem(iq4_nl_to_fp16_lut) : hmx_vmem(q4_0_to_fp16_lut);
+      ? hvx_vmem(iq4_nl_to_fp16_lut) : hvx_vmem(q4_0_to_fp16_lut);
 
   // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
   // Each int32 element holds a K-row-pair (2 adjacent fp16 values).  word[i] at offset i*128
   // maps to K-rows 2i and 2i+1.  Column offset (n*4) added per row.
-  const HVX_Vector v_scat_base = hmx_vmem(weight_transpose_scatter_offsets);
+  const HVX_Vector v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
   const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
   const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 

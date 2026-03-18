@@ -9,6 +9,9 @@
 #include "hex-utils.h"
 #include "hvx-types.h"
 
+#define hvx_vmem(A)   *((HVX_Vector *)(A))
+#define hvx_vmemu(A)  *((HVX_UVector *)(A))
+
 static inline void hvx_vec_store_u(void * restrict dst, uint32_t n, HVX_Vector v) {
     // Rotate as needed.
     v = Q6_V_vlalign_VVR(v, v, (size_t) dst);
