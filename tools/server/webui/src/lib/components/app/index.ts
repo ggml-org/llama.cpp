@@ -8,4 +8,5 @@ export * from './mcp';
 export * from './misc';
 export * from './models';
 export * from './navigation';
+export * from './notebook';
 export * from './server';

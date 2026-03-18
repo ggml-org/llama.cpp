@@ -822,7 +822,7 @@ export class ChatService {
 	 * @param response - HTTP response object
 	 * @returns Promise<Error> - Parsed error with context info if available
 	 */
-	private static async parseErrorResponse(
+	public static async parseErrorResponse(
 		response: Response
 	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
 		try {
