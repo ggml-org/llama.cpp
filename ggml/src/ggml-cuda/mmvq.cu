@@ -492,13 +492,13 @@ static void mul_mat_vec_q_switch_ncols_dst(
             constexpr int c_ncols_dst = 1;
 
             // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
-		    // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
-		    constexpr int qk  = ggml_cuda_type_traits<type>::qk;
-		    constexpr int qi  = ggml_cuda_type_traits<type>::qi;
-		    constexpr int vdr = get_vdr_mmvq(type);
-		    const int blocks_per_row_x = ncols_x / qk;
-		    const int blocks_per_iter_1warp = vdr * warp_size / qi;
-		    const int nwarps = calc_nwarps(type, c_ncols_dst, table_id);
+            // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
+            constexpr int qk  = ggml_cuda_type_traits<type>::qk;
+            constexpr int qi  = ggml_cuda_type_traits<type>::qi;
+            constexpr int vdr = get_vdr_mmvq(type);
+            const int blocks_per_row_x = ncols_x / qk;
+            const int blocks_per_iter_1warp = vdr * warp_size / qi;
+            const int nwarps = calc_nwarps(type, c_ncols_dst, table_id);
             const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
             if (use_small_k) {
                 std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst,
