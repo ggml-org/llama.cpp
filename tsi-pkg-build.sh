@@ -460,7 +460,7 @@ resolve_paths() {
   local arch="$1"
 
   if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.8/${arch}}"
+    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.9/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
   fi
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
