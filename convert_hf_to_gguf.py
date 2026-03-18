@@ -9147,7 +9147,10 @@ class Step35Model(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        nextn = self.hparams.get("num_nextn_predict_layers", 0)
+        source_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        # Step3.5 runtime currently uses only the first MTP layer. Keep the
+        # GGUF export aligned with that runtime until multi-layer MTP lands.
+        nextn = 1 if source_nextn > 0 else 0
         if nextn > 0:
             self.block_count = self.hparams["num_hidden_layers"] + nextn
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -9179,7 +9182,8 @@ class Step35Model(TextModel):
         kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
         swa_pat = [lt == "sliding_attention" for lt in layer_types]
 
-        nextn = self.hparams.get("num_nextn_predict_layers", 0)
+        source_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        nextn = 1 if source_nextn > 0 else 0
         if nextn > 0:
             self.gguf_writer.add_nextn_predict_layers(nextn)
 
@@ -9224,9 +9228,14 @@ class Step35Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
+        source_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        export_nextn = 1 if source_nextn > 0 else 0
+        last_export_layer = n_main + export_nextn
 
         if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
             il = int(m.group(1))
+            if il >= last_export_layer:
+                return
             if il >= n_main:
                 name = name.replace(f"model.layers.{il}.transformer.", f"model.layers.{il}.")
 

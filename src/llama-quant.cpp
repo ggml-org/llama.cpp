@@ -99,11 +99,17 @@ static std::string remap_imatrix(const std::string & orig_name, const std::map<i
 
 static bool tensor_name_match_token_embd(const char * tensor_name) {
     return std::strcmp(tensor_name, "token_embd.weight") == 0 ||
-           std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0;
+           std::strcmp(tensor_name, "per_layer_token_embd.weight") == 0 ||
+           std::strstr(tensor_name, ".nextn.embed_tokens.weight") != nullptr;
 }
 
 static bool tensor_name_match_output_weight(const char * tensor_name) {
-    return std::strcmp(tensor_name, "output.weight") == 0;
+    return std::strcmp(tensor_name, "output.weight") == 0 ||
+           std::strstr(tensor_name, ".nextn.shared_head_head.weight") != nullptr;
+}
+
+static bool tensor_name_should_ignore_imatrix(const char * tensor_name) {
+    return std::strstr(tensor_name, ".nextn.") != nullptr;
 }
 
 //
@@ -300,7 +306,7 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize norm tensors
     quantize &= name.find("_norm.weight") == std::string::npos;
 
-    quantize &= params->quantize_output_tensor || name != "output.weight";
+    quantize &= params->quantize_output_tensor || !tensor_name_match_output_weight(name.c_str());
 
     // do not quantize expert gating tensors
     // NOTE: can't use LLM_TN here because the layer number is not known
@@ -1194,6 +1200,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             }
                         }
                     }
+                }
+                if (tensor_name_should_ignore_imatrix(tensor->name)) {
+                    imatrix = nullptr;
                 }
                 if (!imatrix && tm.requires_imatrix) {
                     LLAMA_LOG_ERROR("\n\n============================================================\n");

@@ -2586,6 +2586,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
 
+                if (params.mtp && hparams.nextn_predict_layers > 1) {
+                    LLAMA_LOG_WARN("%s: Step35 MTP uses only the first nextn layer\n", __func__);
+                }
+
                 if (params.mtp && hparams.nextn_predict_layers > 0) {
                     hparams.n_layer_kv_from_start = hparams.n_layer;
                 } else {
