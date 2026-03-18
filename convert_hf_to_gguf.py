@@ -1150,9 +1150,8 @@ class TextModel(ModelBase):
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
 
-        file_type = gguf.LlamaFileType.MOSTLY_NVFP4 if self._is_nvfp4 else self.ftype
-        self.gguf_writer.add_file_type(file_type)
-        logger.info(f"gguf: file type = {file_type}")
+        self.gguf_writer.add_file_type(self.ftype)
+        logger.info(f"gguf: file type = {self.ftype}")
 
     def write_vocab(self):
         if len(self.gguf_writer.tensors) != 1:
