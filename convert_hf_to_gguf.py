@@ -876,8 +876,11 @@ class ModelBase:
         if self.metadata.name is None:
             self.metadata.name = self.dir_model.name
 
-        if self._is_nvfp4 and self.model_name is None and self.metadata.name is not None and self.metadata.name.endswith(" BF16"):
-            self.metadata.name = f"{self.metadata.name[:-5]} NVFP4"
+        if self.ftype in (gguf.LlamaFileType.ALL_F32, gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16):
+            if self._is_nvfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
+            elif self._is_mxfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
