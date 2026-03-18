@@ -57,7 +57,6 @@
 		// Handle ?q= parameter - create new conversation and send message
 		if (qParam !== null) {
 			await conversationsStore.createConversation();
-			await chatStore.sendMessage(qParam);
 			clearUrlParams();
 		} else if (modelParam || newChatParam === 'true') {
 			clearUrlParams();
