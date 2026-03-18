@@ -82,6 +82,10 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
 
         cur = ggml_add(ctx0, cur, ffn_inp);
 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
         inpL = cur;
     }
     cur = inpL;

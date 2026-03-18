@@ -88,6 +88,9 @@ llm_build_neo_bert::llm_build_neo_bert(const llama_model & model, const llm_grap
         // attentions bypass the intermediate layer
         cur = ggml_add(ctx0, cur, ffn_inp);
 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
         // input for next layer
         inpL = cur;
     }

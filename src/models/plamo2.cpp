@@ -70,7 +70,11 @@ llm_build_plamo2::llm_build_plamo2(const llama_model & model, const llm_graph_pa
         // residual connection
         cur = ggml_add(ctx0, cur, residual);
         cb(cur, "ffn_residual", il);
+        
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
 
+        // input for next layer
         inpL = cur;
     }
 

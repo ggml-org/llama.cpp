@@ -66,7 +66,10 @@ llm_build_jais::llm_build_jais(const llama_model & model, const llm_graph_params
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         }
+
+        // Residual connection
         inpL = ggml_add(ctx0, cur, ffn_inp);
+        inpL = build_cvec(inpL, il);
         cb(inpL, "l_out", il);
     }
     cur = build_norm(inpL,
