@@ -67,10 +67,13 @@ llm_build_jais::llm_build_jais(const llama_model & model, const llm_graph_params
             cb(cur, "ffn_out", il);
         }
 
-        // Residual connection
-        inpL = ggml_add(ctx0, cur, ffn_inp);
-        inpL = build_cvec(inpL, il);
-        cb(inpL, "l_out", il);
+        cur = ggml_add(ctx0, cur, ffn_inp);
+
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
+        inpL = cur;
     }
     cur = build_norm(inpL,
             model.output_norm,

@@ -171,9 +171,6 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
         // output layer norm
         cur = build_norm(cur, model.layers[il].layer_out_norm, model.layers[il].layer_out_norm_b, LLM_NORM, il);
 
-        cur = build_cvec(cur, il);
-        cb(cur, "l_out", il);
-
         // input for next layer
         inpL = cur;
     }
