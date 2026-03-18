@@ -610,11 +610,7 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
 
       HVX_Vector v_src = ((const HVX_Vector *) tile)[r1 / 2];
 
-      // HVX_VectorPair vp = hvx_vec_f16_to_f32(v_src);
-      HVX_VectorPair vp = hmx_hvx_vhf_to_wsf(v_src);
-
-      // hvx_vec_dump_f32("hmx-f32-1: v0", Q6_V_lo_W(vp));
-      // hvx_vec_dump_f32("hmx-f32-1: v1", Q6_V_hi_W(vp));
+      HVX_VectorPair vp = hvx_vec_f16_to_f32_hmx(v_src);
 
       HVX_Vector *pv_out0 = (HVX_Vector *) (dst + (r * n + c + 0));
       HVX_Vector *pv_out1 = (HVX_Vector *) (dst + (r * n + c + n));  // next row in global memory
