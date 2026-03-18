@@ -160,7 +160,7 @@ static inline HVX_VectorPair hmx_hvx_vqf16_to_wqf32(HVX_Vector v_src) {
 
 // Convert half-float to two single-floats.
 static inline HVX_VectorPair hmx_hvx_vhf_to_wsf(HVX_Vector v) {
-#if 0
+#if 1
     HVX_Vector q = Q6_Vqf16_vadd_VhfVhf(v, Q6_V_vzero());
     HVX_VectorPair p = hmx_hvx_vqf16_to_wqf32(q);
 #else
