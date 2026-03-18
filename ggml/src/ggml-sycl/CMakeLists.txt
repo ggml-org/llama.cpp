@@ -7,6 +7,11 @@ endif()
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
 if (DEFINED ENV{ONEAPI_ROOT})
+    if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+        message(FATAL_ERROR
+            "oneAPI detected but compiler is not icpx (got '${CMAKE_CXX_COMPILER_ID}').\n"
+            "Re-run CMake with: -DCMAKE_CXX_COMPILER=icpx")
+    endif()
     message(STATUS "Using oneAPI Release SYCL compiler (icpx).")
 elseif(SUPPORTS_SYCL)
     message(WARNING "Using open-source SYCL compiler (clang++). Didn't detect ENV {ONEAPI_ROOT}.
@@ -33,7 +38,6 @@ list(APPEND GGML_SOURCES_SYCL ${SRCS})
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 if (WIN32)
-    # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
     if( ${CMAKE_GENERATOR} MATCHES "Visual Studio" AND NOT (${CMAKE_GENERATOR_TOOLSET} MATCHES "Intel C"))
         set_target_properties(ggml-sycl PROPERTIES VS_PLATFORM_TOOLSET "Intel C++ Compiler 2025")
         set(CMAKE_CXX_COMPILER "icx")
@@ -83,30 +87,25 @@ endmacro()
 
 detect_and_find_package(IntelSYCL)
 if (IntelSYCL_FOUND)
-    # Use oneAPI CMake when possible
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
 else()
-    # Fallback to the simplest way of enabling SYCL when using intel/llvm nightly for instance
     target_compile_options(ggml-sycl PRIVATE "-fsycl")
     target_link_options(ggml-sycl PRIVATE "-fsycl")
 endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
-# Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
     find_package(DNNL)
     if(DNNL_FOUND)
         if (NOT DEFINED DNNL_GPU_VENDOR)
-            # default to intel target
             set(DNNL_GPU_VENDOR "INTEL")
             if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
                 message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
             endif()
         endif()
 
-        # Verify oneDNN was compiled for the same target as llama
         if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
             target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
             set(GGML_SYCL_DNNL 1)
@@ -137,14 +136,12 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
 
-    # Link against Intel oneMKL
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(SYCL_COMPILER ON)
     endif()
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
 else()
-    # default for other target
     message(FATAL_ERROR "GGML_SYCL_TARGET is not supported")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
 endif()
@@ -158,4 +155,3 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_compile_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
     target_link_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
 endif()
-
