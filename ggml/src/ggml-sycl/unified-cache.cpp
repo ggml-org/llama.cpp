@@ -5934,21 +5934,25 @@ size_t unified_cache_available_for_compute(int device) {
         return 0;
     }
 
-    // Query actual free VRAM from the driver as ground truth.
-    // The budget-based calculation (base_budget - reserved - used) can return 0
-    // when g_runtime_reserved_bytes includes pre-emptive reservations (DMA staging,
-    // headroom) or when the weight buffer allocation exceeds the 90% budget cap.
-    // Actual free VRAM is the most reliable indicator of what's available for
-    // new cache entries (expert caching, SOA conversions, etc.).
+    // Use budget-based availability as the primary limit.  The budget already
+    // accounts for reserved bytes (KV cache, compute buffers) and VRAM_BUDGET_PCT.
+    // Previously this function returned live free VRAM which could exceed the budget
+    // (e.g. 13 GB free on B50 but only 10.8 GB budget after reserves), causing
+    // Phase 2 expert uploads to overshoot and trigger budget-exceeded crashes later.
+    //
+    // We still query live VRAM as a safety cap: if the driver reports less free
+    // memory than the budget says, use the lower value.
+    const size_t budget_avail = it->second->available_for_compute();
     size_t free_vram = 0, total_vram = 0;
     ggml_backend_sycl_get_device_memory(effective_device, &free_vram, &total_vram);
     if (free_vram == 0) {
-        return it->second->available_for_compute();  // fallback to budget-based
+        return budget_avail;
     }
     // Reserve 256 MB headroom for driver structures, compute scratch, and
     // transient allocations that come and go during inference.
-    const size_t headroom = size_t(256) << 20;
-    return free_vram > headroom ? free_vram - headroom : 0;
+    const size_t headroom   = size_t(256) << 20;
+    const size_t live_avail = free_vram > headroom ? free_vram - headroom : 0;
+    return std::min(budget_avail, live_avail);
 }
 
 size_t unified_cache_total_managed(int device) {

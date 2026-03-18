@@ -1228,6 +1228,29 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         // and resolve host accessibility at Phase 2 upload time.
         auto * src0_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
 
+        // Host-resident expert tensors (SYCL_Host buffer) may not have
+        // ggml_tensor_extra_gpu allocated because the host buffer type
+        // does not call ggml_backend_sycl_buffer_init_tensor.  Without
+        // extra, the MoE cache key generation fails (model_id = 0,
+        // cache_uuid = 0) and Phase 1/2 placement skips all experts,
+        // causing them to fall back to CPU-only dispatch.
+        // Fix: allocate extra on-demand and attach it to the tensor.
+        // Lifetime is managed by a static vector (freed at process exit).
+        if (!src0_extra) {
+            static std::vector<std::unique_ptr<ggml_tensor_extra_gpu>> s_host_extras;
+            static std::mutex                                          s_host_extras_mutex;
+            auto new_extra = std::make_unique<ggml_tensor_extra_gpu>();
+            ggml_sycl_register_optimize_feature(&new_extra->optimized_feature);
+            src0_extra                             = new_extra.get();
+            const_cast<ggml_tensor *>(src0)->extra = src0_extra;
+            std::lock_guard<std::mutex> lock(s_host_extras_mutex);
+            s_host_extras.push_back(std::move(new_extra));
+            GGML_LOG_INFO(
+                "[MOE-HYBRID] Created ggml_tensor_extra_gpu for host-resident "
+                "expert tensor %s (buffer=%s)\n",
+                src0->name ? src0->name : "?", src0->buffer ? ggml_backend_buffer_name(src0->buffer) : "none");
+        }
+
         // Validate src0->data before computing expert offsets.
         // With aligned_alloc host buffers, some tensor data pointers may be
         // corrupt if the buffer wasn't properly allocated or mapped.
@@ -1424,6 +1447,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             int             dev;
             size_t          n_slots;
             size_t          n_uploaded;
+            size_t          bytes_remaining;  // actual VRAM budget tracking (SOA-aware)
             unified_cache * cache;
         };
         std::vector<device_budget> budgets;
@@ -1438,7 +1462,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             GGML_LOG_INFO("[MOE-PHASE2] GPU%d: %zu slots available (%.1f MB / %.1f KB per expert)\n",
                           d, slots, avail / (1024.0 * 1024.0), expert_weight_bytes / 1024.0);
             if (slots > 0) {
-                budgets.push_back({ d, slots, 0, cache_d });
+                budgets.push_back({ d, slots, 0, avail, cache_d });
             }
         }
 
@@ -1493,7 +1517,30 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 }
             }
 
+            // Time-budget Phase 2: stop uploading after 30s to avoid blocking init.
+            // Override with GGML_SYCL_PHASE2_TIMEOUT_SEC.
+            int          phase2_timeout_sec = 30;
+            const char * timeout_env        = std::getenv("GGML_SYCL_PHASE2_TIMEOUT_SEC");
+            if (timeout_env) {
+                int val = std::atoi(timeout_env);
+                if (val > 0) {
+                    phase2_timeout_sec = val;
+                }
+            }
+            const auto phase2_start    = std::chrono::steady_clock::now();
+            const auto phase2_deadline = phase2_start + std::chrono::seconds(phase2_timeout_sec);
+            bool       phase2_timeout  = false;
+
             for (size_t oi = 0; oi < upload_order.size() && total_uploaded < max_phase2_upload; oi++) {
+                // Check time budget every 16 uploads to avoid clock overhead
+                if ((total_uploaded & 15) == 0 && total_uploaded > 0) {
+                    if (std::chrono::steady_clock::now() >= phase2_deadline) {
+                        phase2_timeout = true;
+                        GGML_LOG_INFO("[MOE-PHASE2] Time budget exhausted (%ds), stopping after %zu experts\n",
+                                      phase2_timeout_sec, total_uploaded);
+                        break;
+                    }
+                }
                 size_t ei = upload_order[oi];
                 if (placed[ei]) {
                     continue;
@@ -1529,6 +1576,19 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 const size_t  soa_bytes   = ggml_sycl_layout_bytes_for_dims(
                     info.tensor->type, ncols, nrows, GGML_LAYOUT_SOA, budget.dev);
                 const size_t  dst_bytes   = (soa_bytes > 0) ? soa_bytes : info.bytes;
+
+                // Budget guard: stop uploading to this device if the SOA-expanded
+                // expert size would exceed the remaining VRAM.  Without this check,
+                // the slot count (computed from AOS bytes) overestimates capacity
+                // and causes VRAM exhaustion + Level Zero SIGABRT.
+                if (dst_bytes > budget.bytes_remaining) {
+                    budget.n_slots = 0;  // mark device as full
+                    GGML_LOG_INFO(
+                        "[MOE-PHASE2] GPU%d VRAM budget exhausted: need %zu bytes, "
+                        "remaining %zu bytes (uploaded %zu experts)\n",
+                        budget.dev, dst_bytes, budget.bytes_remaining, budget.n_uploaded);
+                    continue;  // try next expert (may fit on different device)
+                }
 
                 // Determine if source pointer is device memory (VRAM on device 0).
                 // If so, D2H stage it via device 0's queue before passing to
@@ -1611,10 +1671,17 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                         info.layer_id, info.expert_idx, static_cast<int>(total_uploaded));
                     budget.n_slots--;
                     budget.n_uploaded++;
+                    budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
                     total_uploaded++;
                     placed[ei] = true;
                 }
             }
+
+            // Log Phase 2 elapsed time
+            const auto phase2_elapsed = std::chrono::steady_clock::now() - phase2_start;
+            const auto phase2_ms      = std::chrono::duration_cast<std::chrono::milliseconds>(phase2_elapsed).count();
+            GGML_LOG_INFO("[MOE-PHASE2] Completed: %zu experts uploaded in %.1f s%s\n", total_uploaded,
+                          phase2_ms / 1000.0, phase2_timeout ? " (timeout)" : "");
         }
 
         // Verify Phase 2 placement table integrity
@@ -31882,8 +31949,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
 
                         if (!expert_ptr) {
-                            GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n",
-                                           layer_id, (int) i02);
+                            GGML_SYCL_DEBUG("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n", layer_id,
+                                            (int) i02);
                             continue;
                         }
                     } else {
@@ -32026,8 +32093,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 if (!expert_ptr) {
                     // Cannot use mmap fallback - GPU cannot access non-USM memory
                     // Skip this expert instead of crashing with DEVICE_LOST
-                    GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached (batch) - memory exhausted, skipping\n", layer_id,
-                                   (int) i02);
+                    GGML_SYCL_DEBUG("[MoE] Expert L%d:E%d not cached (batch) - memory exhausted, skipping\n", layer_id,
+                                    (int) i02);
                     continue;
                 }
             } else {
@@ -41840,6 +41907,25 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     } offload_stats_guard{ offload_stats_active, sycl_ctx ? sycl_ctx->device : -1 };
 
     ggml_sycl_set_main_device(sycl_ctx->device);
+
+    // One-shot VRAM diagnostic: log per-device memory state on first graph_compute.
+    // Helps diagnose VRAM exhaustion issues in multi-GPU configurations.
+    {
+        static std::once_flag vram_diag_flag;
+        std::call_once(vram_diag_flag, [&]() {
+            const int n_devs = ggml_sycl_info().total_gpu_count;
+            for (int d = 0; d < n_devs && d < GGML_SYCL_MAX_DEVICES; d++) {
+                size_t free_mem = 0, total_mem = 0;
+                ggml_backend_sycl_get_device_memory(d, &free_mem, &total_mem);
+                GGML_LOG_INFO(
+                    "[GRAPH-COMPUTE] device %d: free=%.1f MB / total=%.1f MB "
+                    "(used=%.1f MB)\n",
+                    d, free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0),
+                    (total_mem - free_mem) / (1024.0 * 1024.0));
+            }
+        });
+    }
+
     std::lock_guard<std::mutex> graph_lock(sycl_ctx->graph_mutex);
     if (g_sycl_graph_inflight.load(std::memory_order_relaxed) > 1) {
         g_sycl_graph_multithreaded.store(true, std::memory_order_relaxed);
