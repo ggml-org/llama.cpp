@@ -83,7 +83,6 @@ struct ggml_webgpu_shader_lib_context {
     uint32_t sg_mat_n                 = 0;
     uint32_t sg_mat_k                 = 0;
     uint32_t max_subgroup_size        = 0;
-    ggml_op  op;
 };
 
 struct webgpu_pipeline {
@@ -152,20 +151,19 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
     }
 };
 
-/** RMS_NORM **/
-/** L2_NORM **/
+/** Row Norm **/
 
-struct ggml_webgpu_rms_norm_pipeline_key {
+struct ggml_webgpu_row_norm_pipeline_key {
     ggml_op op;
     bool    inplace;
 
-    bool operator==(const ggml_webgpu_rms_norm_pipeline_key & other) const {
+    bool operator==(const ggml_webgpu_row_norm_pipeline_key & other) const {
         return op == other.op && inplace == other.inplace;
     }
 };
 
-struct ggml_webgpu_rms_norm_pipeline_key_hash {
-    size_t operator()(const ggml_webgpu_rms_norm_pipeline_key & key) const {
+struct ggml_webgpu_row_norm_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_row_norm_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.op);
         ggml_webgpu_hash_combine(seed, key.inplace);
@@ -457,8 +455,8 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
-    std::unordered_map<ggml_webgpu_rms_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_rms_norm_pipeline_key_hash>
-        rms_norm_pipelines;                                            // op, inplace
+    std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
+        row_norm_pipelines;                                            // op/inplace
     std::unordered_map<ggml_webgpu_get_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_get_rows_pipeline_key_hash>
         get_rows_pipelines;                                            // src_type, vectorized
     std::unordered_map<ggml_webgpu_unary_pipeline_key, webgpu_pipeline, ggml_webgpu_unary_pipeline_key_hash>
@@ -503,14 +501,14 @@ class ggml_webgpu_shader_lib {
         return sum_rows_pipelines[1];
     }
 
-    webgpu_pipeline get_rms_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_rms_norm_pipeline_key key = {
-            .op      = context.op,
+    webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_row_norm_pipeline_key key = {
+            .op      = context.dst->op,
             .inplace = context.inplace,
         };
 
-        auto it = rms_norm_pipelines.find(key);
-        if (it != rms_norm_pipelines.end()) {
+        auto it = row_norm_pipelines.find(key);
+        if (it != row_norm_pipelines.end()) {
             return it->second;
         }
         std::vector<std::string> defines;
@@ -526,7 +524,7 @@ class ggml_webgpu_shader_lib {
                 variant = "l2_norm";
                 break;
             default:
-                GGML_ABORT("Unsupported norm op for rms_norm shader");
+                GGML_ABORT("Unsupported op for row_norm shader");
         }
 
         if (key.inplace) {
@@ -536,9 +534,9 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed          = preprocessor.preprocess(wgsl_rms_norm, defines);
-        rms_norm_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, variant);
-        return rms_norm_pipelines[key];
+        auto processed          = preprocessor.preprocess(wgsl_row_norm, defines);
+        row_norm_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, variant);
+        return row_norm_pipelines[key];
     }
 
     webgpu_pipeline get_argmax_pipeline(const ggml_webgpu_shader_lib_context & context) {
