@@ -3260,6 +3260,14 @@ void llama_model::load_vocab(llama_model_loader & ml) {
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
 #ifdef GGML_USE_SYCL
+    // S1: Route all weights to host-pinned memory so the unified cache is the
+    // sole owner of VRAM placement.  This must be set BEFORE set_model_loading
+    // so the depth counter in set_model_loading takes the S1 path.
+    // Check: skip if model will be entirely CPU (n_gpu_layers == 0).
+    if (params.n_gpu_layers > 0) {
+        ggml_backend_sycl_set_all_weights_host();
+    }
+
     // Signal SYCL backend that we're in model load phase (buffer allocation)
     // This allows the unified cache to avoid monolithic pinned allocations
     ggml_backend_sycl_set_model_loading(true);

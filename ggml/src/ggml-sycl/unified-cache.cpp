@@ -4639,7 +4639,7 @@ void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
         }
     }
     // Recalculate model placement decision based on new effective budget.
-    // This ensures g_model_exceeds_vram reflects actual available VRAM after KV cache allocation.
+    // Currently a no-op — the unified cache manages budget internally.
     ggml_sycl_recalc_model_exceeds_vram(effective_budget);
 }
 

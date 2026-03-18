@@ -1610,8 +1610,8 @@ ExpertPlacementTable & get_expert_placement_table();
 // These functions are defined in ggml-sycl.cpp but called from unified-cache.cpp
 // to recalculate model placement decisions when VRAM budget changes.
 
-// Recalculate g_model_exceeds_vram based on current effective budget.
-// Called when runtime reservations (KV cache, compute buffers) change.
+// No-op: unified_cache_active() replaces g_model_exceeds_vram.
+// Kept for API compatibility — the unified cache manages budget internally.
 void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget);
 
 // Get the total model size from tensor inventory (for budget calculations)

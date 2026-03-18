@@ -71,6 +71,14 @@ GGML_BACKEND_API bool ggml_backend_sycl_cpu_offload_available(void);
 
 // Weight residency policy: true when dense weights should remain host-backed and streamed via unified cache.
 GGML_BACKEND_API bool ggml_backend_sycl_weights_evictable(void);
+
+// S1: all-weights-host mode — routes ALL weights to host-pinned memory.
+// The unified cache manages on-demand VRAM uploads for all weights.
+GGML_BACKEND_API void ggml_backend_sycl_set_all_weights_host(void);
+GGML_BACKEND_API bool ggml_backend_sycl_all_weights_host(void);
+
+// MoE expert split tracking — set by llama-model.cpp when expert tensors are routed to host.
+GGML_BACKEND_API void ggml_backend_sycl_set_moe_expert_split(int n_expert, int n_expert_used);
 // Set unified cache budget as a percentage of free VRAM (clamped 1..100).
 GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_budget_pct(int pct);
 // Set unified host cache budget as a percentage of total system RAM (clamped 1..100).

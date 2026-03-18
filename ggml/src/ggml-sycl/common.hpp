@@ -2280,7 +2280,8 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         if (host_weights) {
             if (target == GGML_LAYOUT_AOS) {
                 // Evictable weights must go through unified cache to avoid direct host/mmap access.
-                if (ggml_backend_sycl_weights_evictable()) {
+                // Exception: S1 mode — tensor->data is host-pinned, safe for zero-copy AOS access.
+                if (ggml_backend_sycl_weights_evictable() && !ggml_backend_sycl_all_weights_host()) {
                     ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_MISS);
                     if (out_source) {
                         *out_source = "host_cache_aos_miss";
@@ -2308,7 +2309,8 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         return ggml_sycl_get_data_ptr(tensor, device);
     }
     if (target == GGML_LAYOUT_AOS) {
-        if (ggml_sycl::unified_cache_enabled() && ggml_backend_sycl_weights_evictable()) {
+        if (ggml_sycl::unified_cache_enabled() && ggml_backend_sycl_weights_evictable() &&
+            !ggml_backend_sycl_all_weights_host()) {
             if (out_source) {
                 *out_source = "aos_requires_cache";
             }

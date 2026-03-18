@@ -165,10 +165,18 @@ static std::atomic<int> g_sycl_graph_inflight{ 0 };
 static std::atomic<bool> g_sycl_graph_multithreaded{ false };
 std::atomic<bool>        g_ggml_sycl_debug_forced_off{ false };
 // Force VRAM placement override (GGML_SYCL_FORCE_VRAM=1)
-// When set, ignores g_model_exceeds_vram and always prefers VRAM placement
+// When set, always prefers VRAM placement regardless of budget
 static std::atomic<int>  g_ggml_sycl_force_vram{ -1 };  // -1 = not initialized, 0 = disabled, 1 = enabled
-// Forward declaration - defined later in tensor inventory section
-extern std::atomic<bool> g_model_exceeds_vram;
+
+// Returns true when the unified cache should manage weight placement.
+// The cache is always active when initialized — it handles VRAM placement for all model sizes.
+static bool unified_cache_active() {
+    return ggml_sycl::unified_cache_enabled();
+}
+
+// Tracks whether the model's effective weight size exceeds the VRAM budget.
+// Set once by set_tensor_inventory(), queried by ggml_backend_sycl_model_exceeds_vram().
+static std::atomic<bool> g_model_exceeds_budget{ false };
 
 // ============================================================================
 // FP16 Weight Cache: Persistent pre-dequantized FP16 weights in VRAM
@@ -2151,7 +2159,7 @@ static bool ggml_sycl_unified_dispatch_enabled() {
 }
 
 // Check if VRAM placement is forced via environment variable
-// When GGML_SYCL_FORCE_VRAM=1, ignores g_model_exceeds_vram and always prefers VRAM
+// When GGML_SYCL_FORCE_VRAM=1, always prefers VRAM placement regardless of budget
 static bool ggml_sycl_force_vram_enabled() {
     int val = g_ggml_sycl_force_vram.load(std::memory_order_acquire);
     if (val < 0) {
@@ -3206,18 +3214,36 @@ static void ggml_sycl_log_layout_mismatch_once(const ggml_sycl_cache_id & key_id
     }
 }
 
+// Forward declaration — full definition with API functions below.
+static std::atomic<bool> g_all_weights_host{ false };
+
 void ggml_backend_sycl_set_model_loading(bool loading) {
-    const bool was_loading = g_sycl_in_model_load.load(std::memory_order_acquire);
-    g_sycl_in_model_load.store(loading, std::memory_order_release);
+    // Depth counter tracks nesting of load_tensors → load_all_data.
+    // S1 mode: only clear registry at outermost entry, only preload at outermost exit.
+    //   This preserves host weight registrations from load_tensors across load_all_data.
+    // Non-S1 (baseline): always clear and always preload (original behavior).
+    //   The depth counter is maintained but not used for gating.
+    static std::atomic<int> g_model_load_depth{ 0 };
+
     if (loading) {
-        g_sycl_layouts_epoch.fetch_add(1, std::memory_order_acq_rel);
-        ggml_sycl_clear_layout_choices();
-        // Clear host weight registry to avoid stale tensor pointers from previous loads.
-        // Tensors will be re-registered during the current model load.
-        ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::registry_only);
+        const int depth = g_model_load_depth.fetch_add(1, std::memory_order_acq_rel);
+        g_sycl_in_model_load.store(true, std::memory_order_release);
+        // S1: only clear on outermost entry.  Non-S1: always clear.
+        if (depth == 0 || !g_all_weights_host.load(std::memory_order_acquire)) {
+            g_sycl_layouts_epoch.fetch_add(1, std::memory_order_acq_rel);
+            ggml_sycl_clear_layout_choices();
+            ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::registry_only);
+        }
         return;
     }
-    if (was_loading) {
+
+    const int prev = g_model_load_depth.fetch_sub(1, std::memory_order_acq_rel);
+    if (prev <= 1) {
+        g_model_load_depth.store(0, std::memory_order_release);  // safety clamp
+    }
+    // S1: only preload on outermost exit.  Non-S1: always preload.
+    if (prev <= 1 || !g_all_weights_host.load(std::memory_order_acquire)) {
+        g_sycl_in_model_load.store(false, std::memory_order_release);
         ggml_sycl_preload_model_weights();
     }
 }
@@ -3377,7 +3403,7 @@ bool ggml_backend_sycl_weights_evictable(void) {
     static std::atomic<int> g_env_cached{ -1 };  // -1 = uninitialized, 0 = false, 1 = true, 2 = auto
     int                     env_cached = g_env_cached.load(std::memory_order_acquire);
     if (env_cached == -1) {
-        int resolved = 2;  // default = auto (follow g_model_exceeds_vram)
+        int resolved = 2;  // default = auto (follow S1 all-weights-host mode)
         if (ggml_sycl::unified_cache_enabled()) {
             const char * env = std::getenv("GGML_SYCL_WEIGHTS_EVICTABLE");
             if (env != nullptr) {
@@ -3398,9 +3424,22 @@ bool ggml_backend_sycl_weights_evictable(void) {
         return false;
     }
 
-    // Auto mode: enable when model exceeds VRAM (requires streaming from host)
-    // This allows large models to work automatically without manual env var configuration.
-    return g_model_exceeds_vram.load(std::memory_order_acquire);
+    // Auto mode: enable eviction only when S1 all-weights-host is active
+    // (host-pinned weights need cache-managed VRAM uploads with potential eviction).
+    // For models that fit in VRAM without S1, eviction is not needed.
+    return ggml_backend_sycl_all_weights_host();
+}
+
+// --- S1: All-weights-host mode API ---
+void ggml_backend_sycl_set_all_weights_host(void) {
+    if (g_all_weights_host.exchange(true, std::memory_order_acq_rel)) {
+        return;  // already set
+    }
+    GGML_LOG_INFO("[SYCL] all-weights-host mode: unified cache manages all VRAM uploads\n");
+}
+
+bool ggml_backend_sycl_all_weights_host(void) {
+    return g_all_weights_host.load(std::memory_order_acquire);
 }
 
 // --- MoE expert split tracking ---
@@ -3880,7 +3919,6 @@ static size_t                                      g_moe_expert_total_bytes     
 static int                                         g_moe_n_experts_total         = 0;
 static int                                         g_moe_n_experts_used          = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
-std::atomic<bool>                                  g_model_exceeds_vram{ false };  // True when model > VRAM budget
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
 
@@ -4004,8 +4042,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // For MoE models, use effective weight size (only active experts needed in VRAM)
     const size_t effective_model_size = ggml_sycl::compute_moe_effective_weight_bytes(
         g_tensor_inventory_total_size, g_moe_expert_total_bytes, g_moe_n_experts_total, g_moe_n_experts_used);
-    const bool model_exceeds_vram = effective_model_size > vram_budget;
-    g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
+    const bool model_exceeds_vram = effective_model_size > vram_budget ||
+                                     g_all_weights_host.load(std::memory_order_acquire);
+    g_model_exceeds_budget.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
     GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB, model_size=%.1f MB, exceeds=%s\n", budget_pct,
@@ -4045,7 +4084,8 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     GGML_LOG_INFO("[SYCL-BUDGET] vram_budget_base=%.1f MB, final_budget=%.1f MB, model_size=%.1f MB\n",
                   vram_budget_base / (1024.0 * 1024.0), vram_budget / (1024.0 * 1024.0),
                   g_tensor_inventory_total_size / (1024.0 * 1024.0));
-    GGML_LOG_INFO("[SYCL-BUDGET] g_model_exceeds_vram=%s\n",
+    GGML_LOG_INFO("[SYCL-BUDGET] unified_cache_active=%s, model_exceeds_budget=%s\n",
+                  unified_cache_active() ? "true" : "false",
                   model_exceeds_vram ? "true (HOST placement)" : "false (VRAM placement)");
 
     // Reserve extra VRAM headroom for large models that exceed VRAM (onemath/DNN scratch).
@@ -4115,74 +4155,10 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load() ? "enabled" : "disabled");
 }
 
-// Recalculate g_model_exceeds_vram based on current effective budget.
-// Called when runtime reservations (KV cache, compute buffers) change the available VRAM.
-// This ensures the model placement decision reflects actual available memory.
+// No-op: unified_cache_active() replaces g_model_exceeds_vram.
+// The unified cache manages budget internally; external recalculation is no longer needed.
 void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
-    // Determine placement change under the inventory mutex, then release it
-    // BEFORE calling layer streaming init.  The streaming init chain calls
-    // unified_cache_add_runtime_bytes → update_reserved_bytes → recalc,
-    // which would deadlock if g_tensor_inventory_mutex were still held.
-    bool need_streaming_init = false;
-    int  stream_device       = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
-        if (g_tensor_inventory_total_size == 0) {
-            return;
-        }
-        const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
-
-        // When the initial inventory (set_tensor_inventory) determined the model
-        // fits within VRAM budget, do NOT override that decision. The framework's
-        // device buffer already holds all assigned weights in VRAM. Runtime budget
-        // depletion (KV cache, compute) doesn't invalidate the device allocation —
-        // it just means the unified cache has no extra budget for layout copies.
-        if (!old_exceeds) {
-            return;
-        }
-        const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
-
-        if (old_exceeds != new_exceeds) {
-            g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
-            GGML_LOG_INFO(
-                "[SYCL-BUDGET] Recalculated g_model_exceeds_vram: %s -> %s "
-                "(model=%.1f MB, effective_budget=%.1f MB)\n",
-                old_exceeds ? "true" : "false", new_exceeds ? "true" : "false",
-                g_tensor_inventory_total_size / (1024.0 * 1024.0), effective_budget / (1024.0 * 1024.0));
-
-            // Check if layer streaming init is needed — actual init deferred
-            // until after mutex release to avoid recursive deadlock.
-            const bool cpu_offload_avail = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
-            if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty() && !cpu_offload_avail) {
-                stream_device       = g_tensor_inventory_device;
-                need_streaming_init = true;
-            }
-        }
-    }
-
-    // g_tensor_inventory_mutex released — safe to call streaming init which
-    // triggers unified_cache_add_runtime_bytes → update_reserved_bytes → recalc
-    if (need_streaming_init) {
-        auto & mgr = ggml_sycl::get_layer_stream_manager(stream_device);
-        if (!mgr.is_active()) {
-            {
-                std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
-                mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
-            }
-            sycl::queue & q = ggml_sycl_get_device(stream_device).default_queue();
-            if (mgr.allocate_buffers(q)) {
-                ggml_sycl::unified_cache_add_runtime_bytes(stream_device, mgr.allocated_bytes());
-                GGML_LOG_INFO(
-                    "[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers (%.1f MB "
-                    "budgeted)\n",
-                    mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0),
-                    mgr.allocated_bytes() / (1024.0 * 1024.0));
-            } else {
-                GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
-            }
-        }
-    }
+    (void) effective_budget;
 }
 
 // Get the total model size from tensor inventory (for budget calculations)
@@ -4212,7 +4188,7 @@ bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
 
 bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
-    return g_model_exceeds_vram.load(std::memory_order_acquire);
+    return g_model_exceeds_budget.load(std::memory_order_acquire);
 }
 
 // Export unified cache budget for llama_params_fit integration
@@ -4281,8 +4257,8 @@ void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * 
     if (!tensor_name) {
         return nullptr;
     }
-    // Only check tiered cache when model exceeds VRAM - otherwise weights are in device memory
-    if (!g_model_exceeds_vram.load(std::memory_order_acquire)) {
+    // Only check tiered cache when unified cache is managing weights
+    if (!unified_cache_active()) {
         return nullptr;
     }
     // First check inventory index (fast path for inventory check)
@@ -4330,8 +4306,8 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     if (!tensor || tensor->name[0] == '\0') {
         return nullptr;
     }
-    // Only check tiered cache when model exceeds VRAM
-    if (!g_model_exceeds_vram.load(std::memory_order_acquire)) {
+    // Only check tiered cache when unified cache is managing weights
+    if (!unified_cache_active()) {
         return nullptr;
     }
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
@@ -5646,7 +5622,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                                    ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 
             // Register host pointer with layer stream manager for DMA
-            if (is_weight && tensor->name && tensor->data && g_model_exceeds_vram.load(std::memory_order_acquire)) {
+            if (is_weight && tensor->name && tensor->data && unified_cache_active()) {
                 ggml_sycl::layer_streaming_register_host_ptr(device, tensor->name, tensor->data, ggml_nbytes(tensor));
             }
 
@@ -8022,7 +7998,10 @@ static void ggml_sycl_preload_model_weights() {
             !ggml_sycl_reorder_enabled()) {
             target = GGML_LAYOUT_AOS;
         }
-        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target, true);
+        // S1: prefer_host=false so SOA copies land in device VRAM for fast TG.
+        // Non-S1: prefer_host=true (original behavior) to avoid VRAM pressure during preload.
+        const bool prefer_host = !g_all_weights_host.load(std::memory_order_acquire);
+        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target, prefer_host);
         return cached != nullptr;
     };
     // Pass 1: dense weights (non-MoE)
@@ -8196,13 +8175,12 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     const bool  host_layout_supported =
         (resolved == GGML_LAYOUT_AOS || resolved == GGML_LAYOUT_SOA || resolved == GGML_LAYOUT_COALESCED ||
          resolved == GGML_LAYOUT_XMX_GEMM_TILED || resolved == GGML_LAYOUT_XMX_TILED);
-    // Only prefer host placement when model exceeds VRAM AND GPU streaming is the
-    // fallback (no CPU offload). When CPU offload is available, let the cache fill
-    // VRAM naturally — weights that don't fit will overflow to HOST, and
-    // should_dispatch_to_cpu() routes those layers to CPU based on actual location.
+    // Only prefer host placement when VRAM budget is actually exceeded AND GPU
+    // streaming is the fallback (no CPU offload). When the model fits in VRAM,
+    // let the cache upload everything to device for maximum performance.
     // GGML_SYCL_FORCE_VRAM=1 overrides this to always prefer VRAM (for debugging).
     bool prefer_host_default = ggml_backend_sycl_weights_evictable() && !src_is_device &&
-                               g_model_exceeds_vram.load(std::memory_order_acquire) &&
+                               ggml_sycl::unified_cache_is_budget_exceeded(device) &&
                                !ggml_sycl_force_vram_enabled() && !ggml_sycl_cpu_offload_available();
     // For reordered/tiled layouts, prefer device placement to avoid non-USM host pointers
     // leaking into kernel dispatch when VRAM is available.
@@ -8217,7 +8195,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
             "force_vram=%d, layout=%d)\n",
             tensor->name ? tensor->name : "(unnamed)", prefer_host_default ? "HOST" : "VRAM",
             ggml_backend_sycl_weights_evictable() ? 1 : 0, src_is_device ? 1 : 0,
-            g_model_exceeds_vram.load(std::memory_order_acquire) ? 1 : 0, ggml_sycl_force_vram_enabled() ? 1 : 0,
+            unified_cache_active() ? 1 : 0, ggml_sycl_force_vram_enabled() ? 1 : 0,
             static_cast<int>(resolved));
     }
 
@@ -9760,7 +9738,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     // Force host-pinned for MoE model weight buffers when total model exceeds VRAM.
     // Expert AOS data in device VRAM is dead weight -- GPU only reads SOA from cache.
     // Placing the model buffer in host-pinned frees ~10 GB VRAM for the expert SOA cache.
-    // Note: g_model_exceeds_vram uses effective (active-expert) size which may be < VRAM
+    // Note: the budget check uses effective (active-expert) size which may be < VRAM
     // even when the total model is much larger.  Use raw inventory size for this check.
     // The first weight buffer that individually fits in VRAM is allowed on device to avoid
     // exhausting GPU page-table entries from mapping all 60+ GB as host-pinned.  Subsequent
@@ -15939,7 +15917,7 @@ static void ggml_sycl_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor *
 // When model exceeds VRAM, checks layer stream manager first,
 // then falls back to tiered cache lookup + on-demand streaming.
 static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int device) {
-    if (!src0 || !src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
+    if (!src0 || !src0->name || !unified_cache_active()) {
         return;
     }
     // During SYCL graph recording, weight pointers must already be stable
@@ -25131,7 +25109,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // Implementation status: Layer tracking infrastructure is in place. Full prefetch
     // integration requires building cache_id from tensor names to interface with
     // unified_cache. For models that fit in VRAM, prefetch is a no-op anyway.
-    if (src0->name && src1->ne[1] == 1 && g_model_exceeds_vram.load(std::memory_order_acquire) &&
+    if (src0->name && src1->ne[1] == 1 && unified_cache_active() &&
         ggml_sycl::layer_prefetch_tracker::is_enabled()) {
         int next_layer_id = -1;
         if (ggml_sycl::get_prefetch_tracker().record_access(src0->name, next_layer_id)) {
@@ -25156,7 +25134,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // This is complementary to the host->VRAM prefetch above - this handles the
     // case where weights are already in VRAM but we want to warm up L2.
     // Enable with: GGML_SYCL_L2_PREFETCH=1
-    if (src0->name && src1->ne[1] == 1 && !g_model_exceeds_vram.load(std::memory_order_acquire)) {
+    if (src0->name && src1->ne[1] == 1) {
         auto * l2_mgr = ctx.l2_prefetch_manager.get();
         if (l2_mgr) {
             // Lazy registration: register tensor on first access if not already registered
@@ -25568,14 +25546,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             bool used_onednn_fp16 = false;
                             if (onednn_pp_enabled && M >= onednn_pp_threshold && ggml_is_quantized(src0->type) &&
                                 ggml_is_contiguous(src0)) {
-                                // Get dequantization function for the weight type.
-                                // CRITICAL: Pass full_tensor=false to force standard AOS dequant.
-                                // src0_data points to AOS layout (from ggml_sycl_get_layout_ptr_for
-                                // with GGML_LAYOUT_AOS). With full_tensor=true, the function checks
-                                // dst->src[0]->extra for SOA layout and returns SOA-reorder dequant,
-                                // which reads data in SOA format — applying it to AOS data produces
-                                // garbage FP16 weights and wrong GEMM results.
-                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, false);
+                                // Get dequantization function matching the actual data layout.
+                                // When src0 is in SOA layout and we requested SOA, use the
+                                // SOA-aware reorder dequant kernel. Otherwise use standard AOS.
+                                auto * extra_pp     = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+                                bool   src0_is_soa  = (ggml_sycl_layout_is_soa(extra_pp)
+                                                       && requested_layout == GGML_LAYOUT_SOA);
+                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, src0_is_soa);
                                 if (dequant_to_fp16) {
                                     // Calculate buffer sizes needed
                                     const size_t src0_elems        = static_cast<size_t>(N) * static_cast<size_t>(K);
@@ -32560,7 +32537,7 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
                                 break;
                             }
                         }
-                        if (!found_in_cache && g_model_exceeds_vram.load(std::memory_order_relaxed)) {
+                        if (!found_in_cache && unified_cache_active()) {
                             // Weight evicted from cache — only exists on host (mmap/pinned)
                             on_cpu = true;
                         }
@@ -37388,7 +37365,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
         }
 
         // Check layer stream manager for host-resident weights
-        if (ggml_sycl_tensor_is_weight(tensor) && g_model_exceeds_vram.load(std::memory_order_acquire) &&
+        if (ggml_sycl_tensor_is_weight(tensor) && unified_cache_active() &&
             ggml_sycl::layer_streaming_active(ctx.device) && tensor->name) {
             void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(ctx.device, tensor->name);
             if (streamed) {
@@ -41817,8 +41794,8 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
                                     || persistent_split_env
                                     || std::getenv("GGML_SYCL_PERSISTENT_TG") != nullptr);
     if (!split_env_set) {
-        if (g_model_exceeds_vram.load(std::memory_order_acquire) || ggml_sycl::unified_cache_has_evictions()) {
-            GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: weight pointers may be stale\n");
+        if (ggml_sycl::unified_cache_has_evictions()) {
+            GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: weight pointers may be stale (evictions)\n");
             return false;
         }
     } else {
@@ -42515,20 +42492,21 @@ normal_dispatch:
     }
 
     // Disable graph replay when weight pointers may be stale:
-    // 1. Model exceeds VRAM → layer streaming rotates buffer pointers
-    // 2. Cache has evictions → baked pointers reference freed device memory
+    // Disable graph replay when weight pointers may be stale:
+    // Cache evictions → baked pointers reference freed device memory.
+    // Note: unified_cache_active() alone does NOT disable graph replay — once the
+    // cache uploads SOA to VRAM, those device pointers are stable until eviction.
     // Skip this check in GPU prefix mode — the prefix contains only VRAM-resident
     // layers whose pointers are stable (host-streamed layers are in the CPU suffix).
-    const bool exceeds   = g_model_exceeds_vram.load(std::memory_order_acquire);
     const bool evictions = ggml_sycl::unified_cache_has_evictions();
     // In GPU-only mode (no prefix/suffix split), graph REPLAY uses baked-in
     // pointers from the original recording.  If weights were evicted, those
     // pointers are stale → fall back to compute_impl.
     // Prefix mode disables graph entirely (see below), so this gate only
     // matters for GPU-only mode where gpu_prefix_end < 0.
-    if ((exceeds || evictions) && gpu_prefix_end < 0) {
-        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
-                        (int) exceeds, (int) evictions);
+    if (evictions && gpu_prefix_end < 0) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (evictions=%d)\n",
+                        (int) evictions);
         compute_impl_unlocked();
         record_completion(false);
         return GGML_STATUS_SUCCESS;
