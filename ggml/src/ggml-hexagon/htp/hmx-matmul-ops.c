@@ -229,14 +229,14 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
   // q4x4x2 stores two int4 values per byte. Keep only the selected nibble.
   HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
   v_quants = Q6_V_vand_VV(v_quants, mask_h4);
+  // Shuffle before LUT
+  v_quants = Q6_Vb_vshuff_Vb(v_quants);
   // Use standard vlut16 (not _nomatch) to avoid stale-register NaN.
   // _nomatch retains the previous destination-register value for colliding
   // indices, but the C intrinsic doesn't model the implicit read so the
   // compiler may allocate a register containing garbage/NaN.
   HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-  // vlut16 produces interleaved output: even-indexed byte results in lo,
-  // odd-indexed in hi.  Deinterleave with vshuff to restore linear order.
-  HVX_Vector v_hf = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(vp), Q6_V_lo_W(vp), -2));
+  HVX_Vector v_hf = Q6_V_lo_W(vp);
 
   return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
@@ -254,12 +254,12 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
   HVX_Vector v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
   v_quants = Q6_V_vand_VV(v_quants, mask_h4);
 
+  // Shuffle before LUT
+  v_quants = Q6_Vb_vshuff_Vb(v_quants);
   // Full-width vlut16: 128 byte lookups -> 128 fp16 results in a VectorPair
   HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-  // Deinterleave to linear order: lo = bytes 0..63, hi = bytes 64..127
-  HVX_VectorPair vp_lin = Q6_W_vshuff_VVR(Q6_V_hi_W(vp), Q6_V_lo_W(vp), -2);
-  HVX_Vector v_lo = Q6_V_lo_W(vp_lin);  // [group0: 32 fp16 | group1: 32 fp16]
-  HVX_Vector v_hi = Q6_V_hi_W(vp_lin);  // [group2: 32 fp16 | group3: 32 fp16]
+  HVX_Vector v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
+  HVX_Vector v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
 
   // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
   HVX_VectorPred q64 = Q6_Q_vsetq_R(64);
