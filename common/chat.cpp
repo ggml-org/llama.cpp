@@ -878,8 +878,8 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
         // Response format parser
         if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
             // Ministral wants to emit json surrounded by code fences
-            return reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema))
-                             << "```";
+            return wrap_for_generation_prompt(p, reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema)) << "```",
+                inputs, autoparser::analyze_reasoning("[THINK]", "[/THINK]"));
         }
 
         // Tool call parser
@@ -899,12 +899,13 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
             auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
             auto tool_calls = p.trigger_rule("tool-call", p.repeat("[TOOL_CALLS]" + tool_choice, min_calls, max_calls));
 
-            return reasoning << p.content(p.until("[TOOL_CALLS]")) << tool_calls;
+            return wrap_for_generation_prompt(p, reasoning << p.content(p.until("[TOOL_CALLS]")) << tool_calls,
+                inputs, autoparser::analyze_reasoning("[THINK]", "[/THINK]"));
         }
 
         // Content only parser
         include_grammar = false;
-        return reasoning << p.content(p.rest());
+        return wrap_for_generation_prompt(p, reasoning << p.content(p.rest()), inputs, autoparser::analyze_reasoning("[THINK]", "[/THINK]"));
     });
 
     data.parser = parser.save();
@@ -990,7 +991,8 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
 
-            return response_format | (analysis + p.zero_or_more(start + analysis) + start + response_format);
+            return wrap_for_generation_prompt(p, response_format | (analysis + p.zero_or_more(start + analysis) + start + response_format),
+                inputs, autoparser::analyze_reasoning("<|channel|>", ""));
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -1022,10 +1024,12 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 return tool_call | ( any + p.zero_or_more(start + any) + start + tool_call);
             }
 
-            return tool_call | final_msg | (any + p.zero_or_more(start + any) + start + (tool_call | final_msg));
+            return wrap_for_generation_prompt(p, tool_call | final_msg | (any + p.zero_or_more(start + any) + start + (tool_call | final_msg)),
+                inputs, autoparser::analyze_reasoning("<|channel|>", ""));
         }
 
-        return final_msg | (any + p.zero_or_more(start + any) + start + final_msg);
+        return wrap_for_generation_prompt(p, final_msg | (any + p.zero_or_more(start + any) + start + final_msg),
+            inputs, autoparser::analyze_reasoning("<|channel|>", ""));
     });
 
     data.parser = parser.save();

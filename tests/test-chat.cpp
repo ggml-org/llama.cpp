@@ -1280,11 +1280,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test("[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
             .expect(message_assist_thoughts)
             .run();
 
         tst.test(R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .run();
@@ -1293,6 +1295,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "[THINK]I'm\nthinking[/THINK]"
                R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
             .run();
