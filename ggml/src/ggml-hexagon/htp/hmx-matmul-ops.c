@@ -648,9 +648,9 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
   if (params->k % 32 != 0 || params->n % 32 != 0) {
     return -1;
   }
-  if (!hmx_is_aligned(params->dst, HMX_VLEN) ||
-      !hmx_is_aligned(params->activation, HMX_VLEN) ||
-      !hmx_is_aligned(params->permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(params->dst, HMX_VLEN) ||
+      !hex_is_aligned(params->activation, HMX_VLEN) ||
+      !hex_is_aligned(params->permuted_weight, HMX_VLEN)) {
     return -1;
   }
 
@@ -845,7 +845,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
   if (k % 32 != 0 || n % 32 != 0) {
     return -1;
   }
-  if (!hmx_is_aligned(dst, HMX_VLEN) || !hmx_is_aligned(activation, HMX_VLEN) || !hmx_is_aligned(permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(dst, HMX_VLEN) || !hex_is_aligned(activation, HMX_VLEN) || !hex_is_aligned(permuted_weight, HMX_VLEN)) {
     return -1;
   }
 
@@ -1017,7 +1017,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
   if (k % 32 != 0 || n % 32 != 0) {
     return -1;
   }
-  if (!hmx_is_aligned(dst, HMX_VLEN) || !hmx_is_aligned(activation, HMX_VLEN) || !hmx_is_aligned(permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(dst, HMX_VLEN) || !hex_is_aligned(activation, HMX_VLEN) || !hex_is_aligned(permuted_weight, HMX_VLEN)) {
     return -1;
   }
 

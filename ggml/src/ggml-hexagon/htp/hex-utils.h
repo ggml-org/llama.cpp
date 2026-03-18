@@ -29,7 +29,7 @@ static inline uint64_t hex_get_pktcnt() {
     return pktcnt;
 }
 
-static inline int32_t hex_is_aligned(void * addr, uint32_t align) {
+static inline int32_t hex_is_aligned(const void * addr, uint32_t align) {
     return ((size_t) addr & (align - 1)) == 0;
 }
 
