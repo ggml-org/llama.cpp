@@ -683,6 +683,8 @@ static webgpu_submission ggml_backend_webgpu_submit(webgpu_global_context &     
             ctx->profiling_futures.push_back({ f, false });
         }
     }
+#else
+    GGML_UNUSED(ctx_opt);
 #endif
     return submission;
 }
@@ -757,6 +759,7 @@ static webgpu_command ggml_backend_webgpu_build_multi(
         pass = encoder.BeginComputePass();
     }
 #else
+    GGML_UNUSED(ctx_opt);
     pass = encoder.BeginComputePass();
 #endif
     for (size_t i = 0; i < pipelines.size(); i++) {
@@ -777,6 +780,8 @@ static webgpu_command ggml_backend_webgpu_build_multi(
         // TODO: handle multiple pipeline names
         result.pipeline_name        = pipelines.front().name;
     }
+#else
+    GGML_UNUSED(ctx_opt);
 #endif
     return result;
 }
