@@ -73,17 +73,16 @@ struct ggml_webgpu_shader_lib_context {
     ggml_tensor * src4;
     ggml_tensor * dst;
 
-    uint32_t      max_wg_size;
-    size_t        wg_mem_limit_bytes       = 0;
-    bool          inplace                  = false;
-    bool          overlap                  = false;
-    bool          src_overlap              = false;
-    bool          supports_subgroup_matrix = false;
-    uint32_t      sg_mat_m                 = 0;
-    uint32_t      sg_mat_n                 = 0;
-    uint32_t      sg_mat_k                 = 0;
-    uint32_t      max_subgroup_size        = 0;
-    ggml_tri_type ttype;
+    uint32_t max_wg_size;
+    size_t   wg_mem_limit_bytes       = 0;
+    bool     inplace                  = false;
+    bool     overlap                  = false;
+    bool     src_overlap              = false;
+    bool     supports_subgroup_matrix = false;
+    uint32_t sg_mat_m                 = 0;
+    uint32_t sg_mat_n                 = 0;
+    uint32_t sg_mat_k                 = 0;
+    uint32_t max_subgroup_size        = 0;
 };
 
 struct webgpu_pipeline {
@@ -249,7 +248,7 @@ struct ggml_webgpu_unary_pipeline_key {
     int           op;
     bool          is_unary;  // many unary operators fall under the GGML_OP_UNARY umbrella
     bool          inplace;
-    ggml_tri_type ttype;
+    ggml_tri_type ttype;     // only used for GGML_OP_TRI
 
     bool operator==(const ggml_webgpu_unary_pipeline_key & other) const {
         return type == other.type && op == other.op && is_unary == other.is_unary && inplace == other.inplace &&
@@ -1062,7 +1061,7 @@ class ggml_webgpu_shader_lib {
                  .op       = op,
                  .is_unary = is_unary,
                  .inplace  = context.inplace,
-                 .ttype    = context.ttype,
+                 .ttype    = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0),
         };
 
         auto it = unary_pipelines.find(key);
