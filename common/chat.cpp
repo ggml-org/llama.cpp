@@ -977,7 +977,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         auto analysis = p.rule("analysis", p.literal("<|channel|>analysis<|message|>") + p.reasoning(content) + end);
         auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
-        auto final = p.rule("final", p.literal("<|channel|>final<|message|>") + p.content(content));
+        auto final_msg = p.rule("final", p.literal("<|channel|>final<|message|>") + p.content(content));
         auto any = p.rule("any", preamble | analysis);
 
         if (has_response_format) {
@@ -1018,10 +1018,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 return tool_call | ( any + p.zero_or_more(start + any) + start + tool_call);
             }
 
-            return tool_call | final | (any + p.zero_or_more(start + any) + start + (tool_call | final));
+            return tool_call | final_msg | (any + p.zero_or_more(start + any) + start + (tool_call | final_msg));
         }
 
-        return final | (any + p.zero_or_more(start + any) + start + final);
+        return final_msg | (any + p.zero_or_more(start + any) + start + final_msg);
     });
 
     data.parser = parser.save();
