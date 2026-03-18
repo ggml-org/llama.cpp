@@ -2530,6 +2530,15 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     uint64_t   new_hash = can_hash ? compute_content_hash(request.src_ptr, request.src_size) : 0;
 
     auto try_host_fallback = [&](const char * reason) -> bool {
+        // Skip host fallback for SOA layout requests — SOA is only useful on GPU.
+        // CPU reads AOS directly from the original host-pinned buffer.
+        // Without this check, falling back to host creates SOA copies of ALL
+        // experts in pinned memory (~100 GB for 120B), wasting memory and time.
+        if (request.layout == GGML_LAYOUT_SOA) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping host fallback for SOA layout "
+                            "(CPU reads AOS directly): %s\n", reason);
+            return false;
+        }
         host_cache * hcache = get_host_cache(queue_);
         if (!hcache) {
             return false;
