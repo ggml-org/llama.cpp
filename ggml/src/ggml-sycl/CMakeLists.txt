@@ -7,6 +7,13 @@ endif()
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
 if (DEFINED ENV{ONEAPI_ROOT})
+    # Fail early if oneAPI is present but icpx is not used as the CXX compiler.
+    # Without this check, IntelSYCL_FOUND will be false and -fsycl gets passed to GCC/Clang.
+    if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+        message(FATAL_ERROR
+            "oneAPI detected but compiler is not icpx (got '${CMAKE_CXX_COMPILER_ID}').\n"
+            "Re-run CMake with: -DCMAKE_CXX_COMPILER=icpx")
+    endif()
     message(STATUS "Using oneAPI Release SYCL compiler (icpx).")
 elseif(SUPPORTS_SYCL)
     message(WARNING "Using open-source SYCL compiler (clang++). Didn't detect ENV {ONEAPI_ROOT}.
@@ -158,4 +165,3 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_compile_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
     target_link_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
 endif()
-
