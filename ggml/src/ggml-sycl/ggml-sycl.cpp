@@ -5446,24 +5446,20 @@ static void flush_pending_secondary_scatter() {
     if (!g_pending_secondary_scatter.active) return;
 
     try {
-        // Use depends_on for cross-device synchronization instead of .wait():
-        // each H2D scatter on the primary queue depends on the corresponding
-        // D2H completion event from the secondary GPU queue.  This avoids
-        // blocking the host thread and allows the primary queue to pipeline
-        // the scatter memcpy submissions.
+        // Host-side event wait for cross-device synchronization:
+        // depends_on with cross-device events causes SIGABRT on Level Zero
+        // due to dual SYCL context (dpct vs shared context = different
+        // ze_context_handle_t).  Wait on host for secondary GPU D2H to
+        // complete, then submit H2D scatter on primary queue.
         if (g_pending_secondary_scatter.stream
             && !g_pending_secondary_scatter.entries.empty()) {
-            for (const auto & e : g_pending_secondary_scatter.entries) {
+            for (auto & e : g_pending_secondary_scatter.entries) {
                 if (e.dst_device && e.out_staging) {
                     if (e.target_queue) {
-                        // Cross-device dependency: primary H2D waits for secondary D2H
-                        g_pending_secondary_scatter.stream->submit([&](sycl::handler & cgh) {
-                            cgh.depends_on(e.last_event);
-                            cgh.memcpy(e.dst_device, e.out_staging, e.bytes);
-                        });
-                    } else {
-                        g_pending_secondary_scatter.stream->memcpy(e.dst_device, e.out_staging, e.bytes);
+                        // Wait for secondary GPU D2H completion on host
+                        e.last_event.wait();
                     }
+                    g_pending_secondary_scatter.stream->memcpy(e.dst_device, e.out_staging, e.bytes);
                 } else if (e.dst_device && !e.out_staging) {
                     // B50 local aggregation: zero-fill remaining expert slots
                     // whose contributions were folded into the aggregate.
@@ -27672,6 +27668,9 @@ static void dispatch_experts_secondary_gpu_impl(
         return;
     }
 
+    GGML_SYCL_DEBUG("[MOE-B50] dispatching %zu experts to device %d (type=%d K=%lld N=%lld)\n", entries.size(),
+                    target_device, (int) ctx.src0->type, (long long) ctx.K, (long long) ctx.N);
+
     // Ring-buffered staging: host-pinned for activations/outputs,
     // device-side for Q8_1 quantized activations and GEMM output.
     // RAII wrapper ensures sycl::free() is called on thread exit.
@@ -27865,35 +27864,31 @@ static void dispatch_experts_secondary_gpu_impl(
         const size_t chunk_sz  = chunk_end - chunk_start;
 
         // Phase 1+2: Get activation data to host for secondary GPU.
-        // Use depends_on instead of .wait() for cross-device synchronization:
-        // capture D2H events and inject them as dependencies on the secondary
-        // queue so GPU1 work waits for GPU0 D2H without blocking the host.
-        std::vector<sycl::event> act_d2h_deps;
+        // Host-side event wait for cross-device synchronization:
+        // ext_oneapi_submit_barrier / depends_on with cross-device events
+        // causes SIGABRT on Level Zero due to dual SYCL context (dpct vs
+        // shared context = different ze_context_handle_t).  Use event.wait()
+        // to ensure D2H completes before submitting work on the secondary queue.
         if (ctx.act_on_host && batch1) {
-            act_d2h_deps.push_back(ctx.act_d2h_event);
+            ctx.act_d2h_event.wait();
         } else if (batch1) {
             const auto &  entry    = entries[gpu_indices[chunk_start]];
             const int64_t i11      = entry.id % ne11;
             const int64_t i12      = entry.iid1;
             const char *  src1_dev = ctx.src1_original + i11 * nb11 + i12 * nb12;
-            act_d2h_deps.push_back(ctx.stream->memcpy(act_staging[0], src1_dev, needed_act));
+            ctx.stream->memcpy(act_staging[0], src1_dev, needed_act).wait();
         } else {
-            act_d2h_deps.reserve(chunk_sz);
+            std::vector<sycl::event> act_d2h_events;
+            act_d2h_events.reserve(chunk_sz);
             for (size_t ci = 0; ci < chunk_sz; ci++) {
                 const auto &  entry    = entries[gpu_indices[chunk_start + ci]];
                 const int     slot     = static_cast<int>(ci);
                 const int64_t i11      = entry.id % ne11;
                 const int64_t i12      = entry.iid1;
                 const char *  src1_dev = ctx.src1_original + i11 * nb11 + i12 * nb12;
-                act_d2h_deps.push_back(ctx.stream->memcpy(act_staging[slot], src1_dev, needed_act));
+                act_d2h_events.push_back(ctx.stream->memcpy(act_staging[slot], src1_dev, needed_act));
             }
-        }
-
-        // Inject D2H dependency on secondary queue via barrier.
-        // The target_queue is in-order, so all subsequent submissions
-        // (quantize, GEMM, D2H) will wait for the activation D2H.
-        if (!act_d2h_deps.empty()) {
-            target_queue->ext_oneapi_submit_barrier(act_d2h_deps);
+            sycl::event::wait(act_d2h_events);
         }
 
         // Phase 3: Quantize + GEMM kernels on secondary queue.
