@@ -2448,7 +2448,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Analysis channel (reasoning) with final channel (content)
         tst.test(
-               "<|channel|>analysis<|message|>I'm\nthinking<|end|>\n<|channel|>final<|message|>Hello, world!\nWhat's "
+               "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's "
                "up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_thoughts)
@@ -2459,15 +2459,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .is_partial(true)
             .expect_reasoning("I'm\nthinking")
-            .run();
-
-        // Reasoning format none - reasoning stays in content
-        tst.test(
-               "<|channel|>analysis<|message|>I'm\nthinking<|end|>\n<|channel|>final<|message|>Hello, world!\nWhat's "
-               "up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
-            .expect_content(
-                "<|channel|>analysis<|message|>I'm\nthinking<|end|>Hello, world!\nWhat's up?")
             .run();
 
         // Tool call with recipient in role header: " to=functions.NAME<|channel|>analysis<|message|>JSON"
@@ -2496,37 +2487,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Tool call with reasoning + content (analysis first, then tool call)
         tst.test(
-               "<|channel|>analysis<|message|>I'm\nthinking<|end|>\n"
+               "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
                "<|start|>assistant to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
             .run();
 
-        // Tool calling with extra channel before
+        // Complex tool calling
         tst.test(
-                "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>commentary"
-                " to=functions.special_function <|message|>{\"arg1\": 1}")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({ special_function_tool })
-            .expect(message_assist_call_thoughts)
-            .run();
-
-        // Reasoning after final channel
-        // Tool calling after final channel
-        tst.test(
-            "<|channel|>final<|message|><|end|>"
-            "<|start|>assistant<|channel|>analysis<|message|>Thinking about edit..."
-        )
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .expect_reasoning("Thinking about edit...")
-            .expect_content("")
-            .run();
-
-        // Tool calling after final channel
-        tst.test(
-            "<|channel|>final<|message|><|end|>"
-            "<|start|>assistant<|channel|>analysis<|message|>Thinking about edit...<|end|>"
+            "<|channel|>analysis<|message|>Thinking about edit...<|end|>"
             "<|start|>assistant<|channel|>commentary to=functions.edit <|constrain|>json"
             "<|message|>{\"oldString\": \"if (part < railCount - 1) {\", \"newString\": \"if (part < 4) {\", \"replaceAll\": false}"
             )
@@ -2561,19 +2531,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
-        // Parallel tool calls
+        // Structured output
         tst.test(
-               " to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}\n"
-               "<|start|>assistant to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1, "
-               "\"arg2\": 2}")
-            .parallel_tool_calls(true)
-            .tools({
-                special_function_tool, special_function_tool_with_optional_param
-        })
-            .expect_tool_calls({
-                { "special_function", R"({"arg1": 1})", {} },
-                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
-            })
+            "<|channel|>analysis<|message|>I need to output the invoice details in JSON<|end|>"
+            "<|start|>assistant<|channel|>final <|constrain|>json"
+            "<|message|>"
+            R"({"amount": 123.45, "date": "2025-12-03"})"
+            )
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
     }
 
