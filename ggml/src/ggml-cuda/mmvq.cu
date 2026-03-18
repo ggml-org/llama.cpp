@@ -174,13 +174,10 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
 }
 
 static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int table_id, bool small_k = false, int nwarps = 1) {
-    if (small_k) {
-        return nwarps;
-    }
     if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN) {
         switch (ncols_dst) {
             case 1:
-                return 1;
+                return small_k ? nwarps : 1;
             case 2:
             case 3:
             case 4:
@@ -479,27 +476,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     const bool has_ids = ids != nullptr;
 
-    // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
-    // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
-    constexpr int qk  = ggml_cuda_type_traits<type>::qk;
-    constexpr int qi  = ggml_cuda_type_traits<type>::qi;
-    constexpr int vdr = get_vdr_mmvq(type);
-    const int blocks_per_row_x = ncols_x / qk;
-    const int blocks_per_iter_1warp = vdr * warp_size / qi;
-
     if (has_ids && ncols_dst > 1) {
         // Multi-token MUL_MAT_ID path only - single-token goes through regular path below
         constexpr int c_ncols_dst = 1;
-        const int nwarps = calc_nwarps(type, c_ncols_dst, table_id);
-        const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
-        if (use_small_k) {
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, ncols_dst, warp_size, table_id, true);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, true, true>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
-                 dims.first, dims.second, 0, ids_stride, stream);
-            return;
-        }
         std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, ncols_dst, warp_size, table_id);
         mul_mat_vec_q_switch_fusion<type, c_ncols_dst, true>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
              channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
@@ -508,45 +487,97 @@ static void mul_mat_vec_q_switch_ncols_dst(
         return;
     }
 
-#define MMVQ_SWITCH_CASE(C_NCOLS_DST)                                                                                          \
-    {                                                                                                                            \
-        constexpr int c_ncols_dst = C_NCOLS_DST;                                                                                \
-        const int nwarps = calc_nwarps(type, c_ncols_dst, table_id);                                                            \
-        const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;                              \
-        if (use_small_k) {                                                                                                       \
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst,             \
-                                                                  warp_size, table_id, true);                                    \
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, true>(                                                         \
-                vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,                  \
-                channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,                                       \
-                sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,                                           \
-                dims.first, dims.second, 0, ids_stride, stream);                                                                \
-        } else {                                                                                                                 \
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst,             \
-                                                                  warp_size, table_id);                                          \
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(                                                                      \
-                vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,                  \
-                channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,                                       \
-                sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,                                           \
-                dims.first, dims.second, 0, ids_stride, stream);                                                                \
-        }                                                                                                                        \
-    }
-
     switch (ncols_dst) {
-        case 1: MMVQ_SWITCH_CASE(1) break;
-        case 2: MMVQ_SWITCH_CASE(2) break;
-        case 3: MMVQ_SWITCH_CASE(3) break;
-        case 4: MMVQ_SWITCH_CASE(4) break;
-        case 5: MMVQ_SWITCH_CASE(5) break;
-        case 6: MMVQ_SWITCH_CASE(6) break;
-        case 7: MMVQ_SWITCH_CASE(7) break;
-        case 8: MMVQ_SWITCH_CASE(8) break;
+        case 1: {
+            constexpr int c_ncols_dst = 1;
+
+            // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
+		    // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
+		    constexpr int qk  = ggml_cuda_type_traits<type>::qk;
+		    constexpr int qi  = ggml_cuda_type_traits<type>::qi;
+		    constexpr int vdr = get_vdr_mmvq(type);
+		    const int blocks_per_row_x = ncols_x / qk;
+		    const int blocks_per_iter_1warp = vdr * warp_size / qi;
+		    const int nwarps = calc_nwarps(type, c_ncols_dst, table_id);
+            const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+            if (use_small_k) {
+                std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst,
+                                                                    warp_size, table_id, true);
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, true>(
+                    vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                    channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                    sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                    dims.first, dims.second, 0, ids_stride, stream);
+            } else {
+                std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst,
+                                                                    warp_size, table_id);
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(
+                    vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                    channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                    sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                    dims.first, dims.second, 0, ids_stride, stream);
+            }
+        } break;
+        case 2: {
+            constexpr int c_ncols_dst = 2;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 3: {
+            constexpr int c_ncols_dst = 3;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 4: {
+            constexpr int c_ncols_dst = 4;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 5: {
+            constexpr int c_ncols_dst = 5;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 6: {
+            constexpr int c_ncols_dst = 6;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 7: {
+            constexpr int c_ncols_dst = 7;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
+        case 8: {
+            constexpr int c_ncols_dst = 8;
+            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                 dims.first, dims.second, 0, ids_stride, stream);
+        } break;
         default:
             GGML_ABORT("fatal error");
             break;
     }
-
-#undef MMVQ_SWITCH_CASE
 
     GGML_UNUSED(has_fusion);
 }
