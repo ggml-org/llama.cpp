@@ -2130,15 +2130,19 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     }
 
     const float * scores = nullptr;
+    uint32_t n_scores = 0;
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
     if (score_idx != -1) {
         scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+        n_scores = gguf_get_arr_n(ctx, score_idx);
     }
 
     const int * toktypes = nullptr;
+    uint32_t n_toktypes = 0;
     const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
     if (toktype_idx != -1) {
         toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
+        n_toktypes = gguf_get_arr_n(ctx, toktype_idx);
     }
 
     uint32_t n_tokens = gguf_get_arr_n(ctx, token_idx);
@@ -2156,10 +2160,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
         auto & token_data = id_to_token[i];
         token_data.text  = std::move(word);
-        token_data.score = scores ? scores[i] : 0.0f;
+        token_data.score = (scores && i < n_scores) ? scores[i] : 0.0f;
         token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
 
-        if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
+        if (toktypes && i < n_toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
             switch(toktypes[i]) {
                 case LLAMA_TOKEN_TYPE_UNKNOWN:      token_data.attr = LLAMA_TOKEN_ATTR_UNKNOWN;      break;
                 case LLAMA_TOKEN_TYPE_UNUSED:       token_data.attr = LLAMA_TOKEN_ATTR_UNUSED;       break;
