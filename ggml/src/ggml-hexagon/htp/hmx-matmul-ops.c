@@ -596,54 +596,56 @@ static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const 
 }
 
 static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows, int n_cols, int n) {
-  assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
-  const int n_col_tiles = n_cols / HMX_FP16_TILE_N_COLS;
+    assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
+    const int n_col_tiles = n_cols / HMX_FP16_TILE_N_COLS;
 
-  for (int r = 0; r < n_rows; r += 2) {
-    int r0 = r / HMX_FP16_TILE_N_ROWS;
-    int r1 = r % HMX_FP16_TILE_N_ROWS;
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
 
-    for (int c = 0; c < n_cols; c += HMX_FP16_TILE_N_COLS) {
-      int c0 = c / HMX_FP16_TILE_N_COLS;
+    for (int r = 0; r < n_rows; r += 2) {
+        int r0 = r / HMX_FP16_TILE_N_ROWS;
+        int r1 = r % HMX_FP16_TILE_N_ROWS;
 
-      const __fp16 *tile = vtcm_src + (r0 * n_col_tiles + c0) * HMX_FP16_TILE_N_ELMS;
+        #pragma unroll(4)
+        for (int c = 0; c < n_cols; c += HMX_FP16_TILE_N_COLS) {
+            int c0 = c / HMX_FP16_TILE_N_COLS;
 
-      HVX_Vector v_src = ((const HVX_Vector *) tile)[r1 / 2];
+            const __fp16 *tile = vtcm_src + (r0 * n_col_tiles + c0) * HMX_FP16_TILE_N_ELMS;
 
-      HVX_VectorPair vp = hvx_vec_f16_to_f32_hmx(v_src);
+            HVX_Vector v = ((const HVX_Vector *) tile)[r1 / 2];
+            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
-      HVX_Vector *pv_out0 = (HVX_Vector *) (dst + (r * n + c + 0));
-      HVX_Vector *pv_out1 = (HVX_Vector *) (dst + (r * n + c + n));  // next row in global memory
+            volatile HVX_Vector *pv_out0 = (volatile HVX_Vector *) (dst + (r * n + c + 0));
+            volatile HVX_Vector *pv_out1 = (volatile HVX_Vector *) (dst + (r * n + c + n));  // next row in global memory
 
-      *pv_out0 = Q6_V_lo_W(vp);
-      if (r + 1 < n_rows) {
-        *pv_out1 = Q6_V_hi_W(vp);
-      }
+            *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (r + 1 < n_rows) {
+                *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+            }
+        }
     }
-  }
 }
 
 typedef struct {
-  int            n_tasks;
-  int            n_tot_chunks;
-  int            n_chunks_per_task;
-  float         *dst;
-  const __fp16  *vtcm_src;
-  int            n_cols;
-  int            n;  // DDR row stride (total output columns)
+    const __fp16  *vtcm_src;
+    float         *dst;
+    int            n_tasks;
+    int            n_tot_chunks;
+    int            n_chunks_per_task;
+    int            n_cols;
+    int            n;  // DDR row stride (total output columns)
 } output_transfer_task_state_t;
 
 static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
-  output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
+    output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
 
-  for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
-    int    chunk_idx  = task_id * st->n_chunks_per_task;
-    size_t chunk_size = hmx_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
+    for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
+        int    chunk_idx  = task_id * st->n_chunks_per_task;
+        size_t chunk_size = hmx_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
-    float        *dst     = st->dst     + chunk_idx * st->n;
-    const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
-    transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->n);
-  }
+        float        *dst      = st->dst      + chunk_idx * st->n;
+        const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
+        transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->n);
+    }
 }
 
 static void transfer_output_chunk_multithread(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,

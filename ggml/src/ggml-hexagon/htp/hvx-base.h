@@ -132,38 +132,23 @@ static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
     return v;
 }
 
-static inline HVX_VectorPair hvx_vec_f16_to_f32_hmx(HVX_Vector v) {
-    const HVX_Vector v_lo_mask = Q6_V_vsplat_R(0x0000ffff);
-    const HVX_Vector v_hi_mask = Q6_V_vsplat_R(0xffff0000);
-    const HVX_Vector v_shift16 = Q6_V_vsplat_R(16);
-
-    // Extract packed exp & mantissa
-    HVX_Vector qf16     = Q6_Vqf16_vadd_VhfVhf(v, Q6_V_vzero());
-    HVX_Vector exp_comp = Q6_V_vand_VV(qf16, Q6_Vh_vsplat_R(0x1f));
-    HVX_Vector mantissa = Q6_V_vand_VV(qf16, Q6_Vh_vsplat_R(0xffe0));
-
-    // Convert qf16 biased exponent to qf32 biased exponent: +112
-    exp_comp = Q6_Vh_vadd_VhVh(exp_comp, Q6_Vh_vsplat_R(112));
-
-    // Unpack even/odd
-    HVX_Vector exp_comp0 = Q6_V_vand_VV(exp_comp, v_lo_mask);
-    HVX_Vector exp_comp1 = Q6_Vw_vlsr_VwVw(exp_comp, v_shift16);
-
-    HVX_Vector mantissa0 = Q6_Vw_vasl_VwVw(mantissa, v_shift16);
-    HVX_Vector mantissa1 = Q6_V_vand_VV(mantissa, v_hi_mask);
-
-    HVX_Vector v0 = Q6_Vsf_equals_Vqf32(Q6_Vw_vadd_VwVw(mantissa0, exp_comp0));
-    HVX_Vector v1 = Q6_Vsf_equals_Vqf32(Q6_Vw_vadd_VwVw(mantissa1, exp_comp1));
-    return Q6_W_vcombine_VV(v1, v0);
-}
-
 #if __HVX_ARCH__ >= 79
+static inline HVX_VectorPair hvx_vec_f16_to_f32_shuff(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v, one);
+    return Q6_W_vcombine_VV(Q6_V_hi_W(p), Q6_V_lo_W(p));
+}
 static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
     HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v), one);
     return Q6_W_vcombine_VV(Q6_V_hi_W(p), Q6_V_lo_W(p));
 }
 #else
+static inline HVX_VectorPair hvx_vec_f16_to_f32_shuff(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(v, one);
+    return Q6_W_vcombine_VV(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p)), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p)));
+}
 static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
     HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v), one);
