@@ -55,10 +55,9 @@ llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 
 ## Description
 
-The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
-range of hardware - locally and in the cloud.
+The goal of `llama.cpp` is to enable LLM inference with minimal setup and high performance across a wide range of hardware — both locally and in the cloud.
 
-- Plain C/C++ implementation without any dependencies
+Plain C/C++ implementation with no external dependencies
 - Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
 - AVX, AVX2, AVX512 and AMX support for x86 architectures
 - RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
@@ -300,7 +299,7 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
-You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, such as [ModelScope](https://modelscope.cn/), by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
+You can either manually download the GGUF file or directly run any `llama.cpp`-compatible model from [Hugging Face](https://huggingface.co/) or other model hosting sites, such as [ModelScope](https://modelscope.cn/), by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
 
 ```sh
 llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
@@ -308,7 +307,7 @@ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
 
 By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. For example, you may opt to downloading model checkpoints from ModelScope or other model sharing communities by setting the environment variable, e.g. `MODEL_ENDPOINT=https://www.modelscope.cn/`.
 
-After downloading a model, use the CLI tools to run it locally - see below.
+After downloading a model, use the CLI tools below to run it locally.
 
 `llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
 
