@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
+#include <assert.h>
 
 #include "hex-utils.h"
 #include "hvx-types.h"

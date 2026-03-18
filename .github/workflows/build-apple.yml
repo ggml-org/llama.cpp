@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-ios
           evict-old-files: 1d
@@ -124,7 +124,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-tvos
           evict-old-files: 1d
@@ -186,7 +186,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: macOS-latest-swift
           evict-old-files: 1d

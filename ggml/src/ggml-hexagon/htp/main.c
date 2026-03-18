@@ -516,6 +516,39 @@ static void proc_cpy_req(struct htp_context * ctx, struct htp_general_req * req,
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
+static void proc_repeat_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
+    struct dspqueue_buffer rsp_bufs[1];
+
+    // We had written to the output buffer, we'd also need to flush it
+    rsp_bufs[0].fd     = bufs[1].fd;
+    rsp_bufs[0].ptr    = bufs[1].ptr;
+    rsp_bufs[0].offset = bufs[1].offset;
+    rsp_bufs[0].size   = bufs[1].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+
+    // Setup Op context
+    struct htp_ops_context octx = { 0 };
+    octx.ctx                    = ctx;
+    octx.src0                   = req->src0;
+    octx.dst                    = req->dst;
+    octx.flags                  = req->flags;
+    octx.op                     = req->op;
+
+    // Update data pointers
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.dst.data  = (uint32_t) bufs[1].ptr;
+    octx.n_threads = ctx->n_threads;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = op_repeat(&octx);
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
 static void proc_get_rows_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
     struct dspqueue_buffer rsp_bufs[1];
 
@@ -1090,6 +1123,10 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
             case HTP_OP_SQR:
             case HTP_OP_SQRT:
+            case HTP_OP_UNARY_NEG:
+            case HTP_OP_UNARY_EXP:
+            case HTP_OP_UNARY_SIGMOID:
+            case HTP_OP_UNARY_SOFTPLUS:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
@@ -1173,6 +1210,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     continue;
                 }
                 proc_cpy_req(ctx, &req, bufs);
+                break;
+
+            case HTP_OP_REPEAT:
+                if (n_bufs != 2) {
+                    FARF(ERROR, "Bad repeat-req buffer list");
+                    continue;
+                }
+                proc_repeat_req(ctx, &req, bufs);
                 break;
 
             case HTP_OP_ARGSORT:

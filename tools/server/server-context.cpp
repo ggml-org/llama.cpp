@@ -911,6 +911,7 @@ private:
                 /* reasoning_budget      */ params_base.reasoning_budget,
                 /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
+                /* force_pure_content    */ params_base.force_pure_content_parser
             };
         }
 
@@ -2402,11 +2403,11 @@ private:
                             }
 
                             {
-                                // erase any checkpoints with pos_min > pos_min_thold
+                                // erase any checkpoints with pos_max > pos_next
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
-                                    if (cur.pos_min > pos_min_thold) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, (float) cur.data.size() / 1024 / 1024);
+                                    if (cur.pos_max > pos_next) {
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.data.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
                                         ++it;

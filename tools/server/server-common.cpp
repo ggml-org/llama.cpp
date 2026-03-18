@@ -1065,6 +1065,7 @@ json oaicompat_chat_params_parse(
 
         inputs.add_generation_prompt = true;
     }
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
