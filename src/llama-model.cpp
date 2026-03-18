@@ -3578,6 +3578,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 static bool expert_pinned_logged = false;
                 if (!expert_pinned_logged) {
                     LLAMA_LOG_INFO("sycl: expert tensors -> host-pinned (device VRAM freed for SOA cache)\n");
+                    ggml_backend_sycl_set_moe_expert_split(0, 0);
                     expert_pinned_logged = true;
                 }
             }

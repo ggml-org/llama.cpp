@@ -3333,6 +3333,21 @@ bool ggml_backend_sycl_weights_evictable(void) {
     return g_model_exceeds_vram.load(std::memory_order_acquire);
 }
 
+// --- MoE expert split tracking ---
+// Set by llama-model.cpp when expert tensors are routed to host-pinned buffers.
+// Queried by KV tiering to auto-enable host KV for MoE models.
+static std::atomic<bool> g_moe_expert_split_active{ false };
+
+void ggml_backend_sycl_set_moe_expert_split(int n_expert, int n_expert_used) {
+    (void) n_expert;
+    (void) n_expert_used;
+    g_moe_expert_split_active.store(true, std::memory_order_release);
+}
+
+bool ggml_backend_sycl_query_moe_expert_split(void) {
+    return g_moe_expert_split_active.load(std::memory_order_acquire);
+}
+
 void ggml_backend_sycl_set_unified_cache_budget_pct(int pct) {
     ggml_sycl::set_unified_cache_budget_pct(pct);
 }
@@ -3987,18 +4002,28 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     if (g_tiered_enabled.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
         if (!g_tensor_cache) {
-            // Create cache with VRAM budget based on total VRAM minus allocated/headroom
-            // The pinned_chunk_pool handles the per-allocation ~11GB Level Zero limit
-            // by using multiple 8GB chunks, so total budget can be much larger.
+            // Create cache with VRAM budget MINUS a reserve for KV cache + compute buffers.
+            // Without this reserve, compute_placement() greedily fills all VRAM with
+            // weight SOA copies, leaving nothing for graph_reserve → DEVICE_LOST.
             size_t cache_vram_budget = vram_budget;
+
+            // Reserve for KV cache + compute: configurable via env var, default 50%
+            static int weight_cache_pct = -1;
+            if (weight_cache_pct < 0) {
+                const char * env = getenv("GGML_SYCL_WEIGHT_CACHE_PCT");
+                weight_cache_pct = env ? atoi(env) : 50;  // Default: 50% of VRAM for weights
+                weight_cache_pct = std::max(10, std::min(90, weight_cache_pct));  // Clamp [10, 90]
+            }
+            cache_vram_budget = cache_vram_budget * weight_cache_pct / 100;
             size_t system_ram        = get_system_memory_bytes();
             size_t host_budget       = system_ram > 0 ? static_cast<size_t>(system_ram * 0.75) :
                                                         10ULL * 1024 * 1024 * 1024;  // 75% of RAM, fallback 10GB
             GGML_LOG_INFO(
-                "[SYCL] Unified tensor cache: VRAM %.2f GB (total %.2f GB - allocated %.2f GB - headroom %.2f GB), "
-                "Host %.2f GB\n",
-                cache_vram_budget / (1024.0 * 1024.0 * 1024.0), base_mem / (1024.0 * 1024.0 * 1024.0),
-                already_allocated / (1024.0 * 1024.0 * 1024.0), base_headroom / (1024.0 * 1024.0 * 1024.0),
+                "[SYCL] Unified tensor cache: VRAM %.2f GB (%d%% of %.2f GB budget, "
+                "reserving %.2f GB for KV+compute), Host %.2f GB\n",
+                cache_vram_budget / (1024.0 * 1024.0 * 1024.0), weight_cache_pct,
+                vram_budget / (1024.0 * 1024.0 * 1024.0),
+                (vram_budget - cache_vram_budget) / (1024.0 * 1024.0 * 1024.0),
                 host_budget / (1024.0 * 1024.0 * 1024.0));
             g_tensor_cache =
                 std::make_unique<ggml_sycl::unified_tensor_cache>(*(ctx->stream()), cache_vram_budget, host_budget);
@@ -10164,11 +10189,27 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     size = std::max(size, size_t(1));
 
     // Check env var override: GGML_SYCL_KV_HOST=1 forces all-host KV cache
+    // Auto-enable host KV when expert tensors are on host-pinned (MoE models).
+    // For large MoE models, VRAM is better used for expert SOA caching than KV.
     static std::atomic<int> cached_kv_host{ -1 };
     int                     kv_host_val = cached_kv_host.load(std::memory_order_acquire);
     if (kv_host_val == -1) {
         const char * env_kv = std::getenv("GGML_SYCL_KV_HOST");
-        kv_host_val         = (env_kv && std::atoi(env_kv) == 1) ? 1 : 0;
+        if (env_kv) {
+            kv_host_val = std::atoi(env_kv);
+        } else {
+            // Auto-detect: if expert tensors are on host-pinned, KV should also be on host
+            // to leave VRAM free for expert SOA cache
+            kv_host_val = ggml_backend_sycl_query_moe_expert_split() ? 1 : 0;
+            if (kv_host_val) {
+                static bool logged_once = false;
+                if (!logged_once) {
+                    GGML_LOG_INFO("[KV-TIER] MoE expert tensors on host — auto-enabling KV host "
+                                 "(VRAM reserved for expert SOA cache)\n");
+                    logged_once = true;
+                }
+            }
+        }
         cached_kv_host.store(kv_host_val, std::memory_order_release);
     }
 
