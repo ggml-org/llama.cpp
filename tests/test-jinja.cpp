@@ -1959,6 +1959,7 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         }
         fflush(p_stdin);
         fclose(p_stdin); // Close stdin to signal EOF to the Python process
+        subprocess.stdin_file = nullptr;
 
         // Read output
         std::string output;
