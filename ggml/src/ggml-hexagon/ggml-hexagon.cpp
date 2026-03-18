@@ -2362,6 +2362,27 @@ static inline size_t init_cpy_req(htp_general_req * req, dspqueue_buffer * bufs,
     return n_bufs;
 }
 
+static inline size_t init_cont_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    // CONT is just a contiguous copy — reuse CPY op
+    req->op = HTP_OP_CPY;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_repeat_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_REPEAT;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     req->op = HTP_OP_GET_ROWS;
 
@@ -2449,12 +2470,33 @@ static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * buf
             break;
 
         case GGML_OP_UNARY:
-            if (ggml_get_unary_op(t) == GGML_UNARY_OP_SILU) {
+            switch (ggml_get_unary_op(t)) {
+            case GGML_UNARY_OP_SILU:
                 req->op   = HTP_OP_UNARY_SILU;
                 supported = true;
-            } else if (ggml_get_unary_op(t) == GGML_UNARY_OP_GELU) {
+                break;
+            case  GGML_UNARY_OP_GELU:
                 req->op   = HTP_OP_UNARY_GELU;
                 supported = true;
+                break;
+            case GGML_UNARY_OP_SIGMOID:
+                req->op   = HTP_OP_UNARY_SIGMOID;
+                supported = true;
+                break;
+            case GGML_UNARY_OP_NEG:
+                req->op   = HTP_OP_UNARY_NEG;
+                supported = true;
+                break;
+            case GGML_UNARY_OP_EXP:
+                req->op   = HTP_OP_UNARY_EXP;
+                supported = true;
+                break;
+            case GGML_UNARY_OP_SOFTPLUS:
+                req->op   = HTP_OP_UNARY_SOFTPLUS;
+                supported = true;
+                break;
+            default:
+                break;
             }
             break;
 
@@ -2640,16 +2682,28 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_sum_rows_req>(sess, node, flags);
                 break;
             case GGML_OP_UNARY:
-                if ((ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) ||
-                        (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU)) {
-                    ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
+                switch (ggml_get_unary_op(node)) {
+                    case GGML_UNARY_OP_NEG:
+                    case GGML_UNARY_OP_EXP:
+                    case GGML_UNARY_OP_SIGMOID:
+                    case GGML_UNARY_OP_SOFTPLUS:
+                    case GGML_UNARY_OP_SILU:
+                    case GGML_UNARY_OP_GELU:
+                        ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
+                        break;
+                    default:
+                        break;
                 }
                 break;
             case GGML_OP_GLU:
-                if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
-                        (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI) ||
-                        (ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU)) {
-                    ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
+                switch (ggml_get_glu_op(node)) {
+                    case GGML_GLU_OP_SWIGLU:
+                    case GGML_GLU_OP_SWIGLU_OAI:
+                    case GGML_GLU_OP_GEGLU:
+                        ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
+                        break;
+                    default:
+                        break;
                 }
                 break;
             case GGML_OP_SOFT_MAX:
@@ -2674,6 +2728,14 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_CPY:
                 ggml_hexagon_dispatch_op<init_cpy_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_CONT:
+                ggml_hexagon_dispatch_op<init_cont_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_REPEAT:
+                ggml_hexagon_dispatch_op<init_repeat_req>(sess, node, flags);
                 break;
 
             case GGML_OP_ARGSORT:
@@ -3006,6 +3068,39 @@ static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess,
     return true;
 }
 
+static bool ggml_hexagon_supported_cont(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    GGML_UNUSED(sess);
+    const struct ggml_tensor * src0 = op->src[0];
+
+    // CONT is same-type only, supports f32 and f16
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+
+    return true;
+}
+
+static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    GGML_UNUSED(sess);
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    // Support f32 and f16
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+
+    // src and dst must be the same type
+    if (src0->type != dst->type) return false;
+
+    // dst dims must be multiples of src dims
+    if (dst->ne[0] % src0->ne[0] != 0) return false;
+    if (dst->ne[1] % src0->ne[1] != 0) return false;
+    if (dst->ne[2] % src0->ne[2] != 0) return false;
+    if (dst->ne[3] % src0->ne[3] != 0) return false;
+
+    // require contiguous tensors (no transposition)
+    if (ggml_is_transposed(src0) || ggml_is_transposed(dst)) return false;
+
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
@@ -3063,21 +3158,32 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_UNARY:
-            {
-                const auto unary_op = ggml_get_unary_op(op);
-                if (unary_op == GGML_UNARY_OP_SILU || unary_op == GGML_UNARY_OP_GELU) {
+            switch (ggml_get_unary_op(op)) {
+                case GGML_UNARY_OP_NEG:
+                case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_SOFTPLUS:
+                    supp = ggml_hexagon_supported_unary(sess, op);
+                    break;
+                case GGML_UNARY_OP_SILU:
+                case GGML_UNARY_OP_GELU:
                     supp = ggml_hexagon_supported_activations(sess, op);
-                }
-                break;
+                    break;
+                default:
+                    break;
             }
+            break;
         case GGML_OP_GLU:
-            {
-                const auto glu_op = ggml_get_glu_op(op);
-                if ((glu_op == GGML_GLU_OP_SWIGLU) || (glu_op == GGML_GLU_OP_SWIGLU_OAI) || (glu_op == GGML_GLU_OP_GEGLU)) {
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
+                case GGML_GLU_OP_GEGLU:
                     supp = ggml_hexagon_supported_activations(sess, op);
-                }
-                break;
+                    break;
+                default:
+                    break;
             }
+            break;
         case GGML_OP_ROPE:
             supp = ggml_hexagon_supported_rope(sess, op);
             break;
@@ -3096,6 +3202,14 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_CPY:
             supp = ggml_hexagon_supported_cpy(sess, op);
+            break;
+
+        case GGML_OP_CONT:
+            supp = ggml_hexagon_supported_cont(sess, op);
+            break;
+
+        case GGML_OP_REPEAT:
+            supp = ggml_hexagon_supported_repeat(sess, op);
             break;
 
         case GGML_OP_ARGSORT:
