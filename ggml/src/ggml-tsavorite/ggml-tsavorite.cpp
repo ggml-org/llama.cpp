@@ -1237,9 +1237,9 @@ static const tmu_bucket_dispatch g_tmu_dispatch[] = {
     { 1024, tmu_mul_mat_k1024 },
     {  512, tmu_mul_mat_k512  },
     {  256, tmu_mul_mat_k256  },
+#endif
     {  128, tmu_mul_mat_k128  },
     {   64, tmu_mul_mat_k64   },
-#endif
     {   32, tmu_mul_mat_k32   },
     {    0, nullptr           }
 };
