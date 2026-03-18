@@ -702,7 +702,7 @@ build_fpga_impl() {
   return 0
 }
 
-build_fpga() { build_fpga_impl "build-fpga" 1 1; }
+build_fpga() { build_fpga_impl "build-fpga" 0 1; }
 build_fpga_tmu_only() { build_fpga_impl "build-fpga-tmu-only" 1 0; }
 build_fpga_tmu_disable() { build_fpga_impl "build-fpga-tmu-disable" 0 1; }
 
@@ -749,7 +749,7 @@ bundle_fpga() {
 #!/bin/bash
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$(pwd)
 tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "swiglu" \
-"add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16")
+"add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16" "mul_mat_tile_f32_k32" "mul_mat_tile_f32_k64" "mul_mat_tile_f32_k128")
 for kernel in "${tsi_kernels[@]}"; do
   mkdir -p __TSI_BLOB_INSTALL_DIR__/txe_${kernel}
   cp blobs __TSI_BLOB_INSTALL_DIR__/txe_${kernel}/ -r
