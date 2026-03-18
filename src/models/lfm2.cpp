@@ -178,8 +178,8 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
 
         cur = ggml_add(ctx0, cur, ffn_out);
 
-        cur = build_cvec(cur, il);                                                                                                                              
-        cb(cur, "l_out", il); 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
     }
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
