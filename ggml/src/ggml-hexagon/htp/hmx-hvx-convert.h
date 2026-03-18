@@ -9,14 +9,6 @@
 
 #include "hmx-hvx-internal.h"
 
-// Convert two single-float vectors to one half-float vector.
-static HMX_HVX_INLINE_ALWAYS HVX_Vector hmx_hvx_wsf_to_vhf(HVX_Vector v1, HVX_Vector v0) {
-    const HVX_Vector v_zero = Q6_V_vzero();
-    HVX_Vector v0_qf32 = Q6_Vqf32_vadd_VsfVsf(v0, v_zero);
-    HVX_Vector v1_qf32 = Q6_Vqf32_vadd_VsfVsf(v1, v_zero);
-    return Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(v1_qf32, v0_qf32));
-}
-
 // Convert one qf16 vector to two qf32 vectors (vector pair).
 static HMX_HVX_INLINE_ALWAYS HVX_VectorPair hmx_hvx_vqf16_to_wqf32(HVX_Vector v_src) {
     const HVX_Vector v_lo_mask = Q6_V_vsplat_R(0x0000ffff);
@@ -59,11 +51,6 @@ static HMX_HVX_INLINE_ALWAYS HVX_Vector hmx_hvx_vhf_to_vqf16(HVX_Vector vx) {
 // Convert half-float to two single-floats.
 static HMX_HVX_INLINE_ALWAYS HVX_VectorPair hmx_hvx_vhf_to_wsf(HVX_Vector vx) {
     return hmx_hvx_vqf16_to_wsf(hmx_hvx_vhf_to_vqf16(vx));
-}
-
-// Convert half-float to two qf32.
-static HMX_HVX_INLINE_ALWAYS HVX_VectorPair hmx_hvx_vhf_to_wqf32(HVX_Vector vx) {
-    return hmx_hvx_vqf16_to_wqf32(hmx_hvx_vhf_to_vqf16(vx));
 }
 
 #endif // HMX_HVX_CONVERT_H

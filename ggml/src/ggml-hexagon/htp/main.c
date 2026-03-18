@@ -26,10 +26,8 @@
 #include "worker-pool.h"
 
 #ifdef HTP_HAS_HMX
-#include "hmx/hmx-ops.h"
+#include "hmx-ops.h"
 #endif // HTP_HAS_HMX
-
-
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     struct htp_context * ctx;

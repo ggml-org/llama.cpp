@@ -10,15 +10,16 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 
+#include "hex-dma.h"
+#include "hvx-utils.h"
+#include "worker-pool.h"
+#include "htp-ctx.h"
+
 #include "hmx-utils.h"
 #include "hmx-hvx-convert.h"
 #include "hmx-hvx-internal.h"
 #include "hmx-ops.h"
 #include "hmx-quants.h"
-#include "htp-ctx.h"
-#include "worker-pool.h"
-#include "hex-dma.h"
-
 #include "hmx-profile.h"
 
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = {
@@ -604,6 +605,7 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
 
       HVX_Vector v_src = ((const HVX_Vector *) tile)[r1 / 2];
 
+      // HVX_VectorPair vp = hvx_vec_f16_to_f32(v_src);
       HVX_VectorPair vp = hmx_hvx_vhf_to_wsf(v_src);
 
       HVX_Vector *pv_out0 = (HVX_Vector *) (dst + (r * n + c + 0));
@@ -1411,7 +1413,7 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
       HVX_Vector v0 = *pv_in0++;
       HVX_Vector v1 = next_row_valid ? *pv_in1++ : Q6_V_vzero();
 
-      HVX_Vector v_out = hmx_hvx_wsf_to_vhf(v1, v0);
+      HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
       // compute output position
       int c0       = c / HMX_FP16_TILE_N_COLS;  // tile column index
