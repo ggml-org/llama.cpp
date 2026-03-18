@@ -3567,19 +3567,26 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 }
             }
 
-            // SYCL expert host-pinned: route MoE expert tensors to sycl::malloc_host buffers
-            // This frees device VRAM for the unified cache to use as expert SOA hot-cache
+            // SYCL expert mmap: route MoE expert tensors to CPU/mmap buffer (NOT sycl::malloc_host).
+            // sycl::malloc_host pins ALL pages upfront → 58 GB pinned = 10+ min load time.
+            // mmap is near-instant (demand-paged), and experts get pinned lazily per-expert
+            // when the unified cache uploads hot experts to GPU VRAM as SOA.
             bool moe_expert_host_pinned = false;
 #ifdef GGML_USE_SYCL
             if (!is_lazy_moe_tensor && !prefer_host_weights &&
                 is_expert_tensor && info.layer == LLM_TENSOR_LAYER_REPEATING &&
                 ggml_backend_dev_backend_reg(layer_dev) == ggml_backend_sycl_reg()) {
-                moe_expert_host_pinned = true;
-                static bool expert_pinned_logged = false;
-                if (!expert_pinned_logged) {
-                    LLAMA_LOG_INFO("sycl: expert tensors -> host-pinned (device VRAM freed for SOA cache)\n");
-                    ggml_backend_sycl_set_moe_expert_split(0, 0);
-                    expert_pinned_logged = true;
+                // Use CPU/mmap buffer type (same as lazy_moe) — fast load via mmap
+                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                if (cpu_dev) {
+                    buft               = ggml_backend_dev_buffer_type(cpu_dev);
+                    is_lazy_moe_tensor = true;  // Mark as lazy so downstream code treats it correctly
+                    static bool expert_mmap_logged = false;
+                    if (!expert_mmap_logged) {
+                        LLAMA_LOG_INFO("sycl: expert tensors -> mmap (device VRAM freed for SOA cache)\n");
+                        ggml_backend_sycl_set_moe_expert_split(0, 0);
+                        expert_mmap_logged = true;
+                    }
                 }
             }
 #endif
