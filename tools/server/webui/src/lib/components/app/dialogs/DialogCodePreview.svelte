@@ -37,7 +37,7 @@
 			<iframe
 				bind:this={iframeRef}
 				title="Preview {language}"
-				sandbox="allow-scripts allow-same-origin"
+				sandbox="allow-scripts"
 				class="code-preview-iframe"
 			></iframe>
 
