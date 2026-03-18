@@ -509,50 +509,39 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
 static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
                                      std::vector<webgpu_submission> & subs,
                                      bool                             block = true) {
-    // If we have too many in-flight submissions, wait on the oldest one first.
     if (subs.empty()) {
         return;
     }
-    while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
-        if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
+
+    bool blocking_wait = block || subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD;
+    while (blocking_wait) {
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, 0);
+        if (ggml_backend_webgpu_handle_wait_status(waitStatus, true)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
 #endif
             subs.erase(subs.begin());
         }
+        blocking_wait = (block && !subs.empty()) || subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD;
     }
 
     if (subs.empty()) {
         return;
     }
 
-    if (block) {
-        for (auto & sub : subs) {
-            while (!sub.submit_done.completed) {
-                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
-                ggml_backend_webgpu_handle_wait_status(waitStatus);
-            }
+    // Poll each submit future once and remove completed submissions.
+    for (auto sub = subs.begin(); sub != subs.end();) {
+        auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
+        bool success    = ggml_backend_webgpu_handle_wait_status(waitStatus, true);
 #ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
-#endif
-        }
-        subs.clear();
-    } else {
-        // Poll each submit future once and remove completed submissions.
-        for (auto sub = subs.begin(); sub != subs.end();) {
-            auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
-            ggml_backend_webgpu_handle_wait_status(waitStatus, true);
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
-            if (sub->submit_done.completed && sub->profile_futures.empty()) {
+        ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
+        if (success && sub->profile_futures.empty()) {
 #else
-            if (sub->submit_done.completed) {
+        if (success) {
 #endif
-                sub = subs.erase(sub);
-            } else {
-                ++sub;
-            }
+            sub = subs.erase(sub);
+        } else {
+            ++sub;
         }
     }
 }
@@ -2961,17 +2950,16 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
 
     static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type = {
         /* .iface = */ {
-                        /* .get_name         = */ ggml_backend_webgpu_buffer_type_get_name,
-                        /* .alloc_buffer     = */
-            ggml_backend_webgpu_buffer_type_alloc_buffer,                                    /* .get_alignment    = */
-            ggml_backend_webgpu_buffer_type_get_alignment,                                   /* .get_max_size     = */
-            ggml_backend_webgpu_buffer_type_get_max_size,                                    /* .get_alloc_size   = */
-            ggml_backend_webgpu_buffer_type_get_alloc_size, /* .is_host          = */ NULL,  // defaults to false
+                        /* .get_name       = */ ggml_backend_webgpu_buffer_type_get_name,
+                        /* .alloc_buffer   = */ ggml_backend_webgpu_buffer_type_alloc_buffer,
+                        /* .get_alignment  = */ ggml_backend_webgpu_buffer_type_get_alignment,
+                        /* .get_max_size   = */ ggml_backend_webgpu_buffer_type_get_max_size,
+                        /* .get_alloc_size = */ ggml_backend_webgpu_buffer_type_get_alloc_size,
+                        /* .is_host        = */ NULL,  // defaults to false
         },
         /* .device  = */
-        dev,
-        /* .context = */
-        NULL
+         dev,
+        /* .context = */ NULL
     };
 
     return &ggml_backend_webgpu_buffer_type;
