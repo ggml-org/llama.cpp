@@ -7971,6 +7971,13 @@ static void ggml_sycl_preload_model_weights() {
     if (!ggml_backend_sycl_weights_evictable() || !ggml_sycl::unified_cache_enabled()) {
         return;
     }
+    // S1: skip bulk preload — rely on on-demand caching during warmup/inference.
+    // Bulk preload can trigger DEVICE_LOST on some drivers when allocating many
+    // VRAM entries simultaneously (race between fill kernel and chunk allocation).
+    if (g_all_weights_host.load(std::memory_order_acquire)) {
+        GGML_LOG_INFO("[S1] Skipping bulk preload — on-demand caching during warmup\n");
+        return;
+    }
 
     std::vector<ggml_tensor *> weights;
     {
@@ -7980,6 +7987,7 @@ static void ggml_sycl_preload_model_weights() {
             weights.push_back(entry.first);
         }
     }
+    GGML_LOG_INFO("[S1-PRELOAD] %zu host-registered weights found for preload\n", weights.size());
     if (weights.empty()) {
         return;
     }
@@ -8064,10 +8072,8 @@ static void ggml_sycl_preload_model_weights() {
         }
     }
 
-    if (g_ggml_sycl_debug) {
-        GGML_SYCL_DEBUG("[MODEL-PRELOAD] dense cached=%zu failed=%zu, moe cached=%zu failed=%zu\n", dense_cached,
-                        dense_failed, moe_cached, moe_failed);
-    }
+    GGML_LOG_INFO("[S1-PRELOAD] dense cached=%zu failed=%zu, moe cached=%zu failed=%zu\n", dense_cached, dense_failed,
+                  moe_cached, moe_failed);
 }
 
 static bool ggml_sycl_xmx_gemm_tiled_tile_bytes(const ggml_tensor * tensor,

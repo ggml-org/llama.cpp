@@ -2887,14 +2887,31 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     const size_t headroom     = std::max(min_headroom, total_mem / 10);
                     const size_t usable_free  = free_mem > headroom ? free_mem - headroom : 0;
                     if (alloc_cost > usable_free) {
-                        GGML_SYCL_DEBUG(
-                            "[UNIFIED-CACHE] live VRAM low (free=%.1f MB, headroom=%.1f MB, need=%.1f MB) - using "
-                            "host\n",
-                            free_mem / (1024.0f * 1024.0f), headroom / (1024.0f * 1024.0f),
-                            request.dst_size / (1024.0f * 1024.0f));
-                        force_host = true;
+                        // Try eviction before falling back to host.
+                        // SOA/COALESCED layouts are only useful on device — host fallback
+                        // would degrade to AOS, so eviction is the only viable path.
+                        size_t evicted_total = 0;
+                        while (evicted_total < alloc_cost) {
+                            size_t evicted = evict_one(alloc_cost);
+                            if (evicted == 0) {
+                                break;
+                            }
+                            evicted_total += evicted;
+                        }
+                        if (evicted_total < alloc_cost) {
+                            GGML_SYCL_DEBUG(
+                                "[UNIFIED-CACHE] live VRAM low after eviction (free=%.1f MB, headroom=%.1f MB, "
+                                "need=%.1f MB, evicted=%.1f MB) - using host\n",
+                                free_mem / (1024.0f * 1024.0f), headroom / (1024.0f * 1024.0f),
+                                request.dst_size / (1024.0f * 1024.0f), evicted_total / (1024.0f * 1024.0f));
+                            force_host = true;
+                        } else {
+                            GGML_SYCL_DEBUG("[UNIFIED-CACHE] evicted %.1f MB to make room for layout (need=%.1f MB)\n",
+                                            evicted_total / (1024.0f * 1024.0f),
+                                            request.dst_size / (1024.0f * 1024.0f));
+                        }
                     }
-                    // VRAM is sufficient — skip budget-based eviction/rejection
+                    // VRAM is sufficient (or eviction freed enough) — skip budget-based eviction/rejection
                 } else if (hcache) {
                     // VRAM query failed — fall back to budget-based check
                     const size_t base_budget = budget_;
@@ -2940,11 +2957,17 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
             bool layout_degraded_to_aos = false;
             if (!new_device_ptr) {
-                // Try host_cache fallback when device allocation fails
-                if (!hcache) {
+                // Try host_cache fallback when device allocation fails.
+                // Skip host fallback for SOA layout — SOA is only useful on GPU.
+                // CPU reads AOS directly; creating a host SOA copy wastes memory.
+                if (request.layout == GGML_LAYOUT_SOA) {
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] skipping host_cache fallback for SOA layout "
+                        "(CPU reads AOS directly)\n");
+                } else if (!hcache) {
                     hcache = get_host_cache(queue_);
                 }
-                if (hcache) {
+                if (request.layout != GGML_LAYOUT_SOA && hcache) {
                     cache_location host_loc = hcache->get_location(request.key, request.type, request.layer_id,
                                                                    request.expert_id, request.layout);
                     void *         host_ptr =
