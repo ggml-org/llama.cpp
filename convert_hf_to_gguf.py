@@ -876,6 +876,9 @@ class ModelBase:
         if self.metadata.name is None:
             self.metadata.name = self.dir_model.name
 
+        if self._is_nvfp4 and self.model_name is None and self.metadata.name is not None and self.metadata.name.endswith(" BF16"):
+            self.metadata.name = f"{self.metadata.name[:-5]} NVFP4"
+
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
             self.metadata.size_label = gguf.size_label(total_params, shared_params, expert_params, expert_count)
@@ -1016,7 +1019,7 @@ class TextModel(ModelBase):
 
         total_params = self.gguf_writer.get_total_parameter_count()[0]
         # Extract the encoding scheme from the file type name. e.g. 'gguf.LlamaFileType.MOSTLY_Q8_0' --> 'Q8_0'
-        output_type: str = self.ftype.name.partition("_")[2]
+        output_type: str = "NVFP4" if self._is_nvfp4 else self.ftype.name.partition("_")[2]
 
         # Filename Output
         if self.fname_out.is_dir():
@@ -1144,8 +1147,9 @@ class TextModel(ModelBase):
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
 
-        self.gguf_writer.add_file_type(self.ftype)
-        logger.info(f"gguf: file type = {self.ftype}")
+        file_type = gguf.LlamaFileType.MOSTLY_NVFP4 if self._is_nvfp4 else self.ftype
+        self.gguf_writer.add_file_type(file_type)
+        logger.info(f"gguf: file type = {file_type}")
 
     def write_vocab(self):
         if len(self.gguf_writer.tensors) != 1:
