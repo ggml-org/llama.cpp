@@ -229,6 +229,20 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
         result.tool_calls.push_back(pending_tool_call.value());
         pending_tool_call.reset();
     }
+
+    // Discard whitespace-only reasoning content (e.g. from <think></think> prefill)
+    if (!result.reasoning_content.empty()) {
+        bool all_whitespace = true;
+        for (char c : result.reasoning_content) {
+            if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
+                all_whitespace = false;
+                break;
+            }
+        }
+        if (all_whitespace) {
+            result.reasoning_content.clear();
+        }
+    }
 }
 
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {

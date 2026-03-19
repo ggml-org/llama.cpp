@@ -42,9 +42,9 @@
         {%- if 'tool_calls' in message and message['tool_calls'] -%}
             {%- for tool_call in message['tool_calls'] -%}
                 {%- if tool_call["function"]["name"] == "python" -%}
-                    {{ '<|python_tag|>' + tool_call['function']['arguments'] }}
+                    {{ '<|python_tag|>' + tool_call['function']['arguments'] | tojson }}
                 {%- else -%}
-                    {{ '<function=' + tool_call['function']['name'] + '>' + tool_call['function']['arguments'] + '</function>' }}
+                    {{ '<function=' + tool_call['function']['name'] + '>' + tool_call['function']['arguments'] | tojson + '</function>' }}
                 {%- endif -%}
             {%- endfor -%}
             {{ '<|eom_id|>' }}
