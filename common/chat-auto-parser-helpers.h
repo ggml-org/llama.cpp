@@ -62,7 +62,7 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
 common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
                                              const common_peg_parser &             prs,
                                              const autoparser::generation_params & inputs,
-                                             const autoparser::analyze_reasoning & reasoning);
+                                             const std::string &                   reasoning_start = {});
 namespace autoparser {
 
 // Apply a template with the given parameters, returning the rendered string (empty on failure)

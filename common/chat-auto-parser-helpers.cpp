@@ -296,12 +296,12 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
 common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
                                              const common_peg_parser &             prs,
                                              const autoparser::generation_params & inputs,
-                                             const autoparser::analyze_reasoning & reasoning) {
+                                             const std::string &                   reasoning_start) {
     auto parser = prs;
     if (!inputs.generation_prompt.empty()) {
         size_t end_pos = inputs.generation_prompt.size();
-        if (!reasoning.start.empty() && inputs.generation_prompt.find(reasoning.start) != std::string::npos) {
-            end_pos = inputs.generation_prompt.find(reasoning.start);
+        if (!reasoning_start.empty() && inputs.generation_prompt.find(reasoning_start) != std::string::npos) {
+            end_pos = inputs.generation_prompt.find(reasoning_start);
         }
         std::string cut_genprompt = inputs.generation_prompt.substr(0, end_pos);
         parser                    = p.literal(cut_genprompt) + parser;

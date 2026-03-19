@@ -116,7 +116,7 @@ describe('ParameterSyncService', () => {
 				chat_format: '',
 				reasoning_format: '',
 				reasoning_in_content: false,
-				prefill: '',
+				generation_prompt: '',
 				'speculative.n_max': 0,
 				'speculative.n_min': 0,
 				'speculative.p_min': 0.0,

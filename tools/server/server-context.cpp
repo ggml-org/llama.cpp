@@ -1161,13 +1161,6 @@ private:
                 return false;
             }
 
-            if (slot.smpl == nullptr) {
-                LOG_ERR("%s: error in parsing grammar. Grammar was:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                    common_grammar_value(task.params.sampling.grammar).c_str(), task.params.sampling.generation_prompt.c_str());
-                send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
-                return false;
-            }
-
             const bool need_logits = task.params.sampling.n_probs > 0;
 
             bool backend_sampling = true;

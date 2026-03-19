@@ -189,15 +189,15 @@ enum common_grammar_type {
 };
 
 // Grammar variant struct with type and grammar string
-struct common_grammar_variant {
+struct common_grammar {
     common_grammar_type type = COMMON_GRAMMAR_TYPE_NONE;
     std::string grammar;
 
     // Default constructor - no grammar
-    common_grammar_variant() = default;
+    common_grammar() = default;
 
     // Constructor with type and grammar string
-    common_grammar_variant(common_grammar_type t, std::string g) : type(t), grammar(std::move(g)) {
+    common_grammar(common_grammar_type t, std::string g) : type(t), grammar(std::move(g)) {
         GGML_ASSERT(type != COMMON_GRAMMAR_TYPE_NONE || !grammar.empty());
     }
 
@@ -206,13 +206,13 @@ struct common_grammar_variant {
 };
 
 // Returns the raw grammar string, or empty string if no grammar is set.
-inline const std::string & common_grammar_value(const common_grammar_variant & g) {
+inline const std::string & common_grammar_value(const common_grammar & g) {
     return g.grammar;
 }
 
 // Returns true when the generation_prompt should be prefilled into the grammar sampler.
 // Only output-format and tool-call grammars need prefill; user-supplied grammars must not be prefilled.
-inline bool common_grammar_needs_prefill(const common_grammar_variant & g) {
+inline bool common_grammar_needs_prefill(const common_grammar & g) {
     return g.type == COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT
         || g.type == COMMON_GRAMMAR_TYPE_TOOL_CALLS;
 }
@@ -267,7 +267,7 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_TEMPERATURE,
     };
 
-    common_grammar_variant              grammar;      // optional grammar constraint (user / output-format / tool-calls)
+    common_grammar              grammar;      // optional grammar constraint (user / output-format / tool-calls)
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
