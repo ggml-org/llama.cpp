@@ -1912,9 +1912,26 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
-                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
-            })
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },            })
             .run();
+
+        // #20650: tool with no required args, model emits <tool_call>name</tool_call> with no arg tags.
+        {
+            static common_chat_tool no_args_tool{
+                "read_file_diff_md", "Reads a file diff",
+                R"({"type":"object","properties":{"review_id":{"type":"string"},"file_id":{"type":"string"}}})",
+            };
+            tst.test(
+                   "Let me read the diff content."
+                   "</think>"
+                   "<tool_call>read_file_diff_md</tool_call>")
+                .enable_thinking(true)
+                .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+                .tools({ no_args_tool })
+                .expect_reasoning("Let me read the diff content.")
+                .expect_tool_calls({{ "read_file_diff_md", "{}", {} }})
+                .run();
+        }
     }
 
     // Kimi-K2-Thinking tests - custom parser
