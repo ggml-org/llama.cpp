@@ -1,0 +1,71 @@
+name: AI review (issues)
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  find-related:
+    if: github.event.action == 'opened'
+    runs-on: [self-hosted, opencode]
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Find related
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_PERMISSION: |
+            {
+              "bash": {
+                "*": "deny",
+                "gh issue*": "allow"
+              },
+              "webfetch": "deny"
+            }
+        run: |
+          opencode run -m llama.cpp-dgx/gpt-oss-120b-hf-low "A new issue has been created:
+
+          Issue number: ${{ github.event.issue.number }}
+
+          Lookup this issue with `gh issue view ${{ github.event.issue.number }} --json title,body,url,number`
+
+          Perform the following task and then post a SINGLE comment (if needed).
+
+          ---
+
+          TASK : FIND RELATED ISSUES
+
+          Search through existing issues (excluding #${{ github.event.issue.number }}) to find related or similar issues.
+          Consider:
+          1. Similar titles or descriptions
+          2. Same error messages or symptoms
+          3. Related functionality or components
+          4. Similar feature requests
+
+          ---
+
+          POSTING YOUR COMMENT:
+
+          Based on your findings, post a SINGLE comment on issue #${{ github.event.issue.number }}. Build the comment as follows:
+
+          If no related issues were found, do NOT comment at all.
+
+          If related issues were found, include a section listing them with links using the following format:
+
+          [comment]
+          This issue might be similar or related to:
+          - #[issue_number]: [brief description of how they are related]
+
+          _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
+          [/comment]
+
+          Remember: Do not include the comment tags in your actual comment. Post at most ONE comment combining all findings. If everything is fine, post nothing.
+          "

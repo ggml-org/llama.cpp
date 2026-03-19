@@ -36,7 +36,8 @@ import {
 	ISO_TIME_SEPARATOR,
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
-	MULTIPLE_UNDERSCORE_REGEX
+	MULTIPLE_UNDERSCORE_REGEX,
+	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
 class ConversationsStore {
@@ -61,7 +62,37 @@ class ConversationsStore {
 	isInitialized = $state(false);
 
 	/** Pending MCP server overrides for new conversations (before first message) */
-	pendingMcpServerOverrides = $state<McpServerOverride[]>([]);
+	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
+
+	/** Load MCP default overrides from localStorage */
+	private static loadMcpDefaults(): McpServerOverride[] {
+		if (typeof globalThis.localStorage === 'undefined') return [];
+		try {
+			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+			if (!raw) return [];
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter(
+				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
+			) as McpServerOverride[];
+		} catch {
+			return [];
+		}
+	}
+
+	/** Persist MCP default overrides to localStorage */
+	private saveMcpDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		const plain = this.pendingMcpServerOverrides.map((o) => ({
+			serverId: o.serverId,
+			enabled: o.enabled
+		}));
+		if (plain.length > 0) {
+			localStorage.setItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY, JSON.stringify(plain));
+		} else {
+			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+		}
+	}
 
 	/** Callback for title update confirmation dialog */
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
@@ -261,6 +292,8 @@ class ConversationsStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
+		// reload MCP defaults so new chats inherit persisted state
+		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
 	}
 
 	/**
@@ -597,6 +630,7 @@ class ConversationsStore {
 				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
 			}
 		}
+		this.saveMcpDefaults();
 	}
 
 	/**
@@ -621,6 +655,7 @@ class ConversationsStore {
 	 */
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
+		this.saveMcpDefaults();
 	}
 
 	/**
