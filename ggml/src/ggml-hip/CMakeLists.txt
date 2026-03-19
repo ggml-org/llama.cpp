@@ -53,9 +53,6 @@ endif()
 
 message(STATUS "HIP and hipBLAS found")
 
-# Workaround old compilers
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --gpu-max-threads-per-block=1024")
-
 file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
