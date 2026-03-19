@@ -291,8 +291,10 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::or
 
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
 
-// Chat conversion functions (defined in chat-conversion.h)
-#include "chat-conversion.h"
+// DEPRECATED: only used in tests
+nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
+
+nlohmann::ordered_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);

@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"

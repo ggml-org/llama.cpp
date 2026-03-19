@@ -5,7 +5,6 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
-#include "chat-conversion.h"
 #include "base64.hpp"
 
 #include "server-common.h"

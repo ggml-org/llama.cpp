@@ -1,61 +1,7 @@
-#include "chat-conversion.h"
-
-#include "common.h"
-#include "log.h"
-#include "jinja/caps.h"
+#include "server-chat.h"
+#include "server-common.h"
 
 #include <sstream>
-
-#define JSON_ASSERT GGML_ASSERT
-
-// Helper function for JSON value extraction with default
-template <typename T>
-static T json_value(const json & body, const std::string & key, const T & default_value) {
-    // Fallback null to default value
-    if (body.contains(key) && !body.at(key).is_null()) {
-        try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
-            return default_value;
-        }
-    } else {
-        return default_value;
-    }
-}
-
-// Helper function to render messages to JSON (shared with chat.cpp)
-static json render_message_to_json(const std::vector<common_chat_msg> & msgs, const jinja::caps & c) {
-    if (!c.supports_string_content && !c.supports_typed_content) {
-        LOG_WRN("%s: Neither string content nor typed content is supported by the template. This is unexpected and may lead to issues.\n", __func__);
-    }
-
-    bool only_string_accepted =  c.supports_string_content && !c.supports_typed_content;
-    bool only_typed_accepted  = !c.supports_string_content &&  c.supports_typed_content;
-
-    json messages = json::array();
-    for (const auto & msg : msgs) {
-        if (only_string_accepted) {
-            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ true);
-            messages.push_back(jmsg);
-        } else if (only_typed_accepted) {
-            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ false);
-            if (jmsg.at("content").is_string()) {
-                jmsg["content"] = json::array({
-                    json{
-                        {"type", "text"},
-                        {"text", jmsg.at("content").get<std::string>()},
-                    }
-                });
-            }
-            messages.push_back(jmsg);
-        } else {
-            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ false);
-            messages.push_back(jmsg);
-        }
-    }
-    return messages;
-}
 
 json common_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
@@ -555,34 +501,6 @@ json common_chat_convert_anthropic_to_oai(const json & body) {
     }
 
     return oai_body;
-}
-
-// DEPRECATED: only used in tests
-json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text) {
-    jinja::caps c;
-    c.supports_string_content = true;
-    c.supports_typed_content = !concat_typed_text;
-    return render_message_to_json(msgs, c);
-}
-
-json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
-    if (tools.empty()) {
-        return json();
-    }
-
-    auto result = json::array();
-    for (const auto & tool : tools) {
-        result.push_back({
-            { "type",     "function" },
-            { "function",
-             {
-                  { "name", tool.name },
-                  { "description", tool.description },
-                  { "parameters", json::parse(tool.parameters) },
-              }                      },
-        });
-    }
-    return result;
 }
 
 json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {

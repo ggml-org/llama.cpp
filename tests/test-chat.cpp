@@ -7,6 +7,7 @@
 //
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
+#include "../tools/server/server-chat.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"

@@ -385,6 +385,34 @@ static json render_message_to_json(const std::vector<common_chat_msg> & msgs, co
     return messages;
 }
 
+// DEPRECATED: only used in tests
+json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text) {
+    jinja::caps c;
+    c.supports_string_content = true;
+    c.supports_typed_content = !concat_typed_text;
+    return render_message_to_json(msgs, c);
+}
+
+json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
+    if (tools.empty()) {
+        return json();
+    }
+
+    auto result = json::array();
+    for (const auto & tool : tools) {
+        result.push_back({
+            { "type",     "function" },
+            { "function",
+             {
+                  { "name", tool.name },
+                  { "description", tool.description },
+                  { "parameters", json::parse(tool.parameters) },
+              }                      },
+        });
+    }
+    return result;
+}
+
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
