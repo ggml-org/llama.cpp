@@ -24,7 +24,6 @@
 
 #include "hmx-utils.h"
 #include "hmx-ops.h"
-#include "hmx-quants.h"
 #include "hmx-profile.h"
 
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
@@ -44,6 +43,10 @@ static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned
     8*128,  9*128, 10*128, 11*128, 12*128, 13*128, 14*128, 15*128,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
+
+// Scales per x4x2 logical block: 8 × sizeof(__fp16) = 16 bytes
+#define HMX_X4X2_SCALES_PER_BLK  8
+#define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes
 
 static inline void swap_ptr(void **p1, void **p2) {
   void *t = *p1;
@@ -71,13 +74,13 @@ typedef struct {
 // Total per row = nb * (128+16) = 144*nb (Q4) or nb * (256+16) = 272*nb (Q8).
 // Callers must ensure k is a multiple of 256 (enforced by proc_hmx_matmul_req).
 static inline size_t get_x4x2_row_stride(int weight_type, int k) {
-  int nb = (k + HMX_QK_Q4x4x2 - 1) / HMX_QK_Q4x4x2;
+  int nb = (k + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
   switch (weight_type) {
     case HTP_TYPE_Q4_0:
     case HTP_TYPE_IQ4_NL:
-      return (size_t)nb * (HMX_QK_Q4x4x2 / 2 + HMX_X4X2_DBLK_SIZE);  // 144 * nb
+      return (size_t)nb * (QK_Q4_0x4x2 / 2 + HMX_X4X2_DBLK_SIZE);  // 144 * nb
     case HTP_TYPE_Q8_0:
-      return (size_t)nb * (HMX_QK_Q8x4x2 + HMX_X4X2_DBLK_SIZE);      // 272 * nb
+      return (size_t)nb * (QK_Q8_0x4x2 + HMX_X4X2_DBLK_SIZE);      // 272 * nb
     default:
       return 0;
   }
@@ -313,10 +316,10 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
 
     // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
     if (is_q4 && (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct)) {
-      int blk_idx      = (kt * 32) / HMX_QK_Q4x4x2;
-      int sub_blk_base = ((kt * 32) % HMX_QK_Q4x4x2) / 32;  // 0 or 4
+      int blk_idx      = (kt * 32) / QK_Q4_0x4x2;
+      int sub_blk_base = ((kt * 32) % QK_Q4_0x4x2) / 32;  // 0 or 4
       bool upper       = (sub_blk_base >= 4);
-      int packed_off   = blk_idx * (HMX_QK_Q4x4x2 / 2);     // 128 contiguous packed bytes
+      int packed_off   = blk_idx * (QK_Q4_0x4x2 / 2);     // 128 contiguous packed bytes
       int scale_off    = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE
                        + sub_blk_base * (int)sizeof(__fp16);   // 4 consecutive scales
 
@@ -360,10 +363,10 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
 
     if (is_q4) {
-      int blk_idx  = (kt * 32) / HMX_QK_Q4x4x2;
-      int sub_blk  = ((kt * 32) % HMX_QK_Q4x4x2) / 32;
+      int blk_idx  = (kt * 32) / QK_Q4_0x4x2;
+      int sub_blk  = ((kt * 32) % QK_Q4_0x4x2) / 32;
       bool upper   = (sub_blk >= 4);
-      int byte_off  = blk_idx * (HMX_QK_Q4x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
+      int byte_off  = blk_idx * (QK_Q4_0x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
       int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
 
       HVX_Vector v_off = v_scat_base;  // reset to column 0
@@ -389,9 +392,9 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
       (void) *(volatile HVX_Vector *)(tile_base);
     } else {
       // Q8_0
-      int blk_idx  = (kt * 32) / HMX_QK_Q8x4x2;
-      int sub_blk  = ((kt * 32) % HMX_QK_Q8x4x2) / 32;
-      int byte_off  = blk_idx * HMX_QK_Q8x4x2 + sub_blk * 32;
+      int blk_idx  = (kt * 32) / QK_Q8_0x4x2;
+      int sub_blk  = ((kt * 32) % QK_Q8_0x4x2) / 32;
+      int byte_off  = blk_idx * QK_Q8_0x4x2 + sub_blk * 32;
       int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
 
       HVX_Vector v_off = v_scat_base;  // reset to column 0
@@ -1486,8 +1489,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
           qweight_fetch_task_state_t s;
 
           const bool is_q4 = (weight_type == HTP_TYPE_Q4_0 || weight_type == HTP_TYPE_IQ4_NL);
-          const int blk_start = kk / HMX_QK_Q4x4x2;
-          const int nb_sub = (k_blk_sz + HMX_QK_Q4x4x2 - 1) / HMX_QK_Q4x4x2;
+          const int blk_start = kk / QK_Q4_0x4x2;
+          const int nb_sub = (k_blk_sz + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
           const int full_qrow = is_q4 ? (k / 2) : k;
           const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
 
@@ -1496,8 +1499,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
           s.n_rows      = n_blk_sz;
           s.src_stride  = row_stride;
           s.dst_stride  = sub_row_stride;
-          s.quant_off   = is_q4 ? (blk_start * (HMX_QK_Q4x4x2 / 2)) : (blk_start * HMX_QK_Q8x4x2);
-          s.quant_width = is_q4 ? (nb_sub    * (HMX_QK_Q4x4x2 / 2)) : (nb_sub * HMX_QK_Q8x4x2);
+          s.quant_off   = is_q4 ? (blk_start * (QK_Q4_0x4x2 / 2)) : (blk_start * QK_Q8_0x4x2);
+          s.quant_width = is_q4 ? (nb_sub    * (QK_Q4_0x4x2 / 2)) : (nb_sub * QK_Q8_0x4x2);
           s.scale_off   = full_qrow + blk_start * HMX_X4X2_DBLK_SIZE;
           s.scale_width = nb_sub * HMX_X4X2_DBLK_SIZE;
 

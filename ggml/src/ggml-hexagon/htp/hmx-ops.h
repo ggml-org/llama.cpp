@@ -6,7 +6,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "hmx-quants.h"
 
 #ifndef restrict
 #  define restrict __restrict
