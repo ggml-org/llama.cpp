@@ -1912,7 +1912,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
-                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },            })
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
             .run();
 
         // #20650: tool with no required args, model emits <tool_call>name</tool_call> with no arg tags.
