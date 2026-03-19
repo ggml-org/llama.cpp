@@ -81,11 +81,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     }
     sum = scratch[0];
 
-#ifdef OP_RMS_NORM
+#ifdef RMS_NORM
     let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
-#elif OP_L2_NORM
+#elif defined(L2_NORM)
     let scale = 1.0/max(sqrt(sum), params.eps);
 #endif
+
     col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
