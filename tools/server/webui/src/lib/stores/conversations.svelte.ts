@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode, parseMcpServerSettings } from '$lib/utils';
+import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 import {
@@ -555,13 +555,7 @@ class ConversationsStore {
 	 */
 	isMcpServerEnabledForChat(serverId: string): boolean {
 		const override = this.getMcpServerOverride(serverId);
-		if (override) {
-			return override.enabled;
-		}
-		// no override: fall back to global enabled state
-		const servers = parseMcpServerSettings(config().mcpServers);
-		const server = servers.find((s) => s.id === serverId);
-		return server?.enabled ?? false;
+		return override?.enabled ?? false;
 	}
 
 	/**
