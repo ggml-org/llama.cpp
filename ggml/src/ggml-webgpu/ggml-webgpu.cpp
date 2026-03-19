@@ -2209,6 +2209,8 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
+        case GGML_OP_DIAG:
+        case GGML_OP_TRI:
             return ggml_webgpu_unary_op(ctx, src0, node);
         case GGML_OP_PAD:
             return ggml_webgpu_pad(ctx, src0, node);
@@ -3199,6 +3201,12 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
             break;
         case GGML_OP_COS:
+            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
+            break;
+        case GGML_OP_DIAG:
+            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
+            break;
+        case GGML_OP_TRI:
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
             break;
         case GGML_OP_PAD:

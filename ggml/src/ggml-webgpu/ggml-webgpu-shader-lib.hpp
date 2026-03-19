@@ -244,13 +244,15 @@ struct ggml_webgpu_binary_pipeline_key_hash {
 /** Unary **/
 
 struct ggml_webgpu_unary_pipeline_key {
-    int  type;
-    int  op;
-    bool is_unary;  // many unary operators fall under the GGML_OP_UNARY umbrella
-    bool inplace;
+    int           type;
+    int           op;
+    bool          is_unary;  // many unary operators fall under the GGML_OP_UNARY umbrella
+    bool          inplace;
+    ggml_tri_type ttype;     // only used for GGML_OP_TRI
 
     bool operator==(const ggml_webgpu_unary_pipeline_key & other) const {
-        return type == other.type && op == other.op && is_unary == other.is_unary && inplace == other.inplace;
+        return type == other.type && op == other.op && is_unary == other.is_unary && inplace == other.inplace &&
+               ttype == other.ttype;
     }
 };
 
@@ -261,6 +263,7 @@ struct ggml_webgpu_unary_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.op);
         ggml_webgpu_hash_combine(seed, key.is_unary);
         ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.ttype);
         return seed;
     }
 };
@@ -1058,6 +1061,7 @@ class ggml_webgpu_shader_lib {
                  .op       = op,
                  .is_unary = is_unary,
                  .inplace  = context.inplace,
+                 .ttype    = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0),
         };
 
         auto it = unary_pipelines.find(key);
@@ -1086,6 +1090,29 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        }
+
+        if (op == GGML_OP_TRI) {
+            switch (key.ttype) {
+                case GGML_TRI_TYPE_LOWER:
+                    defines.push_back("TRI_TYPE_LOWER");
+                    variant += "_tri_type_lower";
+                    break;
+                case GGML_TRI_TYPE_LOWER_DIAG:
+                    defines.push_back("TRI_TYPE_LOWER_DIAG");
+                    variant += "_tri_type_lower_diag";
+                    break;
+                case GGML_TRI_TYPE_UPPER:
+                    defines.push_back("TRI_TYPE_UPPER");
+                    variant += "_tri_type_upper";
+                    break;
+                case GGML_TRI_TYPE_UPPER_DIAG:
+                    defines.push_back("TRI_TYPE_UPPER_DIAG");
+                    variant += "_tri_upper_diag";
+                    break;
+                default:
+                    GGML_ABORT("Unsupported ggml_tri_type for unary shader");
+            }
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
