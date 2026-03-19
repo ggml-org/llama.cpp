@@ -1685,6 +1685,7 @@ public:
   std::function<TaskQueue *(void)> new_task_queue;
 
 protected:
+  bool process_and_close_socket(socket_t sock, const std::string &first_line);
   bool process_request(Stream &strm, const std::string &remote_addr,
                        int remote_port, const std::string &local_addr,
                        int local_port, bool close_connection,
@@ -1763,7 +1764,9 @@ private:
                          FormDataHeader multipart_header,
                          ContentReceiver multipart_receiver) const;
 
-  virtual bool process_and_close_socket(socket_t sock);
+  virtual bool process_and_close_socket(socket_t sock) {
+    return process_and_close_socket(sock, std::string());
+  }
 
   void output_log(const Request &req, const Response &res) const;
   void output_pre_compression_log(const Request &req,
