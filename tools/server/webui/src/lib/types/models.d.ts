@@ -25,7 +25,6 @@ export interface ParsedModelId {
 	modelName: string | null;
 	params: string | null;
 	activatedParams: string | null;
-	format: string | null;
 	quantization: string | null;
 	tags: string[];
 }
