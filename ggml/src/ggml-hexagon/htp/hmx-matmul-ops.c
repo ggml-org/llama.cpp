@@ -20,18 +20,18 @@
 #include "hvx-dump.h"
 #include "worker-pool.h"
 #include "htp-ctx.h"
+#include "htp-msg.h"
 
 #include "hmx-utils.h"
-#include "hmx-hvx-internal.h"
 #include "hmx-ops.h"
 #include "hmx-quants.h"
 #include "hmx-profile.h"
 
-static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = {
+static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
   -8, 0, -7, 0, -6, 0, -5, 0, -4, 0, -3, 0, -2, 0, -1, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0,
 };
 
-static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = {
+static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
   -127, 0, -104, 0, -83, 0, -65, 0, -49, 0, -35, 0, -22, 0, -10, 0,
   1,    0, 13,   0, 25,  0, 38,  0, 53,  0, 69,  0, 89,  0, 113, 0,
 };
@@ -39,7 +39,7 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(HMX_VLEN))) = 
 // vscatter offsets for fused dequant+transpose: write K-values directly to [K][N] tile.
 // word[i] = i*128 maps K-row-pair i to byte offset i*128 in the tile.
 // Column offset (n*4) is added at runtime.  Only entries 0..15 are used (masked by predicate).
-static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned(HMX_VLEN))) = {
+static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned(VLEN))) = {
     0*128,  1*128,  2*128,  3*128,  4*128,  5*128,  6*128,  7*128,
     8*128,  9*128, 10*128, 11*128, 12*128, 13*128, 14*128, 15*128,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -73,10 +73,10 @@ typedef struct {
 static inline size_t get_x4x2_row_stride(int weight_type, int k) {
   int nb = (k + HMX_QK_Q4x4x2 - 1) / HMX_QK_Q4x4x2;
   switch (weight_type) {
-    case HMX_TYPE_Q4_0:
-    case HMX_TYPE_IQ4_NL:
+    case HTP_TYPE_Q4_0:
+    case HTP_TYPE_IQ4_NL:
       return (size_t)nb * (HMX_QK_Q4x4x2 / 2 + HMX_X4X2_DBLK_SIZE);  // 144 * nb
-    case HMX_TYPE_Q8_0:
+    case HTP_TYPE_Q8_0:
       return (size_t)nb * (HMX_QK_Q8x4x2 + HMX_X4X2_DBLK_SIZE);      // 272 * nb
     default:
       return 0;
@@ -294,10 +294,10 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     int start_tile, int end_tile) {
 
   const int n_k_tiles = k_block / HMX_FP16_TILE_N_COLS;
-  const bool is_q4 = (weight_type == HMX_TYPE_Q4_0 || weight_type == HMX_TYPE_IQ4_NL);
+  const bool is_q4 = (weight_type == HTP_TYPE_Q4_0 || weight_type == HTP_TYPE_IQ4_NL);
   const int qrow_size = is_q4 ? (k_block / 2) : k_block;
 
-  const HVX_Vector vlut_cvt = (weight_type == HMX_TYPE_IQ4_NL)
+  const HVX_Vector vlut_cvt = (weight_type == HTP_TYPE_IQ4_NL)
       ? hvx_vmem(iq4_nl_to_fp16_lut) : hvx_vmem(q4_0_to_fp16_lut);
 
   // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
@@ -644,9 +644,9 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
   if (params->k % 32 != 0 || params->n % 32 != 0) {
     return -1;
   }
-  if (!hex_is_aligned(params->dst, HMX_VLEN) ||
-      !hex_is_aligned(params->activation, HMX_VLEN) ||
-      !hex_is_aligned(params->permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(params->dst, VLEN) ||
+      !hex_is_aligned(params->activation, VLEN) ||
+      !hex_is_aligned(params->permuted_weight, VLEN)) {
     return -1;
   }
 
@@ -841,7 +841,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
   if (k % 32 != 0 || n % 32 != 0) {
     return -1;
   }
-  if (!hex_is_aligned(dst, HMX_VLEN) || !hex_is_aligned(activation, HMX_VLEN) || !hex_is_aligned(permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(permuted_weight, VLEN)) {
     return -1;
   }
 
@@ -1013,7 +1013,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
   if (k % 32 != 0 || n % 32 != 0) {
     return -1;
   }
-  if (!hex_is_aligned(dst, HMX_VLEN) || !hex_is_aligned(activation, HMX_VLEN) || !hex_is_aligned(permuted_weight, HMX_VLEN)) {
+  if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(permuted_weight, VLEN)) {
     return -1;
   }
 
@@ -1368,7 +1368,7 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
 
 void transfer_activation_chunk_multithread(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride) {
   assert(k_block % HMX_FP16_TILE_N_COLS == 0 && k_stride % HMX_FP16_TILE_N_COLS == 0);
-  assert(HMX_VLEN == 32 * sizeof(float));
+  assert(VLEN == 32 * sizeof(float));
 
   size_t n_tot_chunks      = n_rows;
   size_t n_chunks_per_task = 32;  // must be multiple of 32 to ensure correct destination address
@@ -1440,12 +1440,12 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     HVX_Vector v;
     v = Q6_V_vzero();
     v = Q6_Vw_vinsert_VwR(v, 0x3c000000);
-    v = Q6_V_vror_VR(v, HMX_VLEN - 4);
+    v = Q6_V_vror_VR(v, VLEN - 4);
     v = Q6_Vw_vinsert_VwR(v, 0x00003c00);
     for (int i = 0; i < 16; ++i) {
       ((HVX_Vector *) vtcm_eye_tile)[i] = v;
 
-      v = Q6_V_vror_VR(v, HMX_VLEN - 8);
+      v = Q6_V_vror_VR(v, VLEN - 8);
     }
   }
   hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
@@ -1485,7 +1485,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
         {
           qweight_fetch_task_state_t s;
 
-          const bool is_q4 = (weight_type == HMX_TYPE_Q4_0 || weight_type == HMX_TYPE_IQ4_NL);
+          const bool is_q4 = (weight_type == HTP_TYPE_Q4_0 || weight_type == HTP_TYPE_IQ4_NL);
           const int blk_start = kk / HMX_QK_Q4x4x2;
           const int nb_sub = (k_blk_sz + HMX_QK_Q4x4x2 - 1) / HMX_QK_Q4x4x2;
           const int full_qrow = is_q4 ? (k / 2) : k;
