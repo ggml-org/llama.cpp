@@ -3929,6 +3929,7 @@ static int                                         g_tensor_inventory_device    
 static size_t                                      g_moe_expert_total_bytes      = 0;
 static int                                         g_moe_n_experts_total         = 0;
 static int                                         g_moe_n_experts_used          = 0;
+static uint32_t                                    g_model_n_layer               = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
@@ -3994,6 +3995,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
             g_tensor_inventory_total_size += inventory->tensors[i].size;
         }
     }
+
+    // Store model hparams for KV tiering
+    g_model_n_layer          = inventory->n_layer;
 
     // Detect MoE expert tensors and store MoE hparams
     g_moe_n_experts_total    = inventory->n_expert;
@@ -10480,6 +10484,28 @@ static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->hot_base ? ctx->hot_base : ctx->cold_base;
 }
 
+// Parse layer ID from KV cache tensor name ("cache_k_l{N}" or "cache_v_l{N}").
+// Returns -1 if the name does not match the expected pattern.
+static int parse_kv_layer_id(const char * name) {
+    const char * prefix_k = "cache_k_l";
+    const char * prefix_v = "cache_v_l";
+    const char * p        = nullptr;
+    if (strncmp(name, prefix_k, 9) == 0) {
+        p = name + 9;
+    } else if (strncmp(name, prefix_v, 9) == 0) {
+        p = name + 9;
+    }
+    if (!p || *p == '\0') {
+        return -1;
+    }
+    char * end = nullptr;
+    long   val = strtol(p, &end, 10);
+    if (end == p || val < 0) {
+        return -1;
+    }
+    return static_cast<int>(val);
+}
+
 static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     if (tensor->view_src != nullptr) {
@@ -10711,17 +10737,17 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
                     device, free_mem / (1024.0 * 1024.0), effective_free / (1024.0 * 1024.0),
                     compute_reserve / (1024.0 * 1024.0), weight_cache_reserve / (1024.0 * 1024.0),
                     kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
-    // Use kv_tier_manager as the authority for the hot/cold split.
-    // Estimate kv_bytes_per_token so the manager can work in token units
-    // (required for GGML_SYCL_KV_HOT_TOKENS env var and 1024-token minimum).
-    // Default context is 32768 tokens; size / 32768 gives a conservative estimate.
-    size_t kv_bytes_per_token = size / 32768;
-    if (kv_bytes_per_token == 0) {
-        kv_bytes_per_token = 1;
+    // Use kv_tier_manager for per-layer hot/cold split.
+    // When n_layer is known (from inventory), tier by layer so KV lives
+    // alongside its attention weights on the same device/host tier.
+    uint32_t n_layers = g_model_n_layer;
+    if (n_layers == 0) {
+        // Fallback: assume 32 layers (common for 7B models)
+        n_layers = 32;
     }
 
     auto & mgr = ggml_sycl::get_kv_tier_manager(device);
-    mgr.configure(device, kv_vram_cap, size, kv_bytes_per_token);
+    mgr.configure(device, n_layers, kv_vram_cap, size);
 
     size_t hot_size = 0, cold_size = 0;
 
@@ -10733,8 +10759,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         hot_size  = static_cast<size_t>(static_cast<double>(size) * pct / 100.0);
         cold_size = size - hot_size;
     } else {
-        // Delegate to manager: uses budget-derived hot window, GGML_SYCL_KV_HOT_TOKENS
-        // env var override, and enforces minimum 1024-unit hot window.
+        // Delegate to manager: uses layer-based budget split
         mgr.get_region_sizes(size, hot_size, cold_size);
     }
 
@@ -10746,12 +10771,6 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         }
     }
     cold_size = size - hot_size;
-
-    // If everything fits in VRAM, no tiering needed
-    if (cold_size == 0 && hot_size > 0) {
-        GGML_LOG_INFO("[KV-TIER] Device %d: entire KV (%.1f MB) fits in VRAM, no tiering\n", device,
-                      size / (1024.0 * 1024.0));
-    }
 
     void * hot_base  = nullptr;
     void * cold_base = nullptr;
@@ -10799,18 +10818,19 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     }
 
     if (hot_size == 0) {
-        if (kv_host_val == 1) {
-            GGML_LOG_INFO("[KV-TIER] Device %d: KV_HOST=1 — entire KV cache (%.1f MB) in host pinned memory\n", device,
-                          size / (1024.0 * 1024.0));
-        } else {
-            GGML_LOG_WARN("[KV-TIER] Device %d: VRAM exhausted — entire KV cache (%.1f MB) in host pinned memory\n",
-                          device, size / (1024.0 * 1024.0));
-        }
+        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on host (%.1f MB)%s\n",
+                      device, n_layers, size / (1024.0 * 1024.0),
+                      kv_host_val == 1 ? " (KV_HOST=1)" : " (VRAM exhausted)");
+    } else if (cold_size == 0) {
+        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on device (%.1f MB)\n",
+                      device, n_layers, size / (1024.0 * 1024.0));
     } else {
         GGML_LOG_INFO(
-            "[KV-TIER] Device %d: tiered KV buffer %.1f MB total — "
-            "hot=%.1f MB (device), cold=%.1f MB (host pinned)\n",
-            device, size / (1024.0 * 1024.0), hot_size / (1024.0 * 1024.0), cold_size / (1024.0 * 1024.0));
+            "[KV-TIER] Device %d: %u hot layers on device (%.1f MB), "
+            "%u cold layers on host (%.1f MB), %.1f MB total\n",
+            device, mgr.hot_layers(), hot_size / (1024.0 * 1024.0),
+            n_layers - mgr.hot_layers(), cold_size / (1024.0 * 1024.0),
+            size / (1024.0 * 1024.0));
     }
 
     auto * ctx    = new tiered_kv_buffer_context{ hot_base, cold_base, hot_size, cold_size, device, buft_ctx->stream };

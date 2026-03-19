@@ -1,4 +1,5 @@
 #include "kv-tier-manager.hpp"
+
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -13,76 +14,54 @@ kv_tier_manager & get_kv_tier_manager(int device) {
     return g_kv_tier_managers[device];
 }
 
-bool kv_tier_manager::configure(int device, size_t hot_bytes, size_t total_bytes, size_t kv_bytes_per_token) {
-    device_             = device;
-    kv_bytes_per_token_ = kv_bytes_per_token;
+bool kv_tier_manager::configure(int device, uint32_t n_layers, size_t kv_vram_cap, size_t total_bytes) {
+    device_       = device;
+    total_layers_ = n_layers;
 
-    // Convert byte counts to token counts
-    total_tokens_ = (kv_bytes_per_token > 0)
-                      ? static_cast<uint32_t>(std::min(total_bytes / kv_bytes_per_token,
-                                                       static_cast<size_t>(UINT32_MAX)))
-                      : static_cast<uint32_t>(std::min(total_bytes, static_cast<size_t>(UINT32_MAX)));
+    if (n_layers == 0) {
+        active_       = false;
+        hot_layers_   = 0;
+        kv_per_layer_ = 0;
+        return false;
+    }
 
-    // Check env var override: GGML_SYCL_KV_HOT_TOKENS=N (token count)
-    const char * env = std::getenv("GGML_SYCL_KV_HOT_TOKENS");
-    int val = env ? std::atoi(env) : 0;
-    if (val > 0) {
-        hot_tokens_ = static_cast<uint32_t>(val);
+    kv_per_layer_ = total_bytes / n_layers;
+
+    // Check env var override: GGML_SYCL_KV_HOT_LAYERS=N
+    const char * env = std::getenv("GGML_SYCL_KV_HOT_LAYERS");
+    int          val = env ? std::atoi(env) : -1;
+    if (val >= 0) {
+        hot_layers_ = static_cast<uint32_t>(std::min(val, static_cast<int>(n_layers)));
+    } else if (kv_vram_cap == 0 || kv_per_layer_ == 0) {
+        hot_layers_ = 0;
     } else {
-        hot_tokens_ = (kv_bytes_per_token > 0)
-                        ? static_cast<uint32_t>(hot_bytes / kv_bytes_per_token)
-                        : static_cast<uint32_t>(std::min(hot_bytes, static_cast<size_t>(UINT32_MAX)));
+        hot_layers_ = static_cast<uint32_t>(std::min(static_cast<size_t>(n_layers), kv_vram_cap / kv_per_layer_));
     }
 
-    // When VRAM is available, enforce minimum hot window of 1024 tokens.
-    // When VRAM is exhausted (hot_bytes == 0), allow fully cold KV cache
-    // to avoid device allocation failures on memory-constrained GPUs.
-    if (hot_bytes > 0) {
-        hot_tokens_ = std::max(hot_tokens_, uint32_t(1024));
-    }
-
-    // If hot window >= total, no tiering needed — everything fits in VRAM
-    if (hot_tokens_ >= total_tokens_) {
+    if (hot_layers_ >= total_layers_) {
         active_ = false;
         return false;
     }
 
     active_ = true;
-    if (hot_tokens_ == 0) {
-        GGML_LOG_WARN("[KV-TIER] Device %d: VRAM exhausted — entire KV cache (%u tokens) in host pinned memory\n",
-                      device_, total_tokens_);
-    } else {
-        GGML_LOG_INFO("[KV-TIER] Device %d: hot=%u tokens (VRAM), cold=%u tokens (host pinned), total=%u\n", device_,
-                      hot_tokens_, total_tokens_ - hot_tokens_, total_tokens_);
-    }
     return true;
 }
 
-bool kv_tier_manager::is_hot(uint32_t token_pos) const {
+bool kv_tier_manager::is_hot(uint32_t layer_id) const {
     if (!active_) {
         return true;  // All hot when tiering inactive
     }
-    return token_pos < hot_tokens_;
+    return layer_id < hot_layers_;
 }
 
 void kv_tier_manager::get_region_sizes(size_t total_bytes, size_t & hot_bytes, size_t & cold_bytes) const {
-    if (!active_ || total_tokens_ == 0) {
+    if (!active_ || total_layers_ == 0) {
         hot_bytes  = total_bytes;
         cold_bytes = 0;
         return;
     }
-    // Convert hot token count back to bytes
-    if (kv_bytes_per_token_ > 0) {
-        hot_bytes = std::min(static_cast<size_t>(hot_tokens_) * kv_bytes_per_token_, total_bytes);
-    } else {
-        // Fallback: proportional split
-        double hot_fraction = static_cast<double>(hot_tokens_) / total_tokens_;
-        hot_bytes = static_cast<size_t>(total_bytes * hot_fraction);
-        if (hot_bytes > total_bytes) {
-            hot_bytes = total_bytes;
-        }
-    }
+    hot_bytes  = std::min(static_cast<size_t>(hot_layers_) * kv_per_layer_, total_bytes);
     cold_bytes = total_bytes - hot_bytes;
 }
 
-} // namespace ggml_sycl
+}  // namespace ggml_sycl
