@@ -1773,7 +1773,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // Pre-fill the prefetch VRAM pool with the first N experts per MoE layer.
     // Expert 0 tends to be most frequently activated, so preloading low-index
     // experts gives good coverage even without runtime frequency data.
-    if (device == 0 && n_experts_per_layer > 0) {
+    //
+    // S1 mode skip: when all weights are host-pinned, S1-PRELOAD already cached
+    // entire MoE tensors as AOS in VRAM.  Per-expert SOA conversion here would
+    // take 10+ minutes for large MoE models (e.g. 120B with 13824 experts).
+    // The per-op dispatch converts AOS→SOA on-demand for activated experts.
+    const bool skip_phase3 = ggml_backend_sycl_all_weights_host();
+    if (device == 0 && n_experts_per_layer > 0 && !skip_phase3) {
         // Collect unique layer IDs from expert_list.
         std::map<int, std::vector<int>> layer_experts;  // sorted by layer ID for deterministic order
         for (const auto & info : expert_list) {
@@ -1799,6 +1805,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
         GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 prefetch pool pre-loading complete "
                       "(pool_capacity=%d)\n", prefetcher.pool_capacity());
+    } else if (skip_phase3) {
+        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: skipped — S1 mode already cached MoE tensors as AOS in VRAM\n");
     }
 
     // Initialize ExpertPredictor using top-K detected from graph ids tensor.
@@ -6900,6 +6908,14 @@ layout_mode ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int devic
 }
 
 static layout_mode ggml_sycl_select_moe_graph_layout(const ggml_tensor * src0, int device, bool host_weights) {
+    // S1 mode with large MoE: use AOS to avoid per-expert SOA conversion thrashing.
+    // The S1-PRELOAD already cached whole MoE tensors as AOS in VRAM.  Per-expert
+    // SOA conversion for 13824+ experts exceeds VRAM and causes 10+ minute thrashing.
+    // AOS is read directly by MMVQ kernels (slower per-token but no conversion cost).
+    // Threshold: 64 experts (same as GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS default).
+    if (host_weights && ggml_backend_sycl_all_weights_host() && src0->ne[2] > 64) {
+        return GGML_LAYOUT_AOS;
+    }
     // Host weights require unified cache staging for XMX MoE layouts. If cache is unavailable,
     // fall back to MMVQ/host-routing requirements to avoid layout mismatches.
     if (host_weights && !ggml_sycl::unified_cache_enabled()) {
@@ -8022,6 +8038,186 @@ static void ggml_sycl_preload_model_weights() {
     if (weights.empty()) {
         return;
     }
+
+    const bool s1_mode = g_all_weights_host.load(std::memory_order_acquire);
+
+    // S1 mode: async bulk preload with AOS layout.
+    // All H2D copies are submitted without waiting, then a single queue.wait()
+    // at the end completes all transfers.  This reduces preload time from
+    // O(n * latency) to O(total_bytes / bandwidth) — e.g. 10 min → seconds.
+    if (s1_mode) {
+        size_t dense_cached  = 0;
+        size_t dense_failed  = 0;
+        size_t moe_cached    = 0;
+        size_t moe_failed    = 0;
+        size_t total_bytes   = 0;
+
+        // Collect all (tensor, device) pairs, grouped by device
+        struct preload_item {
+            const ggml_tensor * tensor;
+            int                 device;
+            bool                is_moe;
+        };
+        std::vector<preload_item> items;
+        items.reserve(weights.size());
+
+        for (const auto * tensor : weights) {
+            if (!tensor || !tensor->buffer || !tensor->data) {
+                continue;
+            }
+            if (tensor->type > GGML_TYPE_COUNT || tensor->ne[0] <= 0 || tensor->ne[1] <= 0) {
+                continue;
+            }
+            auto *          extra  = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            const int       device = extra ? extra->layout.device_id : 0;
+            const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
+            items.push_back({ tensor, device, usage == tensor_usage::MOE_EXPERT_WEIGHT });
+        }
+
+        // Process per device — one queue.wait() per device at the end
+        std::unordered_map<int, std::vector<size_t>> items_by_device;
+        for (size_t i = 0; i < items.size(); ++i) {
+            items_by_device[items[i].device].push_back(i);
+        }
+
+        const auto t_start = std::chrono::steady_clock::now();
+
+        for (auto & [device, indices] : items_by_device) {
+            sycl::queue &              stream = ggml_sycl_get_device(device).default_queue();
+            ggml_sycl::unified_cache * cache  = ggml_sycl::get_unified_cache(stream);
+            if (!cache) {
+                continue;
+            }
+
+            // Submit all H2D copies for this device without waiting
+            for (size_t idx : indices) {
+                const auto & item   = items[idx];
+                const auto * tensor = item.tensor;
+
+                if (item.is_moe) {
+                    // MoE: submit all expert copies with skip_fill_wait
+                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+                    if (!extra) {
+                        moe_failed++;
+                        continue;
+                    }
+                    const int64_t n_experts   = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
+                    const size_t  expert_size = tensor->nb[2];
+                    const int64_t ncols       = tensor->ne[0];
+                    const size_t  expert_layout_bytes =
+                        ggml_sycl_get_padded_weight_bytes(tensor->type, ncols, expert_size);
+                    const int layer_id = ggml_sycl_tp_extract_layer_number(tensor->name);
+
+                    bool any_cached = false;
+                    for (int64_t e = 0; e < n_experts; ++e) {
+                        const uint8_t * expert_aos =
+                            static_cast<const uint8_t *>(tensor->data) + e * expert_size;
+                        ggml_sycl_cache_id key =
+                            ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
+                        if (!expert_aos || !key.valid) {
+                            continue;
+                        }
+
+                        ggml_sycl::cache_layout_request req{};
+                        req.key              = key;
+                        req.src_ptr          = expert_aos;
+                        req.src_size         = expert_size;
+                        req.dst_size         = expert_layout_bytes;
+                        req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+                        req.layer_id         = layer_id;
+                        req.expert_id        = static_cast<int>(e);
+                        req.layout           = GGML_LAYOUT_AOS;
+                        req.validate_content = false;
+                        req.skip_fill_wait   = true;  // Async — no wait per expert
+
+                        auto result = cache->ensure_cached_layout(req, {});
+                        if (result.status == ggml_sycl::cache_layout_status::READY ||
+                            result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                            any_cached = true;
+                            total_bytes += expert_size;
+                        }
+                    }
+                    if (any_cached) {
+                        moe_cached++;
+                    } else {
+                        moe_failed++;
+                    }
+                } else {
+                    // Dense: submit H2D copy with skip_fill_wait via cache directly
+                    if (!tensor->data) {
+                        dense_failed++;
+                        continue;
+                    }
+                    ggml_sycl_cache_id cache_key =
+                        ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                    if (!cache_key.valid) {
+                        dense_failed++;
+                        continue;
+                    }
+
+                    // Resolve source pointer (may be tiered/cached)
+                    const void *     src_ptr   = tensor->data;
+                    sycl::usm::alloc src_alloc = sycl::usm::alloc::unknown;
+                    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
+                        ggml_sycl::memory_tier tier   = ggml_sycl::memory_tier::MMAP;
+                        void * cached = ggml_sycl_get_cached_tensor_ptr_for(
+                            tensor, device, &tier, nullptr, &src_alloc);
+                        if (cached) {
+                            src_ptr = cached;
+                        }
+                    }
+                    if (!src_ptr) {
+                        dense_failed++;
+                        continue;
+                    }
+
+                    const size_t src_size = ggml_nbytes(tensor);
+                    const size_t dst_size = src_size;  // AOS: no layout transform
+
+                    ggml_sycl::cache_layout_request req{};
+                    req.key              = cache_key;
+                    req.src_ptr          = src_ptr;
+                    req.src_size         = src_size;
+                    req.dst_size         = dst_size;
+                    req.type             = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+                    req.layout           = GGML_LAYOUT_AOS;
+                    req.validate_content = false;
+                    req.skip_fill_wait   = true;  // Async — no wait per tensor
+
+                    auto result = cache->ensure_cached_layout(req, {});
+                    if (result.status == ggml_sycl::cache_layout_status::READY ||
+                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                        dense_cached++;
+                        total_bytes += src_size;
+                    } else {
+                        dense_failed++;
+                    }
+                }
+            }
+
+            // Single wait for ALL H2D copies on this device
+            try {
+                stream.wait();
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[S1-PRELOAD] queue.wait() failed: %s\n", e.what());
+            }
+
+            // Mark all IN_PROGRESS entries as READY now that DMA is complete
+            cache->finalize_pending_fills();
+        }
+
+        const auto t_end   = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
+
+        GGML_LOG_INFO("[S1-PRELOAD] async bulk: dense cached=%zu failed=%zu, moe cached=%zu failed=%zu, "
+                      "%.1f MB in %lld ms (%.1f GB/s)\n",
+                      dense_cached, dense_failed, moe_cached, moe_failed,
+                      total_bytes / (1024.0f * 1024.0f), (long long) elapsed,
+                      elapsed > 0 ? (total_bytes / (1024.0 * 1024.0 * 1024.0)) / (elapsed / 1000.0) : 0.0);
+        return;
+    }
+
+    // Non-S1 path: original serial preload behavior
     size_t dense_cached  = 0;
     size_t dense_failed  = 0;
     size_t moe_cached    = 0;
@@ -8030,23 +8226,15 @@ static void ggml_sycl_preload_model_weights() {
         if (!tensor || !tensor->data) {
             return false;
         }
-        // S1: preload in AOS layout so the first PP (oneDNN) iteration reads
-        // from device VRAM instead of host-pinned PCIe zero-copy.  The TG path
-        // creates SOA entries on-demand during its warmup pass.
-        layout_mode target = GGML_LAYOUT_AOS;
-        if (!g_all_weights_host.load(std::memory_order_acquire)) {
-            const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
-            target                   = layout_policy::get_with_override(tensor->type, usage, device);
-            target                   = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-            if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED &&
-                target != GGML_LAYOUT_ONEDNN_WOQ && !ggml_sycl_reorder_enabled()) {
-                target = GGML_LAYOUT_AOS;
-            }
+        const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
+        layout_mode target       = layout_policy::get_with_override(tensor->type, usage, device);
+        target                   = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
+        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED &&
+            target != GGML_LAYOUT_ONEDNN_WOQ && !ggml_sycl_reorder_enabled()) {
+            target = GGML_LAYOUT_AOS;
         }
-        // S1: prefer_host=false so copies land in device VRAM for fast inference.
         // Non-S1: prefer_host=true (original behavior) to avoid VRAM pressure during preload.
-        const bool prefer_host = !g_all_weights_host.load(std::memory_order_acquire);
-        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target, prefer_host);
+        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target, true);
         return cached != nullptr;
     };
     // Pass 1: dense weights (non-MoE)
@@ -8076,9 +8264,8 @@ static void ggml_sycl_preload_model_weights() {
         if (!tensor || !tensor->buffer || !tensor->data) {
             continue;
         }
-        // Validate tensor looks reasonable (basic sanity check for use-after-free)
         if (tensor->type > GGML_TYPE_COUNT || tensor->ne[0] <= 0 || tensor->ne[1] <= 0) {
-            continue;  // Skip invalid tensor
+            continue;
         }
 
         const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
@@ -8088,22 +8275,21 @@ static void ggml_sycl_preload_model_weights() {
         auto *    extra  = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
         const int device = extra ? extra->layout.device_id : 0;
 
+        // Non-S1: use full layout selection (original behavior)
         bool host_weights = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
         if (!host_weights) {
-            sycl::queue & stream = ggml_sycl_get_device(device).default_queue();
-            const auto    alloc  = ggml_sycl_get_alloc_type(tensor->data);
-            host_weights         = (alloc != sycl::usm::alloc::device);
+            const auto alloc = ggml_sycl_get_alloc_type(tensor->data);
+            host_weights     = (alloc != sycl::usm::alloc::device);
         }
 
         layout_mode target = ggml_sycl_select_moe_graph_layout(tensor, device, host_weights);
-        target             = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED && target != GGML_LAYOUT_ONEDNN_WOQ &&
-            !ggml_sycl_reorder_enabled()) {
+        target = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
+        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED &&
+            target != GGML_LAYOUT_ONEDNN_WOQ && !ggml_sycl_reorder_enabled()) {
             target = GGML_LAYOUT_AOS;
         }
         if (ggml_sycl_preload_moe_experts(tensor, device, target)) {
             moe_cached++;
-
         } else {
             moe_failed++;
         }
@@ -21918,14 +22104,17 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     // regular host buffers.
     bool       host_weights = ggml_sycl_is_host_resident_weight(src0, stream);
     void *     direct_base  = nullptr;
-    if (layout == GGML_LAYOUT_AOS && !force_cache_aos) {
+    if (layout == GGML_LAYOUT_AOS) {
+        // Try to find the whole-tensor AOS entry in the unified cache (VRAM).
+        // S1-PRELOAD caches entire MoE tensors as AOS — using the device pointer
+        // lets us compute per-expert offsets without individual cache entries.
         direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
-        if (!direct_base && src0_is_usm_accessible) {
+        if (!direct_base && !force_cache_aos && src0_is_usm_accessible) {
             // Only use raw src0->data if it's USM-accessible (host or shared)
             // mmap'd (unknown) memory is NOT GPU-accessible and must go through cache staging
             GGML_SYCL_DEBUG("[MOE-PTR] Using direct src0->data=%p (USM accessible)\n", src0->data);
             direct_base = const_cast<void *>(src0->data);
-        } else if (!direct_base) {
+        } else if (!direct_base && !force_cache_aos) {
             // Not USM-accessible - must use cache path for proper staging
             GGML_SYCL_DEBUG("[MOE-PTR] Non-USM src0->data, forcing cache path for %s\n", src0->name);
         }

@@ -264,6 +264,7 @@ struct cache_layout_request {
     int64_t               onednn_pack_m    = 0;
     bool                  validate_content = false;
     bool                  prefer_host      = false;
+    bool                  skip_fill_wait   = false;  // When true, skip fill_event.wait() — caller collects events
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
@@ -629,6 +630,11 @@ class unified_cache {
     cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
                                              const std::vector<sycl::event> & deps,
                                              sycl::queue * override_queue = nullptr);
+
+    // Finalize all IN_PROGRESS entries that were created with skip_fill_wait.
+    // Call this after a batch queue.wait() to mark pending entries as READY
+    // and apply any deferred padding.
+    void finalize_pending_fills();
 
     // === Multi-Device Partial Row Loading ===
 

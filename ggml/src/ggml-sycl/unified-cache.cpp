@@ -3221,6 +3221,43 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             GGML_SYCL_DEBUG("[DEBUG-FILL] copy_to_device_async returned\n");
         }
 
+        // When skip_fill_wait is set (bulk preload), skip the synchronous wait
+        // and return the event for the caller to batch-wait later.
+        if (request.skip_fill_wait) {
+            GGML_SYCL_DEBUG("[DEBUG-FILL] skip_fill_wait: returning event for batch wait\n");
+
+            // Submit padding async if needed (implicitly ordered after fill on in-order queue)
+            sycl::event last_event = fill_event;
+            if (request.layout != GGML_LAYOUT_XMX_TILED && request.layout != GGML_LAYOUT_XMX_GEMM_TILED &&
+                request.layout != GGML_LAYOUT_ONEDNN_PACKED && request.layout != GGML_LAYOUT_ONEDNN_WOQ &&
+                request.dst_size > request.src_size) {
+                const size_t pad_bytes = request.dst_size - request.src_size;
+                void *       pad_ptr   = static_cast<char *>(device_ptr) + request.src_size;
+                last_event = queue_.memset(pad_ptr, 0, pad_bytes);
+            }
+
+            // Mark entry as IN_PROGRESS with ready_event so concurrent lookups
+            // can see the pending fill and wait on it if needed.
+            {
+                std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+                auto                                it = entries_.find(key);
+                if (it != entries_.end()) {
+                    it->second.has_ready_event = true;
+                    it->second.ready_event     = last_event;
+                    it->second.state           = cache_entry_state::IN_PROGRESS;
+                }
+            }
+            entry_cv_.notify_all();
+
+            result.device_ptr    = device_ptr;
+            result.size          = request.dst_size;
+            result.status        = cache_layout_status::IN_PROGRESS;
+            result.host_resident = false;
+            result.location      = cache_location::DEVICE;
+            result.event         = last_event;
+            return result;
+        }
+
         // Wait for fill to complete before any padding memset
         GGML_SYCL_DEBUG("[DEBUG-FILL] About to wait on fill_event...\n");
         fill_event.wait();
@@ -3372,6 +3409,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     result.location      = cache_location::DEVICE;
     // Don't set result.event - no need to wait since everything is done synchronously
     return result;
+}
+
+void unified_cache::finalize_pending_fills() {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    size_t finalized = 0;
+    for (auto & [key, entry] : entries_) {
+        if (entry.state == cache_entry_state::IN_PROGRESS && entry.has_ready_event) {
+            entry.state           = cache_entry_state::READY;
+            entry.has_ready_event = false;
+            finalized++;
+        }
+    }
+    if (finalized > 0) {
+        entry_cv_.notify_all();
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] finalized %zu pending fills\n", finalized);
+    }
 }
 
 bool unified_cache::is_cached(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) const {
