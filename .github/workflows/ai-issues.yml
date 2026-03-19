@@ -60,8 +60,12 @@ jobs:
 
           If duplicates were found, include a section about potential duplicates with links using the following format:
 
+          [comment]
           This issue might be a duplicate of:
           - #[issue_number]: [brief description of similarity]
 
-          _(auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**)_
+          _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
+          [/comment]
+
+          Remember: Do not include the comment tags in your actual comment. Post at most ONE comment combining all findings. If everything is fine, post nothing.
           "
