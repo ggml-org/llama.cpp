@@ -199,6 +199,10 @@ int main(int argc, char ** argv) {
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));
+    // Activation capture (feature transparency + SAE collection)
+    ctx_http.get ("/activations",          ex_wrapper(routes.get_activations));
+    ctx_http.post("/activations",          ex_wrapper(routes.post_activations));
+    ctx_http.post("/activations/collect",   ex_wrapper(routes.post_activations_collect));
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));

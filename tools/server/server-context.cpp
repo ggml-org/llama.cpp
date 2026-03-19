@@ -1,3 +1,4 @@
+#include "activation_capture.h"
 #include "server-context.h"
 #include "server-common.h"
 #include "server-http.h"
@@ -628,6 +629,10 @@ private:
 
         params_base = params;
 
+        // Activation capture: install eval callback before context creation
+        params_base.cb_eval = activation_eval_callback;
+        params_base.cb_eval_user_data = nullptr;
+
         llama_init = common_init_from_params(params_base);
 
         model = llama_init->model();
@@ -641,6 +646,14 @@ private:
         vocab = llama_model_get_vocab(model);
 
         n_ctx = llama_n_ctx(ctx);
+
+        // Activation capture: init struct with model dimensions
+        {
+            int act_n_layers = llama_model_n_layer(model);
+            int act_n_embd   = llama_model_n_embd(model);
+            g_activation_capture.init(act_n_layers, act_n_embd);
+            SRV_INF("activation capture: initialized (%d layers, %d embd)%s\n", act_n_layers, act_n_embd, "");
+        }
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
@@ -3994,6 +4007,170 @@ void server_routes::init_routes() {
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
+        return res;
+    };
+
+    // --- Activation capture: GET /activations ---
+    this->get_activations = [](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        json result;
+
+        std::lock_guard<std::mutex> lock(g_activation_capture.mtx);
+        result["enabled"]          = g_activation_capture.enabled;
+        result["n_layers"]         = g_activation_capture.n_layers;
+        result["n_embd"]           = g_activation_capture.n_embd;
+        result["last_capture_ms"]  = g_activation_capture.last_capture_ms;
+        result["last_n_tokens"]    = g_activation_capture.last_n_tokens;
+        result["collecting"]       = g_activation_capture.collecting;
+        result["collect_layer"]    = g_activation_capture.collect_layer;
+        result["collect_n_tokens"] = g_activation_capture.collect_n_tokens;
+
+        // Parse optional query params
+        std::string layers_param = req.get_param("layers");
+        std::string top_k_param  = req.get_param("top_k");
+        int top_k = top_k_param.empty() ? 0 : std::stoi(top_k_param);
+
+        // Determine which layers to return
+        std::vector<int> requested_layers;
+        if (!layers_param.empty()) {
+            std::stringstream ss(layers_param);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                int il = std::stoi(item);
+                if (il >= 0 && il < g_activation_capture.n_layers) {
+                    requested_layers.push_back(il);
+                }
+            }
+        } else {
+            for (int i = 0; i < g_activation_capture.n_layers; i++) {
+                requested_layers.push_back(i);
+            }
+        }
+
+        if (top_k > 0) {
+            // Return only top-K activations by magnitude per layer
+            json layers_obj = json::object();
+            for (int il : requested_layers) {
+                json layer_data;
+                if (il < (int)g_activation_capture.layer_means.size() &&
+                    !g_activation_capture.layer_means[il].empty()) {
+                    const auto & means = g_activation_capture.layer_means[il];
+                    int n = (int)means.size();
+                    std::vector<std::pair<int, float>> indexed(n);
+                    for (int j = 0; j < n; j++) {
+                        indexed[j] = {j, means[j]};
+                    }
+                    std::partial_sort(indexed.begin(),
+                                      indexed.begin() + std::min(top_k, n),
+                                      indexed.end(),
+                                      [](const auto & a, const auto & b) {
+                                          return std::abs(a.second) > std::abs(b.second);
+                                      });
+                    json top_arr = json::array();
+                    for (int j = 0; j < std::min(top_k, n); j++) {
+                        top_arr.push_back({{"idx", indexed[j].first}, {"val", indexed[j].second}});
+                    }
+                    layer_data["top_k"] = top_arr;
+                } else {
+                    layer_data["top_k"] = json::array();
+                }
+                layers_obj[std::to_string(il)] = layer_data;
+            }
+            result["layers"] = layers_obj;
+        } else {
+            // Return full mean vectors
+            json layer_means = json::array();
+            for (int il : requested_layers) {
+                if (il < (int)g_activation_capture.layer_means.size() &&
+                    !g_activation_capture.layer_means[il].empty()) {
+                    layer_means.push_back(g_activation_capture.layer_means[il]);
+                } else {
+                    layer_means.push_back(json::array());
+                }
+            }
+            result["layer_means"] = layer_means;
+        }
+
+        res->data = result.dump();
+        return res;
+    };
+
+    // --- Activation capture: POST /activations ---
+    this->post_activations = [](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res->status = 400;
+            res->data = json({{"error", "invalid JSON"}}).dump();
+            return res;
+        }
+
+        bool want_enabled = body.value("enabled", false);
+        {
+            std::lock_guard<std::mutex> lock(g_activation_capture.mtx);
+            g_activation_capture.enabled = want_enabled;
+        }
+
+        json result;
+        result["enabled"]  = want_enabled;
+        result["n_layers"] = g_activation_capture.n_layers;
+        result["n_embd"]   = g_activation_capture.n_embd;
+        res->data = result.dump();
+        return res;
+    };
+
+    // --- Activation capture: POST /activations/collect ---
+    // Start or stop per-token activation collection to a binary file (for SAE training)
+    // Start: {"layer": 17, "path": "/tmp/activations_layer17.bin"}
+    // Stop:  {"stop": true}
+    // Status: {} (empty body)
+    this->post_activations_collect = [](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res->status = 400;
+            res->data = json({{"error", "invalid JSON"}}).dump();
+            return res;
+        }
+
+        json result;
+
+        if (body.contains("stop") && body["stop"].get<bool>()) {
+            // Stop collection
+            int64_t tokens_collected = g_activation_capture.collect_n_tokens;
+            bool stopped = g_activation_capture.stop_collection();
+            result["stopped"] = stopped;
+            result["tokens_collected"] = tokens_collected;
+        } else if (body.contains("layer") && body.contains("path")) {
+            // Start collection
+            int layer = body["layer"].get<int>();
+            std::string path = body["path"].get<std::string>();
+            bool started = g_activation_capture.start_collection(layer, path.c_str());
+            if (!started) {
+                res->status = 409;
+                result["error"] = "Collection already active or invalid layer/path";
+                result["collecting"] = g_activation_capture.collecting;
+                result["n_layers"] = g_activation_capture.n_layers;
+                res->data = result.dump();
+                return res;
+            }
+            result["started"] = true;
+            result["layer"] = layer;
+            result["path"] = path;
+            result["n_embd"] = g_activation_capture.n_embd;
+        }
+
+        // Always include status
+        result["collecting"]       = g_activation_capture.collecting;
+        result["collect_layer"]    = g_activation_capture.collect_layer;
+        result["collect_n_tokens"] = g_activation_capture.collect_n_tokens;
+        result["enabled"]          = g_activation_capture.enabled;
+
+        res->data = result.dump();
         return res;
     };
 }
