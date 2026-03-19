@@ -64,3 +64,4 @@ jobs:
           - #[issue_number]: [brief description of similarity]
 
           _(auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**)_
+          "
