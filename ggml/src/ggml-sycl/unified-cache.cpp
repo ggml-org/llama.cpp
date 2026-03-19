@@ -3651,24 +3651,16 @@ void unified_cache::pin(const ggml_sycl_cache_id & key_id, ggml_layout_mode layo
     auto entry_it = entries_.find(id_it->second);
     if (entry_it != entries_.end()) {
         if (entry_it->second.layout != layout) {
-            // Rate-limit: log once, then suppress. Common for MoE models where
-            // MMVQ pins with AOS but unified cache stores SOA/COALESCED for experts.
-            static std::atomic<int> mismatch_count{ 0 };
-            int                     count = mismatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (count == 1) {
-                GGML_LOG_WARN(
-                    "[UNIFIED-CACHE] layout mismatch in pin: have=%d want=%d "
-                    "(MoE expert layout mismatch, benign — further occurrences suppressed)\n",
-                    (int) entry_it->second.layout, (int) layout);
-            }
-            if (cache_assert_enabled()) {
-                GGML_ABORT("unified_cache layout mismatch");
-            }
-            return;
+            // Layout changed since caller's last lookup (PP→TG switch).
+            // Pin with the entry's current layout — caller still gets protection.
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin layout mismatch model=%llu name_hash=0x%llx have=%d want=%d — pinning with current layout\n",
+                            (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
+                            (int) entry_it->second.layout, (int) layout);
         }
         entry_it->second.pinned = true;
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin model=%llu name_hash=0x%llx layout=%d\n",
-                        (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash, (int) layout);
+                        (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
+                        (int) entry_it->second.layout);
     }
 }
 
@@ -3684,17 +3676,17 @@ void unified_cache::unpin(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
     auto entry_it = entries_.find(id_it->second);
     if (entry_it != entries_.end()) {
         if (entry_it->second.layout != layout) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in unpin model=%llu name_hash=0x%llx have=%d want=%d\n",
-                           (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
-                           (int) entry_it->second.layout, (int) layout);
-            if (cache_assert_enabled()) {
-                GGML_ABORT("unified_cache layout mismatch");
-            }
-            return;
+            // Entry layout changed (e.g. PP→TG layout switch).  Unpin anyway
+            // since the caller's pinned handle is stale but the entry must be
+            // released for future eviction.
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin layout mismatch model=%llu name_hash=0x%llx have=%d want=%d — unpinning anyway\n",
+                            (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
+                            (int) entry_it->second.layout, (int) layout);
         }
         entry_it->second.pinned = false;
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin model=%llu name_hash=0x%llx layout=%d\n",
-                        (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash, (int) layout);
+                        (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
+                        (int) entry_it->second.layout);
     }
 }
 

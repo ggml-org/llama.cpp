@@ -7974,13 +7974,8 @@ static void ggml_sycl_preload_model_weights() {
     if (!ggml_backend_sycl_weights_evictable() || !ggml_sycl::unified_cache_enabled()) {
         return;
     }
-    // S1: skip bulk preload — rely on on-demand caching during warmup/inference.
-    // Bulk preload can trigger DEVICE_LOST on some drivers when allocating many
-    // VRAM entries simultaneously (race between fill kernel and chunk allocation).
-    if (g_all_weights_host.load(std::memory_order_acquire)) {
-        GGML_LOG_INFO("[S1] Skipping bulk preload — on-demand caching during warmup\n");
-        return;
-    }
+    // S1: preload weights to device VRAM via unified cache.
+    // Eviction strategy handles VRAM pressure if model doesn't fully fit.
 
     std::vector<ggml_tensor *> weights;
     {
@@ -8002,14 +7997,20 @@ static void ggml_sycl_preload_model_weights() {
         if (!tensor || !tensor->data) {
             return false;
         }
-        const tensor_usage usage  = ggml_sycl_get_tensor_usage(tensor);
-        layout_mode        target = layout_policy::get_with_override(tensor->type, usage, device);
-        target                    = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED && target != GGML_LAYOUT_ONEDNN_WOQ &&
-            !ggml_sycl_reorder_enabled()) {
-            target = GGML_LAYOUT_AOS;
+        // S1: preload in AOS layout so the first PP (oneDNN) iteration reads
+        // from device VRAM instead of host-pinned PCIe zero-copy.  The TG path
+        // creates SOA entries on-demand during its warmup pass.
+        layout_mode target = GGML_LAYOUT_AOS;
+        if (!g_all_weights_host.load(std::memory_order_acquire)) {
+            const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
+            target                   = layout_policy::get_with_override(tensor->type, usage, device);
+            target                   = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
+            if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED &&
+                target != GGML_LAYOUT_ONEDNN_WOQ && !ggml_sycl_reorder_enabled()) {
+                target = GGML_LAYOUT_AOS;
+            }
         }
-        // S1: prefer_host=false so SOA copies land in device VRAM for fast TG.
+        // S1: prefer_host=false so copies land in device VRAM for fast inference.
         // Non-S1: prefer_host=true (original behavior) to avoid VRAM pressure during preload.
         const bool prefer_host = !g_all_weights_host.load(std::memory_order_acquire);
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target, prefer_host);
@@ -10296,20 +10297,10 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         kv_vram_cap = (effective_free > total_reserve) ? effective_free - total_reserve : 0;
     }
 
-    GGML_LOG_INFO(
-        "[KV-TIER] free=%.0f MB, eff_free=%.0f MB, compute_reserve=%.0f MB, weight_reserve=%.0f MB, kv_cap=%.0f MB, kv_req=%.0f MB\n",
-        free_mem / (1024.0 * 1024.0), effective_free / (1024.0 * 1024.0),
-        compute_reserve / (1024.0 * 1024.0), weight_cache_reserve / (1024.0 * 1024.0),
-        kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
-    GGML_LOG_DEBUG(
-        "[KV-TIER] free_vram=%.0f MB, total=%.0f MB, reserve=%.0f MB, "
-        "kv_cap=%.0f MB, requested=%.0f MB\n",
-        free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), compute_reserve / (1024.0 * 1024.0),
-        kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
-
-    GGML_SYCL_DEBUG("[KV-TIER-DBG] dev=%d size=%.1f MB free_mem=%.1f MB total_mem=%.1f MB compute_reserve=%.1f MB kv_vram_cap=%.1f MB\n",
-                  device, size / (1024.0 * 1024.0), free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0),
-                  compute_reserve / (1024.0 * 1024.0), kv_vram_cap / (1024.0 * 1024.0));
+    GGML_SYCL_DEBUG("[KV-TIER] dev=%d free=%.0f MB eff_free=%.0f MB compute_rsv=%.0f MB weight_rsv=%.0f MB kv_cap=%.0f MB kv_req=%.0f MB\n",
+                    device, free_mem / (1024.0 * 1024.0), effective_free / (1024.0 * 1024.0),
+                    compute_reserve / (1024.0 * 1024.0), weight_cache_reserve / (1024.0 * 1024.0),
+                    kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
     // Use kv_tier_manager as the authority for the hot/cold split.
     // Estimate kv_bytes_per_token so the manager can work in token units
     // (required for GGML_SYCL_KV_HOT_TOKENS env var and 1024-token minimum).
@@ -22533,27 +22524,22 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
                 return false;
             }
             layout_mode target = GGML_LAYOUT_AOS;
-            if (!ggml_sycl_get_layout_choice_for_tensor(src, ctx.device, &target)) {
-                // In S1 mode, the layout choice registry may not have an entry
-                // (PP warmup registers PP layouts only).  Default to AOS and
-                // let the S1 TG override below fix it up.
-                if (!ggml_backend_sycl_all_weights_host()) {
+            if (ggml_backend_sycl_all_weights_host()) {
+                // S1: choose layout based on phase.
+                // PP (non-decode): oneDNN reads AOS from VRAM.
+                // TG (decode): MMVQ reads SOA from VRAM.
+                if (is_decode && ggml_is_quantized(src->type) &&
+                    ggml_sycl_supports_reorder_mmvq(src->type)) {
+                    target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
+                } else {
+                    target = GGML_LAYOUT_AOS;
+                }
+            } else {
+                if (!ggml_sycl_get_layout_choice_for_tensor(src, ctx.device, &target)) {
                     GGML_LOG_ERROR("[GRAPH-PRELOAD-WEIGHTS] missing layout choice for %s\n", src->name);
                     return false;
                 }
-                target = GGML_LAYOUT_AOS;
-            }
-
-            target  = ggml_sycl_adjust_layout_for_tensor(src, target, ctx.device);
-
-            // S1 TG override: when all weights are host-pinned and we're in
-            // decode phase (batch=1), the TG fast-path uses MMVQ+SOA.  Request
-            // SOA layout so the cache materializes it BEFORE graph recording,
-            // avoiding on-demand allocation during recording (which causes OOM
-            // because pool-allocated AOS entries can't be individually freed).
-            if (is_decode && ggml_backend_sycl_all_weights_host() &&
-                ggml_is_quantized(src->type) && ggml_sycl_supports_reorder_mmvq(src->type)) {
-                target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
+                target = ggml_sycl_adjust_layout_for_tensor(src, target, ctx.device);
             }
             auto it = target_layouts.find(cache_key);
             if (it == target_layouts.end()) {
