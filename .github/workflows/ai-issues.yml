@@ -56,17 +56,11 @@ jobs:
 
           Based on your findings, post a SINGLE comment on issue #${{ github.event.issue.number }}. Build the comment as follows:
 
-          If duplicates were found, include a section about potential duplicates with links.
-
           If no duplicates were found, do NOT comment at all.
 
-          Use this format for the comment (do not include the dashes):
+          If duplicates were found, include a section about potential duplicates with links using the following format:
 
-          ---
           This issue might be a duplicate of:
           - #[issue_number]: [brief description of similarity]
 
-          _(auto-generated locally using *$GA_ENGINE* on *$GA_MACHINE*)_
-          ---
-
-          Remember: post at most ONE comment combining all findings. If everything is fine, post nothing."
+          _(auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**)_
