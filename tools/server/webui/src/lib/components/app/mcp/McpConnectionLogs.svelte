@@ -15,6 +15,18 @@
 	let { logs, connectionTimeMs, defaultExpanded = false, class: className }: Props = $props();
 
 	let isExpanded = $derived(defaultExpanded);
+
+	function formatLogDetails(details: unknown): string {
+		if (details == null) {
+			return '';
+		}
+
+		try {
+			return JSON.stringify(details, null, 2);
+		} catch {
+			return String(details);
+		}
+	}
 </script>
 
 {#if logs.length > 0}
@@ -53,6 +65,16 @@
 
 						<span class="break-all">{log.message}</span>
 					</div>
+
+					{#if log.details !== undefined}
+						<details class="ml-11">
+							<summary class="cursor-pointer text-[10px] text-muted-foreground"> details </summary>
+
+							<pre
+								class="mt-1 overflow-x-auto rounded bg-background/70 p-2 text-[10px] break-all whitespace-pre-wrap text-foreground/80">
+{formatLogDetails(log.details)}</pre>
+						</details>
+					{/if}
 				{/each}
 			</div>
 		</Collapsible.Content>

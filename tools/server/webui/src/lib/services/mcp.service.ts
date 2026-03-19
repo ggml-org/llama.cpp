@@ -55,7 +55,41 @@ interface ToolCallResult {
 	_meta?: Record<string, unknown>;
 }
 
+interface RequestBodySummary {
+	kind: string;
+	size?: number;
+}
+
+interface DiagnosticRequestDetails {
+	url: string;
+	method: string;
+	credentials?: RequestCredentials;
+	mode?: RequestMode;
+	headers: Record<string, string>;
+	body: RequestBodySummary;
+	jsonRpcMethods?: string[];
+}
+
 export class MCPService {
+	private static readonly REDACTED_HEADERS = new Set([
+		'authorization',
+		'api-key',
+		'cookie',
+		'mcp-session-id',
+		'proxy-authorization',
+		'set-cookie',
+		'x-auth-token',
+		'x-api-key'
+	]);
+
+	private static redactHeaderValue(headerName: string, value: string): string {
+		if (headerName === 'mcp-session-id') {
+			return `....${value.slice(-5)}`;
+		}
+
+		return '[redacted]';
+	}
+
 	/**
 	 * Create a connection log entry for phase tracking.
 	 *
@@ -77,6 +111,351 @@ export class MCPService {
 			message,
 			level,
 			details
+		};
+	}
+
+	private static sanitizeHeaders(
+		headers?: HeadersInit,
+		extraRedactedHeaders?: Iterable<string>
+	): Record<string, string> {
+		if (!headers) {
+			return {};
+		}
+
+		const normalized = new Headers(headers);
+		const sanitized: Record<string, string> = {};
+		const redactedHeaders = new Set(
+			Array.from(extraRedactedHeaders ?? [], (header) => header.toLowerCase())
+		);
+
+		for (const [key, value] of normalized.entries()) {
+			const normalizedKey = key.toLowerCase();
+			sanitized[key] =
+				this.REDACTED_HEADERS.has(normalizedKey) || redactedHeaders.has(normalizedKey)
+					? this.redactHeaderValue(normalizedKey, value)
+					: value;
+		}
+
+		return sanitized;
+	}
+
+	private static getRequestUrl(input: RequestInfo | URL): string {
+		if (typeof input === 'string') {
+			return input;
+		}
+
+		if (input instanceof URL) {
+			return input.href;
+		}
+
+		return input.url;
+	}
+
+	private static getRequestMethod(
+		input: RequestInfo | URL,
+		init?: RequestInit,
+		baseInit?: RequestInit
+	): string {
+		if (init?.method) {
+			return init.method;
+		}
+
+		if (typeof Request !== 'undefined' && input instanceof Request) {
+			return input.method;
+		}
+
+		return baseInit?.method ?? 'GET';
+	}
+
+	private static getRequestBody(
+		input: RequestInfo | URL,
+		init?: RequestInit
+	): BodyInit | null | undefined {
+		if (init?.body !== undefined) {
+			return init.body;
+		}
+
+		if (typeof Request !== 'undefined' && input instanceof Request) {
+			return input.body;
+		}
+
+		return undefined;
+	}
+
+	private static summarizeRequestBody(body: BodyInit | null | undefined): RequestBodySummary {
+		if (body == null) {
+			return { kind: 'empty' };
+		}
+
+		if (typeof body === 'string') {
+			return { kind: 'string', size: body.length };
+		}
+
+		if (body instanceof Blob) {
+			return { kind: 'blob', size: body.size };
+		}
+
+		if (body instanceof URLSearchParams) {
+			return { kind: 'urlsearchparams', size: body.toString().length };
+		}
+
+		if (body instanceof FormData) {
+			return { kind: 'formdata' };
+		}
+
+		if (body instanceof ArrayBuffer) {
+			return { kind: 'arraybuffer', size: body.byteLength };
+		}
+
+		if (ArrayBuffer.isView(body)) {
+			return { kind: body.constructor.name, size: body.byteLength };
+		}
+
+		return { kind: typeof body };
+	}
+
+	private static formatDiagnosticErrorMessage(error: unknown): string {
+		const message = error instanceof Error ? error.message : String(error);
+
+		return message.includes('Failed to fetch') ? `${message} (check CORS?)` : message;
+	}
+
+	private static extractJsonRpcMethods(body: BodyInit | null | undefined): string[] | undefined {
+		if (typeof body !== 'string') {
+			return undefined;
+		}
+
+		try {
+			const parsed = JSON.parse(body);
+			const messages = Array.isArray(parsed) ? parsed : [parsed];
+			const methods = messages
+				.map((message) =>
+					typeof message?.method === 'string' ? (message.method as string) : undefined
+				)
+				.filter((method): method is string => Boolean(method));
+
+			return methods.length > 0 ? methods : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private static createDiagnosticRequestDetails(
+		input: RequestInfo | URL,
+		init: RequestInit | undefined,
+		baseInit: RequestInit,
+		requestHeaders: Headers,
+		extraRedactedHeaders?: Iterable<string>
+	): DiagnosticRequestDetails {
+		const body = this.getRequestBody(input, init);
+		const details: DiagnosticRequestDetails = {
+			url: this.getRequestUrl(input),
+			method: this.getRequestMethod(input, init, baseInit).toUpperCase(),
+			credentials: init?.credentials ?? baseInit.credentials,
+			mode: init?.mode ?? baseInit.mode,
+			headers: this.sanitizeHeaders(requestHeaders, extraRedactedHeaders),
+			body: this.summarizeRequestBody(body)
+		};
+		const jsonRpcMethods = this.extractJsonRpcMethods(body);
+
+		if (jsonRpcMethods) {
+			details.jsonRpcMethods = jsonRpcMethods;
+		}
+
+		return details;
+	}
+
+	private static summarizeError(error: unknown): Record<string, unknown> {
+		if (error instanceof Error) {
+			return {
+				name: error.name,
+				message: error.message,
+				cause:
+					error.cause instanceof Error
+						? { name: error.cause.name, message: error.cause.message }
+						: error.cause,
+				stack: error.stack?.split('\n').slice(0, 6).join('\n')
+			};
+		}
+
+		return { value: String(error) };
+	}
+
+	private static getBrowserContext(
+		targetUrl: URL,
+		useProxy: boolean
+	): Record<string, unknown> | undefined {
+		if (typeof window === 'undefined') {
+			return undefined;
+		}
+
+		return {
+			location: window.location.href,
+			origin: window.location.origin,
+			protocol: window.location.protocol,
+			isSecureContext: window.isSecureContext,
+			targetOrigin: targetUrl.origin,
+			targetProtocol: targetUrl.protocol,
+			sameOrigin: window.location.origin === targetUrl.origin,
+			useProxy
+		};
+	}
+
+	private static getConnectionHints(
+		targetUrl: URL,
+		config: MCPServerConfig,
+		error: unknown
+	): string[] {
+		const hints: string[] = [];
+		const message = error instanceof Error ? error.message : String(error);
+		const headerNames = Object.keys(config.headers ?? {});
+
+		if (typeof window !== 'undefined') {
+			if (
+				window.location.protocol === 'https:' &&
+				targetUrl.protocol === 'http:' &&
+				!config.useProxy
+			) {
+				hints.push(
+					'The page is running over HTTPS but the MCP server is HTTP. Browsers often block this as mixed content; enable the proxy or use HTTPS/WSS for the MCP server.'
+				);
+			}
+
+			if (window.location.origin !== targetUrl.origin && !config.useProxy) {
+				hints.push(
+					'This is a cross-origin browser request. If the server is reachable from curl or Node but not from the browser, missing CORS headers are the most likely cause.'
+				);
+			}
+		}
+
+		if (headerNames.length > 0) {
+			hints.push(
+				`Custom request headers are configured (${headerNames.join(', ')}). That triggers a CORS preflight, so the server must allow OPTIONS and include the matching Access-Control-Allow-Headers response.`
+			);
+		}
+
+		if (config.credentials && config.credentials !== 'omit') {
+			hints.push(
+				'Credentials are enabled for this connection. Cross-origin credentialed requests need Access-Control-Allow-Credentials: true and cannot use a wildcard Access-Control-Allow-Origin.'
+			);
+		}
+
+		if (message.includes('Failed to fetch')) {
+			hints.push(
+				'"Failed to fetch" is a browser-level network failure. Common causes are CORS rejection, mixed-content blocking, certificate/TLS errors, DNS failures, or nothing listening on the target port.'
+			);
+		}
+
+		return hints;
+	}
+
+	private static createDiagnosticFetch(
+		serverName: string,
+		config: MCPServerConfig,
+		baseInit: RequestInit,
+		targetUrl: URL,
+		useProxy: boolean,
+		onLog?: (log: MCPConnectionLog) => void
+	): {
+		fetch: typeof fetch;
+		disable: () => void;
+	} {
+		let enabled = true;
+		const logIfEnabled = (log: MCPConnectionLog) => {
+			if (enabled) {
+				onLog?.(log);
+			}
+		};
+
+		return {
+			fetch: async (input, init) => {
+				const startedAt = performance.now();
+				const requestHeaders = new Headers(baseInit.headers);
+
+				if (typeof Request !== 'undefined' && input instanceof Request) {
+					for (const [key, value] of input.headers.entries()) {
+						requestHeaders.set(key, value);
+					}
+				}
+
+				if (init?.headers) {
+					for (const [key, value] of new Headers(init.headers).entries()) {
+						requestHeaders.set(key, value);
+					}
+				}
+
+				const request = this.createDiagnosticRequestDetails(
+					input,
+					init,
+					baseInit,
+					requestHeaders,
+					Object.keys(config.headers ?? {})
+				);
+				const { method, url } = request;
+
+				logIfEnabled(
+					this.createLog(
+						MCPConnectionPhase.INITIALIZING,
+						`HTTP ${method} ${url}`,
+						MCPLogLevel.INFO,
+						{
+							serverName,
+							request
+						}
+					)
+				);
+
+				try {
+					const response = await fetch(input, {
+						...baseInit,
+						...init,
+						headers: requestHeaders
+					});
+					const durationMs = Math.round(performance.now() - startedAt);
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP ${response.status} ${method} ${url} (${durationMs}ms)`,
+							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
+							{
+								response: {
+									url,
+									status: response.status,
+									statusText: response.statusText,
+									headers: this.sanitizeHeaders(response.headers),
+									durationMs
+								}
+							}
+						)
+					);
+
+					return response;
+				} catch (error) {
+					const durationMs = Math.round(performance.now() - startedAt);
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.ERROR,
+							`HTTP ${method} ${url} failed: ${this.formatDiagnosticErrorMessage(error)}`,
+							MCPLogLevel.ERROR,
+							{
+								serverName,
+								request,
+								error: this.summarizeError(error),
+								browser: this.getBrowserContext(targetUrl, useProxy),
+								hints: this.getConnectionHints(targetUrl, config, error),
+								durationMs
+							}
+						)
+					);
+
+					throw error;
+				}
+			},
+			disable: () => {
+				enabled = false;
+			}
 		};
 	}
 
@@ -106,9 +485,14 @@ export class MCPService {
 	 * @returns Object containing the created transport and the transport type used
 	 * @throws {Error} If url is missing, WebSocket + proxy combination, or all transports fail
 	 */
-	static createTransport(config: MCPServerConfig): {
+	static createTransport(
+		serverName: string,
+		config: MCPServerConfig,
+		onLog?: (log: MCPConnectionLog) => void
+	): {
 		transport: Transport;
 		type: MCPTransportType;
+		stopPhaseLogging: () => void;
 	} {
 		if (!config.url) {
 			throw new Error('MCP server configuration is missing url');
@@ -140,11 +524,20 @@ export class MCPService {
 
 			return {
 				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.WEBSOCKET
+				type: MCPTransportType.WEBSOCKET,
+				stopPhaseLogging: () => {}
 			};
 		}
 
 		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
+		const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
+			serverName,
+			config,
+			requestInit,
+			url,
+			useProxy,
+			onLog
+		);
 
 		if (useProxy && import.meta.env.DEV) {
 			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
@@ -157,17 +550,24 @@ export class MCPService {
 
 			return {
 				transport: new StreamableHTTPClientTransport(url, {
-					requestInit
+					requestInit,
+					fetch: diagnosticFetch
 				}),
-				type: MCPTransportType.STREAMABLE_HTTP
+				type: MCPTransportType.STREAMABLE_HTTP,
+				stopPhaseLogging
 			};
 		} catch (httpError) {
 			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
 
 			try {
 				return {
-					transport: new SSEClientTransport(url, { requestInit }),
-					type: MCPTransportType.SSE
+					transport: new SSEClientTransport(url, {
+						requestInit,
+						fetch: diagnosticFetch,
+						eventSourceInit: { fetch: diagnosticFetch }
+					}),
+					type: MCPTransportType.SSE,
+					stopPhaseLogging
 				};
 			} catch (sseError) {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
@@ -249,7 +649,11 @@ export class MCPService {
 			console.log(`[MCPService][${serverName}] Creating transport...`);
 		}
 
-		const { transport, type: transportType } = this.createTransport(serverConfig);
+		const {
+			transport,
+			type: transportType,
+			stopPhaseLogging
+		} = this.createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
 
 		// Setup WebSocket reconnection handler
 		if (transportType === MCPTransportType.WEBSOCKET) {
@@ -280,6 +684,24 @@ export class MCPService {
 			}
 		);
 
+		const runtimeErrorHandler = (error: Error) => {
+			console.error(`[MCPService][${serverName}] Protocol error after initialize:`, error);
+		};
+
+		client.onerror = (error) => {
+			onPhase?.(
+				MCPConnectionPhase.ERROR,
+				this.createLog(
+					MCPConnectionPhase.ERROR,
+					`Protocol error: ${error.message}`,
+					MCPLogLevel.ERROR,
+					{
+						error: this.summarizeError(error)
+					}
+				)
+			);
+		};
+
 		// Phase: Initializing
 		onPhase?.(
 			MCPConnectionPhase.INITIALIZING,
@@ -287,7 +709,48 @@ export class MCPService {
 		);
 
 		console.log(`[MCPService][${serverName}] Connecting to server...`);
-		await client.connect(transport);
+		try {
+			await client.connect(transport);
+			// Transport diagnostics are only for the initial handshake, not long-lived traffic.
+			stopPhaseLogging();
+			client.onerror = runtimeErrorHandler;
+		} catch (error) {
+			client.onerror = runtimeErrorHandler;
+			const url =
+				(serverConfig.useProxy ?? false)
+					? buildProxiedUrl(serverConfig.url)
+					: new URL(serverConfig.url);
+
+			onPhase?.(
+				MCPConnectionPhase.ERROR,
+				this.createLog(
+					MCPConnectionPhase.ERROR,
+					`Connection failed during initialize: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+					MCPLogLevel.ERROR,
+					{
+						error: this.summarizeError(error),
+						config: {
+							serverName,
+							configuredUrl: serverConfig.url,
+							effectiveUrl: url.href,
+							transportType,
+							useProxy: serverConfig.useProxy ?? false,
+							headers: this.sanitizeHeaders(
+								serverConfig.headers,
+								Object.keys(serverConfig.headers ?? {})
+							),
+							credentials: serverConfig.credentials
+						},
+						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
+						hints: this.getConnectionHints(url, serverConfig, error)
+					}
+				)
+			);
+
+			throw error;
+		}
 
 		const serverVersion = client.getServerVersion();
 		const serverCapabilities = client.getServerCapabilities();
