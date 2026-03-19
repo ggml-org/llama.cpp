@@ -4195,7 +4195,13 @@ float unified_cache::compute_score(const unified_cache_entry & entry) const {
 }
 
 void unified_cache::copy_to_device(void * dst, const void * src, size_t size) {
-    // Use staging buffer for mmap'd data
+    // Host-pinned USM can be read directly by the GPU via DMA — skip staging.
+    const sycl::usm::alloc src_type = ggml_sycl_get_alloc_type(src);
+    if (src_type == sycl::usm::alloc::host || src_type == sycl::usm::alloc::device) {
+        queue_.memcpy(dst, src, size).wait();
+        return;
+    }
+    // Use staging buffer for mmap'd / non-USM data
     if (staging_ && size <= staging_size_) {
         std::lock_guard<std::mutex> lock(staging_mutex_);
         // Copy mmap -> staging (may trigger page fault)
@@ -4258,13 +4264,16 @@ sycl::event unified_cache::copy_to_device_async(void *                          
         return submit_barrier_all();
     }
 
-    // Stage any non-device source memory through host buffer.
+    // Stage non-USM source memory through host-pinned buffer.
     // This handles:
-    // - unknown: mmap'd or non-USM pointers
+    // - unknown: mmap'd or non-USM pointers (must stage — GPU cannot DMA)
     // - shared: can fail on Level Zero if allocated on different context
-    // - host: generally works, but staging is safer
-    // Only device-to-device copies skip staging.
-    const bool needs_staging = (src_type != sycl::usm::alloc::device);
+    // Host-pinned (sycl::usm::alloc::host) and device sources skip staging —
+    // the GPU can DMA directly from host-pinned USM via queue.memcpy.
+    // This is critical for large tensors (e.g. 615 MB token_embd.weight in
+    // 120B models) where staging through intermediate buffers can segfault.
+    const bool needs_staging = (src_type != sycl::usm::alloc::device &&
+                                src_type != sycl::usm::alloc::host);
     if (needs_staging) {
         // Non-USM source pointers are staged through reusable host-pinned chunks.
         constexpr size_t         k_fallback_chunk = 64 * 1024 * 1024;
