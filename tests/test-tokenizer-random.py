@@ -449,7 +449,7 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
         t2 = time.perf_counter()
         text1 = tokenizer1.decode(ids1)
         t3 = time.perf_counter()
-        text2 = tokenizer2.decode(ids1)
+        text2 = tokenizer2.decode(ids2)
         t4 = time.perf_counter()
         t_encode1 += t1 - t0
         t_encode2 += t2 - t1
