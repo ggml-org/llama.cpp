@@ -1064,7 +1064,7 @@ class TextModel(ModelBase):
 
         if self.hparams.get("is_causal") is False:
             self.gguf_writer.add_causal_attention(False)
-            logger.info(f"gguf: causal attention = False")
+            logger.info("gguf: causal attention = False")
 
         # TODO: Handle "sliding_attention" similarly when models start implementing it
         rope_params = self.rope_parameters.get("full_attention", self.rope_parameters)
