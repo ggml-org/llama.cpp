@@ -1748,18 +1748,6 @@ if(GGML_SYCL)
     target_include_directories(test-tensor-classification PRIVATE ${PROJECT_SOURCE_DIR}/ggml/include)
     add_test(NAME test-tensor-classification COMMAND $<TARGET_FILE:test-tensor-classification>)
 
-    # test-unified-tensor-cache: Tests for unified tensor cache with tiered memory
-    # Part of Unified Tensor Cache for managing weights across VRAM/Host/mmap
-    add_executable(test-unified-tensor-cache test-unified-tensor-cache.cpp)
-    target_link_libraries(test-unified-tensor-cache PRIVATE ggml)
-    target_include_directories(test-unified-tensor-cache PRIVATE
-        ${PROJECT_SOURCE_DIR}/ggml/include
-        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
-    target_compile_options(test-unified-tensor-cache PRIVATE "-fsycl" "-Wno-narrowing")
-    target_link_options(test-unified-tensor-cache PRIVATE "-fsycl")
-    install(TARGETS test-unified-tensor-cache RUNTIME)
-    add_test(NAME test-unified-tensor-cache COMMAND $<TARGET_FILE:test-unified-tensor-cache>)
-
     # test-sycl-eviction-policy: Tests for priority-based LRU eviction policy
     # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-2oy)
     add_executable(test-sycl-eviction-policy test-sycl-eviction-policy.cpp

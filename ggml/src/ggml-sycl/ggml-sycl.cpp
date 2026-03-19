@@ -129,7 +129,6 @@ static dnnl::memory::data_type ggml_sycl_onednn_dtype(ggml_type type);
 #include "ggml-sycl/sycl-profiling.hpp"
 #include "ggml-sycl/tensor-types.hpp"
 #include "ggml-sycl/unified-cache.hpp"
-#include "ggml-sycl/unified-tensor-cache.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded          = false;
@@ -3962,10 +3961,6 @@ static size_t get_system_memory_bytes() {
 #endif
 }
 
-// Global unified_tensor_cache for tiered memory dispatch
-static std::unique_ptr<ggml_sycl::unified_tensor_cache> g_tensor_cache;
-
-static std::mutex g_tensor_cache_mutex;
 
 void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_sycl_tensor_inventory * inventory) {
     if (!backend || !inventory || (inventory->count > 0 && !inventory->tensors)) {
@@ -4125,82 +4120,6 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                       desired_extra / (1024.0 * 1024.0), base_headroom / (1024.0 * 1024.0),
                       base_mem / (1024.0 * 1024.0));
     }
-    // If tiered mode enabled, create unified_tensor_cache
-
-    if (g_tiered_enabled.load(std::memory_order_acquire)) {
-        std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
-        if (!g_tensor_cache) {
-            // Create cache with VRAM budget MINUS reserves for KV cache + compute buffers.
-            // Without this reserve, compute_placement() greedily fills all VRAM with
-            // weight SOA copies, leaving nothing for graph_reserve → DEVICE_LOST.
-            size_t cache_vram_budget = vram_budget;
-
-            // Estimate KV cache VRAM requirement from model hparams.
-            // KV = 2 * n_layer * (n_embd_k_gqa + n_embd_v_gqa) * n_ctx * sizeof(fp16)
-            // For MoE models, KV auto-hosts via tiered_kv_buft, so KV VRAM = 0.
-            // Use inventory n_expert (set from hparams) rather than query_moe_expert_split()
-            // because in S1 mode (prefer_host_weights) the split flag is never set.
-            const bool   is_moe         = (inventory->n_expert > 0);
-            const size_t kv_full        = is_moe ? 0 :
-                static_cast<size_t>(2) * inventory->n_layer *
-                (inventory->n_embd_k_gqa + inventory->n_embd_v_gqa) *
-                inventory->n_ctx * sizeof(uint16_t);
-            // Cap KV VRAM estimate at 50% of budget — KV tiering will adaptively split
-            // between device and host based on actual free VRAM at allocation time.
-            const size_t kv_estimate     = std::min(kv_full, cache_vram_budget / 2);
-            const size_t compute_reserve = 256ULL * 1024 * 1024;  // 256 MB for compute scratch
-
-            // Allow env var override for the weight cache percentage
-            static int weight_cache_pct = -1;
-            if (weight_cache_pct < 0) {
-                const char * env = getenv("GGML_SYCL_WEIGHT_CACHE_PCT");
-                weight_cache_pct = env ? atoi(env) : 0;  // 0 = auto (use KV estimate)
-                if (weight_cache_pct > 0) {
-                    weight_cache_pct = std::max(10, std::min(90, weight_cache_pct));
-                }
-            }
-
-            if (weight_cache_pct > 0) {
-                // Explicit percentage override
-                cache_vram_budget = cache_vram_budget * weight_cache_pct / 100;
-            } else {
-                // Auto: subtract KV estimate + compute reserve from VRAM budget
-                const size_t total_reserve = kv_estimate + compute_reserve;
-                if (cache_vram_budget > total_reserve) {
-                    cache_vram_budget = cache_vram_budget - total_reserve;
-                } else {
-                    // Not enough VRAM for KV + compute + any weights → minimal weight cache
-                    cache_vram_budget = cache_vram_budget / 10;
-                }
-            }
-
-            size_t system_ram        = get_system_memory_bytes();
-            size_t host_budget       = system_ram > 0 ? static_cast<size_t>(system_ram * 0.75) :
-                                                        10ULL * 1024 * 1024 * 1024;  // 75% of RAM, fallback 10GB
-            GGML_LOG_INFO(
-                "[SYCL] Unified tensor cache: VRAM %.2f GB (of %.2f GB budget, "
-                "KV estimate %.2f GB%s, compute reserve %.0f MB), Host %.2f GB\n",
-                cache_vram_budget / (1024.0 * 1024.0 * 1024.0),
-                vram_budget / (1024.0 * 1024.0 * 1024.0),
-                kv_estimate / (1024.0 * 1024.0 * 1024.0),
-                is_moe ? " (on host)" : "",
-                compute_reserve / (1024.0 * 1024.0),
-                host_budget / (1024.0 * 1024.0 * 1024.0));
-            g_tensor_cache =
-                std::make_unique<ggml_sycl::unified_tensor_cache>(*(ctx->stream()), cache_vram_budget, host_budget);
-        }
-        // Build internal inventory from API inventory
-        ggml_sycl::tensor_inventory internal_inv;
-        internal_inv.tensors.reserve(inventory->count);
-        for (size_t i = 0; i < inventory->count; i++) {
-            if (inventory->tensors[i].name != nullptr) {
-                internal_inv.tensors.push_back(
-                    ggml_sycl::make_tensor_info(inventory->tensors[i].name, inventory->tensors[i].size));
-                internal_inv.total_size += inventory->tensors[i].size;
-            }
-        }
-        g_tensor_cache->set_inventory(internal_inv);
-    }
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load() ? "enabled" : "disabled");
@@ -4268,29 +4187,16 @@ size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend) {
 
 bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
     (void) backend;
-    std::lock_guard<std::mutex> lock(g_tensor_cache_mutex);
-
-    return g_tensor_cache != nullptr && g_tiered_enabled.load(std::memory_order_acquire);
+    return g_tiered_enabled.load(std::memory_order_acquire);
 }
 
 void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses) {
     (void) backend;
-    std::lock_guard<std::mutex> lock(g_tensor_cache_mutex);
-    if (g_tensor_cache) {
-        if (hits) {
-            *hits = g_tensor_cache->cache_hits();
-        }
-        if (misses) {
-            *misses = g_tensor_cache->cache_misses();
-        }
-    } else {
-        if (hits) {
-            *hits = 0;
-        }
-
-        if (misses) {
-            *misses = 0;
-        }
+    if (hits) {
+        *hits = 0;
+    }
+    if (misses) {
+        *misses = 0;
     }
 }
 
@@ -4299,7 +4205,7 @@ void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, 
 // If not in tiered mode or tensor not found, returns nullptr.
 // Sets found_in_inventory to indicate if tensor is tracked (avoids second mutex lock).
 // Uses O(1) hash lookup for performance in hot path.
-// This is the integration point between mul_mat dispatch and unified_tensor_cache.
+// This is the integration point between mul_mat dispatch and the unified cache.
 
 void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out, bool * found_in_inventory) {
     if (found_in_inventory) {
@@ -4323,23 +4229,11 @@ void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * 
             *found_in_inventory = true;
         }
     }
-    // Query unified_tensor_cache for actual pointer and tier
-    std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
-    if (!g_tensor_cache) {
-        if (tier_out) {
-            *tier_out = ggml_sycl::memory_tier::MMAP;  // Fallback
-        }
-        return nullptr;
-    }
-    auto id_opt = g_tensor_cache->get_tensor_id(tensor_name);
-    if (!id_opt.has_value()) {
-        return nullptr;
-    }
-    auto location = g_tensor_cache->get_tensor_with_location(id_opt.value());
+    // No tensor cache — return nullptr (unified_cache handles weight placement)
     if (tier_out) {
-        *tier_out = location.tier;
+        *tier_out = ggml_sycl::memory_tier::MMAP;  // Fallback
     }
-    return location.ptr;
+    return nullptr;
 }
 
 void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
@@ -10482,28 +10376,6 @@ static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
     // When VRAM is exhausted (all-cold mode), hot_base is null — use cold_base.
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     return ctx->hot_base ? ctx->hot_base : ctx->cold_base;
-}
-
-// Parse layer ID from KV cache tensor name ("cache_k_l{N}" or "cache_v_l{N}").
-// Returns -1 if the name does not match the expected pattern.
-static int parse_kv_layer_id(const char * name) {
-    const char * prefix_k = "cache_k_l";
-    const char * prefix_v = "cache_v_l";
-    const char * p        = nullptr;
-    if (strncmp(name, prefix_k, 9) == 0) {
-        p = name + 9;
-    } else if (strncmp(name, prefix_v, 9) == 0) {
-        p = name + 9;
-    }
-    if (!p || *p == '\0') {
-        return -1;
-    }
-    char * end = nullptr;
-    long   val = strtol(p, &end, 10);
-    if (end == p || val < 0) {
-        return -1;
-    }
-    return static_cast<int>(val);
 }
 
 static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -37001,7 +36873,6 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
     int       already_device_count         = 0;
     int       cache_hit_count              = 0;
     int       skipped_weight_count         = 0;
-    int       tiered_weight_promoted_count = 0;
 
     // Check if tiered mode is enabled - if so, weight tensors in HOST need promotion to VRAM
     const bool tiered_enabled = g_tiered_enabled.load(std::memory_order_acquire);
@@ -37025,8 +36896,6 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
 
     // Track already-staged pointers to avoid duplicates
     std::unordered_set<void *>                            staged_pointers;
-    // Track weight tensors that need promotion in tiered mode (collected first, promoted in batch)
-    std::vector<std::pair<const ggml_tensor *, uint64_t>> weights_to_promote;
 
     // Helper lambda to stage a tensor
     auto stage_tensor = [&](const ggml_tensor * tensor, const char * source_desc) {
@@ -37048,7 +36917,6 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
             }
 
             // Tiered mode: check if weight is in HOST tier and needs promotion to VRAM
-            // Query the unified_tensor_cache to get current location
             ggml_sycl::memory_tier tier               = ggml_sycl::memory_tier::MMAP;
             bool                   found_in_inventory = false;
             void *                 cached_ptr         = get_cached_tensor_ptr(tensor->name, &tier, &found_in_inventory);
@@ -37066,19 +36934,7 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
                 return;
             }
 
-            // Weight is in HOST or MMAP tier - collect for batch promotion
-            // Get tensor ID for promotion request
-            {
-                std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
-                if (g_tensor_cache) {
-                    auto id_opt = g_tensor_cache->get_tensor_id(tensor->name);
-                    if (id_opt.has_value()) {
-                        weights_to_promote.emplace_back(tensor, id_opt.value());
-                        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Queued tiered weight %s for promotion (tier=%d)\n",
-                                        tensor->name, (int) tier);
-                    }
-                }
-            }
+            // Weight is in HOST or MMAP tier — unified_cache handles placement
             staged_pointers.insert(tensor->data);
             return;
         }
@@ -37166,29 +37022,9 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
         }
     }
 
-    // Batch promote all collected tiered weights to VRAM and wait for completion
-    if (!weights_to_promote.empty()) {
-        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Promoting %zu tiered weights to VRAM...\n", weights_to_promote.size());
-        {
-            std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
-            if (g_tensor_cache) {
-                for (const auto & [tensor, tensor_id] : weights_to_promote) {
-                    g_tensor_cache->request_promotion(tensor_id);
-                    tiered_weight_promoted_count++;
-                }
-                // CRITICAL: Wait for all async transfers to complete before graph recording starts
-                // This ensures all weights are in VRAM when kernels access them during recording
-                g_tensor_cache->wait_pending_transfers();
-            }
-        }
-        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Tiered weight promotion complete: %d promoted\n",
-                        tiered_weight_promoted_count);
-    }
-
     GGML_SYCL_DEBUG(
-        "[GRAPH-PRESTAGE] Complete: %d staged, %d cache hits, %d already device, %d weights skipped, %d tiered weights "
-        "promoted\n",
-        staged_count, cache_hit_count, already_device_count, skipped_weight_count, tiered_weight_promoted_count);
+        "[GRAPH-PRESTAGE] Complete: %d staged, %d cache hits, %d already device, %d weights skipped\n",
+        staged_count, cache_hit_count, already_device_count, skipped_weight_count);
 }
 
 // When reusing an executable SYCL command graph, the usual per-op pointer refresh

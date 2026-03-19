@@ -187,12 +187,10 @@ GGML_BACKEND_API size_t ggml_backend_sycl_get_vram_budget(ggml_backend_t backend
 // Returns 0 if budget is exceeded. Used by llama_params_fit.
 GGML_BACKEND_API size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend);
 
-// Check if the unified tensor cache instance is available.
-// Returns true if tiered mode is enabled AND the cache has been created.
+// Check if the tiered weight placement mode is enabled.
 GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend);
 
-// Get cache hit/miss statistics for the unified tensor cache.
-// Used for monitoring tiered dispatch effectiveness.
+// Get cache hit/miss statistics (stub — returns zeros).
 // hits/misses may be NULL if caller doesn't need that stat.
 GGML_BACKEND_API void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses);
 
