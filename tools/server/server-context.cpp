@@ -11,6 +11,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "base64.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -2463,22 +2464,42 @@ private:
 
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
-                        // process the image
-                        size_t n_tokens_out = 0;
-                        int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
-                        if (res != 0) {
-                            SLT_ERR(slot, "failed to process image, res = %d\n", res);
-                            send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
-                            slot.release();
-                            continue;
-                        }
+                        if (input_tokens.has_precomputed_at(slot.prompt.n_tokens())) {
+                            // precomputed image embeddings path: decode directly
+                            size_t n_tokens_out = 0;
+                            int32_t res = input_tokens.process_precomputed_chunk(ctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                SLT_ERR(slot, "failed to process precomputed image, res = %d\n", res);
+                                send_error(slot, "failed to process precomputed image", ERROR_TYPE_SERVER);
+                                slot.release();
+                                continue;
+                            }
 
-                        slot.n_prompt_tokens_processed += n_tokens_out;
+                            slot.n_prompt_tokens_processed += n_tokens_out;
 
-                        // add the image chunk to cache
-                        {
-                            const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
-                            slot.prompt.tokens.push_back(chunk.get()); // copy
+                            // add precomputed chunk to cache
+                            {
+                                const auto & img = input_tokens.find_precomputed(slot.prompt.n_tokens());
+                                slot.prompt.tokens.push_back_precomputed(img);
+                            }
+                        } else {
+                            // process the image via CLIP
+                            size_t n_tokens_out = 0;
+                            int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                SLT_ERR(slot, "failed to process image, res = %d\n", res);
+                                send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
+                                slot.release();
+                                continue;
+                            }
+
+                            slot.n_prompt_tokens_processed += n_tokens_out;
+
+                            // add the image chunk to cache
+                            {
+                                const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
+                                slot.prompt.tokens.push_back(chunk.get()); // copy
+                            }
                         }
 
                         do_checkpoint = false; // do not checkpoint right after an image chunk
@@ -3039,7 +3060,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             server_task_type type,
             const json & data,
             const std::vector<raw_buffer> & files,
-            task_response_type res_type) {
+            task_response_type res_type,
+            const std::vector<server_precomputed_image> & precomputed_images) {
     GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
     auto res = create_response();
@@ -3056,7 +3078,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // process prompt
         std::vector<server_tokens> inputs;
 
-        if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
+        if (!precomputed_images.empty()) {
+            // Precomputed image embeddings path: bypass CLIP, inject embeddings directly
+            inputs.push_back(process_precomputed_image_prompt(ctx_server.vocab, prompt.get<std::string>(), precomputed_images));
+        } else if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
             // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
             inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
         } else {
@@ -3657,29 +3682,34 @@ void server_routes::init_routes() {
     this->post_chat_completions = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<server_precomputed_image> precomputed_images;
         json body = json::parse(req.body);
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            precomputed_images);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            TASK_RESPONSE_TYPE_OAI_CHAT);
+            TASK_RESPONSE_TYPE_OAI_CHAT,
+            precomputed_images);
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<server_precomputed_image> precomputed_images;
         json body = convert_responses_to_chatcmpl(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            precomputed_images);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3691,13 +3721,15 @@ void server_routes::init_routes() {
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<server_precomputed_image> precomputed_images;
         json body = convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            precomputed_images);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3709,13 +3741,15 @@ void server_routes::init_routes() {
     this->post_anthropic_count_tokens = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<server_precomputed_image> precomputed_images;
         json body = convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            precomputed_images);
 
         json prompt = body_parsed.at("prompt");
         llama_tokens tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true);
@@ -3727,13 +3761,122 @@ void server_routes::init_routes() {
     this->post_apply_template = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files; // dummy, unused
+        std::vector<server_precomputed_image> precomputed_images; // dummy, unused
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            precomputed_images);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;
+    };
+
+    this->post_vision_embedding = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        if (ctx_server.mctx == nullptr) {
+            res->error(format_error_response("This server does not support multimodal. Start it with a multimodal projector (--mmproj)", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        try {
+            json body = json::parse(req.body);
+            if (!body.contains("image") || !body.at("image").is_string()) {
+                throw std::runtime_error("Request must contain 'image' field with base64-encoded image data");
+            }
+
+            const std::string & image_b64 = body.at("image").get_ref<const std::string &>();
+            bool return_b64 = json_value(body, "b64", false);
+
+            // strip data URI prefix if present
+            std::string b64_data;
+            {
+                auto comma_pos = image_b64.find(',');
+                if (comma_pos != std::string::npos && image_b64.substr(0, comma_pos).find("base64") != std::string::npos) {
+                    b64_data = image_b64.substr(comma_pos + 1);
+                } else {
+                    b64_data = image_b64;
+                }
+            }
+
+            // base64 decode the image
+            raw_buffer image_data = base64_decode(b64_data);
+            if (image_data.empty()) {
+                throw std::runtime_error("Failed to decode base64 image data");
+            }
+
+            // create bitmap from buffer
+            mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, image_data.data(), image_data.size()));
+            if (!bmp.ptr) {
+                throw std::runtime_error("Failed to load image from buffer");
+            }
+            bmp.set_id("vision_embedding");
+
+            // tokenize with a dummy prompt containing the media marker
+            std::string dummy_prompt = mtmd_default_marker();
+            mtmd_input_text inp_txt = {
+                dummy_prompt.c_str(),
+                /* add_special */   false,
+                /* parse_special */ true,
+            };
+            mtmd::input_chunks chunks(mtmd_input_chunks_init());
+            const mtmd_bitmap * bmp_ptr = bmp.ptr.get();
+            int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
+                                              chunks.ptr.get(),
+                                              &inp_txt,
+                                              &bmp_ptr,
+                                              1);
+            if (tokenized != 0) {
+                throw std::runtime_error("Failed to tokenize image");
+            }
+
+            // find the image chunk and encode it
+            for (size_t i = 0; i < chunks.size(); i++) {
+                const auto * chunk = mtmd_input_chunks_get(chunks.ptr.get(), i);
+                auto chunk_type = mtmd_input_chunk_get_type(chunk);
+                if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE || chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+                    int32_t encode_res = mtmd_encode_chunk(ctx_server.mctx, chunk);
+                    if (encode_res != 0) {
+                        throw std::runtime_error("Failed to encode image chunk");
+                    }
+
+                    size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+                    int32_t n_embd = meta->model_n_embd_inp;
+                    float * embd = mtmd_get_output_embd(ctx_server.mctx);
+
+                    // build response based on b64 option
+                    size_t total_floats = n_tokens * n_embd;
+                    size_t total_bytes = total_floats * sizeof(float);
+
+                    json result = {
+                        {"n_tokens", (int32_t) n_tokens},
+                        {"n_embd",   n_embd},
+                    };
+
+                    if (return_b64) {
+                        // only base64
+                        result["embedding_b64"] = base64::encode(
+                            reinterpret_cast<const char *>(embd), total_bytes);
+                    } else {
+                        // only array of floats
+                        json embedding = json::array();
+                        for (size_t j = 0; j < total_floats; j++) {
+                            embedding.push_back(embd[j]);
+                        }
+                        result["embedding"]     = std::move(embedding); 
+                    }
+
+                    res->ok(std::move(result));
+                    return res;
+                }
+            }
+
+            throw std::runtime_error("No image chunk found after tokenization");
+        } catch (const std::exception & e) {
+            res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
     };
 
     this->get_models = [this](const server_http_req &) {
