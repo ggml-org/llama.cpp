@@ -475,6 +475,66 @@ kernel void kernel_restore_block_q4_K(
     }
 }
 
+kernel void kernel_convert_block_q4_K_noshuffle(
+    global struct block_q4_K * src0,
+    global uchar * dst_q,
+    global uchar * dst_s,
+    global half  * dst_d,
+    global half  * dst_dm
+) {
+    global struct block_q4_K * b = (global struct block_q4_K *) src0 + get_global_id(0);
+    global uchar * q  = (global uchar *) dst_q  + QK_K/2 * get_global_id(0);
+    global uchar * s  = (global uchar *) dst_s  + K_SCALE_SIZE * get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+    global half  * dm = (global half  *) dst_dm + get_global_id(0);
+
+    *d  = b->d;
+    *dm = b->dm;
+
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar x0 = b->q[i*32 + 2*j];
+            uchar x1 = b->q[i*32 + 2*j + 1];
+            q[i*32 + j]      = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+            q[i*32 + j + 16] = (x0 >> 4)   | (x1 & 0xF0);
+        }
+    }
+
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        s[i] = b->s[i];
+    }
+}
+
+kernel void kernel_restore_block_q4_K_noshuffle(
+    global uchar * src_q,
+    global uchar * src_s,
+    global half  * src_d,
+    global half  * src_dm,
+    global struct block_q4_K * dst
+) {
+    global struct block_q4_K * b = (global struct block_q4_K *) dst + get_global_id(0);
+    global uchar * q  = (global uchar *) src_q  + QK_K/2 * get_global_id(0);
+    global uchar * s  = (global uchar *) src_s  + K_SCALE_SIZE * get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+    global half  * dm = (global half  *) src_dm + get_global_id(0);
+
+    b->d  = *d;
+    b->dm = *dm;
+
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar lo = q[i*32 + j];
+            uchar hi = q[i*32 + j + 16];
+            b->q[i*32 + 2*j]     = (lo & 0x0F) | ((hi & 0x0F) << 4);
+            b->q[i*32 + 2*j + 1] = (lo >> 4)   | (hi & 0xF0);
+        }
+    }
+
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        b->s[i] = s[i];
+    }
+}
+
 //------------------------------------------------------------------------------
 // kernel_convert_block_q6_K
 // Convert the block_q6_K format to 3 separate arrays (AOS -> SOA).
