@@ -51,6 +51,27 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
     assert choice["finish_reason"] == finish_reason
 
 
+def test_chat_completion_cached_tokens():
+    global server
+    server.n_slots = 1
+    server.start()
+    seq = [
+        ("1 2 3 4 5 6", 77, 0),
+        ("1 2 3 4 5 6", 77, 76),
+        ("1 2 3 4 5 9", 77, 51),
+        ("1 2 3 9 9 9", 77, 47),
+    ]
+    for user_prompt, n_prompt, n_cache in seq:
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 8,
+            "messages": [
+                {"role": "system", "content": "Test"},
+                {"role": "user", "content": user_prompt},
+            ],
+        })
+        assert res.body["usage"]["prompt_tokens"] == n_prompt
+        assert res.body["usage"]["prompt_tokens_details"]["cached_tokens"] == n_cache
+
 @pytest.mark.parametrize(
     "system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason",
     [
