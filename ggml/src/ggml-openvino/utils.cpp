@@ -664,7 +664,9 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         input_shape = ggml_decoder->get_shape(ggml_tensor);
     }
 
-    // If the tensor is a result of PERMUTE operation and the model is not fully supported, we need to reconstruct the data based on the view tensor shape & stride
+    //   Add explicit strided-copy reconstruction for PERMUTE and VIEW tensors in split
+    //   models: iterate over all 4 dimensions using `nb[]` strides and `view_offs` to
+    //   copy non-contiguous source data into a contiguous `ov::Tensor` buffer
     if ((ggml_tensor->op == GGML_OP_PERMUTE || ggml_tensor->op == GGML_OP_VIEW) && ggml_decoder->is_splited_model()) {
         // Create OpenVINO input tensor, the data need to reconstructed based on the view tensor shape & stride
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
