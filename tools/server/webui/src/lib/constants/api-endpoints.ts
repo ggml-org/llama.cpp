@@ -4,5 +4,9 @@ export const API_MODELS = {
 	UNLOAD: '/models/unload'
 };
 
+export const API_TOOLS = {
+	LIST: '/tools'
+};
+
 /** CORS proxy endpoint path */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';
