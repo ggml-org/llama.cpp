@@ -77,28 +77,6 @@ static HMX_INLINE_ALWAYS void hmx_dot_fp16(__fp16 *out,
     hmx_consume_accumulator_fp16(out);
 }
 
-// --- Utility functions (from htp-ops-lib/include/dsp/utils.h) ---
-
-static inline size_t hmx_ceil_div(size_t num, size_t den) {
-    return (num + den - 1) / den;
-}
-
-static inline size_t hmx_align_up(size_t v, size_t align) {
-    return hmx_ceil_div(v, align) * align;
-}
-
-static inline size_t hmx_align_down(size_t v, size_t align) {
-    return (v / align) * align;
-}
-
-static inline size_t hmx_smin(size_t a, size_t b) {
-    return a < b ? a : b;
-}
-
-static inline size_t hmx_smax(size_t a, size_t b) {
-    return a > b ? a : b;
-}
-
 // --- VTCM sequential allocator (from htp-ops-lib/include/dsp/vtcm_mgr.h) ---
 
 static inline uint8_t *vtcm_seq_alloc(uint8_t **vtcm_ptr, size_t size) {
