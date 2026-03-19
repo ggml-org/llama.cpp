@@ -175,6 +175,86 @@ static inline uint32_t dma_queue_capacity(dma_queue * q) {
     return q->capacity;
 }
 
+// ---------------------------------------------------------------------------
+// Overflow-safe DMA push: all UDMA type1 descriptor fields (roiwidth,
+// roiheight, srcstride, dststride) are 16-bit, max 65535.  This helper
+// transparently handles values that exceed the 16-bit limit and submits
+// chained DMA transtions.
+//
+// Case 1 (fast path): all params fit in 16 bits -> direct dma_queue_push.
+// Case 2 (contiguous block): width == srcstride == dststride.  Reshape the
+//   flat transfer into a 2D descriptor with sub_width <= 65535.  Produces a
+//   single descriptor, preserving async DMA behavior.
+// Case 3 (stride overflow): srcstride or dststride > 65535.  Issue rows
+//   one at a time.  The first N-1 rows are pushed+popped synchronously;
+//   the last row is left async so the caller can pop it.
+// ---------------------------------------------------------------------------
+#define UDMA_MAX_FIELD_VAL 65535u
+
+static inline bool dma_queue_push_chained(dma_queue *q, dma_ptr dptr, size_t dst_stride, size_t src_stride, size_t width, size_t nrows) {
+    // Fast path: everything fits in 16 bits.
+    if (__builtin_expect(
+            width      <= UDMA_MAX_FIELD_VAL &&
+            nrows      <= UDMA_MAX_FIELD_VAL &&
+            src_stride <= UDMA_MAX_FIELD_VAL &&
+            dst_stride <= UDMA_MAX_FIELD_VAL, 1)) {
+        return dma_queue_push(q, dptr, dst_stride, src_stride, width, nrows);
+    }
+
+    // Case 2: contiguous block (width == src_stride == dst_stride).
+    // Reshape total bytes into sub_width * sub_nrows where sub_width <= 65535.
+    if (width == src_stride && width == dst_stride) {
+        size_t total = width * nrows;
+
+        // Pick the largest 128-byte-aligned sub_width that divides total evenly.
+        size_t sub_width = UDMA_MAX_FIELD_VAL & ~(size_t)127;  // 65408
+        while (sub_width > 0 && total % sub_width != 0) {
+            sub_width -= 128;
+        }
+        if (sub_width == 0) {
+            // Fallback: use original width (must fit) with adjusted nrows.
+            // This shouldn't happen for 128-aligned DMA sizes.
+            sub_width = width;
+        }
+        size_t sub_nrows = total / sub_width;
+
+        // Handle sub_nrows > 65535 by issuing chunked descriptors.
+        const uint8_t *src = (const uint8_t *)dptr.src;
+        uint8_t       *dst = (uint8_t *)dptr.dst;
+        size_t rows_done = 0;
+        while (rows_done < sub_nrows) {
+            size_t chunk = sub_nrows - rows_done;
+            if (chunk > UDMA_MAX_FIELD_VAL) chunk = UDMA_MAX_FIELD_VAL;
+
+            dma_ptr p = dma_make_ptr(dst + rows_done * sub_width, src + rows_done * sub_width);
+            if (!dma_queue_push(q, p, sub_width, sub_width, sub_width, chunk))
+                return false;
+
+            rows_done += chunk;
+            // Complete all chunks without waiting except the last one, so the
+            // caller's single dma_queue_pop drains the final descriptor.
+            if (rows_done < sub_nrows)
+                dma_queue_pop_nowait(q);
+        }
+        return true;
+    }
+
+    // Case 3: stride overflow — fall back to row-by-row.
+    {
+        const uint8_t *src = (const uint8_t *)dptr.src;
+        uint8_t       *dst = (uint8_t *)dptr.dst;
+        for (size_t r = 0; r < nrows; ++r) {
+          dma_ptr p = dma_make_ptr(dst + r * dst_stride,
+                                   src + r * src_stride);
+          if (!dma_queue_push(q, p, 0, 0, width, 1))
+            return false;
+          if (r + 1 < nrows)
+            dma_queue_pop_nowait(q);
+        }
+        return true;
+    }
+}
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

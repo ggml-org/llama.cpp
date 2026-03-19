@@ -30,6 +30,12 @@ struct htp_context {
     atomic_bool vtcm_needs_release;
 
     uint32_t opmask;
+
+    // HMX acceleration fields (v73+, enabled by compile-time HTP_HAS_HMX)
+#ifdef HTP_HAS_HMX
+    int        hmx_enabled;       // Runtime flag: HMX initialisation succeeded
+    size_t     vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
+#endif
 };
 
 #endif /* HTP_CTX_H */
