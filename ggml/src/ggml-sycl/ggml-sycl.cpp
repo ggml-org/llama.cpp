@@ -13230,6 +13230,14 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
 }
 
 static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    // Use host_max_alloc_size which accounts for ALL Level Zero devices including iGPU.
+    // The iGPU may have a much lower max_mem_alloc_size (4 GB) than discrete GPUs (11+ GB).
+    // sycl::malloc_host creates GGTT mappings for all devices in the driver handle,
+    // so we must respect the smallest device's limit.
+    const size_t host_max = ggml_sycl_get_host_max_alloc_size();
+    if (host_max > 0) {
+        return host_max;
+    }
     const int    device_id = get_current_device_id();
     const size_t safe_max  = ggml_sycl_get_safe_max_alloc_size(device_id);
     if (safe_max > 0) {
@@ -13250,35 +13258,10 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     GGML_LOG_INFO("[SYCL] Host buffer alloc request: %.1f MB (evictable=%d, in_model_load=%d)\n",
                   size / (1024.0 * 1024.0), weights_evictable ? 1 : 0, in_model_load ? 1 : 0);
 
-    // Use aligned_alloc for buffers that exceed the host malloc limit.
-    // sycl::malloc_host creates GGTT mappings for ALL Level Zero devices;
-    // allocations exceeding any device's max_mem_alloc_size will hang.
-    // The unified cache handles GPU access for non-USM model weight buffers
-    // through its staging/DMA path.
-    const size_t host_alloc_cap = ggml_sycl_get_host_max_alloc_size();
-    void * ptr = nullptr;
-    bool   used_aligned_alloc = false;
-    if (in_model_load && host_alloc_cap > 0 && size >= host_alloc_cap) {
-        ptr = aligned_alloc(4096, size);
-        if (ptr) {
-#ifdef __linux__
-            madvise(ptr, size, MADV_POPULATE_WRITE);
-#else
-            memset(ptr, 0, size);
-#endif
-            used_aligned_alloc = true;
-            // Register as MMAP so ggml_sycl_host_free uses std::free (not sycl::free)
-            ggml_sycl::alloc_registry::instance().register_alloc(
-                ptr, size, -1, ggml_sycl::alloc_type::MMAP);
-            GGML_LOG_INFO("[SYCL] Host buffer: %.1f GB via aligned_alloc + pre-fault "
-                          "(exceeds %.1f GB host alloc cap)\n",
-                          size / (1024.0 * 1024.0 * 1024.0),
-                          host_alloc_cap / (1024.0 * 1024.0 * 1024.0));
-        }
-    }
-    if (!ptr) {
-        ptr = ggml_sycl_host_malloc(size);
-    }
+    // With correct get_max_size (capped at iGPU's max_mem_alloc_size), ggml
+    // automatically chunks buffers to fit within the limit. All allocations
+    // here should be <= host_max_alloc_size, so sycl::malloc_host works directly.
+    void * ptr = ggml_sycl_host_malloc(size);
     if (ptr == nullptr) {
         // fallback to CPU memory when pinned allocation fails
         // Keep host buffer type in evictable-weight mode so unified cache can stage weights.
