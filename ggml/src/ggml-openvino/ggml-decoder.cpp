@@ -235,6 +235,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 throw std::runtime_error("Unsupported VIEW case");
             }
             op_case = 2;
+            if (m_model_is_splitted && m_model_inputs.find(std::string(src->name)) != m_model_inputs.end()) {
+                op_case = 0;
+            }
         }
         {
             auto * src = node->src[0];
