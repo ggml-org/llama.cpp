@@ -2,6 +2,7 @@
 fn update(src_offset: u32, dst_offset: u32, scale: f32) {
     src[dst_offset] = scale * src[src_offset];
 }
+
 @group(0) @binding(1)
 var<uniform> params: Params;
 #else

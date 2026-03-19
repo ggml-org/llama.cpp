@@ -508,50 +508,39 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
 static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
                                      std::vector<webgpu_submission> & subs,
                                      bool                             block = true) {
-    // If we have too many in-flight submissions, wait on the oldest one first.
     if (subs.empty()) {
         return;
     }
-    while (subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, UINT64_MAX);
-        if (ggml_backend_webgpu_handle_wait_status(waitStatus)) {
+
+    bool blocking_wait = block || subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD;
+    while (blocking_wait) {
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, 0);
+        if (ggml_backend_webgpu_handle_wait_status(waitStatus, true)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
 #endif
             subs.erase(subs.begin());
         }
+        blocking_wait = (block && !subs.empty()) || subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD;
     }
 
     if (subs.empty()) {
         return;
     }
 
-    if (block) {
-        for (auto & sub : subs) {
-            while (!sub.submit_done.completed) {
-                auto waitStatus = ctx->instance.WaitAny(1, &sub.submit_done, UINT64_MAX);
-                ggml_backend_webgpu_handle_wait_status(waitStatus);
-            }
+    // Poll each submit future once and remove completed submissions.
+    for (auto sub = subs.begin(); sub != subs.end();) {
+        auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
+        bool success    = ggml_backend_webgpu_handle_wait_status(waitStatus, true);
 #ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub.profile_futures, true);
-#endif
-        }
-        subs.clear();
-    } else {
-        // Poll each submit future once and remove completed submissions.
-        for (auto sub = subs.begin(); sub != subs.end();) {
-            auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
-            ggml_backend_webgpu_handle_wait_status(waitStatus, true);
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
-            if (sub->submit_done.completed && sub->profile_futures.empty()) {
+        ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
+        if (success && sub->profile_futures.empty()) {
 #else
-            if (sub->submit_done.completed) {
+        if (success) {
 #endif
-                sub = subs.erase(sub);
-            } else {
-                ++sub;
-            }
+            sub = subs.erase(sub);
+        } else {
+            ++sub;
         }
     }
 }
@@ -932,7 +921,7 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
-    uint32_t                              binding_index = 0;
+    uint32_t                          binding_index = 0;
     if (!inplace) {
         entries.push_back({ .binding = 0,
                             .buffer  = ggml_webgpu_tensor_buf(src0),
@@ -991,46 +980,6 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
         (uint32_t) ggml_get_op_params_i32(dst, 5),
         (uint32_t) ggml_get_op_params_i32(dst, 6),
         (uint32_t) ggml_get_op_params_i32(dst, 7),
-    };
-
-    std::vector<wgpu::BindGroupEntry> entries = {
-        { .binding = 0,
-         .buffer  = ggml_webgpu_tensor_buf(src),
-         .offset  = ggml_webgpu_tensor_align_offset(ctx, src),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, src) },
-        { .binding = 1,
-         .buffer  = ggml_webgpu_tensor_buf(dst),
-         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
-    };
-
-    uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
-}
-
-static webgpu_command ggml_webgpu_diag(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    ggml_webgpu_shader_lib_context shader_lib_ctx = {
-        .src0        = src,
-        .dst         = dst,
-        .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
-    };
-
-    webgpu_pipeline pipeline = ctx->shader_lib->get_diag_pipeline(shader_lib_ctx);
-
-    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
-
-    const uint32_t ne = (uint32_t) ggml_nelements(dst);
-
-    std::vector<uint32_t> params = {
-        ne,
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
-        (uint32_t) (src->nb[0] / ggml_type_size(src->type)),
-        (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
-        (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
-        (uint32_t) src->ne[0],
-        (uint32_t) src->ne[2],
-        (uint32_t) src->ne[3],
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -1920,7 +1869,7 @@ static webgpu_command ggml_webgpu_repeat(webgpu_context & ctx, ggml_tensor * src
 }
 
 static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    int inplace = ggml_webgpu_tensor_equal(src, dst);
+    bool inplace = ggml_webgpu_tensor_equal(src, dst);
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
@@ -1938,15 +1887,6 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
         *(uint32_t *) dst->op_params  // epsilon, treated as f32 in the shader
     };
 
-    ggml_webgpu_shader_lib_context shader_lib_ctx = {
-        .src0        = src,
-        .dst         = dst,
-        .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
-        .inplace     = (bool) inplace,
-    };
-
-    webgpu_pipeline pipeline = ctx->shader_lib->get_row_norm_pipeline(shader_lib_ctx);
-
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0,
          .buffer  = ggml_webgpu_tensor_buf(src),
@@ -1960,6 +1900,14 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {
+        .src0        = src,
+        .dst         = dst,
+        .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
+        .inplace     = inplace,
+    };
+
+    webgpu_pipeline pipeline = ctx->shader_lib->get_row_norm_pipeline(shader_lib_ctx);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
 }
 
@@ -2541,10 +2489,9 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
+        case GGML_OP_DIAG:
         case GGML_OP_TRI:
             return ggml_webgpu_unary_op(ctx, src0, node);
-        case GGML_OP_DIAG:
-            return ggml_webgpu_diag(ctx, src0, node);
         case GGML_OP_SOLVE_TRI:
             return ggml_webgpu_solve_tri(ctx, src0, src1, node);
         case GGML_OP_SSM_CONV:
@@ -3281,17 +3228,16 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
 
     static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type = {
         /* .iface = */ {
-                        /* .get_name         = */ ggml_backend_webgpu_buffer_type_get_name,
-                        /* .alloc_buffer     = */
-            ggml_backend_webgpu_buffer_type_alloc_buffer,  /* .get_alignment    = */
-            ggml_backend_webgpu_buffer_type_get_alignment, /* .get_max_size     = */
-            ggml_backend_webgpu_buffer_type_get_max_size,  /* .get_alloc_size   = */
-            ggml_backend_webgpu_buffer_type_get_alloc_size, /* .is_host          = */ NULL,                // defaults to false
+                        /* .get_name       = */ ggml_backend_webgpu_buffer_type_get_name,
+                        /* .alloc_buffer   = */ ggml_backend_webgpu_buffer_type_alloc_buffer,
+                        /* .get_alignment  = */ ggml_backend_webgpu_buffer_type_get_alignment,
+                        /* .get_max_size   = */ ggml_backend_webgpu_buffer_type_get_max_size,
+                        /* .get_alloc_size = */ ggml_backend_webgpu_buffer_type_get_alloc_size,
+                        /* .is_host        = */ NULL,  // defaults to false
         },
         /* .device  = */
         dev,
-        /* .context = */
-        NULL
+        /* .context = */ NULL
     };
 
     return &ggml_backend_webgpu_buffer_type;
