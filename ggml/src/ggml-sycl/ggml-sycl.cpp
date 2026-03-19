@@ -45,6 +45,7 @@
 #include <typeinfo>
 #include <utility>
 #if !defined(_WIN32)
+#    include <dlfcn.h>
 #    include <sys/mman.h>
 #    include <unistd.h>
 #endif
@@ -5870,6 +5871,135 @@ static const ggml_backend_buffer_type_i ggml_backend_sycl_probe_buffer_type_inte
 
 };
 
+// Query the minimum max_mem_alloc_size across ALL Level Zero physical devices,
+// bypassing ONEAPI_DEVICE_SELECTOR filtering.  sycl::malloc_host creates GGTT
+// mappings for every L0 device — if any device's limit is exceeded, the
+// allocation hangs.  Uses dlopen to avoid compile-time L0 dependency.
+//
+// Returns 0 on failure (caller should use a conservative fallback).
+static size_t ggml_sycl_query_l0_min_max_alloc() {
+#ifdef __linux__
+    // Dynamically load Level Zero loader
+    void * l0_lib = dlopen("libze_loader.so.1", RTLD_LAZY | RTLD_LOCAL);
+    if (!l0_lib) {
+        l0_lib = dlopen("libze_loader.so", RTLD_LAZY | RTLD_LOCAL);
+    }
+    if (!l0_lib) {
+        GGML_LOG_DEBUG("[SYCL] dlopen(libze_loader) failed — L0 device enumeration unavailable\n");
+        return 0;
+    }
+
+    // L0 type definitions (avoid #include <level_zero/ze_api.h>)
+    using ze_result_t           = uint32_t;
+    using ze_driver_handle_t    = void *;
+    using ze_device_handle_t    = void *;
+    using ze_init_flags_t       = uint32_t;
+    // Full ze_device_properties_t layout (ze_api.h v1.x, ~408 bytes).
+    // Must define the complete struct because zeDeviceGetProperties writes all fields.
+    struct ze_device_uuid_t { uint8_t id[16]; };
+    struct ze_device_properties_t {
+        uint32_t          stype;                // ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES = 0x3
+        void *            pNext;
+        uint32_t          type;                 // ze_device_type_t
+        uint32_t          vendorId;
+        uint32_t          deviceId;
+        uint32_t          flags;                // ze_device_property_flags_t
+        uint32_t          subdeviceId;
+        uint32_t          coreClockRate;
+        uint64_t          maxMemAllocSize;      // <-- the field we need
+        uint32_t          maxHardwareContexts;
+        uint32_t          maxCommandQueuePriority;
+        uint32_t          numThreadsPerEU;
+        uint32_t          physicalEUSimdWidth;
+        uint32_t          numEUsPerSubslice;
+        uint32_t          numSubslicesPerSlice;
+        uint32_t          numSlices;
+        uint64_t          timerResolution;
+        uint32_t          timestampValidBits;
+        uint32_t          kernelTimestampValidBits;
+        ze_device_uuid_t  uuid;
+        char              name[256];            // ZE_MAX_DEVICE_NAME = 256
+    };
+
+    // Resolve L0 function pointers
+    auto pfn_zeInit = reinterpret_cast<ze_result_t (*)(ze_init_flags_t)>(
+        dlsym(l0_lib, "zeInit"));
+    auto pfn_zeDriverGet = reinterpret_cast<ze_result_t (*)(uint32_t *, ze_driver_handle_t *)>(
+        dlsym(l0_lib, "zeDriverGet"));
+    auto pfn_zeDeviceGet = reinterpret_cast<ze_result_t (*)(ze_driver_handle_t, uint32_t *, ze_device_handle_t *)>(
+        dlsym(l0_lib, "zeDeviceGet"));
+    auto pfn_zeDeviceGetProperties = reinterpret_cast<ze_result_t (*)(ze_device_handle_t, ze_device_properties_t *)>(
+        dlsym(l0_lib, "zeDeviceGetProperties"));
+
+    if (!pfn_zeInit || !pfn_zeDriverGet || !pfn_zeDeviceGet || !pfn_zeDeviceGetProperties) {
+        GGML_LOG_DEBUG("[SYCL] L0 function resolution failed — skipping L0 enumeration\n");
+        dlclose(l0_lib);
+        return 0;
+    }
+
+    // zeInit is idempotent — safe to call even if SYCL already initialized L0.
+    ze_result_t rc = pfn_zeInit(0);  // 0 = ZE_INIT_FLAG_GPU_ONLY
+    if (rc != 0) {
+        GGML_LOG_DEBUG("[SYCL] zeInit failed (rc=%u) — skipping L0 enumeration\n", rc);
+        dlclose(l0_lib);
+        return 0;
+    }
+
+    // Enumerate drivers
+    uint32_t driver_count = 0;
+    rc = pfn_zeDriverGet(&driver_count, nullptr);
+    if (rc != 0 || driver_count == 0) {
+        dlclose(l0_lib);
+        return 0;
+    }
+
+    std::vector<ze_driver_handle_t> drivers(driver_count);
+    rc = pfn_zeDriverGet(&driver_count, drivers.data());
+    if (rc != 0) {
+        dlclose(l0_lib);
+        return 0;
+    }
+
+    size_t min_max_alloc = SIZE_MAX;
+
+    for (uint32_t d = 0; d < driver_count; d++) {
+        uint32_t device_count = 0;
+        rc = pfn_zeDeviceGet(drivers[d], &device_count, nullptr);
+        if (rc != 0 || device_count == 0) {
+            continue;
+        }
+
+        std::vector<ze_device_handle_t> devices(device_count);
+        rc = pfn_zeDeviceGet(drivers[d], &device_count, devices.data());
+        if (rc != 0) {
+            continue;
+        }
+
+        for (uint32_t i = 0; i < device_count; i++) {
+            ze_device_properties_t props = {};
+            props.stype = 3;  // ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES = 0x3
+            props.pNext = nullptr;
+            rc = pfn_zeDeviceGetProperties(devices[i], &props);
+            if (rc != 0) {
+                continue;
+            }
+            const uint64_t max_alloc = props.maxMemAllocSize;
+            if (max_alloc > 0 && max_alloc < min_max_alloc) {
+                GGML_LOG_INFO("[SYCL] L0 device %u/%u: maxMemAllocSize=%.1f GB (type=%u)\n",
+                              d, i, max_alloc / (1024.0 * 1024.0 * 1024.0), props.type);
+                min_max_alloc = max_alloc;
+            }
+        }
+    }
+
+    dlclose(l0_lib);
+    return (min_max_alloc != SIZE_MAX) ? static_cast<size_t>(min_max_alloc) : 0;
+#else
+    // Windows: L0 dlopen not implemented, fall back to SYCL enumeration
+    return 0;
+#endif
+}
+
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info             = {};
     const int             raw_device_count = dpct::dev_mgr::instance().device_count();
@@ -6045,30 +6175,55 @@ static ggml_sycl_device_info ggml_sycl_init() {
                            (post_total - post_free) / (1024.0 * 1024.0));
         }
     }
-    // Compute per-allocation host malloc limit from device VRAM sizes.
-    // Intel Level Zero limits sycl::malloc_host to roughly the smallest device's
-    // total VRAM (empirically verified: 11605 MB = B580's VRAM on this platform).
-    // The pinned_chunk_pool works around this by using multiple smaller chunks,
-    // so total host memory can exceed the per-allocation ceiling.  This value
-    // is used as a per-allocation guard in ggml_sycl_host_malloc() and, critically,
-    // to cap get_max_size() so the tensor allocator never creates a chunk that
-    // would exceed the host-pinned fallback limit.
+    // Compute per-allocation host malloc limit from max_mem_alloc_size.
+    // sycl::malloc_host creates GGTT (Global Graphics Translation Table) mappings
+    // for ALL Level Zero devices.  If any device has a max_mem_alloc_size smaller
+    // than the allocation, the GGTT mapping hangs.
+    //
+    // Critical case: Arrow Lake iGPU has max_mem_alloc_size = 4 GB while discrete
+    // GPUs have 11+ GB.  The iGPU reports 231 GB "global mem" (shared system RAM)
+    // so min-VRAM heuristics miss it.  We must query ALL Level Zero devices,
+    // including those filtered out by ONEAPI_DEVICE_SELECTOR.
+    //
+    // Buffers larger than this cap use aligned_alloc + pre-fault instead of
+    // sycl::malloc_host.  The unified cache handles GPU access through its
+    // staging/DMA path for non-USM model weight buffers.
     {
-        size_t min_vram = SIZE_MAX;
-        for (int i = 0; i < info.device_count; i++) {
-            if (info.devices[i].total_vram > 0 && info.devices[i].total_vram < min_vram) {
-                min_vram = info.devices[i].total_vram;
+        // Primary: query L0 directly (bypasses ONEAPI_DEVICE_SELECTOR filtering)
+        size_t min_max_alloc = ggml_sycl_query_l0_min_max_alloc();
+
+        // Fallback: SYCL platform enumeration (only sees filtered devices)
+        if (min_max_alloc == 0) {
+            size_t sycl_min = SIZE_MAX;
+            try {
+                for (const auto & platform : sycl::platform::get_platforms()) {
+                    const std::string pname = platform.get_info<sycl::info::platform::name>();
+                    if (pname.find("Level-Zero") == std::string::npos &&
+                        pname.find("Level Zero") == std::string::npos) {
+                        continue;
+                    }
+                    for (const auto & dev : platform.get_devices()) {
+                        size_t dev_max = dev.get_info<sycl::info::device::max_mem_alloc_size>();
+                        if (dev_max > 0 && dev_max < sycl_min) {
+                            sycl_min = dev_max;
+                        }
+                    }
+                }
+            } catch (...) {}
+            if (sycl_min != SIZE_MAX) {
+                min_max_alloc = sycl_min;
             }
         }
-        if (min_vram == SIZE_MAX || min_vram == 0) {
-            info.host_max_alloc_size = 8ULL * 1024 * 1024 * 1024;  // conservative 8 GB fallback
+
+        if (min_max_alloc > 0) {
+            // 90% safety margin — stay well under the driver limit
+            info.host_max_alloc_size = static_cast<size_t>(min_max_alloc * 0.9);
         } else {
-            // Apply 95% safety margin to avoid edge-case failures
-            info.host_max_alloc_size = static_cast<size_t>(min_vram * 0.95);
+            info.host_max_alloc_size = 4ULL * 1024 * 1024 * 1024;  // 4 GB safe default
         }
     }
 
-    GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (smallest-device VRAM based)\n",
+    GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (min max_mem_alloc_size across L0 devices)\n",
                   info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
 
     // Create CPU SYCL device for data-local compute.
@@ -13095,15 +13250,15 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     GGML_LOG_INFO("[SYCL] Host buffer alloc request: %.1f MB (evictable=%d, in_model_load=%d)\n",
                   size / (1024.0 * 1024.0), weights_evictable ? 1 : 0, in_model_load ? 1 : 0);
 
-    // For large allocations during model load, sycl::malloc_host can hang in
-    // the full application context (despite working in standalone tests).
-    // Use aligned_alloc + pre-fault for buffers > 1 GB during model load.
-    // The unified cache handles GPU access through its staging/DMA path.
-    // For small allocations, use sycl::malloc_host (fast, GPU DMA-accessible).
-    static constexpr size_t LARGE_ALLOC_THRESHOLD = 1ULL * 1024 * 1024 * 1024;  // 1 GB
+    // Use aligned_alloc for buffers that exceed the host malloc limit.
+    // sycl::malloc_host creates GGTT mappings for ALL Level Zero devices;
+    // allocations exceeding any device's max_mem_alloc_size will hang.
+    // The unified cache handles GPU access for non-USM model weight buffers
+    // through its staging/DMA path.
+    const size_t host_alloc_cap = ggml_sycl_get_host_max_alloc_size();
     void * ptr = nullptr;
     bool   used_aligned_alloc = false;
-    if (in_model_load && size >= LARGE_ALLOC_THRESHOLD) {
+    if (in_model_load && host_alloc_cap > 0 && size >= host_alloc_cap) {
         ptr = aligned_alloc(4096, size);
         if (ptr) {
 #ifdef __linux__
@@ -13112,8 +13267,13 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
             memset(ptr, 0, size);
 #endif
             used_aligned_alloc = true;
-            GGML_LOG_INFO("[SYCL] Host buffer: %.1f GB via aligned_alloc + pre-fault (model load)\n",
-                          size / (1024.0 * 1024.0 * 1024.0));
+            // Register as MMAP so ggml_sycl_host_free uses std::free (not sycl::free)
+            ggml_sycl::alloc_registry::instance().register_alloc(
+                ptr, size, -1, ggml_sycl::alloc_type::MMAP);
+            GGML_LOG_INFO("[SYCL] Host buffer: %.1f GB via aligned_alloc + pre-fault "
+                          "(exceeds %.1f GB host alloc cap)\n",
+                          size / (1024.0 * 1024.0 * 1024.0),
+                          host_alloc_cap / (1024.0 * 1024.0 * 1024.0));
         }
     }
     if (!ptr) {

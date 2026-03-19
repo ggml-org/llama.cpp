@@ -1269,8 +1269,9 @@ namespace dpct
                     return pointer_access_attribute::device_only;
                 case ggml_sycl::alloc_type::HOST_PINNED:
                 case ggml_sycl::alloc_type::SHARED:
-                case ggml_sycl::alloc_type::MMAP:
                     return pointer_access_attribute::host_device;
+                case ggml_sycl::alloc_type::MMAP:
+                    return pointer_access_attribute::host_only;  // Not USM — CPU only
             }
             return pointer_access_attribute::host_only;
         }

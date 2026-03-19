@@ -518,6 +518,10 @@ void ggml_sycl_host_free(void * ptr) try {
     if (!ptr) {
         return;
     }
+    // Check allocation type BEFORE unregistering — MMAP (aligned_alloc) pointers
+    // must use std::free, not sycl::free (which would crash on non-USM memory).
+    const auto * reg_info = ggml_sycl::alloc_registry::instance().lookup(ptr);
+    const bool   is_mmap  = (reg_info != nullptr && reg_info->type == ggml_sycl::alloc_type::MMAP);
     ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
     // Prefer shared TP context if it exists (pinned host memory may be bound to it).
     size_t alloc_size = 0;
@@ -531,6 +535,12 @@ void ggml_sycl_host_free(void * ptr) try {
     }
     if (alloc_size > 0) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(alloc_size);
+    }
+    // Non-USM memory (aligned_alloc from host buffer alloc cap overflow):
+    // must use std::free, sycl::free would crash on non-USM pointers.
+    if (is_mmap) {
+        std::free(ptr);
+        return;
     }
     if (g_tp_shared_context != nullptr) {
         sycl::free(ptr, *g_tp_shared_context);
