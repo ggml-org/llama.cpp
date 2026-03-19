@@ -41,6 +41,9 @@ struct clip_graph {
     virtual ~clip_graph() = default;
     virtual ggml_cgraph * build() = 0;
 
+    // wrapper around ggml_mul_mat, allow hooking (e.g. LoRA, clamping) depending on the model
+    virtual ggml_tensor * build_mm(ggml_tensor * a, ggml_tensor * b) const;
+
     //
     // utility functions
     //
