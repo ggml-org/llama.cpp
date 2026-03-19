@@ -31,7 +31,7 @@ jobs:
               "webfetch": "deny"
             }
         run: |
-          opencode run -m llama.cpp-dgx/gpt-oss-120b-hf-low --thinking "A new issue has been created:
+          opencode run -m llama.cpp-dgx/gpt-oss-120b-hf-medium --thinking "A new issue has been created:
 
           Issue number: ${{ github.event.issue.number }}
 
