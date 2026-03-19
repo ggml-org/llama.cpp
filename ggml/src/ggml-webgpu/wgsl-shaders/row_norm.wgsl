@@ -1,21 +1,11 @@
-#define(VARIANTS)
+#ifdef INPLACE
+fn update(src_offset: u32, dst_offset: u32, scale: f32) {
+    src[dst_offset] = scale * src[src_offset];
+}
 
-[
-  {
-    "DECLS": ["NOT_INPLACE"]
-  },
-  {
-    "SHADER_SUFFIX": "inplace",
-    "DECLS": ["INPLACE"]
-  },
-]
-
-#end(VARIANTS)
-
-#define(DECLS)
-
-#decl(NOT_INPLACE)
-
+@group(0) @binding(1)
+var<uniform> params: Params;
+#else
 fn update(src_offset: u32, dst_offset: u32, scale: f32) {
     dst[dst_offset] = scale * src[src_offset];
 }
@@ -25,23 +15,7 @@ var<storage, read_write> dst: array<f32>;
 
 @group(0) @binding(2)
 var<uniform> params: Params;
-
-#enddecl(NOT_INPLACE)
-
-#decl(INPLACE)
-
-fn update(src_offset: u32, dst_offset: u32, scale: f32) {
-    src[dst_offset] = scale * src[src_offset];
-}
-
-@group(0) @binding(1)
-var<uniform> params: Params;
-
-#enddecl(INPLACE)
-
-#end(DECLS)
-
-#define(SHADER)
+#endif
 
 struct Params {
     offset_src: u32, // in elements
@@ -68,12 +42,9 @@ struct Params {
 @group(0) @binding(0)
 var<storage, read_write> src: array<f32>;
 
-DECLS
+var<workgroup> scratch: array<f32, WG_SIZE>;
 
-override wg_size: u32;
-var<workgroup> scratch: array<f32, wg_size>;
-
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
 
@@ -86,7 +57,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let i_src_row = params.offset_src + i3 * params.stride_src3 + i2 * params.stride_src2 + i1 * params.stride_src1;
     let i_dst_row = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
 
-    let elems = (params.ne0 + wg_size - 1) / wg_size;
+    let elems = (params.ne0 + WG_SIZE - 1) / WG_SIZE;
 
     var sum = 0.0f;
     var col = lid.x;
@@ -95,12 +66,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
             break;
         }
         sum += pow(src[i_src_row + col], 2.0);
-        col += wg_size;
+        col += WG_SIZE;
     }
 
     scratch[lid.x] = sum;
     workgroupBarrier();
-    var offset = wg_size / 2;
+    var offset: u32 = WG_SIZE / 2;
     while (offset > 0) {
         if (lid.x < offset) {
             scratch[lid.x] += scratch[lid.x + offset];
@@ -110,14 +81,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     }
     sum = scratch[0];
 
+#ifdef OP_RMS_NORM
     let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
+#elif OP_L2_NORM
+    let scale = 1.0/max(sqrt(sum), params.eps);
+#endif
     col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
             break;
         }
         update(i_src_row + col, i_dst_row + col, scale);
-        col += wg_size;
+        col += WG_SIZE;
     }
 }
-#end(SHADER)

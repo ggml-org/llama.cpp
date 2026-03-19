@@ -2503,10 +2503,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     // different head sizes of K and V are not supported yet
                     return false;
                 }
-                if (op->src[0]->ne[0] % 16 != 0) {
-                    // TODO: padding to support
-                    return false;
-                }
                 float logitSoftcap = 0.0f;
                 memcpy(&logitSoftcap, (const float *) (op->op_params) + 2, sizeof(float));
                 if (logitSoftcap != 0.0f) {
