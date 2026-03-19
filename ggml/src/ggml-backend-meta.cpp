@@ -542,7 +542,7 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
         } break;
         default: {
             GGML_ABORT("fatal error");
-        } break;
+        }
     }
 }
 
@@ -579,7 +579,7 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
         } break;
         default: {
             GGML_ABORT("fatal error");
-        } break;
+        }
     }
 }
 
@@ -799,7 +799,7 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
         } break;
         default: {
             GGML_ABORT("fatal error");
-        } break;
+        }
     }
 }
 
@@ -839,7 +839,7 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
         } break;
         default: {
             GGML_ABORT("fatal error");
-        } break;
+        }
     }
 }
 
@@ -1311,7 +1311,7 @@ struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const str
             return {assume_sync ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_PARTIAL, {0}};
         }
         GGML_ABORT("fatal error");
-        return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
+        //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
     };
 
     auto handle_reshape = [&](const std::vector<ggml_backend_meta_split_state> & src_split_states) -> ggml_backend_meta_split_state {
@@ -1345,7 +1345,7 @@ struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const str
             }
             default: {
                 GGML_ABORT("fatal error");
-                return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
+                //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
             }
         }
     };
@@ -1373,7 +1373,7 @@ struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const str
             return src_split_states[0];
         }
         GGML_ABORT("view of permuted tensor not implemented");
-        return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
+        //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
     };
 
     auto handle_permute = [&](const std::vector<ggml_backend_meta_split_state> & src_split_states) -> ggml_backend_meta_split_state {
@@ -1390,7 +1390,7 @@ struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const str
             }
             default: {
                 GGML_ABORT("fatal error");
-                return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
+                //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}};
             }
         }
     };
