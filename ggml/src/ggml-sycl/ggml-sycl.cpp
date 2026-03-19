@@ -8025,6 +8025,28 @@ static void ggml_sycl_preload_model_weights() {
     if (!ggml_backend_sycl_weights_evictable() || !ggml_sycl::unified_cache_enabled()) {
         return;
     }
+    // When model load used aligned_alloc (non-USM) for large buffers, weight data
+    // is NOT GPU-accessible via DMA. The unified cache's copy_to_device_async would
+    // need staging buffers for every tensor, which is slow and can hang.
+    // Skip preload — weights will be uploaded on-demand during first inference
+    // via ensure_cached_layout's staging path (which handles non-USM sources correctly
+    // because it uses smaller per-tensor staging buffers, not 10+ GB chunks).
+    if (g_all_weights_host.load(std::memory_order_acquire)) {
+        // Check if first weight is USM-accessible
+        std::lock_guard<std::mutex> lock(g_sycl_host_weight_extras_mutex);
+        if (!g_sycl_host_weight_extras.empty()) {
+            const void * first_data = g_sycl_host_weight_extras.begin()->first->data;
+            if (first_data) {
+                sycl::usm::alloc alloc_type = sycl::usm::alloc::unknown;
+                try { alloc_type = ggml_sycl_get_alloc_type(first_data); } catch (...) {}
+                if (alloc_type == sycl::usm::alloc::unknown) {
+                    GGML_LOG_INFO("[S1-PRELOAD] Weights in non-USM memory (aligned_alloc) — "
+                                  "skipping bulk preload, using on-demand upload\n");
+                    return;
+                }
+            }
+        }
+    }
     // S1: preload weights to device VRAM via unified cache.
     // Eviction strategy handles VRAM pressure if model doesn't fully fit.
 
@@ -13073,10 +13095,30 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     GGML_LOG_INFO("[SYCL] Host buffer alloc request: %.1f MB (evictable=%d, in_model_load=%d)\n",
                   size / (1024.0 * 1024.0), weights_evictable ? 1 : 0, in_model_load ? 1 : 0);
 
-    // Always use sycl::malloc_host — pinned host memory is the canonical store.
-    // Standalone tests confirm: 8 GB alloc = 670 ms, 10 GB via chunks = 900 ms.
-    // The old fallback to unpinned CPU memory was based on a false premise.
-    void * ptr = ggml_sycl_host_malloc(size);
+    // For large allocations during model load, sycl::malloc_host can hang in
+    // the full application context (despite working in standalone tests).
+    // Use aligned_alloc + pre-fault for buffers > 1 GB during model load.
+    // The unified cache handles GPU access through its staging/DMA path.
+    // For small allocations, use sycl::malloc_host (fast, GPU DMA-accessible).
+    static constexpr size_t LARGE_ALLOC_THRESHOLD = 1ULL * 1024 * 1024 * 1024;  // 1 GB
+    void * ptr = nullptr;
+    bool   used_aligned_alloc = false;
+    if (in_model_load && size >= LARGE_ALLOC_THRESHOLD) {
+        ptr = aligned_alloc(4096, size);
+        if (ptr) {
+#ifdef __linux__
+            madvise(ptr, size, MADV_POPULATE_WRITE);
+#else
+            memset(ptr, 0, size);
+#endif
+            used_aligned_alloc = true;
+            GGML_LOG_INFO("[SYCL] Host buffer: %.1f GB via aligned_alloc + pre-fault (model load)\n",
+                          size / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+    if (!ptr) {
+        ptr = ggml_sycl_host_malloc(size);
+    }
     if (ptr == nullptr) {
         // fallback to CPU memory when pinned allocation fails
         // Keep host buffer type in evictable-weight mode so unified cache can stage weights.
