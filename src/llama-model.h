@@ -483,6 +483,21 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
+    // qwen3 tts talker
+    struct ggml_tensor * tts_text_embd       = nullptr;
+    struct ggml_tensor * tts_text_proj_up    = nullptr;
+    struct ggml_tensor * tts_text_proj_up_b  = nullptr;
+    struct ggml_tensor * tts_text_proj_gate  = nullptr;
+    struct ggml_tensor * tts_text_proj_down  = nullptr;
+    struct ggml_tensor * tts_text_proj_down_b = nullptr;
+    struct ggml_tensor * tts_codec_embd     = nullptr;
+    struct ggml_tensor * tts_codec_head     = nullptr;
+
+    // qwen3 tts code predictor
+    struct ggml_tensor * tts_cp_small_to_mtp = nullptr;
+    std::vector<struct ggml_tensor *> tts_cp_codec_embd;
+    std::vector<struct ggml_tensor *> tts_cp_lm_head;
+
     // gemma3n altup
     struct ggml_tensor * tok_embd_per_layer   = nullptr;
     struct ggml_tensor * altup_proj           = nullptr;

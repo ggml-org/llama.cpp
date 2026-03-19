@@ -2664,6 +2664,25 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_QWEN3TTS:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
+                ml.get_key(LLM_KV_TTS_TEXT_VOCAB_SIZE,         hparams.tts_text_vocab_size);
+                ml.get_key(LLM_KV_TTS_TEXT_EMBEDDING_LENGTH,   hparams.tts_text_embd_size);
+                ml.get_key(LLM_KV_TTS_NUM_CODE_GROUPS,         hparams.tts_num_code_groups, false);
+                ml.get_key(LLM_KV_TTS_POSITION_ID_PER_SECONDS, hparams.tts_position_id_per_s, false);
+                switch (hparams.n_layer) {
+                    case 28: type = LLM_TYPE_0_6B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_QWEN3TTS_CP:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_TTS_NUM_CODE_GROUPS,         hparams.tts_num_code_groups, false);
+                type = LLM_TYPE_UNKNOWN;
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
@@ -7702,6 +7721,113 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
                 } break;
+            case LLM_ARCH_QWEN3TTS:
+                {
+                    const int64_t n_text_vocab  = hparams.tts_text_vocab_size;
+                    const int64_t n_text_embd   = hparams.tts_text_embd_size;
+
+                    // codec vocab size is stored in LLM_KV_VOCAB_SIZE (separate from text tokenizer)
+                    uint32_t n_codec_vocab_u32 = 0;
+                    ml.get_key(LLM_KV_VOCAB_SIZE, n_codec_vocab_u32, false);
+                    const int64_t n_codec_vocab = n_codec_vocab_u32 > 0 ? n_codec_vocab_u32 : 3072;
+
+                    // codec embedding used as tok_embd for the graph builder
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TTS_CODEC_EMBD, "weight"), {n_embd, n_codec_vocab}, 0);
+
+                    // text embedding + projection (fc2(silu(fc1(text_embd(id)))))
+                    tts_text_embd       = create_tensor(tn(LLM_TENSOR_TTS_TEXT_EMBD,      "weight"), {n_text_embd, n_text_vocab}, 0);
+                    tts_text_proj_up    = create_tensor(tn(LLM_TENSOR_TTS_TEXT_PROJ_UP,   "weight"), {n_text_embd, n_text_embd}, 0);
+                    tts_text_proj_up_b  = create_tensor(tn(LLM_TENSOR_TTS_TEXT_PROJ_UP,   "bias"),   {n_text_embd},              TENSOR_NOT_REQUIRED);
+                    tts_text_proj_gate  = create_tensor(tn(LLM_TENSOR_TTS_TEXT_PROJ_GATE, "weight"), {n_text_embd, n_text_embd}, TENSOR_NOT_REQUIRED);
+                    tts_text_proj_down  = create_tensor(tn(LLM_TENSOR_TTS_TEXT_PROJ_DOWN, "weight"), {n_text_embd, n_embd}, 0);
+                    tts_text_proj_down_b = create_tensor(tn(LLM_TENSOR_TTS_TEXT_PROJ_DOWN, "bias"),  {n_embd},                   TENSOR_NOT_REQUIRED);
+
+                    // codec embedding (same as tok_embd, alias)
+                    tts_codec_embd = tok_embd;
+
+                    // output
+                    output_norm    = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    tts_codec_head = create_tensor(tn(LLM_TENSOR_TTS_CODEC_HEAD, "weight"), {n_embd, n_codec_vocab}, 0);
+                    output = tts_codec_head;
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+
+                    // Speaker encoder tensors (spk_enc.*) are extra tensors
+                    // loaded separately by the CLI tool via gguf_init_from_file.
+                    // Count them so done_getting_tensors() passes.
+                    for (const auto & kv : ml.weights_map) {
+                        if (kv.first.rfind("spk_enc.", 0) == 0) {
+                            ml.n_created++;
+                        }
+                    }
+                } break;
+            case LLM_ARCH_QWEN3TTS_CP:
+                {
+                    const int n_code_groups = hparams.tts_num_code_groups > 0 ? hparams.tts_num_code_groups : 16;
+                    const int n_cp_codebooks = n_code_groups - 1; // 15
+
+                    uint32_t n_cp_vocab_u32 = 0;
+                    ml.get_key(LLM_KV_VOCAB_SIZE, n_cp_vocab_u32, false);
+                    const int64_t n_cp_vocab = n_cp_vocab_u32 > 0 ? n_cp_vocab_u32 : 2048;
+
+                    // projection from talker hidden to predictor hidden (optional)
+                    tts_cp_small_to_mtp = create_tensor(tn(LLM_TENSOR_TTS_CP_SMALL_TO_MTP, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+
+                    // output norm
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+
+                    // per-codebook embeddings and lm_heads
+                    // These are indexed by codebook (0..14), not by layer.
+                    // Account for them so done_getting_tensors() passes.
+                    tts_cp_codec_embd.resize(n_cp_codebooks);
+                    tts_cp_lm_head.resize(n_cp_codebooks);
+                    for (int cb = 0; cb < n_cp_codebooks; ++cb) {
+                        std::string embd_name = format("tts.cp.codec_embd.%d.weight", cb);
+                        std::string head_name = format("tts.cp.lm_head.%d.weight", cb);
+                        const auto * embd_w = ml.get_weight(embd_name.c_str());
+                        const auto * head_w = ml.get_weight(head_name.c_str());
+                        if (!embd_w || !head_w) {
+                            throw std::runtime_error(format("missing codebook tensor: %s or %s", embd_name.c_str(), head_name.c_str()));
+                        }
+                        ml.n_created += 2;
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -8852,6 +8978,14 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_step35_iswa>(*this, params);
             } break;
+        case LLM_ARCH_QWEN3TTS:
+            {
+                llm = std::make_unique<llm_build_qwen3tts>(*this, params);
+            } break;
+        case LLM_ARCH_QWEN3TTS_CP:
+            {
+                llm = std::make_unique<llm_build_qwen3tts_cp>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -9101,6 +9235,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_QWEN3TTS_CP:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -9110,6 +9245,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN3TTS:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         case LLM_ARCH_GLM4:

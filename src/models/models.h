@@ -682,3 +682,11 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
 struct llm_build_xverse : public llm_graph_context {
     llm_build_xverse(const llama_model & model, const llm_graph_params & params);
 };
+
+struct llm_build_qwen3tts : public llm_graph_context {
+    llm_build_qwen3tts(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_qwen3tts_cp : public llm_graph_context {
+    llm_build_qwen3tts_cp(const llama_model & model, const llm_graph_params & params);
+};
