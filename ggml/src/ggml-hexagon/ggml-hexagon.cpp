@@ -1846,16 +1846,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             if (ggml_nrows(src1) > 1024) {
                 return false;  // no huge batches (for now)
             }
-
-            // v73+ HMX tile-permuted format requires 32-alignment on both dims
-            if (opt_arch >= 73) {
-                if (src0->ne[0] % HMX_FP16_TILE_COLS || src0->ne[1] % HMX_FP16_TILE_ROWS) {
-                    return false;
-                }
-                if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
-                    return false;
-                }
-            }
             break;
 
         default:
