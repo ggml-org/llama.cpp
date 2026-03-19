@@ -2943,6 +2943,27 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         // Rotate full tensor (no tail), using trans tensors
         GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src_trans_tensor.get(), acl_cos_reshape_tensor.get(),
                                 acl_sin_reshape_tensor.get(), acl_mode, acl_dst_trans_tensor.get());
+    } else if (src0->data == dst->data && !ggml_is_contiguous(src0)) {
+        // In-place on non-contiguous tensor: RotaryPositionEmbedding cannot safely
+        // read and write the same non-contiguous buffer. Use contiguous temporaries.
+        size_t contiguous_nb[GGML_MAX_DIMS];
+        contiguous_nb[0] = sizeof(float);
+        for (int i = 1; i < GGML_MAX_DIMS; i++) {
+            contiguous_nb[i] = contiguous_nb[i - 1] * src0->ne[i - 1];
+        }
+        int64_t              total_elements = ggml_nelements(src0);
+        ggml_cann_pool_alloc inplace_src_alloc(ctx.pool(), total_elements * sizeof(float));
+        ggml_cann_pool_alloc inplace_dst_alloc(ctx.pool(), total_elements * sizeof(float));
+
+        acl_tensor_ptr acl_src_contig = ggml_cann_create_tensor(inplace_src_alloc.get(), ACL_FLOAT, sizeof(float),
+                                                                src0->ne, contiguous_nb, GGML_MAX_DIMS);
+        acl_tensor_ptr acl_dst_contig = ggml_cann_create_tensor(inplace_dst_alloc.get(), ACL_FLOAT, sizeof(float),
+                                                                dst->ne, contiguous_nb, GGML_MAX_DIMS);
+
+        cann_copy(ctx, acl_src.get(), acl_src_contig.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src_contig.get(), acl_cos_reshape_tensor.get(),
+                                acl_sin_reshape_tensor.get(), acl_mode, acl_dst_contig.get());
+        cann_copy(ctx, acl_dst_contig.get(), acl_dst.get());
     } else {
         // Rotate full tensor (no tail), using original tensors
         GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src.get(), acl_cos_reshape_tensor.get(),
