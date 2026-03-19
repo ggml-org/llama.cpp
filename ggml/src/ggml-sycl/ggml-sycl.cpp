@@ -1122,6 +1122,8 @@ static uint64_t ggml_sycl_assign_cache_uuid(ggml_tensor_extra_gpu * extra);
 static bool ggml_sycl_is_device_vram_buffer(const ggml_tensor * t);
 // Forward declaration: check if tensor's weights are host-resident (defined after buffer context struct).
 static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::queue * stream);
+// Forward declaration: check if blind preload should be skipped (defined in MoE preload section).
+bool ggml_sycl_should_skip_blind_preload(int64_t n_experts);
 
 // ---------------------------------------------------------------------------
 // Gate+Up tensor pairing for fused CPU expert dispatch
@@ -8102,6 +8104,15 @@ static void ggml_sycl_preload_model_weights() {
                         continue;
                     }
                     const int64_t n_experts   = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
+                    // Skip blind preload for large MoE models (>64 experts/layer).
+                    // Total expert data (e.g. 128 experts x 108 layers x 4.3MB = 57GB)
+                    // far exceeds VRAM — preloading all experts causes cache thrash.
+                    // On-demand caching in ggml_sycl_mul_mat_id handles routing-aware
+                    // staging of only the needed experts during inference.
+                    if (ggml_sycl_should_skip_blind_preload(n_experts)) {
+                        moe_failed++;  // Not a real failure — just skipped
+                        continue;
+                    }
                     const size_t  expert_size = tensor->nb[2];
                     const int64_t ncols       = tensor->ne[0];
                     const size_t  expert_layout_bytes =
@@ -22503,6 +22514,15 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Unified cache disabled, skipping MoE prep\n");
         return true;
     }
+
+    // In S1 mode, ALL weights including experts are in host-pinned memory.
+    // Expert preloading is unnecessary -- host-pinned pointers are GPU-accessible
+    // via PCIe zero-copy.  On-demand SOA caching happens during actual inference
+    // via ggml_sycl_mul_mat_id -> ensure_cached_layout.
+    if (ggml_backend_sycl_all_weights_host()) {
+        GGML_SYCL_DEBUG("[GRAPH-PRELOAD] S1 mode: skipping MoE expert preload (host-pinned zero-copy)\n");
+        return true;
+    }
     static std::atomic<int> routing_prestage_enabled{ -1 };
     int                     routing_prestage_val = routing_prestage_enabled.load(std::memory_order_acquire);
     if (routing_prestage_val < 0) {
@@ -26616,6 +26636,13 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
 
     if (fused_moe_disabled) {
         return false;  // Disabled by environment variable
+    }
+    // In S1 mode, expert weights live in host-pinned memory.  The fused ESIMD
+    // kernel requires the entire MoE tensor contiguously in device VRAM.
+    // Attempting to cache a 500+ MB tensor on-demand here triggers eviction
+    // loops that hang graph_compute.  Bail out -- per-expert MMVQ handles S1.
+    if (ggml_backend_sycl_all_weights_host()) {
+        return false;
     }
     // Early batch size checks - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for common cases
     const int64_t batch_size = src1->ne[2];  // ne12 - number of tokens
