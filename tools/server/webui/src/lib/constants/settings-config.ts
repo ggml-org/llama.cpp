@@ -1,8 +1,8 @@
 import { ColorMode } from '$lib/enums/ui';
 import { Monitor, Moon, Sun } from '@lucide/svelte';
 
-export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
-	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
+export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | undefined> = {
+	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
@@ -36,24 +36,24 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// and are NOT sent in API requests, letting the server decide
 	samplers: '',
 	backend_sampling: false,
-	temperature: '',
-	dynatemp_range: '',
-	dynatemp_exponent: '',
-	top_k: '',
-	top_p: '',
-	min_p: '',
-	xtc_probability: '',
-	xtc_threshold: '',
-	typ_p: '',
-	repeat_last_n: '',
-	repeat_penalty: '',
-	presence_penalty: '',
-	frequency_penalty: '',
-	dry_multiplier: '',
-	dry_base: '',
-	dry_allowed_length: '',
-	dry_penalty_last_n: '',
-	max_tokens: '',
+	temperature: undefined,
+	dynatemp_range: undefined,
+	dynatemp_exponent: undefined,
+	top_k: undefined,
+	top_p: undefined,
+	min_p: undefined,
+	xtc_probability: undefined,
+	xtc_threshold: undefined,
+	typ_p: undefined,
+	repeat_last_n: undefined,
+	repeat_penalty: undefined,
+	presence_penalty: undefined,
+	frequency_penalty: undefined,
+	dry_multiplier: undefined,
+	dry_base: undefined,
+	dry_allowed_length: undefined,
+	dry_penalty_last_n: undefined,
+	max_tokens: undefined,
 	custom: '', // custom json-stringified object
 	// experimental features
 	pyInterpreterEnabled: false,
