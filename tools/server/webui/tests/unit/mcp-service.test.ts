@@ -18,14 +18,9 @@ const createDiagnosticFetch = (
 	onLog?: (log: MCPConnectionLog) => void,
 	baseInit: RequestInit = {}
 ) =>
-	(MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }).createDiagnosticFetch(
-		'test-server',
-		config,
-		baseInit,
-		new URL(config.url),
-		false,
-		onLog
-	);
+	(
+		MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }
+	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url), false, onLog);
 
 describe('MCPService', () => {
 	afterEach(() => {
