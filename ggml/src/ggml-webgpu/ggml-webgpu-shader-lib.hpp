@@ -687,6 +687,14 @@ class ggml_webgpu_shader_lib {
         repeat_pipelines;                                              // type
     std::unordered_map<ggml_webgpu_flash_attn_pipeline_key, webgpu_pipeline, ggml_webgpu_flash_attn_pipeline_key_hash>
         flash_attn_pipelines;
+    std::unordered_map<ggml_webgpu_flash_attn_vec_reduce_pipeline_key,
+                       webgpu_pipeline,
+                       ggml_webgpu_flash_attn_vec_reduce_pipeline_key_hash>
+        flash_attn_vec_reduce_pipelines;
+    std::unordered_map<ggml_webgpu_flash_attn_blk_pipeline_key,
+                       webgpu_pipeline,
+                       ggml_webgpu_flash_attn_blk_pipeline_key_hash>
+        flash_attn_blk_pipelines;
     std::unordered_map<ggml_webgpu_legacy_mul_mat_pipeline_key,
                        webgpu_pipeline,
                        ggml_webgpu_legacy_mul_mat_pipeline_key_hash>
@@ -1468,103 +1476,47 @@ class ggml_webgpu_shader_lib {
         return repeat_pipelines[key];
     }
 
-    webgpu_pipeline get_flash_attn_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool has_mask  = context.src3 != nullptr;
-        const bool has_sinks = context.src4 != nullptr;
-
-        bool kv_direct = (context.src1->type == GGML_TYPE_F16) && (context.src0->ne[0] % context.sg_mat_k == 0) &&
-                         (context.src1->ne[1] % context.sg_mat_n == 0);
-
-        ggml_webgpu_flash_attn_pipeline_key key = {
-            .kv_type            = context.src1->type,
-            .head_dim_qk        = (uint32_t) context.src0->ne[0],
-            .head_dim_v         = (uint32_t) context.src2->ne[0],
-            .kv_direct          = kv_direct,
-            .has_mask           = has_mask,
-            .has_sinks          = has_sinks,
-            .uses_logit_softcap = (*(float *) &context.dst->op_params[2]) != 0.0f,
-        };
-
-        auto it = flash_attn_pipelines.find(key);
+    webgpu_pipeline get_flash_attn_pipeline(const ggml_webgpu_flash_attn_shader_lib_context & context) {
+        auto it = flash_attn_pipelines.find(context.key);
         if (it != flash_attn_pipelines.end()) {
             return it->second;
         }
 
-        std::vector<std::string> defines;
-        std::string              variant = "flash_attn";
+        ggml_webgpu_processed_shader processed = ggml_webgpu_preprocess_flash_attn_shader(
+            preprocessor, context.key.use_vec ? wgsl_flash_attn_vec_split : wgsl_flash_attn, context);
 
-        switch (key.kv_type) {
-            case GGML_TYPE_F32:
-                defines.push_back("KV_F32");
-                break;
-            case GGML_TYPE_F16:
-                defines.push_back("KV_F16");
-                break;
-            case GGML_TYPE_Q4_0:
-                defines.push_back("KV_Q4_0");
-                break;
-            case GGML_TYPE_Q8_0:
-                defines.push_back("KV_Q8_0");
-                break;
-            default:
-                GGML_ABORT("Unsupported KV type for flash attention shader");
-        }
-        variant += std::string("_") + ggml_type_name(key.kv_type);
+        webgpu_pipeline pipeline =
+            ggml_webgpu_create_pipeline(device, processed.wgsl, processed.variant);
+        pipeline.context                    = processed.decisions;
+        flash_attn_pipelines[context.key]   = pipeline;
+        return flash_attn_pipelines[context.key];
+    }
 
-        if (key.has_mask) {
-            defines.push_back("MASK");
-            variant += "_mask";
-        }
-        if (key.has_sinks) {
-            defines.push_back("SINKS");
-            variant += "_sinks";
-        }
-        if (key.uses_logit_softcap) {
-            defines.push_back("LOGIT_SOFTCAP");
-            variant += "_lgsc";
-        }
-        if (key.kv_direct) {
-            defines.push_back("KV_DIRECT");
-            variant += "_kvdirect";
+    webgpu_pipeline get_flash_attn_blk_pipeline(const ggml_webgpu_flash_attn_blk_shader_lib_context & context) {
+        auto it = flash_attn_blk_pipelines.find(context.key);
+        if (it != flash_attn_blk_pipelines.end()) {
+            return it->second;
         }
 
-        defines.push_back(std::string("HEAD_DIM_QK=") + std::to_string(key.head_dim_qk));
-        variant += std::string("_hsqk") + std::to_string(key.head_dim_qk);
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_flash_attn_blk_shader(preprocessor, wgsl_flash_attn_vec_blk, context);
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed.wgsl, processed.variant);
+        flash_attn_blk_pipelines[context.key] = pipeline;
+        return flash_attn_blk_pipelines[context.key];
+    }
 
-        defines.push_back(std::string("HEAD_DIM_V=") + std::to_string(key.head_dim_v));
-        variant += std::string("_hsv") + std::to_string(key.head_dim_v);
-
-        defines.push_back(std::string("SG_MAT_M=") + std::to_string(context.sg_mat_m));
-        defines.push_back(std::string("SG_MAT_N=") + std::to_string(context.sg_mat_n));
-        defines.push_back(std::string("SG_MAT_K=") + std::to_string(context.sg_mat_k));
-
-        uint32_t q_tile = context.sg_mat_m;
-        uint32_t kv_tile =
-            std::min(ggml_webgpu_flash_attn_max_kv_tile({ key, context.sg_mat_m, context.sg_mat_n, context.sg_mat_k,
-                                                          context.wg_mem_limit_bytes, context.max_subgroup_size }),
-                     context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
-        if (key.kv_direct) {
-            while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
-                kv_tile -= context.sg_mat_n;
-            }
+    webgpu_pipeline get_flash_attn_vec_reduce_pipeline(
+        const ggml_webgpu_flash_attn_vec_reduce_shader_lib_context & context) {
+        auto it = flash_attn_vec_reduce_pipelines.find(context.key);
+        if (it != flash_attn_vec_reduce_pipelines.end()) {
+            return it->second;
         }
 
-        defines.push_back(std::string("Q_TILE=") + std::to_string(q_tile));
-        defines.push_back(std::string("KV_TILE=") + std::to_string(kv_tile));
-
-        uint32_t wg_size = std::max(context.max_subgroup_size, GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE);
-        defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
-
-        auto processed     = preprocessor.preprocess(wgsl_flash_attn, defines);
-        auto decisions     = std::make_shared<ggml_webgpu_flash_attn_shader_decisions>();
-        decisions->q_tile  = q_tile;
-        decisions->kv_tile = kv_tile;
-        decisions->wg_size = wg_size;
-
-        webgpu_pipeline pipeline  = ggml_webgpu_create_pipeline(device, processed, variant);
-        pipeline.context          = decisions;
-        flash_attn_pipelines[key] = pipeline;
-        return flash_attn_pipelines[key];
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_flash_attn_vec_reduce_shader(preprocessor, wgsl_flash_attn_vec_reduce, context);
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed.wgsl, processed.variant);
+        flash_attn_vec_reduce_pipelines[context.key] = pipeline;
+        return flash_attn_vec_reduce_pipelines[context.key];
     }
 
   private:

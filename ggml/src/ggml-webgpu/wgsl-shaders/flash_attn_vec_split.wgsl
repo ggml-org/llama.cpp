@@ -356,8 +356,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       workgroupBarrier();
 
       // accumulate q block * k block into registers across the entire KV tile
-      // TODO: this loop seems to be the current largest bottleneck
-      // this bracket exists to scope the lifetime of variables, reducing register pressure
       if (!skip_tile) {
         let num_of_threads = subgroup_size / VEC_NE;
         let tx = sg_inv_id % num_of_threads;
