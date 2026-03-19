@@ -151,6 +151,26 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
     }
 };
 
+/** Row Norm **/
+
+struct ggml_webgpu_row_norm_pipeline_key {
+    ggml_op op;
+    bool    inplace;
+
+    bool operator==(const ggml_webgpu_row_norm_pipeline_key & other) const {
+        return op == other.op && inplace == other.inplace;
+    }
+};
+
+struct ggml_webgpu_row_norm_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_row_norm_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
 /** Pad **/
 struct ggml_webgpu_pad_pipeline_key {
     bool circular;
@@ -438,6 +458,8 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
+        row_norm_pipelines;                                            // op/inplace
     std::unordered_map<ggml_webgpu_get_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_get_rows_pipeline_key_hash>
         get_rows_pipelines;                                            // src_type, vectorized
     std::unordered_map<ggml_webgpu_unary_pipeline_key, webgpu_pipeline, ggml_webgpu_unary_pipeline_key_hash>
@@ -480,6 +502,44 @@ class ggml_webgpu_shader_lib {
         auto processed        = preprocessor.preprocess(wgsl_sum_rows, defines);
         sum_rows_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "sum_rows");
         return sum_rows_pipelines[1];
+    }
+
+    webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_row_norm_pipeline_key key = {
+            .op      = context.dst->op,
+            .inplace = context.inplace,
+        };
+
+        auto it = row_norm_pipelines.find(key);
+        if (it != row_norm_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines;
+        std::string              variant;
+
+        switch (key.op) {
+            case GGML_OP_RMS_NORM:
+                defines.push_back("OP_RMS_NORM");
+                variant = "rms_norm";
+                break;
+            case GGML_OP_L2_NORM:
+                defines.push_back("OP_L2_NORM");
+                variant = "l2_norm";
+                break;
+            default:
+                GGML_ABORT("Unsupported op for row_norm shader");
+        }
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed          = preprocessor.preprocess(wgsl_row_norm, defines);
+        row_norm_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, variant);
+        return row_norm_pipelines[key];
     }
 
     webgpu_pipeline get_argmax_pipeline(const ggml_webgpu_shader_lib_context & context) {

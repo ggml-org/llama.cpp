@@ -366,7 +366,6 @@ struct webgpu_context_struct {
 
     std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;                      // src_type, dst_type
 
-    std::map<int, webgpu_pipeline>                               rms_norm_pipelines;  // inplace
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> rope_pipelines;      // type, ff, inplace
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> glu_pipelines;       // glu_op, type, split
 
@@ -1598,8 +1597,8 @@ static webgpu_command ggml_webgpu_repeat(webgpu_context & ctx, ggml_tensor * src
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
-static webgpu_command ggml_webgpu_rms_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    int inplace = ggml_webgpu_tensor_equal(src, dst);
+static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    bool inplace = ggml_webgpu_tensor_equal(src, dst);
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
@@ -1630,8 +1629,15 @@ static webgpu_command ggml_webgpu_rms_norm(webgpu_context & ctx, ggml_tensor * s
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, ctx->rms_norm_pipelines[inplace], params,
-                                     entries, ggml_nrows(src));
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {
+        .src0        = src,
+        .dst         = dst,
+        .max_wg_size = WEBGPU_ROW_SPLIT_WG_SIZE,
+        .inplace     = inplace,
+    };
+
+    webgpu_pipeline pipeline = ctx->shader_lib->get_row_norm_pipeline(shader_lib_ctx);
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
 }
 
 static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
@@ -2192,7 +2198,8 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_REPEAT:
             return ggml_webgpu_repeat(ctx, src0, node);
         case GGML_OP_RMS_NORM:
-            return ggml_webgpu_rms_norm(ctx, src0, node);
+        case GGML_OP_L2_NORM:
+            return ggml_webgpu_row_norm(ctx, src0, node);
         case GGML_OP_ROPE:
             return ggml_webgpu_rope(ctx, src0, src1, src2, node);
         case GGML_OP_GLU:
@@ -2616,15 +2623,6 @@ static void ggml_webgpu_init_cpy_pipeline(webgpu_context & webgpu_ctx) {
         ggml_webgpu_create_pipeline(webgpu_ctx->global_ctx->device, wgsl_cpy_f16_f16, "cpy_f16_f16", constants);
 }
 
-static void ggml_webgpu_init_rms_norm_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_ROW_SPLIT_WG_SIZE);
-
-    webgpu_ctx->rms_norm_pipelines[0] =
-        ggml_webgpu_create_pipeline(webgpu_ctx->global_ctx->device, wgsl_rms_norm, "rms_norm", constants);
-    webgpu_ctx->rms_norm_pipelines[1] = ggml_webgpu_create_pipeline(
-        webgpu_ctx->global_ctx->device, wgsl_rms_norm_inplace, "rms_norm_inplace", constants);
-}
-
 static void ggml_webgpu_init_rope_pipeline(webgpu_context & webgpu_ctx) {
     std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
 
@@ -2909,7 +2907,6 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
                               wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead, "set_rows_host_error_buf");
 
     ggml_webgpu_init_cpy_pipeline(webgpu_ctx);
-    ggml_webgpu_init_rms_norm_pipeline(webgpu_ctx);
     ggml_webgpu_init_rope_pipeline(webgpu_ctx);
     ggml_webgpu_init_glu_pipeline(webgpu_ctx);
     ggml_webgpu_init_soft_max_pipeline(webgpu_ctx);
@@ -3120,6 +3117,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 break;
             }
         case GGML_OP_RMS_NORM:
+        case GGML_OP_L2_NORM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
         case GGML_OP_ROPE:
