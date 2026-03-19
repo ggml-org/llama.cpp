@@ -218,13 +218,16 @@ class MCPStore {
 			return false;
 		}
 
-		if (perChatOverrides) {
+		// per-chat overrides take priority when they exist for this server
+		if (perChatOverrides?.length) {
 			const override = perChatOverrides.find((o) => o.serverId === server.id);
-
-			return override?.enabled ?? false;
+			if (override) {
+				return override.enabled;
+			}
 		}
 
-		return false;
+		// no override for this server: use global enabled state
+		return server.enabled;
 	}
 
 	/**
@@ -570,18 +573,8 @@ class MCPStore {
 	getEnabledServersForConversation(
 		perChatOverrides?: McpServerOverride[]
 	): MCPServerSettingsEntry[] {
-		if (!perChatOverrides?.length) {
-			return [];
-		}
-
 		return this.getServers().filter((server) => {
-			if (!server.enabled) {
-				return false;
-			}
-
-			const override = perChatOverrides.find((o) => o.serverId === server.id);
-
-			return override?.enabled ?? false;
+			return this.#checkServerEnabled(server, perChatOverrides);
 		});
 	}
 
