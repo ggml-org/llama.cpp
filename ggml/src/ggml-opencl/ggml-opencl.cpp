@@ -5386,9 +5386,16 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
 }
 
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // no memory to report
-    *free  = 0;
-    *total = 0;
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
+    cl_ulong mem_size = 0;
+    cl_int err = clGetDeviceInfo(dev_ctx->device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &mem_size, NULL);
+    if (err != CL_SUCCESS) {
+        *free  = 0;
+        *total = 0;
+    } else {
+        *total = (size_t)mem_size;
+        *free  = (size_t)mem_size; // OpenCL doesn't have a standard way to query free memory
+    }
 
     GGML_UNUSED(dev);
 }
