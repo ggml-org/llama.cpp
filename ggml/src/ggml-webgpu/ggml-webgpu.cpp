@@ -1638,8 +1638,6 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
             default:
                 break;
         }
-    } else if (dst->op == GGML_OP_TRI) {
-        params.push_back((uint32_t) ggml_get_op_params_i32(dst, 0));
     } else if (dst->op == GGML_OP_CLAMP) {
         float clamp_min = ggml_get_op_params_f32(dst, 0);
         float clamp_max = ggml_get_op_params_f32(dst, 1);
@@ -3320,8 +3318,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                           (op->type == GGML_TYPE_I32 && src0->type == GGML_TYPE_F32);
             break;
         case GGML_OP_SET:
-            supports_op = ggml_is_contiguous(src0) && ggml_is_contiguous(op) && src0->type == src1->type &&
-                          src0->type == op->type && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32);
+            supports_op = src0->type == src1->type && src0->type == op->type &&
+                          (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32);
             break;
         case GGML_OP_SET_ROWS:
             supports_op = ((op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32) && src0->type == GGML_TYPE_F32 &&

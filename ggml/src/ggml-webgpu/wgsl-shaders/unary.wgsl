@@ -44,9 +44,6 @@ struct Params {
     beta: f32,
     eps: f32,
 #endif
-#ifdef TRI
-    tri_type: u32,
-#endif
 
 };
 

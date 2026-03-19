@@ -211,21 +211,6 @@ struct ggml_webgpu_pad_pipeline_key_hash {
     }
 };
 
-/** Diag **/
-struct ggml_webgpu_diag_pipeline_key {
-    int type;
-
-    bool operator==(const ggml_webgpu_diag_pipeline_key & other) const { return type == other.type; }
-};
-
-struct ggml_webgpu_diag_pipeline_key_hash {
-    size_t operator()(const ggml_webgpu_diag_pipeline_key & key) const {
-        size_t seed = 0;
-        ggml_webgpu_hash_combine(seed, key.type);
-        return seed;
-    }
-};
-
 /** Solve Tri **/
 struct ggml_webgpu_solve_tri_pipeline_key {
     int type;
