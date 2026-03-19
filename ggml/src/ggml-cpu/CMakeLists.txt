@@ -572,9 +572,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         set(KLEIDIAI_FETCH_ARGS
             URL ${KLEIDIAI_DOWNLOAD_URL}
-            DOWNLOAD_EXTRACT_TIMESTAMP NEW
             URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5}
         )
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+            list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP NEW)
+        endif()
 
         if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
             FetchContent_Declare(KleidiAI_Download
