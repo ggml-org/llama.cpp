@@ -5,7 +5,8 @@ export const API_MODELS = {
 };
 
 export const API_TOOLS = {
-	LIST: '/tools'
+	LIST: '/tools',
+	EXECUTE: '/tools'
 };
 
 /** CORS proxy endpoint path */

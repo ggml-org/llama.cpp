@@ -21,6 +21,8 @@ import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
+import { toolsStore, ToolSource } from '$lib/stores/tools.svelte';
+import { ToolsService } from '$lib/services/tools.service';
 import { isAbortError } from '$lib/utils';
 import {
 	DEFAULT_AGENTIC_CONFIG,
@@ -184,11 +186,22 @@ class AgenticStore {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const maxToolPreviewLines =
 			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+		const hasTools =
+			mcpStore.hasEnabledServers(perChatOverrides) ||
+			toolsStore.builtinTools.length > 0 ||
+			toolsStore.customTools.length > 0;
 		return {
-			enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
+			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
 			maxTurns,
 			maxToolPreviewLines
 		};
+	}
+
+	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
+		if (typeof args === 'object') return args;
+		const trimmed = args.trim();
+		if (trimmed === '') return {};
+		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
@@ -208,15 +221,24 @@ class AgenticStore {
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
 
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-		if (!initialized) {
-			console.log('[AgenticStore] MCP not initialized, falling back to standard chat');
-			return { handled: false };
+		const hasMcpServers = mcpStore.hasEnabledServers(perChatOverrides);
+		if (hasMcpServers) {
+			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+
+			if (!initialized) {
+				console.log('[AgenticStore] MCP not initialized');
+			}
 		}
 
-		const tools = mcpStore.getToolDefinitionsForLLM();
+		// Ensure built-in tools are fetched
+		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
+			await toolsStore.fetchBuiltinTools();
+		}
+
+		const tools = toolsStore.getEnabledToolsForLLM();
 		if (tools.length === 0) {
 			console.log('[AgenticStore] No tools available, falling back to standard chat');
+
 			return { handled: false };
 		}
 
@@ -244,7 +266,8 @@ class AgenticStore {
 			totalToolCalls: 0,
 			lastError: null
 		});
-		mcpStore.acquireConnection();
+
+		if (hasMcpServers) mcpStore.acquireConnection();
 
 		try {
 			await this.executeAgenticLoop({
@@ -274,11 +297,14 @@ class AgenticStore {
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
-			await mcpStore
-				.releaseConnection()
-				.catch((err: unknown) =>
-					console.warn('[AgenticStore] Failed to release MCP connection:', err)
-				);
+
+			if (hasMcpServers) {
+				await mcpStore
+					.releaseConnection()
+					.catch((err: unknown) =>
+						console.warn('[AgenticStore] Failed to release MCP connection:', err)
+					);
+			}
 		}
 	}
 
@@ -517,17 +543,29 @@ class AgenticStore {
 				}
 
 				const toolStartTime = performance.now();
-				const mcpCall: MCPToolCall = {
-					id: toolCall.id,
-					function: { name: toolCall.function.name, arguments: toolCall.function.arguments }
-				};
+				const toolName = toolCall.function.name;
+				const toolSource = toolsStore.getToolSource(toolName);
 
 				let result: string;
 				let toolSuccess = true;
 
 				try {
-					const executionResult = await mcpStore.executeTool(mcpCall, signal);
-					result = executionResult.content;
+					if (toolSource === ToolSource.BUILTIN) {
+						const args = this.parseToolArguments(toolCall.function.arguments);
+						const executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+						result = executionResult.content;
+
+						if (executionResult.isError) toolSuccess = false;
+					} else {
+						const mcpCall: MCPToolCall = {
+							id: toolCall.id,
+							function: { name: toolName, arguments: toolCall.function.arguments }
+						};
+						const executionResult = await mcpStore.executeTool(mcpCall, signal);
+
+						result = executionResult.content;
+					}
 				} catch (error) {
 					if (isAbortError(error)) {
 						onComplete?.(

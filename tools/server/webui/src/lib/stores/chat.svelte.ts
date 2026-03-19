@@ -17,6 +17,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -731,10 +732,12 @@ class ChatStore {
 			if (agenticResult.handled) return;
 		}
 
+		const enabledTools = toolsStore.getEnabledToolsForLLM();
 		const completionOptions = {
 			...this.getApiOptions(),
 			...(effectiveModel ? { model: effectiveModel } : {}),
-			...streamCallbacks
+			...streamCallbacks,
+			...(enabledTools.length > 0 ? { tools: enabledTools } : {})
 		};
 
 		await ChatService.sendMessage(
