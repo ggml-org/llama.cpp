@@ -3263,9 +3263,38 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // S1: Route all weights to host-pinned memory so the unified cache is the
     // sole owner of VRAM placement.  This must be set BEFORE set_model_loading
     // so the depth counter in set_model_loading takes the S1 path.
-    // Check: skip if model will be entirely CPU (n_gpu_layers == 0).
+    //
+    // Only activate S1 when the model actually exceeds the VRAM budget.
+    // Models that fit (e.g., Mistral 7B at 3.9 GB on 11.6 GB B580) use the
+    // fast device buffer path directly — no host-pinned detour needed.
     if (params.n_gpu_layers > 0) {
-        ggml_backend_sycl_set_all_weights_host();
+        // Find first GPU device to query VRAM
+        size_t vram_total = 0;
+        for (auto * dev : devices) {
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                size_t free = 0, total = 0;
+                ggml_backend_dev_memory(dev, &free, &total);
+                vram_total = total;
+                break;
+            }
+        }
+        if (vram_total > 0) {
+            int          budget_pct     = 90;
+            const char * env_budget_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+            if (env_budget_pct) {
+                budget_pct = std::max(1, std::min(100, std::atoi(env_budget_pct)));
+            }
+            const size_t vram_budget = static_cast<size_t>(vram_total * (static_cast<double>(budget_pct) / 100.0));
+            if (ml.n_bytes > vram_budget) {
+                LLAMA_LOG_INFO(
+                    "%s: model size %.1f MB exceeds %d%% VRAM budget %.1f MB - activating S1 host-pinned path\n",
+                    __func__, ml.n_bytes / (1024.0 * 1024.0), budget_pct, vram_budget / (1024.0 * 1024.0));
+                ggml_backend_sycl_set_all_weights_host();
+            } else {
+                LLAMA_LOG_INFO("%s: model size %.1f MB fits in %d%% VRAM budget %.1f MB - using device buffer path\n",
+                               __func__, ml.n_bytes / (1024.0 * 1024.0), budget_pct, vram_budget / (1024.0 * 1024.0));
+            }
+        }
     }
 
     // Signal SYCL backend that we're in model load phase (buffer allocation)
