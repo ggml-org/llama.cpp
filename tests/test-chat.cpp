@@ -806,6 +806,7 @@ struct peg_test_case {
     std::string                  input;
     common_chat_msg              expect;
     bool                         is_partial = false;
+    bool                         expect_partial_rollback = false;
 };
 
 struct make_peg_parser {
@@ -889,39 +890,43 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         std::string     prefix      = tc.input.substr(0, safe_len);
         common_chat_msg msg_current = parser.parse(prefix, is_partial);
 
-        for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
-            if (!diff.reasoning_content_delta.empty()) {
-                msg_accum.reasoning_content += diff.reasoning_content_delta;
-            }
-            if (!diff.content_delta.empty()) {
-                msg_accum.content += diff.content_delta;
-            }
-            if (diff.tool_call_index != std::string::npos) {
-                // During partial parsing, a new tool call may appear with empty name initially
-                // The name gets filled in as more input is parsed
-                while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
-                    msg_accum.tool_calls.push_back({ "", "", "" });
-                }
-                // Always update name and id from diff (may change during incremental parsing), but only if the delta
-                // actually contains them
-                if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
-                }
-                if (!diff.tool_call_delta.id.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
-                }
-                if (!diff.tool_call_delta.arguments.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
-                }
-            }
-        }
         try {
+            for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
+                if (!diff.reasoning_content_delta.empty()) {
+                    msg_accum.reasoning_content += diff.reasoning_content_delta;
+                }
+                if (!diff.content_delta.empty()) {
+                    msg_accum.content += diff.content_delta;
+                }
+                if (diff.tool_call_index != std::string::npos) {
+                    while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
+                        msg_accum.tool_calls.push_back({ "", "", "" });
+                    }
+                    if (!diff.tool_call_delta.name.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
+                    }
+                    if (!diff.tool_call_delta.id.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
+                    }
+                    if (!diff.tool_call_delta.arguments.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
+                    }
+                }
+            }
             assert_msg_equals(msg_current, msg_accum, true);
         } catch (std::exception & e) {
-            throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
+            if (tc.expect_partial_rollback) {
+                return;
+            }
+            throw std::runtime_error((std::string("Error in incremental parse: ") + e.what()).c_str());
         }
 
         msg_prev = msg_current;
+    }
+
+    if (tc.expect_partial_rollback) {
+        throw std::runtime_error("Partial rollback was expected but did not occur. "
+                                 "If grammar coverage improved, update this test to expect the extracted content instead.");
     }
 
     if (!tc.is_partial) {
@@ -1096,6 +1101,10 @@ class peg_test_builder {
 
     peg_test_builder & is_partial(bool val) {
         tc_.is_partial = val;
+        return *this;
+    }
+    peg_test_builder & expect_partial_rollback(bool val = true) {
+        tc_.expect_partial_rollback = val;
         return *this;
     }
 
@@ -1807,6 +1816,78 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
     }
+
+    // Qwen3.5-0.8B: template + basic tool calling + malformed JSON regression
+    {
+        auto tst = peg_tester("models/templates/Qwen-Qwen3.5-0.8B.jinja", /*detailed_debug=*/false);
+
+        static common_chat_tool flashcards_tool{
+            "flashcards", "Flashcards for studying",
+            R"({"type":"object","properties":{"flashcards":{"type":"array","items":{"type":"object","properties":{"query":{"type":"string"},"recall":{"type":"string"}},"required":["recall","query"]}}},"required":["flashcards"]})",
+        };
+
+        tst.test("</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+               "</think>"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "The user wants flashcards about California.\n"
+               "</think>\n"
+               "\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("The user wants flashcards about California.\n")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Well-formed JSON: no regression
+        tst.test(
+               "Making cards.\n"
+               "</think>\n\n"
+               "<tool_call>\n"
+               "<function=flashcards>\n"
+               "<parameter=flashcards>\n"
+               "[{\"query\": \"CA\", \"recall\": \"LA\"}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ flashcards_tool })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("Making cards.\n")
+            .expect_tool_calls({
+                { "flashcards", R"({"flashcards": [{"query": "CA", "recall": "LA"}]})", {} },
+            })
+            .run();
+    }
+
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test(
@@ -1952,6 +2033,39 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .expect_tool_calls({{ "read_file_diff_md", "{}", {} }})
                 .run();
         }
+    }
+
+    // Qwen3.5 TAG_WITH_TAGGED: trailing newline after </tool_call>.
+    //
+    // This is not canonical inference output. It was observed during inference, but
+    // grammar constraints and/or parallel_tool_calls settings now prevent the model
+    // from generating this exact output at runtime. It exists solely as a regression
+    // test: the trailing \n causes result.fail() with result.end > 0 on the full
+    // parse. On unpatched code this throws std::runtime_error and discards all parsed
+    // content. With the fix, reasoning and tool calls are recovered.
+    {
+        auto tst = peg_tester("models/templates/Qwen-Qwen3.5-0.8B.jinja", /*detailed_debug=*/false);
+
+        static common_chat_tool flashcards_tool{
+            "flashcards", "Flashcards for studying",
+            R"({"type":"object","properties":{"flashcards":{"type":"array","items":{"type":"object","properties":{"query":{"type":"string"},"recall":{"type":"string"}},"required":["recall","query"]}}},"required":["flashcards"]})",
+        };
+
+        tst.test(
+               "Making cards.\n"
+               "</think>\n\n"
+               "<tool_call>\n"
+               "<function=flashcards>\n"
+               "<parameter=flashcards>\n"
+               "[{\"query\": \"CA\", \"recall\": \"LA\"}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n")
+            .tools({ flashcards_tool })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_partial_rollback()
+            .run();
     }
 
     // Kimi-K2-Thinking tests - custom parser
