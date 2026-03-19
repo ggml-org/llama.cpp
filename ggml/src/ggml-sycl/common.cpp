@@ -465,9 +465,15 @@ void * ggml_sycl_host_malloc(size_t size) try {
         ggml_sycl::unified_cache_add_runtime_host_bytes(size);
         dpct::err0 err = CHECK_TRY_ERROR(ptr = sycl::malloc_host(size, *g_tp_shared_context));
 
-        if (err != 0) {
+        if (err != 0 || !ptr) {
             ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-            GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of TP shared host memory\n", size / 1024.0 / 1024.0);
+            if (err != 0) {
+                GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of TP shared host memory\n",
+                               size / 1024.0 / 1024.0);
+            } else {
+                GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null (TP path)\n",
+                               size / (1024.0 * 1024.0 * 1024.0));
+            }
             return nullptr;
         }
         ggml_sycl::offload_stats_note_host_alloc("tp_shared_host", size);
@@ -484,11 +490,15 @@ void * ggml_sycl_host_malloc(size_t size) try {
     ggml_sycl::unified_cache_add_runtime_host_bytes(size);
     dpct::err0 err = CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, dpct::get_in_order_queue()));
 
-    if (err != 0) {
+    if (err != 0 || !ptr) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-        // clear the error
-        GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,
-                       "syclGetErrorString is not supported");
+        if (err != 0) {
+            GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,
+                           "syclGetErrorString is not supported");
+        } else {
+            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null\n",
+                           size / (1024.0 * 1024.0 * 1024.0));
+        }
         return nullptr;
     }
     ggml_sycl::offload_stats_note_host_alloc("host_malloc", size);

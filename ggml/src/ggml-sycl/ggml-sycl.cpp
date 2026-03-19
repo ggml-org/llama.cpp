@@ -8186,6 +8186,11 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     if (!tensor || !tensor->buffer) {
         return nullptr;
     }
+    if (!tensor->data) {
+        GGML_LOG_WARN("[S1-PRELOAD] Skipping tensor %s: null data pointer\n",
+                      tensor->name ? tensor->name : "(unnamed)");
+        return nullptr;
+    }
     const bool host_buffer = ggml_backend_buffer_is_host(tensor->buffer);
     const bool sycl_buffer = ggml_backend_buffer_is_sycl(tensor->buffer);
     if (!host_buffer && !sycl_buffer) {

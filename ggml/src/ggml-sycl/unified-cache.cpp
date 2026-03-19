@@ -3205,6 +3205,13 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             GGML_SYCL_DEBUG("[DEBUG-FILL] fill_fn returned\n");
         } else {
             GGML_SYCL_DEBUG("[DEBUG-FILL] Calling copy_to_device_async...\n");
+            if (!request.src_ptr || !device_ptr) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] ensure_cached_layout: null pointer in fill "
+                               "(src=%p dst=%p size=%zu)\n",
+                               request.src_ptr, device_ptr, request.src_size);
+                result.status = cache_layout_status::FAILED;
+                return result;
+            }
             if (override_queue) {
                 // Use caller's queue for the H2D transfer
                 fill_event = override_queue->memcpy(device_ptr, request.src_ptr, request.src_size);
@@ -4227,6 +4234,10 @@ sycl::event unified_cache::copy_to_device_async(void *                          
                                                 const void *                     src,
                                                 size_t                           size,
                                                 const std::vector<sycl::event> & deps) {
+    if (!src || !dst) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] copy_to_device_async: null pointer (src=%p dst=%p size=%zu)\n", src, dst, size);
+        return sycl::event{};
+    }
     const sycl::usm::alloc src_type = ggml_sycl_get_alloc_type(src);
     const sycl::usm::alloc dst_type = ggml_sycl_get_alloc_type(dst);
     if (g_ggml_sycl_debug >= 2 || copy_trace_enabled()) {
