@@ -59,14 +59,14 @@ static inline dma_ptr dma_make_ptr(void *dst, const void *src)
     return p;
 }
 
-static inline bool dma_queue_push(dma_queue * q,
+static inline bool dma_queue_push_single(dma_queue * q,
                                   dma_ptr     dptr,
                                   size_t      dst_row_size,
                                   size_t      src_row_size,
                                   size_t      width, // width in bytes. number of bytes to transfer per row
                                   size_t      nrows) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
-        FARF(ERROR, "dma-push: queue full\n");
+        FARF(HIGH, "dma-push: queue full\n");
         return false;
     }
 
@@ -105,23 +105,6 @@ static inline bool dma_queue_push(dma_queue * q,
     // FARF(ERROR, "dma-push: i %u width %u nrows %d dst %p src %p\n", q->push_idx, width, nrows, dptr.dst, dptr.src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
     return true;
-}
-
-static inline bool dma_queue_push_ddr_to_vtcm(dma_queue * q,
-                                              dma_ptr     dptr,
-                                              size_t      dst_row_size,
-                                              size_t      src_row_size,
-                                              size_t      nrows) {
-    return dma_queue_push(q, dptr, dst_row_size, src_row_size, src_row_size, nrows);
-}
-
-
-static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q,
-                                              dma_ptr     dptr,
-                                              size_t      dst_row_size,
-                                              size_t      src_row_size,
-                                              size_t      nrows) {
-    return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
 static inline dma_ptr dma_queue_pop(dma_queue * q) {
@@ -198,16 +181,23 @@ static inline bool dma_queue_push_chained(dma_queue *q, dma_ptr dptr, size_t dst
             nrows      <= UDMA_MAX_FIELD_VAL &&
             src_stride <= UDMA_MAX_FIELD_VAL &&
             dst_stride <= UDMA_MAX_FIELD_VAL, 1)) {
-        return dma_queue_push(q, dptr, dst_stride, src_stride, width, nrows);
+        return dma_queue_push_single(q, dptr, dst_stride, src_stride, width, nrows);
     }
 
-    // Case 2: contiguous block (width == src_stride == dst_stride).
+    // Always issue a single transaction for dummy requests (nrows == 0) 
+    if (!nrows) {
+        return dma_queue_push_single(q, dptr, dst_stride, src_stride, width, nrows);
+    }
+
+    // Contiguous block (width == src_stride == dst_stride).
     // Reshape total bytes into sub_width * sub_nrows where sub_width <= 65535.
     if (width == src_stride && width == dst_stride) {
         size_t total = width * nrows;
 
+        FARF(HIGH, "dma: re-shaped : src-stride %u dst-stride %u width %u nrows %u\n", src_stride, dst_stride, width, nrows);
+
         // Pick the largest 128-byte-aligned sub_width that divides total evenly.
-        size_t sub_width = UDMA_MAX_FIELD_VAL & ~(size_t)127;  // 65408
+        size_t sub_width = UDMA_MAX_FIELD_VAL & ~(size_t) 127;  // 65408
         while (sub_width > 0 && total % sub_width != 0) {
             sub_width -= 128;
         }
@@ -227,10 +217,11 @@ static inline bool dma_queue_push_chained(dma_queue *q, dma_ptr dptr, size_t dst
             if (chunk > UDMA_MAX_FIELD_VAL) chunk = UDMA_MAX_FIELD_VAL;
 
             dma_ptr p = dma_make_ptr(dst + rows_done * sub_width, src + rows_done * sub_width);
-            if (!dma_queue_push(q, p, sub_width, sub_width, sub_width, chunk))
+            if (!dma_queue_push_single(q, p, sub_width, sub_width, sub_width, chunk))
                 return false;
 
             rows_done += chunk;
+
             // Complete all chunks without waiting except the last one, so the
             // caller's single dma_queue_pop drains the final descriptor.
             if (rows_done < sub_nrows)
@@ -239,20 +230,47 @@ static inline bool dma_queue_push_chained(dma_queue *q, dma_ptr dptr, size_t dst
         return true;
     }
 
-    // Case 3: stride overflow — fall back to row-by-row.
+    // Stride overflow — fall back to row-by-row.
     {
+        FARF(HIGH, "dma: re-strided : src-stride %u dst-stride %u width %u nrows %u\n", src_stride, dst_stride, width, nrows);
+
         const uint8_t *src = (const uint8_t *)dptr.src;
         uint8_t       *dst = (uint8_t *)dptr.dst;
         for (size_t r = 0; r < nrows; ++r) {
-          dma_ptr p = dma_make_ptr(dst + r * dst_stride,
-                                   src + r * src_stride);
-          if (!dma_queue_push(q, p, 0, 0, width, 1))
-            return false;
-          if (r + 1 < nrows)
-            dma_queue_pop_nowait(q);
+            dma_ptr p = dma_make_ptr(dst + r * dst_stride, src + r * src_stride);
+            if (!dma_queue_push_single(q, p, 0, 0, width, 1))
+                return false;
+            if (r + 1 < nrows)
+                dma_queue_pop_nowait(q);
         }
         return true;
     }
+}
+
+static inline bool dma_queue_push(dma_queue * q,
+                                  dma_ptr     dptr,
+                                  size_t      dst_row_size,
+                                  size_t      src_row_size,
+                                  size_t      width, // width in bytes. number of bytes to transfer per row
+                                  size_t      nrows) {
+    return dma_queue_push_chained(q, dptr, dst_row_size, src_row_size, width, nrows);
+}
+
+static inline bool dma_queue_push_ddr_to_vtcm(dma_queue * q,
+                                              dma_ptr     dptr,
+                                              size_t      dst_row_size,
+                                              size_t      src_row_size,
+                                              size_t      nrows) {
+    return dma_queue_push(q, dptr, dst_row_size, src_row_size, src_row_size, nrows);
+}
+
+
+static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q,
+                                              dma_ptr     dptr,
+                                              size_t      dst_row_size,
+                                              size_t      src_row_size,
+                                              size_t      nrows) {
+    return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
 #ifdef __cplusplus

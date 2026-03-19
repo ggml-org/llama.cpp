@@ -191,6 +191,8 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
     if (start_row >= end_row) return;
 
+    FARF(HIGH, "binary-scalar: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
+
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * dst_spad_base  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
     size_t src0_spad_half    = octx->src0_spad.size_per_thread / 2;
@@ -281,6 +283,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
     if (start_row >= end_row) return;
+
+    FARF(HIGH, "binary-same-shape: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
 
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * src1_spad_base = octx->src1_spad.data + (ith * octx->src1_spad.size_per_thread);
@@ -380,6 +384,8 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
     if (start_row >= end_row) return;
 
+    FARF(HIGH, "binary-row-bcast: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
+
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * src1_spad = octx->src1_spad.data + (ith * octx->src1_spad.size_per_thread);
     uint8_t * dst_spad_base  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
@@ -461,6 +467,8 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
     const uint32_t start_row = bctx->nrows_per_thread * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
     if (start_row >= end_row) return;
+
+    FARF(HIGH, "binary-complex: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
 
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * dst_spad_base  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
@@ -553,6 +561,8 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
     uint8_t * dst_spad_base  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
     size_t src0_spad_half = octx->src0_spad.size_per_thread / 2;
     size_t dst_spad_half  = octx->dst_spad.size_per_thread  / 2;
+
+    FARF(HIGH, "binary-repeat: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
 
     dma_queue * q = octx->ctx->dma[ith];
     uint32_t ir_prefetch = start_row;
