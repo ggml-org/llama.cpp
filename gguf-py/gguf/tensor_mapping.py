@@ -157,6 +157,29 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
+        # qwen3 tts talker
+        MODEL_TENSOR.TTS_TEXT_EMBD: (
+            "text_embedding",        # qwen3tts (after prefix strip)
+        ),
+        MODEL_TENSOR.TTS_TEXT_PROJ_UP: (
+            "text_projection.up_proj",    # qwen3tts
+        ),
+        MODEL_TENSOR.TTS_TEXT_PROJ_GATE: (
+            "text_projection.gate_proj",  # qwen3tts
+        ),
+        MODEL_TENSOR.TTS_TEXT_PROJ_DOWN: (
+            "text_projection.down_proj",  # qwen3tts
+        ),
+        MODEL_TENSOR.TTS_CODEC_EMBD: (
+            "codec_embedding",       # qwen3tts
+        ),
+        MODEL_TENSOR.TTS_CODEC_HEAD: (
+            "codec_head",            # qwen3tts
+        ),
+        # qwen3 tts code predictor
+        MODEL_TENSOR.TTS_CP_SMALL_TO_MTP: (
+            "small_to_mtp_projection",   # qwen3tts-cp (after prefix strip)
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
