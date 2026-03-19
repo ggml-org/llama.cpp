@@ -31,11 +31,18 @@ jobs:
               "webfetch": "deny"
             }
         run: |
+          rm AGENTS.md
+          rm CLAUDE.md
+
           opencode run -m llama.cpp-dgx/gpt-oss-120b-hf-medium --thinking "A new issue has been created:
 
           Issue number: ${{ github.event.issue.number }}
 
-          Lookup this issue with `gh issue view ${{ github.event.issue.number }} --json title,body,url,number`
+          Lookup the contents of the issue using the following command:
+
+          ```bash
+          gh issue view ${{ github.event.issue.number }} --json title,body,url,number`
+          ```
 
           Perform the following task and then post a SINGLE comment (if needed).
 
