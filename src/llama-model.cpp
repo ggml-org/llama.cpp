@@ -3263,38 +3263,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // S1: Route all weights to host-pinned memory so the unified cache is the
     // sole owner of VRAM placement.  This must be set BEFORE set_model_loading
     // so the depth counter in set_model_loading takes the S1 path.
-    //
-    // Only activate S1 when the model actually exceeds the VRAM budget.
-    // Models that fit (e.g., Mistral 7B at 3.9 GB on 11.6 GB B580) use the
-    // fast device buffer path directly — no host-pinned detour needed.
+    // The cache handles placement intelligently for all model sizes — no
+    // model-size vs VRAM gating needed.
     if (params.n_gpu_layers > 0) {
-        // Find first GPU device to query VRAM
-        size_t vram_total = 0;
-        for (auto * dev : devices) {
-            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                size_t free = 0, total = 0;
-                ggml_backend_dev_memory(dev, &free, &total);
-                vram_total = total;
-                break;
-            }
-        }
-        if (vram_total > 0) {
-            int          budget_pct     = 90;
-            const char * env_budget_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
-            if (env_budget_pct) {
-                budget_pct = std::max(1, std::min(100, std::atoi(env_budget_pct)));
-            }
-            const size_t vram_budget = static_cast<size_t>(vram_total * (static_cast<double>(budget_pct) / 100.0));
-            if (ml.n_bytes > vram_budget) {
-                LLAMA_LOG_INFO(
-                    "%s: model size %.1f MB exceeds %d%% VRAM budget %.1f MB - activating S1 host-pinned path\n",
-                    __func__, ml.n_bytes / (1024.0 * 1024.0), budget_pct, vram_budget / (1024.0 * 1024.0));
-                ggml_backend_sycl_set_all_weights_host();
-            } else {
-                LLAMA_LOG_INFO("%s: model size %.1f MB fits in %d%% VRAM budget %.1f MB - using device buffer path\n",
-                               __func__, ml.n_bytes / (1024.0 * 1024.0), budget_pct, vram_budget / (1024.0 * 1024.0));
-            }
-        }
+        LLAMA_LOG_INFO("%s: all weights -> host-pinned (unified cache manages VRAM placement)\n", __func__);
+        ggml_backend_sycl_set_all_weights_host();
     }
 
     // Signal SYCL backend that we're in model load phase (buffer allocation)
@@ -8617,13 +8590,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         size_t                             total_size = 0;
 
-        // Iterate over SYCL-backed contexts only to collect tensor inventory.
-        // When fit_params reduces ngl, some contexts use CPU buffer types — those
-        // must be excluded or the inventory inflates the model size, incorrectly
-        // triggering tiered/streaming mode for tensors that fit in VRAM.
+        // Iterate over contexts to collect tensor inventory.
+        // Include SYCL device and SYCL host buffer types (S1 puts weights on
+        // SYCL host).  Only skip pure CPU buffer types (from CPU backend).
         for (auto & [buft, ctx_ptr] : ctx_map) {
-            if (ggml_backend_buft_is_host(buft)) {
-                continue;  // Skip CPU/host buffer types
+            auto * buft_dev = ggml_backend_buft_get_device(buft);
+            bool   is_sycl  = buft_dev && ggml_backend_dev_backend_reg(buft_dev) == ggml_backend_sycl_reg();
+            if (!is_sycl) {
+                continue;  // Skip CPU/non-SYCL buffer types
             }
             ggml_context * ctx = ctx_ptr.get();
             for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {

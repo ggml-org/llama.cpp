@@ -2152,7 +2152,9 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         layout_mode registered_layout = GGML_LAYOUT_AOS;
         if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &registered_layout)) {
             // If no layout choice exists, allow AoS to fall back to raw storage.
-            if (target != GGML_LAYOUT_AOS) {
+            // Also allow SOA in S1 mode — cache creates it on demand.
+            const bool s1_soa_ok = ggml_backend_sycl_all_weights_host() && target == GGML_LAYOUT_SOA;
+            if (target != GGML_LAYOUT_AOS && !s1_soa_ok) {
                 if (out_source) {
                     *out_source = "no_layout_choice";
                 }
@@ -2162,8 +2164,12 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
                 *out_source = "no_layout_choice_aos";
             }
         } else {
-            // Verify the registered layout matches the requested target
-            if (!unified_aos_request && registered_layout != target) {
+            // Verify the registered layout matches the requested target.
+            // Exception: In S1 mode (all_weights_host), SOA is requested for TG
+            // but only the PP layout (e.g. ONEDNN_PACKED) was registered during warmup.
+            // Allow SOA through — the unified cache materializes it on demand.
+            const bool s1_soa_request = ggml_backend_sycl_all_weights_host() && target == GGML_LAYOUT_SOA;
+            if (!unified_aos_request && !s1_soa_request && registered_layout != target) {
                 if (out_source) {
                     *out_source = "layout_mismatch";
                 }

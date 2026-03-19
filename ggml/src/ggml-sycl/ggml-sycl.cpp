@@ -4042,8 +4042,11 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // For MoE models, use effective weight size (only active experts needed in VRAM)
     const size_t effective_model_size = ggml_sycl::compute_moe_effective_weight_bytes(
         g_tensor_inventory_total_size, g_moe_expert_total_bytes, g_moe_n_experts_total, g_moe_n_experts_used);
-    const bool model_exceeds_vram = effective_model_size > vram_budget ||
-                                     g_all_weights_host.load(std::memory_order_acquire);
+    // S1 (all-weights-host) does NOT mean the model exceeds VRAM.  S1 routes
+    // weights to host-pinned as canonical store; the cache uploads SOA to VRAM.
+    // Streaming/headroom reserves should only activate when the model genuinely
+    // doesn't fit, not when S1 is active for a small model.
+    const bool model_exceeds_vram = effective_model_size > vram_budget;
     g_model_exceeds_budget.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
@@ -10272,14 +10275,32 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     // Reserve headroom for compute scratch, graph replay, etc.
     size_t compute_reserve = std::max(size_t(256) << 20, total_mem / 10);
-    size_t kv_vram_cap     = 0;
+    // When weights are on host-pinned (S1), the unified cache needs VRAM for
+    // SOA layout copies.  Reserve space for the weight cache so KV doesn't
+    // exhaust VRAM before the cache can upload weights.
+    size_t weight_cache_reserve = 0;
+    if (ggml_backend_sycl_weights_evictable()) {
+        weight_cache_reserve = ggml_sycl_get_model_size();
+    }
+    // Use conservative free estimate: the driver's free_mem can be overly
+    // optimistic early in loading (before page table / OS overhead is
+    // accounted for).  Cap at 65% of total VRAM to leave room for driver
+    // overhead, OS compositor, and GPU page tables from host-pinned mappings.
+    const size_t effective_free    = std::min(free_mem, total_mem * 65 / 100);
+    const size_t total_reserve     = compute_reserve + weight_cache_reserve;
+    size_t       kv_vram_cap       = 0;
     if (kv_host_val == 1) {
         // User explicitly requested host KV — force all-cold
         kv_vram_cap = 0;
     } else {
-        kv_vram_cap = (free_mem > compute_reserve) ? free_mem - compute_reserve : 0;
+        kv_vram_cap = (effective_free > total_reserve) ? effective_free - total_reserve : 0;
     }
 
+    GGML_LOG_INFO(
+        "[KV-TIER] free=%.0f MB, eff_free=%.0f MB, compute_reserve=%.0f MB, weight_reserve=%.0f MB, kv_cap=%.0f MB, kv_req=%.0f MB\n",
+        free_mem / (1024.0 * 1024.0), effective_free / (1024.0 * 1024.0),
+        compute_reserve / (1024.0 * 1024.0), weight_cache_reserve / (1024.0 * 1024.0),
+        kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
     GGML_LOG_DEBUG(
         "[KV-TIER] free_vram=%.0f MB, total=%.0f MB, reserve=%.0f MB, "
         "kv_cap=%.0f MB, requested=%.0f MB\n",
@@ -22456,7 +22477,7 @@ static void graph_unpin_moe_experts([[maybe_unused]] ggml_backend_sycl_context *
 // Pre-load all dense weights into unified cache before graph recording (weight streaming mode)
 // This ensures stable cache pointers during graph execution
 // Returns true if all weights were successfully pre-loaded and pinned
-static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, bool is_decode) {
     // Check if weight streaming is enabled via env var
 
     static bool weight_streaming_enabled = (std::getenv("GGML_SYCL_WEIGHT_STREAMING") != nullptr);
@@ -22513,11 +22534,27 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
             }
             layout_mode target = GGML_LAYOUT_AOS;
             if (!ggml_sycl_get_layout_choice_for_tensor(src, ctx.device, &target)) {
-                GGML_LOG_ERROR("[GRAPH-PRELOAD-WEIGHTS] missing layout choice for %s\n", src->name);
-                return false;
+                // In S1 mode, the layout choice registry may not have an entry
+                // (PP warmup registers PP layouts only).  Default to AOS and
+                // let the S1 TG override below fix it up.
+                if (!ggml_backend_sycl_all_weights_host()) {
+                    GGML_LOG_ERROR("[GRAPH-PRELOAD-WEIGHTS] missing layout choice for %s\n", src->name);
+                    return false;
+                }
+                target = GGML_LAYOUT_AOS;
             }
 
             target  = ggml_sycl_adjust_layout_for_tensor(src, target, ctx.device);
+
+            // S1 TG override: when all weights are host-pinned and we're in
+            // decode phase (batch=1), the TG fast-path uses MMVQ+SOA.  Request
+            // SOA layout so the cache materializes it BEFORE graph recording,
+            // avoiding on-demand allocation during recording (which causes OOM
+            // because pool-allocated AOS entries can't be individually freed).
+            if (is_decode && ggml_backend_sycl_all_weights_host() &&
+                ggml_is_quantized(src->type) && ggml_sycl_supports_reorder_mmvq(src->type)) {
+                target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
+            }
             auto it = target_layouts.find(cache_key);
             if (it == target_layouts.end()) {
                 target_layouts.emplace(cache_key, weight_target{ src, target });
@@ -22580,6 +22617,18 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
         // Try to evict to make room.
         cache->evict(missing_bytes - cache->available());
         if (cache->available() < missing_bytes) {
+            if (ggml_backend_sycl_all_weights_host()) {
+                // S1 mode: weights are GPU-accessible via host-pinned USM.
+                // Per-op dispatch can use SOA from cache for weights that fit,
+                // and fall back to AOS host-pinned for the rest.  Graph replay
+                // can't work with partial caching, but the TG fast-path handles
+                // mixed SOA/AOS gracefully.  Skip preload — don't disable graphs
+                // permanently (a future graph with fewer nodes might fit).
+                GGML_LOG_INFO("[GRAPH-PRELOAD-WEIGHTS] S1 mode: %.1f MB weights exceed %.1f MB cache, "
+                              "using per-op dispatch with on-demand SOA\n",
+                              missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f));
+                return false;
+            }
             GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Insufficient cache space: need %.1f MB, have %.1f MB\n",
                           missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f));
             ctx.weight_streaming_graphs_disabled = true;
@@ -22600,6 +22649,10 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
             ctx.graph_pinned_entries.emplace_back(cache_key, target);
             loaded++;
         } else {
+            if (ggml_backend_sycl_all_weights_host()) {
+                // S1: skip this weight; per-op dispatch will use host-pinned AOS
+                continue;
+            }
             GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Failed to cache weight: %s\n", weight->name);
             ctx.weight_streaming_graphs_disabled = true;
             return false;
@@ -24856,7 +24909,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
         // Auto-enable for host-resident weights: GPU cannot access non-USM
         // host pointers (DEVICE_LOST).  Also enabled via GGML_SYCL_CPU_HOST_MAT=1.
-        if (!cpu_host_mat_disabled && !src0_on_device &&
+        // Skip in S1 mode: weights are host-pinned USM (GPU-accessible), and the
+        // unified cache creates VRAM SOA copies for fast GPU dispatch.
+        if (!cpu_host_mat_disabled && !src0_on_device && !ggml_backend_sycl_all_weights_host() &&
             src1->ne[1] == 1 &&                    // batch=1 (TG only)
             ggml_is_quantized(src0->type) &&        // quantized weights
             src1->type == GGML_TYPE_F32 &&
@@ -25029,7 +25084,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const char * env = std::getenv("GGML_SYCL_TG_FAST");
             return env && std::atoi(env) == 0;
         }();
-        if (!tg_fast_disabled && src0_on_device &&
+        // In S1 mode (all_weights_host), weights are host-pinned USM — GPU can
+        // access them via zero-copy, and the unified cache can create VRAM SOA
+        // copies on demand.  Allow TG fast-path for S1 host-pinned weights.
+        const bool src0_gpu_accessible = src0_on_device || ggml_backend_sycl_all_weights_host();
+        if (!tg_fast_disabled && src0_gpu_accessible &&
             src1->ne[1] == 1 && !fast_split && ggml_is_quantized(src0->type) &&
             src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
             !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
@@ -25041,13 +25100,22 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 extra && extra->optimized_feature.is_reordered() && ggml_sycl_supports_reorder_mmvq(src0->type);
             const layout_mode effective_layout = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
 
-            if (has_soa_reorder) {
+            // In S1 mode, the tensor extra may not reflect the cache's SOA copy.
+            // Query the unified cache directly (bypasses layout choice registry which
+            // only has the PP layout, not SOA for TG).
+            void * soa_ptr = nullptr;
+            const bool cache_has_soa = !has_soa_reorder && ggml_backend_sycl_all_weights_host() &&
+                                       ggml_sycl_supports_reorder_mmvq(src0->type) &&
+                                       (soa_ptr = ggml_sycl_get_weight_layout_ptr(src0, ctx.device, GGML_LAYOUT_SOA)) != nullptr;
+
+            if (has_soa_reorder || cache_has_soa) {
+                const layout_mode soa_layout = has_soa_reorder ? effective_layout : GGML_LAYOUT_SOA;
                 // Tensor split: cooperative multi-device MUL_MAT
                 split_config_init(ctx.stream());
                 if (g_split_config.enabled) {
                     const int split_pct = (int)(g_split_config.ratio[2] * 100.0f + 0.5f);
                     if (ggml_sycl_mul_mat_tensor_split(ctx, src0, src1, dst,
-                                                        split_pct, effective_layout)) {
+                                                        split_pct, soa_layout)) {
                         return;
                     }
                     // Fall through to normal GPU dispatch if split failed
@@ -25057,10 +25125,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 split_merge_drain();
 
                 // MMVQ with SOA reorder -- matches master's fast path
-                GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d)\n",
-                                src0->name ? src0->name : "?", src0->type, static_cast<int>(effective_layout));
+                GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d%s)\n",
+                                src0->name ? src0->name : "?", src0->type, static_cast<int>(soa_layout),
+                                cache_has_soa ? " cache" : "");
                 ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
-                                                                    effective_layout);
+                                                                    soa_layout);
                 return;
             } else if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
                 // MMVQ with AOS layout
@@ -42824,7 +42893,7 @@ normal_dispatch:
         // Pre-load and pin all dense weights before graph recording (weight streaming mode).
         // This ensures stable cache slot pointers during graph execution.
         if (!sycl_ctx->exec_graph && !sycl_ctx->weight_streaming_graphs_disabled) {
-            if (!graph_preload_weights(*sycl_ctx, cgraph)) {
+            if (!graph_preload_weights(*sycl_ctx, cgraph, cached_is_decode)) {
                 GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");
                 graph_unpin_weights(sycl_ctx);  // Clean up any partial pins
                 GGML_SYCL_DEBUG("[DEBUG] About to call graph_compute_impl after weight preload failure\n");

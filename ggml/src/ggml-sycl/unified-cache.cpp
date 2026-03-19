@@ -1293,11 +1293,11 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
     if (it != entries_.end() && it->second.layout != layout) {
         if (it->second.pinned) {
             GGML_SYCL_DEBUG(
-                "[UNIFIED-CACHE] host_cache layout switch blocked (pinned) model=%llu name_hash=0x%llx have=%d "
+                "[UNIFIED-CACHE] host_cache layout switch: unpinning model=%llu name_hash=0x%llx have=%d "
                 "want=%d\n",
                 (unsigned long long) key_id_ref.model_id, (unsigned long long) key_id_ref.name_hash,
                 (int) it->second.layout, (int) layout);
-            return nullptr;
+            it->second.pinned = false;
         }
         free_entry(it->second);
         entries_.erase(it);
@@ -2286,10 +2286,10 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
         if (it->second.layout != layout) {
             if (it->second.pinned) {
                 GGML_SYCL_DEBUG(
-                    "[UNIFIED-CACHE] layout switch blocked (pinned) model=%llu name_hash=0x%llx have=%d want=%d\n",
+                    "[UNIFIED-CACHE] layout switch: unpinning model=%llu name_hash=0x%llx have=%d want=%d\n",
                     (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
                     (int) it->second.layout, (int) layout);
-                return nullptr;
+                it->second.pinned = false;
             }
             void * stale_ptr      = it->second.device_ptr;
             size_t stale_size     = it->second.size;
@@ -2697,26 +2697,60 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             auto &     entry           = it->second;
             const bool layout_mismatch = entry.layout != request.layout || onednn_pack_m_mismatch(entry, request);
             if (layout_mismatch) {
-                if (entry.pinned || entry.state == cache_entry_state::IN_PROGRESS) {
+                if (entry.state == cache_entry_state::IN_PROGRESS) {
                     GGML_SYCL_DEBUG(
-                        "[UNIFIED-CACHE] layout switch blocked (pinned/in-progress) model=%llu name_hash=0x%llx "
+                        "[UNIFIED-CACHE] layout switch blocked (in-progress) model=%llu name_hash=0x%llx "
                         "have=%d want=%d\n",
                         (unsigned long long) request.key.model_id, (unsigned long long) request.key.name_hash,
                         (int) entry.layout, (int) request.layout);
                     result.status = cache_layout_status::FAILED;
                     return result;
                 }
+                if (entry.pinned) {
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] layout switch: unpinning model=%llu name_hash=0x%llx have=%d want=%d\n",
+                        (unsigned long long) request.key.model_id, (unsigned long long) request.key.name_hash,
+                        (int) entry.layout, (int) request.layout);
+                    entry.pinned = false;
+                }
                 void * stale_ptr      = entry.device_ptr;
                 size_t stale_size     = entry.size;
                 bool   stale_host_res = entry.host_resident;
                 bool   stale_pool     = entry.pool_allocated;
+                if (stale_pool) {
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] layout switch (pool): model=%llu name_hash=0x%llx "
+                        "have=%d want=%d size=%zu (abandoned in pool)\n",
+                        (unsigned long long) request.key.model_id, (unsigned long long) request.key.name_hash,
+                        (int) entry.layout, (int) request.layout, stale_size);
+                }
                 entries_.erase(it);
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
                     if (!stale_pool) {
-                        enqueue_deferred_free(stale_ptr, stale_size);
+                        // In S1 mode (all-weights-host), free immediately instead of
+                        // deferring.  During preload layout switching (PP→TG), deferred
+                        // frees accumulate without being processed, causing temporary
+                        // double-allocation (old + new) that exhausts VRAM.  Since
+                        // preload runs between phases with no outstanding kernels using
+                        // the old layout, immediate free is safe.
+                        if (ggml_backend_sycl_all_weights_host()) {
+                            try {
+                                queue_.wait();
+                                ggml_sycl::alloc_registry::instance().unregister_alloc(stale_ptr);
+                                sycl::free(stale_ptr, queue_);
+                                saturating_sub_used(stale_size);
+                                GGML_SYCL_DEBUG(
+                                    "[UNIFIED-CACHE] layout switch: immediate free ptr=%p size=%zu (S1 mode)\n",
+                                    stale_ptr, stale_size);
+                            } catch (...) {
+                                enqueue_deferred_free(stale_ptr, stale_size);
+                            }
+                        } else {
+                            enqueue_deferred_free(stale_ptr, stale_size);
+                        }
                     }
-                    // Pool entries: memory stays in pool, used_ stays at chunk level
+                    // Pool entries: sub-allocation abandoned (dead space), chunk stays
                 }
             }
         }
@@ -2784,12 +2818,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             if (entry.size != request.dst_size) {
                 if (entry.pinned) {
                     GGML_SYCL_DEBUG(
-                        "[UNIFIED-CACHE] layout size mismatch: model=%llu name_hash=0x%llx layout=%d cached=%zu "
-                        "req=%zu (pinned)\n",
+                        "[UNIFIED-CACHE] layout size mismatch: unpinning model=%llu name_hash=0x%llx layout=%d "
+                        "cached=%zu req=%zu\n",
                         (unsigned long long) request.key.model_id, (unsigned long long) request.key.name_hash,
                         (int) request.layout, entry.size, request.dst_size);
-                    result.status = cache_layout_status::FAILED;
-                    return result;
+                    entry.pinned = false;
                 }
 
                 GGML_SYCL_DEBUG(
@@ -2805,7 +2838,18 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
                     if (!stale_pool) {
-                        enqueue_deferred_free(stale_ptr, stale_size);
+                        if (ggml_backend_sycl_all_weights_host()) {
+                            try {
+                                queue_.wait();
+                                ggml_sycl::alloc_registry::instance().unregister_alloc(stale_ptr);
+                                sycl::free(stale_ptr, queue_);
+                                saturating_sub_used(stale_size);
+                            } catch (...) {
+                                enqueue_deferred_free(stale_ptr, stale_size);
+                            }
+                        } else {
+                            enqueue_deferred_free(stale_ptr, stale_size);
+                        }
                     }
                     // Pool entries: memory stays in pool, used_ stays at chunk level
                 }
@@ -2932,7 +2976,12 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             bool           is_host_resident = false;
             bool           is_pool_alloc    = false;
             cache_location host_location    = cache_location::HOST_MMAP;
-            if (!force_host && layout_pool_) {
+            // In S1 mode (all-weights-host), skip pool allocation so entries use
+            // standalone malloc_device.  Pool entries can't be individually freed,
+            // which causes OOM when switching layouts between PP (AOS/oneDNN) and
+            // TG (SOA) — the abandoned pool space isn't reclaimable.
+            const bool skip_pool = ggml_backend_sycl_all_weights_host();
+            if (!force_host && layout_pool_ && !skip_pool) {
                 // Use layout pool for contiguous sub-allocation (reduces TLB misses)
                 auto pool_result = layout_pool_->allocate(request.dst_size);
                 new_device_ptr   = pool_result.ptr;
