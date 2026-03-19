@@ -6,8 +6,8 @@
 #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
-#if defined(A_TYPE_VEC4)
-layout (binding = 0) readonly buffer AV4 {A_TYPE_VEC4 data_a_v4[];};
+#if defined(A_TYPEV4)
+layout (binding = 0) readonly buffer AV4 {A_TYPEV4 data_a_v4[];};
 #endif
 #if defined(A_TYPE_PACKED16)
 layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
@@ -17,11 +17,11 @@ layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32
 #endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
-#ifdef B_TYPE_VEC2
-layout (binding = 1) readonly buffer BV2 {B_TYPE_VEC2 data_b_v2[];};
+#ifdef B_TYPEV2
+layout (binding = 1) readonly buffer BV2 {B_TYPEV2 data_b_v2[];};
 #endif
-#ifdef B_TYPE_VEC4
-layout (binding = 1) readonly buffer BV4 {B_TYPE_VEC4 data_b_v4[];};
+#ifdef B_TYPEV4
+layout (binding = 1) readonly buffer BV4 {B_TYPEV4 data_b_v4[];};
 #endif
 
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
