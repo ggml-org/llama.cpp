@@ -2488,6 +2488,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         commands.clear();
     }
 
+    // If there are SET_ROWS operations in this graph, copy the error buffers to the host for checking.
     if (contains_set_rows) {
         wgpu::CommandEncoder encoder = ctx->global_ctx->device.CreateCommandEncoder();
         encoder.CopyBufferToBuffer(ctx->set_rows_dev_error_buf, 0, ctx->set_rows_host_error_buf, 0,
