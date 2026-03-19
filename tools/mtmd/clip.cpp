@@ -255,8 +255,8 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
     gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
 }
 
-ggml_tensor * clip_graph::build_mm(ggml_tensor * a, ggml_tensor * b) const {
-    return ggml_mul_mat(ctx0, a, b);
+ggml_tensor * clip_graph::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+    return ggml_mul_mat(ctx0, w, x);
 }
 
 void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
