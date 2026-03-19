@@ -4115,28 +4115,61 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     if (g_tiered_enabled.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
         if (!g_tensor_cache) {
-            // Create cache with VRAM budget MINUS a reserve for KV cache + compute buffers.
+            // Create cache with VRAM budget MINUS reserves for KV cache + compute buffers.
             // Without this reserve, compute_placement() greedily fills all VRAM with
             // weight SOA copies, leaving nothing for graph_reserve → DEVICE_LOST.
             size_t cache_vram_budget = vram_budget;
 
-            // Reserve for KV cache + compute: configurable via env var, default 50%
+            // Estimate KV cache VRAM requirement from model hparams.
+            // KV = 2 * n_layer * (n_embd_k_gqa + n_embd_v_gqa) * n_ctx * sizeof(fp16)
+            // For MoE models, KV auto-hosts via tiered_kv_buft, so KV VRAM = 0.
+            // Use inventory n_expert (set from hparams) rather than query_moe_expert_split()
+            // because in S1 mode (prefer_host_weights) the split flag is never set.
+            const bool   is_moe         = (inventory->n_expert > 0);
+            const size_t kv_full        = is_moe ? 0 :
+                static_cast<size_t>(2) * inventory->n_layer *
+                (inventory->n_embd_k_gqa + inventory->n_embd_v_gqa) *
+                inventory->n_ctx * sizeof(uint16_t);
+            // Cap KV VRAM estimate at 50% of budget — KV tiering will adaptively split
+            // between device and host based on actual free VRAM at allocation time.
+            const size_t kv_estimate     = std::min(kv_full, cache_vram_budget / 2);
+            const size_t compute_reserve = 256ULL * 1024 * 1024;  // 256 MB for compute scratch
+
+            // Allow env var override for the weight cache percentage
             static int weight_cache_pct = -1;
             if (weight_cache_pct < 0) {
                 const char * env = getenv("GGML_SYCL_WEIGHT_CACHE_PCT");
-                weight_cache_pct = env ? atoi(env) : 50;  // Default: 50% of VRAM for weights
-                weight_cache_pct = std::max(10, std::min(90, weight_cache_pct));  // Clamp [10, 90]
+                weight_cache_pct = env ? atoi(env) : 0;  // 0 = auto (use KV estimate)
+                if (weight_cache_pct > 0) {
+                    weight_cache_pct = std::max(10, std::min(90, weight_cache_pct));
+                }
             }
-            cache_vram_budget = cache_vram_budget * weight_cache_pct / 100;
+
+            if (weight_cache_pct > 0) {
+                // Explicit percentage override
+                cache_vram_budget = cache_vram_budget * weight_cache_pct / 100;
+            } else {
+                // Auto: subtract KV estimate + compute reserve from VRAM budget
+                const size_t total_reserve = kv_estimate + compute_reserve;
+                if (cache_vram_budget > total_reserve) {
+                    cache_vram_budget = cache_vram_budget - total_reserve;
+                } else {
+                    // Not enough VRAM for KV + compute + any weights → minimal weight cache
+                    cache_vram_budget = cache_vram_budget / 10;
+                }
+            }
+
             size_t system_ram        = get_system_memory_bytes();
             size_t host_budget       = system_ram > 0 ? static_cast<size_t>(system_ram * 0.75) :
                                                         10ULL * 1024 * 1024 * 1024;  // 75% of RAM, fallback 10GB
             GGML_LOG_INFO(
-                "[SYCL] Unified tensor cache: VRAM %.2f GB (%d%% of %.2f GB budget, "
-                "reserving %.2f GB for KV+compute), Host %.2f GB\n",
-                cache_vram_budget / (1024.0 * 1024.0 * 1024.0), weight_cache_pct,
+                "[SYCL] Unified tensor cache: VRAM %.2f GB (of %.2f GB budget, "
+                "KV estimate %.2f GB%s, compute reserve %.0f MB), Host %.2f GB\n",
+                cache_vram_budget / (1024.0 * 1024.0 * 1024.0),
                 vram_budget / (1024.0 * 1024.0 * 1024.0),
-                (vram_budget - cache_vram_budget) / (1024.0 * 1024.0 * 1024.0),
+                kv_estimate / (1024.0 * 1024.0 * 1024.0),
+                is_moe ? " (on host)" : "",
+                compute_reserve / (1024.0 * 1024.0),
                 host_budget / (1024.0 * 1024.0 * 1024.0));
             g_tensor_cache =
                 std::make_unique<ggml_sycl::unified_tensor_cache>(*(ctx->stream()), cache_vram_budget, host_budget);
@@ -9920,12 +9953,9 @@ static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_typ
         limit = ggml_sycl_info().devices[ctx->device].max_alloc_size;
     }
 
-    if (ctx->allow_shared_fallback) {
-        size_t host_limit = ggml_sycl_info().host_max_alloc_size;
-        if (host_limit > 0 && host_limit < limit) {
-            limit = host_limit;
-        }
-    }
+    // NOTE: host_max_alloc_size cap removed here — it was overly conservative
+    // (based on smallest-device VRAM) and blocked 120B model loading.
+    // ggml_sycl_host_malloc() will attempt large allocations with a warning.
 
     return limit;
 }
@@ -10252,14 +10282,15 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         if (env_kv) {
             kv_host_val = std::atoi(env_kv);
         } else {
-            // Auto-detect: if expert tensors are on host-pinned, KV should also be on host
-            // to leave VRAM free for expert SOA cache
-            kv_host_val = ggml_backend_sycl_query_moe_expert_split() ? 1 : 0;
+            // Auto-detect: MoE models should use host KV to leave VRAM free for
+            // expert SOA cache.  Use g_moe_n_experts_total (set from inventory hparams)
+            // rather than query_moe_expert_split() which is not set in S1 mode.
+            kv_host_val = (g_moe_n_experts_total > 0) ? 1 : 0;
             if (kv_host_val) {
                 static bool logged_once = false;
                 if (!logged_once) {
-                    GGML_LOG_INFO("[KV-TIER] MoE expert tensors on host — auto-enabling KV host "
-                                 "(VRAM reserved for expert SOA cache)\n");
+                    GGML_LOG_INFO("[KV-TIER] MoE model detected (%d experts) — auto-enabling KV host "
+                                 "(VRAM reserved for expert SOA cache)\n", g_moe_n_experts_total);
                     logged_once = true;
                 }
             }

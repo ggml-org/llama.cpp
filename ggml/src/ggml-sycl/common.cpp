@@ -440,14 +440,14 @@ void * ggml_sycl_host_malloc(size_t size) try {
         return nullptr;
     }
 
-    // Check against probed host malloc limit (driver per-allocation limit)
+    // Warn if allocation exceeds the probed host limit, but attempt it anyway.
+    // The limit is based on smallest-device VRAM and is overly conservative —
+    // standalone tests confirm sycl::malloc_host succeeds for 10+ GB allocations.
     const size_t host_max_alloc = ggml_sycl_get_host_max_alloc_size();
     if (host_max_alloc > 0 && size > host_max_alloc) {
         GGML_LOG_WARN(
-            "[SYCL] Refusing to allocate %.1f GB of pinned memory (driver limit: %.1f GB). "
-            "Falling back to CPU memory with unified cache staging.\n",
+            "[SYCL] Large host allocation: %.1f GB exceeds soft limit (%.1f GB) — attempting anyway\n",
             size / (1024.0 * 1024.0 * 1024.0), host_max_alloc / (1024.0 * 1024.0 * 1024.0));
-        return nullptr;
     }
 
     void * ptr = nullptr;

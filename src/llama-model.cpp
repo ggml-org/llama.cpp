@@ -8616,6 +8616,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             inventory.total_size    = total_size;
             inventory.n_expert      = hparams.n_expert;
             inventory.n_expert_used = hparams.n_expert_used;
+            inventory.n_layer       = hparams.n_layer;
+            inventory.n_embd_k_gqa  = hparams.n_embd_k_gqa();
+            inventory.n_embd_v_gqa  = hparams.n_embd_v_gqa();
+            inventory.n_ctx         = hparams.n_ctx_train;
 
             // Set inventory for each SYCL backend device BEFORE allocation
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {

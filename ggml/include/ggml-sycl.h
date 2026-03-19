@@ -154,6 +154,11 @@ struct ggml_sycl_tensor_inventory {
     size_t                         total_size;
     int                            n_expert;       // Total experts per layer (0 for dense models)
     int                            n_expert_used;  // Experts activated per token (0 for dense models)
+    // Model hparams for KV cache size estimation (used by VRAM budget coordination)
+    uint32_t                       n_layer;        // Number of transformer layers
+    uint32_t                       n_embd_k_gqa;   // Key embedding dim (GQA-adjusted), per layer
+    uint32_t                       n_embd_v_gqa;   // Value embedding dim (GQA-adjusted), per layer
+    uint32_t                       n_ctx;           // Context size (tokens)
 };
 
 // Set tensor inventory for tiered memory placement.
