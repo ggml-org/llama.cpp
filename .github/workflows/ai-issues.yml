@@ -5,7 +5,7 @@ on:
     types: [opened]
 
 jobs:
-  find-duplicates:
+  find-related:
     if: github.event.action == 'opened'
     runs-on: [self-hosted, opencode]
 
@@ -19,7 +19,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Find duplicates
+      - name: Find related
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_PERMISSION: |
@@ -35,15 +35,15 @@ jobs:
 
           Issue number: ${{ github.event.issue.number }}
 
-          Lookup this issue with gh issue view ${{ github.event.issue.number }}.
+          Lookup this issue with `gh issue view ${{ github.event.issue.number }} --json title,body,url,number`
 
           Perform the following task and then post a SINGLE comment (if needed).
 
           ---
 
-          TASK : DUPLICATE CHECK
+          TASK : FIND RELATED ISSUES
 
-          Search through existing issues (excluding #${{ github.event.issue.number }}) to find potential duplicates.
+          Search through existing issues (excluding #${{ github.event.issue.number }}) to find related or similar issues.
           Consider:
           1. Similar titles or descriptions
           2. Same error messages or symptoms
@@ -56,13 +56,13 @@ jobs:
 
           Based on your findings, post a SINGLE comment on issue #${{ github.event.issue.number }}. Build the comment as follows:
 
-          If no duplicates were found, do NOT comment at all.
+          If no related issues were found, do NOT comment at all.
 
-          If duplicates were found, include a section about potential duplicates with links using the following format:
+          If related issues were found, include a section listing them with links using the following format:
 
           [comment]
-          This issue might be a duplicate of:
-          - #[issue_number]: [brief description of similarity]
+          This issue might be similar or related to:
+          - #[issue_number]: [brief description of how they are related]
 
           _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
           [/comment]
