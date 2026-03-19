@@ -129,6 +129,11 @@ endif()
 
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+    if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # CMake on Windows doesn't support the HIP language yet.
+        # Therefore we workaround debug build's failure on HIP backend this way.
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES COMPILE_FLAGS "-O2 -g")
+    endif()
     target_link_libraries(ggml-hip PRIVATE hip::device)
 else()
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
