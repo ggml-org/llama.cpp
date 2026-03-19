@@ -936,7 +936,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     for (auto msg : inputs.messages) {
         if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
             msg["thinking"] = msg.at("reasoning_content");
-            msg.erase("content");
+            if (msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty()) {
+                msg.erase("content");
+            }
         }
         adjusted_messages.push_back(msg);
     }
