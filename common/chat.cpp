@@ -1142,19 +1142,30 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                                                           const autoparser::templates_params & inputs) {
     common_chat_params data;
 
-    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
-    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.supports_thinking  = true;
-    data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
-    data.preserved_tokens  = {
-        "<|tool_calls_section_begin|>",
-        "<|tool_calls_section_end|>",
-        "<|tool_call_begin|>",
-        "<|tool_call_argument_begin|>",
-        "<|tool_call_end|>",
-        "<think>",
-        "</think>",
+    // Tool call markers
+    const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
+    const std::string SECTION_END   = "<|tool_calls_section_end|>";
+    const std::string CALL_BEGIN    = "<|tool_call_begin|>";
+    const std::string ARGS_BEGIN    = "<|tool_call_argument_begin|>";
+    const std::string CALL_END      = "<|tool_call_end|>";
+
+    const std::string THINK_START   = "<think>";
+    const std::string THINK_END     = "</think>";
+
+    data.prompt               = common_chat_template_direct_apply(tmpl, inputs);
+    data.format               = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking    = true;
+    data.thinking_forced_open = inputs.enable_thinking;
+    data.thinking_start_tag   = THINK_START;
+    data.thinking_end_tag     = THINK_END;
+    data.preserved_tokens     = {
+        SECTION_BEGIN,
+        SECTION_END,
+        CALL_BEGIN,
+        ARGS_BEGIN,
+        CALL_END,
+        THINK_START,
+        THINK_END,
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
@@ -1172,24 +1183,16 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         //   <|tool_calls_section_end|>
         // The ID format is: functions.<function_name>:<counter> where counter is 0, 1, 2, ...
 
-                // Tool call markers
-        const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
-        const std::string SECTION_END   = "<|tool_calls_section_end|>";
-        const std::string CALL_BEGIN    = "<|tool_call_begin|>";
-        const std::string ARGS_BEGIN    = "<|tool_call_argument_begin|>";
-        const std::string CALL_END      = "<|tool_call_end|>";
-
-        const std::string THINK_START   = "<think>";
-        const std::string THINK_END     = "</think>";
-
         auto end = p.end();
 
         // Note: this model is CRAZY. It can diverge from its supposed tool calling pattern in so many ways it's not funny.
         // For example, it can call tools at the end of reasoning without closing reasoning...
-        auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
-            p.until_one_of({ THINK_END, "<|tool_calls_section_begin|>", "<|tool_call_begin|>" })) +
-            p.optional(p.literal(THINK_END))) : p.eps();
-
+        auto reasoning = p.eps();
+        if (extract_reasoning && inputs.enable_thinking) {
+            reasoning = p.optional(p.literal(THINK_START)) +
+                        p.reasoning(p.until_one_of({ THINK_END, SECTION_BEGIN, CALL_BEGIN })) +
+                        p.literal(THINK_END);
+        }
 
         // Content only parser (no tools)
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -1246,7 +1249,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         });
 
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call_begin|>" }
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, CALL_BEGIN }
         };
     }
 
