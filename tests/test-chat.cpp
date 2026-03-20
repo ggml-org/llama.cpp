@@ -1972,7 +1972,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
         inputs.add_generation_prompt = true;
         inputs.use_jinja = true;
-        common_chat_message msg;
+        common_chat_msg msg;
         msg.role = "user";
         msg.content = "get_weather";
         inputs.messages = { msg };
