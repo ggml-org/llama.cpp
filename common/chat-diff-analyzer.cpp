@@ -409,7 +409,7 @@ void analyze_reasoning::compare_reasoning_scope() {
             if (result.result.success()) {
                 end = trim_trailing_whitespace(result.tags["post"]);
             } else {
-                LOG_DBG(ANSI_ORANGE "%s: Unable to extracft reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
+                LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
             }
         }
