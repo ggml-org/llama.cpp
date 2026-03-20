@@ -131,7 +131,7 @@ struct cli_context {
         }
 
         append_file_out(
-            "[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n", 
+            "[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n",
             chat_params.prompt
         );
 
@@ -405,13 +405,13 @@ int main(int argc, char ** argv) {
     // open output file early to fail fast
     if (!params.out_file.empty()) {
         ctx_cli.file_out.emplace(params.out_file, std::ios::binary);
-        
+
         if (!ctx_cli.file_out.has_value() || !ctx_cli.file_out->is_open()) {
             console::error("Failed to open output file '%s'\n", params.out_file.c_str());
             return 1;
         }
     }
-    
+
     console::set_display(DISPLAY_TYPE_RESET);
     console::set_completion_callback(auto_completion_callback);
 
