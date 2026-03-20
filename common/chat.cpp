@@ -1774,7 +1774,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             return msg;
         }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
-                                 input.substr(result.end));
+                                 effective_input.substr(result.end));
     }
 
     common_chat_msg msg;

@@ -1954,6 +1954,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         }
     }
 
+    // Verify the throw path produces a readable error message, not std::out_of_range.
+    // #20424 introduced effective_input = generation_prompt + input, but the throw
+    // uses input.substr(result.end) where result.end is in effective_input space.
+    {
+        auto tmpls = common_chat_templates_ptr(
+            common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
+
+        static common_chat_tool weather_tool{
+            "get_weather", "Get weather",
+            R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
+        };
+
+        common_chat_templates_inputs inputs;
+        inputs.tools = { weather_tool };
+        inputs.enable_thinking = true;
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja = true;
+        inputs.messages = {{ "user", "get weather" }};
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        common_peg_arena arena;
+        arena.load(params.parser);
+        common_chat_parser_params pp(params);
+
+        // generation_prompt is non-empty for thinking models, so result.end
+        // will be offset by generation_prompt.size() into effective_input space.
+        assert(!pp.generation_prompt.empty());
+
+        std::string bad_input =
+            "Thinking.\n"
+            "</think>"
+            "<tool_call>get_weather"
+            "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
+            "</tool_call>\n";
+
+        bool got_runtime_error = false;
+        bool got_out_of_range = false;
+        std::string error_msg;
+        try {
+            common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
+        } catch (const std::out_of_range & e) {
+            got_out_of_range = true;
+            error_msg = e.what();
+        } catch (const std::runtime_error & e) {
+            got_runtime_error = true;
+            error_msg = e.what();
+        }
+        assert(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
+        assert(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
+    }
+
     // Kimi-K2-Thinking tests - custom parser
     // Unique feature: tool call ID embeds function name as functions.<name>:<counter>
     {
