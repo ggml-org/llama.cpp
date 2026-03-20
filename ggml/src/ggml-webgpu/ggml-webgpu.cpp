@@ -1051,7 +1051,7 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
                         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
 
     uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
 static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
@@ -1167,7 +1167,7 @@ static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx,
 
     const uint32_t wg_x = CEIL_DIV((uint32_t) src1->ne[0], decisions->wg_size);
     const uint32_t wg_y = (uint32_t) (dst->ne[2] * dst->ne[3]);
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx,
@@ -1223,7 +1223,7 @@ static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx,
 
     const uint32_t wg_x = CEIL_DIV((uint32_t) src0->ne[1], decisions->block_size);
     const uint32_t wg_y = token_tiles * (uint32_t) dst->ne[2];
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_command ggml_webgpu_gated_delta_net(webgpu_context & ctx,
@@ -1308,7 +1308,7 @@ static webgpu_command ggml_webgpu_gated_delta_net(webgpu_context & ctx,
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  }
     };
 
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, h, n_seqs);
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx, ctx->param_buf_pool, pipeline, params, entries, h, n_seqs);
 }
 
 static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
@@ -2018,7 +2018,7 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
     };
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_row_norm_pipeline(shader_lib_ctx);
-    return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
+    return ggml_backend_webgpu_build(ctx->global_ctx, ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
 }
 
 static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
