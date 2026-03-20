@@ -4851,8 +4851,8 @@ kernel void kernel_conv_3d(
                     if (iw < 0 || iw >= args.IW) continue;
 
                     // Convert multi-dimensional coordinates to flat byte offsets
-                    int64_t w_idx = kx*args.nb0_0 + ky*args.nb0_1 + kz*args.nb0_2 + w_cn_idx*args.nb0_3;
-                    int64_t i_idx = iw*args.nb1_0 + ih*args.nb1_1 + id*args.nb1_2 + src_cn_idx*args.nb1_3;
+                    int64_t w_idx = kx*args.nb00 + ky*args.nb01 + kz*args.nb02 + w_cn_idx*args.nb03;
+                    int64_t i_idx = iw*args.nb10 + ih*args.nb11 + id*args.nb12 + src_cn_idx*args.nb13;
 
                     // Dereference memory and cast weights to f32 if they were f16
                     float w_val = (float)*(device const T*)((device const char*)src0 + w_idx);
@@ -4866,7 +4866,7 @@ kernel void kernel_conv_3d(
 
     // 5. Write the accumulated value out to RAM
     int64_t dst_cn_idx = batch_idx * args.OC + oc;
-    int64_t d_idx = ow*args.nb_0 + oh*args.nb_1 + od*args.nb_2 + dst_cn_idx*args.nb_3;
+    int64_t d_idx = ow*args.nb0 + oh*args.nb1 + od*args.nb2 + dst_cn_idx*args.nb3;
 
     *(device float*)(dst + d_idx) = sum;
 }
@@ -4875,8 +4875,8 @@ kernel void kernel_conv_3d(
 template [[host_name("kernel_conv_3d_f32_f32")]]
 kernel void kernel_conv_3d<float>(
     constant ggml_metal_kargs_conv_3d & args,
-    device const float * src0,
-    device const float * src1,
+    device const char * src0,
+    device const char * src1,
     device       char  * dst,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]]);
@@ -4885,8 +4885,8 @@ kernel void kernel_conv_3d<float>(
 template [[host_name("kernel_conv_3d_f16_f32")]]
 kernel void kernel_conv_3d<half>(
     constant ggml_metal_kargs_conv_3d & args,
-    device const half  * src0,
-    device const float * src1,
+    device const char  * src0,
+    device const char * src1,
     device       char  * dst,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]]);
