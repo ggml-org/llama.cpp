@@ -187,11 +187,7 @@ llama_kv_cache::llama_kv_cache(
                 t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
             }
         } else {
-            if (ggml_backend_buft_is_meta(buft)) {
-                buf = ggml_backend_meta_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-            } else {
-                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
-            }
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
         }
         if (!buf) {
             throw std::runtime_error("failed to allocate buffer for kv cache");

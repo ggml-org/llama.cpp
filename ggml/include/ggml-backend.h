@@ -247,33 +247,13 @@ extern "C" {
     };
 
     // function to assign split states for statically allocated tensors, compute tensor split states will be assigned to be compatible:
-    typedef struct ggml_backend_meta_split_state (*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
-
-    GGML_API bool ggml_backend_dev_is_meta(ggml_backend_dev_t dev);
-    GGML_API size_t ggml_backend_meta_dev_n_devs(ggml_backend_dev_t meta_dev);
-    GGML_API ggml_backend_dev_t ggml_backend_meta_dev_simple_dev(ggml_backend_dev_t meta_dev, size_t index);
+    typedef struct ggml_backend_meta_split_state(*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
 
     // create a new meta device from "simple" devices, meta buffer type/buffer/backend is then derived from this:
+    // TODO: this looks a bit strange - a backend API creates a device. I think we should try
+    //       express this as a backend registry functionality instead
     GGML_API ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
-
-    GGML_API bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft);
-    GGML_API size_t ggml_backend_meta_buft_n_bufts(ggml_backend_buffer_type_t meta_buft);
-    GGML_API ggml_backend_buffer_type_t ggml_backend_meta_buft_simple_buft(ggml_backend_buffer_type_t meta_buft, size_t index);
-
-    GGML_API bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf);
-    GGML_API size_t ggml_backend_meta_buffer_n_bufs(ggml_backend_buffer_t meta_buf);
-    GGML_API ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend_buffer_t meta_buf, size_t index);
-    GGML_API struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct ggml_tensor * tensor, size_t index);
-
-    GGML_API bool ggml_backend_is_meta(ggml_backend_t backend);
-    GGML_API size_t ggml_backend_meta_n_backends(ggml_backend_t meta_backend);
-    GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
-
-    GGML_API struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
-
-    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
-    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
     //
     // Backend registry
@@ -293,6 +273,8 @@ extern "C" {
     GGML_API ggml_backend_dev_t ggml_backend_dev_get(size_t index);
     GGML_API ggml_backend_dev_t ggml_backend_dev_by_name(const char * name);
     GGML_API ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type);
+
+    GGML_API bool ggml_backend_dev_is_meta(ggml_backend_dev_t dev);
 
     // Direct backend (stream) initialization
     // = ggml_backend_dev_init(ggml_backend_dev_by_name(name), params)
