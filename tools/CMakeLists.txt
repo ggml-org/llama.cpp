@@ -34,6 +34,7 @@ else()
     endif()
     if (NOT GGML_BACKEND_DL)
         # these examples use the backends directly and cannot be built with dynamic loading
+        add_subdirectory(activation-capture)
         add_subdirectory(cvector-generator)
         add_subdirectory(export-lora)
     endif()
