@@ -1174,8 +1174,17 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (flags & TENSOR_SKIP_IF_VIRTUAL) {
             return nullptr;
         }
-        ggml_type type = GGML_TYPE_F32;
         const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
+
+        // when tensor is not found in metadata and not required, return nullptr
+        // this is needed for tied embeddings: output.weight shares token_embd.weight data,
+        // so output.weight is not present in the GGUF file. returning nullptr here allows
+        // the caller to fall through to the TENSOR_DUPLICATED branch.
+        if (tid == -1 && (flags & TENSOR_NOT_REQUIRED)) {
+            return nullptr;
+        }
+
+        ggml_type type = GGML_TYPE_F32;
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
         }
