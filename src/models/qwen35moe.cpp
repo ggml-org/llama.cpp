@@ -64,6 +64,9 @@ llm_build_qwen35moe::llm_build_qwen35moe(const llama_model & model, const llm_gr
         cur = ggml_add(ctx0, cur, ffn_residual);
         cb(cur, "post_moe", il);
 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
         // Input for next layer
         inpL = cur;
     }
@@ -224,7 +227,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn_linear(
     beta = ggml_sigmoid(ctx0, beta);
 
     ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
-    alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
+    alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
     ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);

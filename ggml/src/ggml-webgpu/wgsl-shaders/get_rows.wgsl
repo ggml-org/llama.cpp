@@ -640,6 +640,35 @@ var<uniform> params: Params;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+#ifdef FLOAT_PARALLEL
+    let blocks_per_row = params.ne0 / BLOCK_SIZE;
+    let row_count = params.n_rows * params.ne2 * params.ne3;
+
+    if (gid.x >= blocks_per_row * row_count) {
+        return;
+    }
+
+    let block_idx = gid.x % blocks_per_row;
+    var row_idx = gid.x / blocks_per_row;
+    let i_dst3 = row_idx / (params.ne2 * params.n_rows);
+
+    row_idx = row_idx % (params.ne2 * params.n_rows);
+    let i_dst2 = row_idx / params.n_rows;
+    let i_dst1 = row_idx % params.n_rows;
+
+    let i_idx2 = i_dst3 % params.idx2;
+    let i_idx1 = i_dst2 % params.idx1;
+    let i_idx0 = i_dst1;
+
+    let i_idx = params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2;
+
+    let idx_val = u32(idx[i_idx]);
+
+    let i_src_row = params.offset_src + idx_val * params.stride_src1 + i_dst2 * params.stride_src2 + i_dst3 * params.stride_src3;
+    let i_dst_row = params.offset_dst + i_dst1 * params.stride_dst1 + i_dst2 * params.stride_dst2 + i_dst3 * params.stride_dst3;
+
+    copy_elements(i_src_row, i_dst_row, block_idx);
+#else
     if (gid.x >= params.n_rows * params.ne2 * params.ne3) {
         return;
     }
@@ -664,5 +693,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var i: u32 = 0; i < params.ne0/BLOCK_SIZE; i++) {
       copy_elements(i_src_row, i_dst_row, i);
     }
+#endif
 }
-

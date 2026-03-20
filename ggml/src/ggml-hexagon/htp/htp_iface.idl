@@ -7,7 +7,7 @@
 #include "remote.idl"
 
 interface htp_iface : remote_handle64 {
-    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx);
+    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx, in uint32 use_hmx);
     AEEResult stop();
     AEEResult enable_etm();
     AEEResult disable_etm();

@@ -1844,23 +1844,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar"}, "GRAMMAR",
-        string_format("BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", params.sampling.grammar.c_str()),
+        "BNF-like grammar to constrain generations (see samples in grammars/ dir)",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = value;
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, value};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar-file"}, "FNAME",
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = read_file(value);
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(value)};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = json_schema_to_grammar(json::parse(value));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1877,7 +1877,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::istreambuf_iterator<char>(),
                 std::back_inserter(schema)
             );
-            params.sampling.grammar = json_schema_to_grammar(json::parse(schema));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(schema))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -3130,6 +3130,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
+        {"--skip-chat-parsing"},
+        {"--no-skip-chat-parsing"},
+        string_format(
+            "force a pure content parser, even if a Jinja template is specified; model will output everything "
+            "in the content section, including any reasoning and/or tool calls (default: disabled)"
+        ),
+        [](common_params & params, bool value) {
+            params.force_pure_content_parser = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SKIP_CHAT_PARSING"));
+    add_opt(common_arg(
         {"--prefill-assistant"},
         {"--no-prefill-assistant"},
         string_format(
@@ -3497,7 +3508,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.ngram_size_n),
