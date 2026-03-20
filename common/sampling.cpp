@@ -277,9 +277,10 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
                     LOG_DBG("%s: accepted prefill token (%d)\n", __func__, token);
                 }
             } catch (std::exception &e) {
-                LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                    common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-                throw e;
+                LOG_WRN("%s: grammar prefill failed, disabling grammar constraints: %s\n",
+                        __func__, e.what());
+                llama_sampler_free(grmr);
+                grmr = nullptr;
             }
         }
     }
