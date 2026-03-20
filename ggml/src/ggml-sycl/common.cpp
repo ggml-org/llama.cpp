@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <future>
 #include <mutex>
@@ -437,13 +438,26 @@ void ggml_sycl_clear_staging_cache() {
     g_tp_staging_cache.clear();
 }
 
-// atexit handler: free all tracked host allocations to prevent GPU driver lockup.
+// GPU cleanup: free all tracked host allocations to prevent GPU driver lockup.
 // When a process exits without freeing sycl::malloc_host memory, the Level Zero
-// driver may hold stale GGTT mappings that block future allocations from other processes.
+// driver holds stale GGTT mappings that block ALL future sycl::malloc_host calls
+// from ANY process until reboot. This cleanup runs on:
+//   1. Normal exit (atexit handler)
+//   2. SIGTERM (from `timeout` command, Ctrl+C forwarding, etc.)
+//   3. SIGINT (Ctrl+C direct)
+//   4. SIGHUP (terminal closed)
+// Note: SIGKILL (kill -9) cannot be caught — that still requires a reboot.
+
+static std::atomic<bool> g_sycl_cleanup_done{false};
+
 static void ggml_sycl_cleanup_host_allocations() {
+    // Prevent double-cleanup (signal handler + atexit both fire)
+    if (g_sycl_cleanup_done.exchange(true, std::memory_order_acq_rel)) return;
+
     std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
     if (g_sycl_host_alloc_sizes.empty()) return;
-    GGML_LOG_INFO("[SYCL] atexit: freeing %zu host allocations\n", g_sycl_host_alloc_sizes.size());
+    fprintf(stderr, "[SYCL] cleanup: freeing %zu host allocations to prevent GPU lockup\n",
+            g_sycl_host_alloc_sizes.size());
     for (auto & [ptr, sz] : g_sycl_host_alloc_sizes) {
         if (ptr) {
             try {
@@ -454,6 +468,15 @@ static void ggml_sycl_cleanup_host_allocations() {
         }
     }
     g_sycl_host_alloc_sizes.clear();
+    fprintf(stderr, "[SYCL] cleanup: done\n");
+}
+
+static void ggml_sycl_signal_handler(int sig) {
+    // Minimal work in signal handler — just call cleanup and re-raise
+    ggml_sycl_cleanup_host_allocations();
+    // Re-raise the signal with default handler to get proper exit code
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 void * ggml_sycl_host_malloc(size_t size) try {
@@ -461,10 +484,16 @@ void * ggml_sycl_host_malloc(size_t size) try {
         return nullptr;
     }
 
-    // Register cleanup handler once to prevent GPU lockup on exit
+    // Register cleanup handlers once to prevent GPU lockup on exit/kill.
+    // SIGTERM is sent by `timeout` command and is the most common kill signal.
+    // Without cleanup, stale GGTT mappings block ALL future sycl::malloc_host
+    // calls from ANY process until reboot.
     static std::once_flag cleanup_registered;
     std::call_once(cleanup_registered, []() {
         std::atexit(ggml_sycl_cleanup_host_allocations);
+        signal(SIGTERM, ggml_sycl_signal_handler);
+        signal(SIGINT,  ggml_sycl_signal_handler);
+        signal(SIGHUP,  ggml_sycl_signal_handler);
     });
 
     // Warn if allocation exceeds the probed host limit, but attempt it anyway.
