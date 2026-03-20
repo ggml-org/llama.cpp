@@ -723,7 +723,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr double INFINITE = std::numeric_limits<double>::infinity();
     constexpr uint64_t STATE_MAGIC = 0x4250572d5631; // "BPW-V1"
     constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
-    constexpr float penalty = 5.0f;
+    constexpr float penalty = 2.0f;
     const char * func = __func__;
 
     // Tensor size in bytes for a given type
@@ -989,14 +989,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         const bool has_vals = values_sample != nullptr;
         const bool has_acts = activations_sample != nullptr;
-        const bool use_wce_for_tensor = has_acts && has_vals && is_angle_sensitive(t->name);
+        const bool use_wce = has_acts && has_vals && is_angle_sensitive(t->name);
 
         // Sampled stats for MSE
         std::vector<double> local_row_sq_norm;
         const std::vector<double> * ptr_row_sq_norm = nullptr;
 
         // Setup reference stats pointers for MSE
-        if (!use_wce_for_tensor) {
+        if (!use_wce) {
             if (ref_mse) {
                 ptr_row_sq_norm = & ref_mse->row_sq_norm;
             } else {
@@ -1070,7 +1070,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         };
 
         // Weighted Cosine Error (WCE)
-        if (use_wce_for_tensor) {
+        if (use_wce) {
             double total_cos_error = 0.0;
             size_t off = 0;
             size_t sample_idx = 0;
@@ -1333,7 +1333,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         prepare_broadcast(val_ptr, val_sz, val_storage, val_vec_ptr);
         prepare_broadcast(act_ptr, act_sz, act_storage, act_vec_ptr);
 
-        const bool use_wce_for_tensor = val_vec_ptr && act_vec_ptr && is_angle_sensitive(remapped_name);
+        const bool use_wce = val_vec_ptr && act_vec_ptr && is_angle_sensitive(remapped_name);
 
         // Precompute WCE reference stats
         wce_cache ref_wce;
@@ -1341,7 +1341,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t total_rows_sampled = 0;
         for (int64_t r : rows_sample) { total_rows_sampled += r; }
 
-        if (use_wce_for_tensor) {
+        if (use_wce) {
             ref_wce.row_sq_norm.reserve(total_rows_sampled);
             size_t off = 0;
             for (int64_t s = 0; s < ne2; ++s) {
@@ -1437,8 +1437,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
-            const wce_cache * ptr_ref_wce = use_wce_for_tensor && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
-            const mse_cache * ptr_ref_mse = !use_wce_for_tensor && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
+            const wce_cache * ptr_ref_wce = use_wce && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
+            const mse_cache * ptr_ref_mse = !use_wce && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
 
             quant_error qe = compute_quant_error(
                 tensor,
