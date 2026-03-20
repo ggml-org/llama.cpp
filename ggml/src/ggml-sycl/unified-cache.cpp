@@ -4775,9 +4775,6 @@ void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
             budget_exceeded_ = false;
         }
     }
-    // Recalculate model placement decision based on new effective budget.
-    // Currently a no-op — the unified cache manages budget internally.
-    ggml_sycl_recalc_model_exceeds_vram(effective_budget);
 }
 
 void unified_cache::unpin_on_event(const ggml_sycl_cache_id & key_id,
@@ -6155,7 +6152,14 @@ void unified_cache_log_budget_summary(int device) {
     if (env_pct) {
         budget_pct = std::max(1, std::min(100, std::atoi(env_pct)));
     }
-    const bool exceeds = ggml_backend_sycl_model_exceeds_vram(nullptr);
+    // Compute model-exceeds-VRAM directly from model size vs available budget
+    const size_t model_size = ggml_sycl_get_model_size();
+    size_t       moe_total_log = 0;
+    int          n_exp_log = 0, n_exp_used_log = 0;
+    ggml_sycl_get_moe_info(&moe_total_log, &n_exp_log, &n_exp_used_log);
+    const size_t effective_model = compute_moe_effective_weight_bytes(
+        model_size, moe_total_log, n_exp_log, n_exp_used_log);
+    const bool exceeds = (model_size > 0) && (effective_model > avail_for_wt);
 
     GGML_LOG_INFO(
         "[UNIFIED-CACHE] Budget summary for device %d:\n"
@@ -6304,8 +6308,6 @@ unified_budget_info unified_cache_get_budget_info(int device) {
         info.available_for_weights = info.budget_bytes;
     }
 
-    info.model_exceeds_vram = ggml_backend_sycl_model_exceeds_vram(nullptr);
-
     // Populate MoE fields from tensor inventory
     size_t moe_total = 0;
     int    n_exp = 0, n_exp_used = 0;
@@ -6314,6 +6316,13 @@ unified_budget_info unified_cache_get_budget_info(int device) {
     info.n_expert_total      = n_exp;
     info.n_expert_used       = n_exp_used;
     info.active_expert_bytes = compute_moe_effective_weight_bytes(moe_total, moe_total, n_exp, n_exp_used);
+
+    // Compute model_exceeds_vram directly from model size vs available budget.
+    // No global flag needed — computed on-the-fly from cache state.
+    const size_t model_size    = ggml_sycl_get_model_size();
+    const size_t effective_size = compute_moe_effective_weight_bytes(
+        model_size, moe_total, n_exp, n_exp_used);
+    info.model_exceeds_vram = (model_size > 0) && (effective_size > info.available_for_weights);
 
     return info;
 }

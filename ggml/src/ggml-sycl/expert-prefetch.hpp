@@ -310,6 +310,7 @@ class ExpertPredictor {
     int   window_size() const;    // Current window sample count (up to ACCURACY_WINDOW)
     int   window_hits() const;    // Hits within current window
     bool  is_active() const { return initialized_; }
+    int   n_layers() const { return n_layers_; }
 
     // Returns true when prediction accuracy is too low for useful prefetching.
     // Checked by ExpertPrefetcher to short-circuit hint().

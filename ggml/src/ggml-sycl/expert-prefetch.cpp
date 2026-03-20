@@ -763,7 +763,33 @@ std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_
         predicted.push_back(eidx);
     }
 
-    // Heuristic 2: Fill remaining slots from global frequency table.
+    // Heuristic 2: Cross-layer correlation — experts active in a recent
+    // preceding layer for the CURRENT token are likely active in this layer.
+    // Sequential IDs include gate/up/down tensors, but record_actual() only
+    // fills gate tensor entries. Scan backwards to find the nearest non-empty
+    // last_experts_ entry (i.e., previous block's gate routing).
+    if (static_cast<int>(predicted.size()) < n_experts_used_) {
+        for (int prev = layer_idx - 1; prev >= 0 && prev >= layer_idx - 4; prev--) {
+            const auto & prev_layer = last_experts_[prev];
+            if (prev_layer.empty()) continue;
+            for (int eidx : prev_layer) {
+                if (static_cast<int>(predicted.size()) >= n_experts_used_) {
+                    break;
+                }
+                // Skip duplicates (already predicted by Heuristic 1)
+                bool dup = false;
+                for (int p : predicted) {
+                    if (p == eidx) { dup = true; break; }
+                }
+                if (!dup) {
+                    predicted.push_back(eidx);
+                }
+            }
+            break;  // Only use the nearest non-empty predecessor
+        }
+    }
+
+    // Heuristic 3: Fill remaining slots from global frequency table.
     // Picks the most commonly activated experts (excluding already-predicted ones).
     if (static_cast<int>(predicted.size()) < n_experts_used_) {
         int remaining = n_experts_used_ - static_cast<int>(predicted.size());

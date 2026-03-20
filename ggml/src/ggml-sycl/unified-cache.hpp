@@ -1414,7 +1414,7 @@ struct unified_budget_info {
     size_t runtime_bytes;          // KV + compute + staging + graph
     size_t available_for_weights;  // budget - runtime (what can hold weights)
     int    budget_pct;             // GGML_SYCL_VRAM_BUDGET_PCT value used
-    bool   model_exceeds_vram;     // True if model > available_for_weights
+    bool   model_exceeds_vram;     // True if effective model size > available_for_weights (computed on-the-fly)
     // MoE expert breakdown (non-zero only for MoE models)
     size_t expert_weight_bytes;  // Total bytes for ALL expert tensors
     size_t active_expert_bytes;  // Estimated bytes for active experts only
@@ -1433,7 +1433,7 @@ size_t unified_cache_get_margin_bytes(int device);
 // Returns true when VRAM is too tight to hold both weights and KV cache,
 // or when GGML_SYCL_HOST_COMPUTE=1 (KV on host avoids GPU island transitions).
 // Override: GGML_SYCL_KV_HOST=1 forces host, GGML_SYCL_KV_HOST=0 forces device.
-// kv_estimate_bytes: estimated KV cache size (0 = skip margin check, use model_exceeds_vram only)
+// kv_estimate_bytes: estimated KV cache size (0 = skip margin check)
 bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes = 0);
 
 // Calculate effective weight bytes accounting for MoE expert sparsity.
@@ -1612,13 +1612,9 @@ ExpertPlacementTable & get_expert_placement_table();
 
 }  // namespace ggml_sycl
 
-// === Cross-module Budget Recalculation ===
+// === Cross-module Budget Queries ===
 // These functions are defined in ggml-sycl.cpp but called from unified-cache.cpp
-// to recalculate model placement decisions when VRAM budget changes.
-
-// No-op: unified_cache_active() replaces g_model_exceeds_vram.
-// Kept for API compatibility — the unified cache manages budget internally.
-void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget);
+// to query tensor inventory state for budget calculations.
 
 // Get the total model size from tensor inventory (for budget calculations)
 size_t ggml_sycl_get_model_size();

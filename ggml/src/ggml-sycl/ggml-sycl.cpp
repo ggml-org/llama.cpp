@@ -174,9 +174,8 @@ static bool unified_cache_active() {
     return ggml_sycl::unified_cache_enabled();
 }
 
-// Tracks whether the model's effective weight size exceeds the VRAM budget.
-// Set once by set_tensor_inventory(), queried by ggml_backend_sycl_model_exceeds_vram().
-static std::atomic<bool> g_model_exceeds_budget{ false };
+// Model-exceeds-VRAM is computed on-the-fly from model size vs VRAM budget.
+// No global flag needed — the unified cache manages budget internally.
 
 // ============================================================================
 // FP16 Weight Cache: Persistent pre-dequantized FP16 weights in VRAM
@@ -709,6 +708,36 @@ static void moe_apply_popularity_placement() {
 }
 
 // ---------------------------------------------------------------------------
+// MoE expert tensor type classification.
+// In MoE FFN: hidden -> gate*up -> SiLU -> down -> output
+// gate+up are read first (enables SiLU overlap), down is read second.
+// ---------------------------------------------------------------------------
+enum moe_tensor_type : int {
+    MOE_TENSOR_GATE    = 0,  // ffn_gate_exps — read first
+    MOE_TENSOR_UP      = 1,  // ffn_up_exps   — read first (with gate)
+    MOE_TENSOR_DOWN    = 2,  // ffn_down_exps — read second (after SiLU)
+    MOE_TENSOR_UNKNOWN = 3,
+};
+
+// Classify tensor type from its name (e.g. "blk.5.ffn_gate_exps").
+static moe_tensor_type moe_classify_tensor(const char * name) {
+    if (!name) return MOE_TENSOR_UNKNOWN;
+    if (strstr(name, "ffn_gate_exps")) return MOE_TENSOR_GATE;
+    if (strstr(name, "ffn_up_exps"))   return MOE_TENSOR_UP;
+    if (strstr(name, "ffn_down_exps")) return MOE_TENSOR_DOWN;
+    return MOE_TENSOR_UNKNOWN;
+}
+
+// Extract block number from tensor name (e.g. "blk.5.ffn_gate_exps" -> 5).
+// Returns -1 if not found.  Used to group gate/up/down tensors from the same block.
+static int moe_extract_block_number(const char * name) {
+    if (!name) return -1;
+    const char * blk = strstr(name, "blk.");
+    if (!blk) return -1;
+    return atoi(blk + 4);
+}
+
+// ---------------------------------------------------------------------------
 // Per-expert metadata for proactive pre-staging after warmup.
 // Populated once during moe_hybrid_init_once(), keyed by (hash_layer_id, expert_idx).
 // ---------------------------------------------------------------------------
@@ -722,6 +751,8 @@ struct moe_expert_meta {
     size_t                  bytes;        // per-expert weight bytes
     int                     layer_id;     // hash-based layer_id
     int                     expert_idx;   // expert index within layer
+    moe_tensor_type         tensor_role;  // gate/up/down classification
+    int                     block_num;    // transformer block number (-1 if unknown)
 };
 static std::vector<moe_expert_meta> g_moe_expert_meta;
 static std::mutex                   g_moe_expert_meta_mutex;
@@ -759,13 +790,13 @@ static void moe_prestage_popular_experts() {
     std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
     if (g_moe_expert_meta.empty()) return;
 
-    // Group experts by layer_id, sort each group by popularity rank
-    std::unordered_map<int, std::vector<const moe_expert_meta *>> by_layer;
+    // Count unique layer IDs for budget calculations.
+    std::unordered_set<int> layer_ids;
     for (const auto & meta : g_moe_expert_meta) {
-        by_layer[meta.layer_id].push_back(&meta);
+        layer_ids.insert(meta.layer_id);
     }
 
-    const int n_layers = static_cast<int>(by_layer.size());
+    const int n_layers = static_cast<int>(layer_ids.size());
     if (n_layers == 0) return;
 
     const size_t expert_bytes = g_moe_expert_meta[0].bytes;
@@ -778,150 +809,231 @@ static void moe_prestage_popular_experts() {
     size_t avail = ggml_sycl::unified_cache_available_for_compute(device);
     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
 
-    // Sort all layers by popularity rank BEFORE Phase 1 or Phase 2 —
-    // both phases iterate experts in popularity order.
-    for (auto & [lid, experts] : by_layer) {
-        std::sort(experts.begin(), experts.end(),
-                  [&](const moe_expert_meta * a, const moe_expert_meta * b) {
-                      auto pa = ptable.get(a->layer_id, a->expert_idx);
-                      auto pb = ptable.get(b->layer_id, b->expert_idx);
-                      int ra = (pa.popularity_rank >= 0) ? pa.popularity_rank : INT_MAX;
-                      int rb = (pb.popularity_rank >= 0) ? pb.popularity_rank : INT_MAX;
-                      return ra < rb;
-                  });
+    // Build a global priority list shared by Phase 1 (GPU0) and Phase 2 (secondary GPUs).
+    // Sort order: popularity rank (ascending), then tensor_role (gate < up < down).
+    // This ensures gate+up tensors are cached before down tensors for each expert,
+    // which matches MoE FFN data flow: gate*up computed first, down computed second.
+    // Under VRAM pressure, down_exps are dropped first since they can be prefetched
+    // during the gate*up -> SiLU computation.
+    std::vector<const moe_expert_meta *> priority_list;
+    priority_list.reserve(g_moe_expert_meta.size());
+    for (const auto & meta : g_moe_expert_meta) {
+        priority_list.push_back(&meta);
     }
+    std::sort(priority_list.begin(), priority_list.end(),
+              [&](const moe_expert_meta * a, const moe_expert_meta * b) {
+                  auto pa = ptable.get(a->layer_id, a->expert_idx);
+                  auto pb = ptable.get(b->layer_id, b->expert_idx);
+                  int ra = (pa.popularity_rank >= 0) ? pa.popularity_rank : INT_MAX;
+                  int rb = (pb.popularity_rank >= 0) ? pb.popularity_rank : INT_MAX;
+                  if (ra != rb) return ra < rb;
+                  // Same popularity: gate before up before down
+                  return static_cast<int>(a->tensor_role) < static_cast<int>(b->tensor_role);
+              });
 
-    int prestaged = 0;
-    int skipped   = 0;
-    size_t slots_per_layer = 0;
+    int prestaged      = 0;
+    int skipped        = 0;
+    int down_deferred  = 0;
 
     if (avail > 0 && cache) {
-        // Compute slots per layer: spread VRAM budget evenly across layers
-        const size_t total_slots  = avail / expert_bytes;
-        slots_per_layer = std::max(size_t(1), total_slots / static_cast<size_t>(n_layers));
+        const size_t total_slots = avail / expert_bytes;
 
-        for (auto & [lid, experts] : by_layer) {
-            size_t staged_this_layer = 0;
-            for (const auto * meta : experts) {
-                if (staged_this_layer >= slots_per_layer) break;
+        // Determine if budget is tight: can we fit all 3 tensor types per expert?
+        // Each logical expert has 3 tensors (gate/up/down).  Count unique (block,expert) pairs.
+        // n_layers here counts hash-based layer_ids which includes gate+up+down separately,
+        // so n_blocks = n_layers / 3 (approximately).
+        const int n_blocks_approx = std::max(1, n_layers / 3);
+        const int n_experts_per_layer = ptable.n_experts();
+        const size_t full_expert_slots = static_cast<size_t>(n_blocks_approx) *
+                                         static_cast<size_t>(n_experts_per_layer) * 3;
+        const bool budget_tight = (total_slots < full_expert_slots);
 
-                // Skip experts already in VRAM
-                auto placement = ptable.get(meta->layer_id, meta->expert_idx);
-                if (placement.device_ptr != nullptr) {
-                    skipped++;
-                    continue;
-                }
+        for (const auto * meta : priority_list) {
+            if (static_cast<size_t>(prestaged) >= total_slots) break;
 
-                // Build cache key
-                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
-                    meta->tensor, meta->extra, meta->expert_idx);
-                if (!key.valid) continue;
+            // Under tight VRAM budget, skip down_exps tensors.
+            // gate+up are needed first in MoE FFN; down can be prefetched during SiLU.
+            if (budget_tight && meta->tensor_role == MOE_TENSOR_DOWN) {
+                down_deferred++;
+                continue;
+            }
 
-                // Build SOA layout request
-                const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
-                    meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
-                const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+            // Skip experts already in VRAM
+            auto placement = ptable.get(meta->layer_id, meta->expert_idx);
+            if (placement.device_ptr != nullptr) {
+                skipped++;
+                continue;
+            }
 
-                ggml_sycl_reorder_fill_ctx reorder_ctx{};
-                reorder_ctx.type        = meta->type;
-                reorder_ctx.ncols       = meta->ne0;
-                reorder_ctx.nrows       = meta->ne1;
-                reorder_ctx.nbytes      = meta->bytes;
-                reorder_ctx.dst_bytes   = dst_bytes;
-                reorder_ctx.layout      = GGML_LAYOUT_SOA;
-                reorder_ctx.src_is_device = false;
-                reorder_ctx.device_id   = device;
+            // Build cache key
+            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+                meta->tensor, meta->extra, meta->expert_idx);
+            if (!key.valid) continue;
 
-                ggml_sycl::cache_layout_request req{};
-                req.key              = key;
-                req.src_ptr          = meta->data_ptr;
-                req.src_size         = meta->bytes;
-                req.dst_size         = dst_bytes;
-                req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                req.layer_id         = meta->layer_id;
-                req.expert_id        = meta->expert_idx;
-                req.layout           = GGML_LAYOUT_SOA;
-                req.validate_content = false;
-                req.fill_fn          = ggml_sycl_fill_reordered_host;
-                req.fill_ctx         = &reorder_ctx;
+            // Build SOA layout request
+            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
+            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
-                try {
-                    auto result = cache->ensure_cached_layout(req, {});
-                    if (result.status == ggml_sycl::cache_layout_status::READY ||
-                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-                        if (result.device_ptr) {
-                            ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
-                        }
-                        prestaged++;
-                        staged_this_layer++;
+            ggml_sycl_reorder_fill_ctx reorder_ctx{};
+            reorder_ctx.type        = meta->type;
+            reorder_ctx.ncols       = meta->ne0;
+            reorder_ctx.nrows       = meta->ne1;
+            reorder_ctx.nbytes      = meta->bytes;
+            reorder_ctx.dst_bytes   = dst_bytes;
+            reorder_ctx.layout      = GGML_LAYOUT_SOA;
+            reorder_ctx.src_is_device = false;
+            reorder_ctx.device_id   = device;
+
+            ggml_sycl::cache_layout_request req{};
+            req.key              = key;
+            req.src_ptr          = meta->data_ptr;
+            req.src_size         = meta->bytes;
+            req.dst_size         = dst_bytes;
+            req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+            req.layer_id         = meta->layer_id;
+            req.expert_id        = meta->expert_idx;
+            req.layout           = GGML_LAYOUT_SOA;
+            req.validate_content = false;
+            req.fill_fn          = ggml_sycl_fill_reordered_host;
+            req.fill_ctx         = &reorder_ctx;
+
+            try {
+                auto result = cache->ensure_cached_layout(req, {});
+                if (result.status == ggml_sycl::cache_layout_status::READY ||
+                    result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                    if (result.device_ptr) {
+                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
                     }
-                } catch (...) {
-                    // VRAM exhausted — stop pre-staging
-                    break;
+                    prestaged++;
                 }
+            } catch (...) {
+                // VRAM exhausted — stop pre-staging
+                break;
             }
         }
     }
 
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
-                  "(%d already cached, %zu slots/layer, %d layers, avail=%zu)\n",
-                  prestaged, skipped, slots_per_layer, n_layers, avail);
+                  "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
+                  prestaged, skipped, down_deferred, n_layers, avail);
 
-    // Phase 2: Fill secondary GPUs with the MOST POPULAR experts (expert-split).
-    // After warmup profiling, we know which experts are hot.  Secondary GPUs
-    // may already be full from init-time uploads (sorted by expert_idx), but
-    // those may not be the most popular.  Unpin old entries so the cache can
-    // evict cold experts and replace them with hot ones.
-    for (int dev = 1; dev < GGML_SYCL_MAX_DEVICES; dev++) {
-        if (!g_expert_prefetchers[dev].is_initialized()) continue;
+    // Phase 2: Fill secondary GPUs with the NEXT TIER of popular experts.
+    // Uses the same global priority list from Phase 1 (sorted by popularity
+    // rank then tensor_role: gate < up < down).  Experts already placed on
+    // GPU0 are skipped — only experts that did NOT fit on GPU0 overflow here.
+    // Under tight VRAM, down_exps tensors are deferred (gate+up are needed
+    // first in MoE FFN; down can be prefetched during the SiLU computation).
+    //
+    // Budget is SOA-aware: each device tracks remaining bytes, not just slot
+    // counts, because SOA layout may expand expert size beyond AOS bytes.
+    {
+        struct sec_budget {
+            int                         dev;
+            size_t                      bytes_remaining;
+            ggml_sycl::unified_cache *  cache;
+            int                         staged;
+            int                         skipped;
+            int                         down_deferred;
+        };
+        std::vector<sec_budget> sec_budgets;
 
-        ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
-        if (!sec_cache) continue;
+        for (int dev = 1; dev < GGML_SYCL_MAX_DEVICES; dev++) {
+            if (!g_expert_prefetchers[dev].is_initialized()) continue;
 
-        // Use total cache capacity for slot calculation, not just free space.
-        // The cache may be full from init-time uploads, but those entries are
-        // evictable after unpinning.  ensure_cached_layout handles eviction.
-        const size_t sec_budget = ggml_sycl::unified_cache_total_managed(dev);
-        size_t sec_slots = (expert_bytes > 0) ? sec_budget / expert_bytes : 0;
-        if (sec_slots == 0) continue;
+            ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
+            if (!sec_cache) continue;
 
-        // Unpin expert entries so the cache can evict cold experts when full.
-        // Init-time uploads pin entries via pool allocation; without unpinning,
-        // the cache cannot make room for newly-popular experts.
-        sec_cache->unpin_experts();
+            // Use total cache capacity: after unpinning, init-time entries are
+            // evictable.  ensure_cached_layout handles LRU eviction internally.
+            const size_t sec_total = ggml_sycl::unified_cache_total_managed(dev);
+            if (sec_total == 0 || expert_bytes == 0) continue;
 
-        size_t sec_per_layer = std::max(size_t(1), sec_slots / static_cast<size_t>(n_layers));
+            // Unpin expert entries so the cache can evict cold experts when full.
+            sec_cache->unpin_experts();
 
-        int sec_staged  = 0;
-        int sec_skipped = 0;
-        for (auto & [lid, experts] : by_layer) {
-            size_t staged_this = 0;
-            for (const auto * meta : experts) {
-                if (staged_this >= sec_per_layer) break;
+            sec_budgets.push_back({ dev, sec_total, sec_cache, 0, 0, 0 });
+        }
+
+        if (!sec_budgets.empty()) {
+            // Walk the global priority list.  Phase 1 consumed the hottest
+            // experts for GPU0; Phase 2 picks up the remainder for secondary
+            // GPUs, filling the device with the most remaining budget first.
+            for (const auto * meta : priority_list) {
+                if (sec_budgets.empty()) break;
+
                 auto placement = ptable.get(meta->layer_id, meta->expert_idx);
-                // Skip experts already cached on THIS secondary device
-                if (placement.device_ptr != nullptr && placement.device_id == dev) {
-                    sec_skipped++;
-                    staged_this++;  // Count toward per-layer limit
-                    continue;
-                }
-                // Skip experts already on GPU0 (they're served from GPU0's cache)
+
+                // Skip experts already on GPU0 (served from GPU0's cache)
                 if (placement.device_ptr != nullptr && placement.device_id == 0) {
                     continue;
                 }
 
+                // Skip experts already on a secondary device
+                if (placement.device_ptr != nullptr && placement.device_id >= 1) {
+                    // Count as skipped for the device that owns it
+                    for (auto & b : sec_budgets) {
+                        if (b.dev == placement.device_id) {
+                            b.skipped++;
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Compute SOA byte count for budget tracking (device-independent for SOA)
+                const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                    meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, 0);
+                const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+
+                // Find secondary device with most remaining budget that can fit this expert
+                int    best_idx   = -1;
+                size_t best_space = 0;
+                for (int i = 0; i < static_cast<int>(sec_budgets.size()); i++) {
+                    if (sec_budgets[i].bytes_remaining >= dst_bytes &&
+                        sec_budgets[i].bytes_remaining > best_space) {
+                        best_idx   = i;
+                        best_space = sec_budgets[i].bytes_remaining;
+                    }
+                }
+                if (best_idx < 0) {
+                    // No secondary device has room — remove exhausted entries
+                    sec_budgets.erase(
+                        std::remove_if(sec_budgets.begin(), sec_budgets.end(),
+                                       [dst_bytes](const sec_budget & b) {
+                                           return b.bytes_remaining < dst_bytes;
+                                       }),
+                        sec_budgets.end());
+                    continue;
+                }
+
+                auto & budget = sec_budgets[best_idx];
+
+                // Under tight budget, defer down_exps tensors (same logic as Phase 1).
+                const size_t total_slots = budget.bytes_remaining / dst_bytes;
+                if (total_slots < 32 && meta->tensor_role == MOE_TENSOR_DOWN) {
+                    budget.down_deferred++;
+                    continue;
+                }
+
                 void * ptr = ggml_sycl::moe_expert_ensure_soa_cached(
-                    meta->layer_id, meta->expert_idx, dev);
+                    meta->layer_id, meta->expert_idx, budget.dev);
                 if (ptr) {
-                    sec_staged++;
-                    staged_this++;
+                    budget.staged++;
+                    budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
                 }
             }
-        }
-        if (sec_staged > 0 || sec_skipped > 0) {
-            GGML_LOG_INFO("[MOE-PRESTAGE] Secondary GPU %d: %d experts staged, %d already cached "
-                          "(%zu slots, %zu/layer)\n",
-                          dev, sec_staged, sec_skipped, sec_slots, sec_per_layer);
+
+            // Log summary per secondary device
+            for (const auto & b : sec_budgets) {
+                if (b.staged > 0 || b.skipped > 0) {
+                    GGML_LOG_INFO("[MOE-PRESTAGE] Secondary GPU %d: %d experts staged, "
+                                  "%d already cached, %d down_exps deferred "
+                                  "(budget remaining=%.1f MB)\n",
+                                  b.dev, b.staged, b.skipped, b.down_deferred,
+                                  b.bytes_remaining / (1024.0 * 1024.0));
+                }
+            }
         }
     }
 }
@@ -1350,10 +1462,12 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             meta.type       = info.tensor->type;
             meta.ne0        = info.tensor->ne[0];
             meta.ne1        = info.tensor->ne[1];
-            meta.data_ptr   = info.data_ptr;
-            meta.bytes      = info.bytes;
-            meta.layer_id   = info.layer_id;
-            meta.expert_idx = info.expert_idx;
+            meta.data_ptr    = info.data_ptr;
+            meta.bytes       = info.bytes;
+            meta.layer_id    = info.layer_id;
+            meta.expert_idx  = info.expert_idx;
+            meta.tensor_role = moe_classify_tensor(info.tensor->name);
+            meta.block_num   = moe_extract_block_number(info.tensor->name);
             g_moe_expert_meta.push_back(meta);
         }
         GGML_LOG_INFO("[MOE-HYBRID] Expert metadata stored: %zu entries for post-warmup pre-staging\n",
@@ -4057,7 +4171,6 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Streaming/headroom reserves should only activate when the model genuinely
     // doesn't fit, not when S1 is active for a small model.
     const bool model_exceeds_vram = effective_model_size > vram_budget;
-    g_model_exceeds_budget.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
     GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB, model_size=%.1f MB, exceeds=%s\n", budget_pct,
@@ -4097,7 +4210,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     GGML_LOG_INFO("[SYCL-BUDGET] vram_budget_base=%.1f MB, final_budget=%.1f MB, model_size=%.1f MB\n",
                   vram_budget_base / (1024.0 * 1024.0), vram_budget / (1024.0 * 1024.0),
                   g_tensor_inventory_total_size / (1024.0 * 1024.0));
-    GGML_LOG_INFO("[SYCL-BUDGET] unified_cache_active=%s, model_exceeds_budget=%s\n",
+    GGML_LOG_INFO("[SYCL-BUDGET] unified_cache_active=%s, model_exceeds_vram=%s\n",
                   unified_cache_active() ? "true" : "false",
                   model_exceeds_vram ? "true (HOST placement)" : "false (VRAM placement)");
 
@@ -4123,12 +4236,6 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load() ? "enabled" : "disabled");
-}
-
-// No-op: unified_cache_active() replaces g_model_exceeds_vram.
-// The unified cache manages budget internally; external recalculation is no longer needed.
-void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
-    (void) effective_budget;
 }
 
 // Get the total model size from tensor inventory (for budget calculations)
@@ -4157,8 +4264,44 @@ bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
 }
 
 bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend) {
-    (void) backend;  // Backend context not needed for current implementation
-    return g_model_exceeds_budget.load(std::memory_order_acquire);
+    // Compute on-the-fly: compare effective model size against VRAM budget.
+    // No global flag needed — the unified cache manages budget internally.
+    int device = 0;
+    if (backend) {
+        ggml_backend_sycl_context * ctx = (ggml_backend_sycl_context *) backend->context;
+        if (ctx) {
+            device = ctx->device;
+        }
+    }
+
+    size_t model_size = ggml_sycl_get_model_size();
+    if (model_size == 0) {
+        return false;  // Inventory not yet populated
+    }
+
+    // Account for MoE sparsity (only active experts needed)
+    size_t moe_total = 0;
+    int    n_exp = 0, n_exp_used = 0;
+    ggml_sycl_get_moe_info(&moe_total, &n_exp, &n_exp_used);
+    const size_t effective_size = ggml_sycl::compute_moe_effective_weight_bytes(
+        model_size, moe_total, n_exp, n_exp_used);
+
+    // Compute VRAM budget (same logic as set_tensor_inventory)
+    size_t free_mem = 0, total_mem = 0;
+    ggml_backend_sycl_get_device_memory(device, &free_mem, &total_mem);
+    const size_t base_mem = total_mem > 0 ? total_mem : free_mem;
+
+    int          budget_pct = 90;
+    const char * env_pct    = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+    if (env_pct) {
+        budget_pct = std::max(1, std::min(100, std::atoi(env_pct)));
+    }
+
+    const size_t vram_budget_base = static_cast<size_t>(base_mem * (static_cast<double>(budget_pct) / 100.0));
+    const size_t base_headroom    = std::max<size_t>(256ull * 1024ull * 1024ull, base_mem / 10);
+    const size_t vram_budget      = vram_budget_base > base_headroom ? vram_budget_base - base_headroom : 0;
+
+    return effective_size > vram_budget;
 }
 
 // Export unified cache budget for llama_params_fit integration
@@ -22474,6 +22617,30 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 }
                 // record_actual: updates last_experts_, freq_table_, and accuracy stats
                 predictor.record_actual(seq_layer_id, actual_experts);
+
+                // Cross-layer reactive prefetch: hint the next few sequential
+                // layers' experts using the actual routing results from this block.
+                // Sequential IDs include gate/up/down tensors (3 per block), so
+                // hinting seq+1..seq+4 covers current block's up+down plus the
+                // next block's gate tensor.  Experts active in block L have high
+                // cross-layer correlation with block L+1.
+                {
+                    auto & prefetcher = g_expert_prefetchers[device];
+                    const int max_seq = predictor.n_layers();
+                    if (prefetcher.is_active()) {
+                        auto & seq_map = g_moe_layer_seq[device];
+                        for (const auto & [hash_id, sid] : seq_map) {
+                            // Hint for seq IDs [current+1, current+4] — covers
+                            // up+down of this block + gate of next block.
+                            if (sid > seq_layer_id && sid <= seq_layer_id + 4
+                                && sid < max_seq) {
+                                for (int eid : actual_experts) {
+                                    prefetcher.hint(hash_id, eid);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
