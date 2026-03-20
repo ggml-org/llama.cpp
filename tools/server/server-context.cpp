@@ -2307,8 +2307,8 @@ private:
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
 
-                            // note: when n_swa == 0, the model does not use SWA, which is equivalent to a window of 1
-                            const auto n_swa = std::max(1, llama_model_n_swa(model));
+                            // note: when n_swa == 0, the model does not use SWA
+                            const auto n_swa = std::max(0, llama_model_n_swa(model));
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa);
@@ -2363,7 +2363,7 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                if (pos_min > pos_min_thold) {
+                                if (pos_min >= pos_min_thold) {
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
