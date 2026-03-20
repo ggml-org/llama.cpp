@@ -22356,10 +22356,12 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // S1-PRELOAD caches entire MoE tensors as AOS — using the device pointer
         // lets us compute per-expert offsets without individual cache entries.
         direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
-        if (!direct_base && !force_cache_aos && src0_is_usm_accessible) {
-            // Only use raw src0->data if it's USM-accessible (host or shared)
-            // mmap'd (unknown) memory is NOT GPU-accessible and must go through cache staging
-            GGML_SYCL_DEBUG("[MOE-PTR] Using direct src0->data=%p (USM accessible)\n", src0->data);
+        if (!direct_base && src0_is_usm_accessible) {
+            // OPT-FUSED: USM-accessible (host-pinned or shared) memory can be read
+            // directly by GPU kernels via PCIe zero-copy. This is the fast fallback
+            // path for cache-miss experts — no staging/reorder needed for AOS.
+            // force_cache_aos is only needed for mmap'd (non-USM) weights.
+            GGML_SYCL_DEBUG("[MOE-PTR] Using direct src0->data=%p (USM accessible, zero-copy)\n", src0->data);
             direct_base = const_cast<void *>(src0->data);
         } else if (!direct_base && !force_cache_aos) {
             // Not USM-accessible - must use cache path for proper staging
@@ -22570,6 +22572,42 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         }
         GGML_SYCL_DEBUG("[MOE] Caching expert %ld layout=%d src=%p size=%zu\n", (long) e, (int) layout, req.src_ptr,
                         req.src_size);
+
+        // OPT-FUSED: For SOA/COALESCED layouts with USM-accessible (host-pinned) source,
+        // avoid blocking CPU reorder on cache miss. Instead, check if the entry is already
+        // cached (fast path). On miss, leave pointer as nullptr so the SOA/COALESCED
+        // dispatch fails gracefully, and the cascade falls through to AOS which reads
+        // host-pinned data directly via PCIe zero-copy. Simultaneously, submit async
+        // background cache fill so the next token gets a SOA cache hit.
+        if ((layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) && src0_is_usm_accessible) {
+            void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
+            if (cached_ptr) {
+                // Cache hit: use the already-cached SOA/COALESCED pointer directly.
+                extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
+                stats_vram_ready++;
+                GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache HIT (fast path), ptr=%p\n", (long) e, cached_ptr);
+
+                // Bridge into placement table (same logic as below)
+                {
+                    auto &    ptable       = ggml_sycl::get_expert_placement_table();
+                    const int pt_layer_id  = moe_cache_layer_id(src0->name);
+                    auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
+                    if (existing.device_id <= 0) {
+                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
+                    }
+                }
+                continue;
+            }
+            // Cache miss: skip blocking CPU reorder. Leave pointer as nullptr so
+            // SOA/COALESCED dispatch fails and cascade falls through to AOS.
+            // Submit async background cache fill for future tokens.
+            GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache MISS, deferring to AOS zero-copy + async fill\n", (long) e);
+            req.skip_fill_wait = true;
+            cache->ensure_cached_layout(req, {});
+            stats_miss++;
+            continue;
+        }
+
         ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
         GGML_SYCL_DEBUG("[MOE] Expert %ld cache result: status=%d device_ptr=%p host_resident=%d\n", (long) e,
                         (int) result.status, result.device_ptr, result.host_resident ? 1 : 0);
@@ -22752,14 +22790,19 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     // Task 1E: Cache resolved pointer table at GATE for UP/DOWN reuse.
     // This eliminates redundant placement table lookups, cache queries,
     // and stats tracking for the 2 subsequent sub-ops in this MoE block.
+    // Only cache when all needed expert pointers are resolved (no nullptr).
+    // OPT-FUSED: SOA/COALESCED layouts may have nullptr entries from deferred
+    // cache fills — don't cache those, as it would poison AOS fallback.
     if (!need_all_experts && src0->name && strstr(src0->name, "ffn_gate")) {
         const int blk_id = parse_layer_id_from_name(src0->name);
         if (blk_id >= 0) {
+            // Check for missing pointers among needed experts
+            bool all_resolved = (stats_miss == 0);
             auto & entry = g_moe_layer_ids_cache[blk_id];
             entry.expert_ptrs.assign(host_ptrs.begin(), host_ptrs.end());
-            entry.ptrs_valid = true;
-            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d\n",
-                            host_ptrs.size(), blk_id);
+            entry.ptrs_valid = all_resolved;
+            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d (ptrs_valid=%d, misses=%d)\n",
+                            host_ptrs.size(), blk_id, all_resolved, stats_miss);
         }
     }
 
