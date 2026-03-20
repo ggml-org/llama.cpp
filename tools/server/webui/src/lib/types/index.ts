@@ -116,6 +116,7 @@ export type {
 	ServerStatus,
 	ToolCallParams,
 	ToolExecutionResult,
+	ServerBuiltinToolInfo,
 	Tool,
 	Prompt,
 	GetPromptResult,

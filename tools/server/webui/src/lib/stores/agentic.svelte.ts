@@ -21,7 +21,8 @@ import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { toolsStore, ToolSource } from '$lib/stores/tools.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
+import { ToolSource } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 import { isAbortError } from '$lib/utils';
 import {

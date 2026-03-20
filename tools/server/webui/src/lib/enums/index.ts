@@ -50,3 +50,5 @@ export { ParameterSource, SyncableParameterType, SettingsFieldType } from './set
 export { ColorMode, McpPromptVariant, UrlProtocol } from './ui';
 
 export { KeyboardKey } from './keyboard';
+
+export { ToolSource, ToolResponseField } from './tools';

@@ -19,7 +19,8 @@
 	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { toolsStore, ToolSource, type ToolGroup } from '$lib/stores/tools.svelte';
+	import { toolsStore, type ToolGroup } from '$lib/stores/tools.svelte';
+	import { ToolSource } from '$lib/enums';
 
 	import { SvelteSet } from 'svelte/reactivity';
 

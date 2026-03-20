@@ -1,16 +1,10 @@
 import type { OpenAIToolDefinition } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { HealthCheckStatus } from '$lib/enums';
+import { HealthCheckStatus, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import { DISABLED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
-
-export enum ToolSource {
-	BUILTIN = 'builtin',
-	MCP = 'mcp',
-	CUSTOM = 'custom'
-}
 
 export interface ToolEntry {
 	source: ToolSource;
@@ -351,7 +345,8 @@ class ToolsStore {
 		this._error = null;
 
 		try {
-			this._builtinTools = await ToolsService.list();
+			const toolInfos = await ToolsService.list();
+			this._builtinTools = toolInfos.map((info) => info.definition);
 		} catch (err) {
 			this._error = err instanceof Error ? err.message : String(err);
 			console.error('[ToolsStore] Failed to fetch built-in tools:', err);
