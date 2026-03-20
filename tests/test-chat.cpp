@@ -2502,6 +2502,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call_id)
             .run();
+        // Regression: real Mistral Small 3.2 appends </s> after tool calls.
+        // Repro: Mistral-Small-3.2-24B-Instruct-2506 temp=0
+        //   prompt="Weather in Tokyo?" tools=[get_weather]
+        {
+            auto tmpls2 = common_chat_templates_ptr(
+                common_chat_templates_init(nullptr, read_file("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja"),
+                    /*bos=*/"", /*eos=*/"</s>"));
+            common_chat_templates_inputs inputs2;
+            inputs2.tools = { special_function_tool };
+            inputs2.add_generation_prompt = true;
+            inputs2.use_jinja = true;
+            inputs2.messages = {{"user", "hi"}};
+            auto params2 = common_chat_templates_apply(tmpls2.get(), inputs2);
+            bool has_eos_stop = false;
+            for (const auto & s : params2.additional_stops) {
+                if (s == "</s>") { has_eos_stop = true; break; }
+            }
+            GGML_ASSERT(has_eos_stop && "autoparser must add EOS to additional_stops");
+        }
     }
     // Devstral
     {

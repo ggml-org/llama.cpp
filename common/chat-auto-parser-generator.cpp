@@ -46,6 +46,14 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
 
+    // Some models emit the EOS token as text (e.g. </s>) rather than as the
+    // special EOS token ID. Add it as a stop so the server strips it before
+    // the parser sees it. Without this, the trailing EOS text causes the
+    // parser to fail at end-of-input.
+    if (!tmpl.eos_token().empty()) {
+        data.additional_stops.push_back(tmpl.eos_token());
+    }
+
     auto parser = autoparser.build_parser(inputs);
     data.parser = parser.save();
 
