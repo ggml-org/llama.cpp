@@ -25,7 +25,7 @@ def get_prompts_text(dataset_name: str, n_prompts: int) -> Optional[list[str]]:
     ret = []
     if dataset_name.lower() == "mmlu":
         logger.info("Loading MMLU dataset...")
-        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]
+        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]  # type: ignore
     else:
         return None
     if n_prompts >= 0:

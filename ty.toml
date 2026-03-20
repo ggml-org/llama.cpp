@@ -18,6 +18,7 @@ include = [
 
 [overrides.rules]
 unresolved-reference = "ignore"
+unresolved-attribute = "ignore"
 
 [[overrides]]
 include = [
