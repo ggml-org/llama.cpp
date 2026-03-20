@@ -7,12 +7,12 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
-#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <regex> // migration only
 #include <string>
+#include <string_view>
 
 namespace nl = nlohmann;
 
@@ -86,35 +86,34 @@ static bool symlinks_supported() {
 }
 
 static std::string folder_name_to_repo(const std::string & folder) {
-    if (folder.size() < 8 || folder.substr(0, 8) != "models--") {
+    constexpr std::string_view prefix = "models--";
+    if (folder.rfind(prefix, 0)) {
         return {};
     }
-    std::string repo_id;
-    for (size_t i = 8; i < folder.size(); ++i) {
-        if (i + 1 < folder.size() && folder[i] == '-' && folder[i+1] == '-') {
-            repo_id += '/';
-            i++;
-        } else {
-            repo_id += folder[i];
-        }
-    }
-    return repo_id;
+    std::string result = folder.substr(prefix.length());
+    string_replace_all(result, "--", "/");
+    return result;
 }
 
 static std::string repo_to_folder_name(const std::string & repo_id) {
-    std::string name = "models--";
-    for (char c : repo_id) {
-        if (c == '/') {
-            name += "--";
-        } else {
-            name += c;
-        }
-    }
-    return name;
+    constexpr std::string_view prefix = "models--";
+    std::string result = std::string(prefix) + repo_id;
+    string_replace_all(result, "/", "--");
+    return result;
 }
 
 static fs::path get_repo_path(const std::string & repo_id) {
     return get_cache_directory() / repo_to_folder_name(repo_id);
+}
+
+static void set_default_headers(httplib::Client & cli, const std::string & bearer_token) {
+    httplib::Headers headers;
+    headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    headers.emplace("Accept", "application/json");
+    if (!bearer_token.empty()) {
+        headers.emplace("Authorization", "Bearer " + bearer_token);
+    }
+    cli.set_default_headers(headers);
 }
 
 static void write_ref(const std::string & repo_id,
@@ -146,13 +145,7 @@ static std::string get_repo_ref(const std::string & repo_id,
     std::string url = get_model_endpoint() + "api/models/" + repo_id + "/refs";
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers;
-    headers.emplace("User-Agent", "llama-cpp/" + build_info);
-    headers.emplace("Accept", "application/json");
-    if (!bearer_token.empty()) {
-        headers.emplace("Authorization", "Bearer " + bearer_token);
-    }
-    cli.set_default_headers(headers);
+    set_default_headers(cli, bearer_token);
 
     auto res = cli.Get(parts.path);
     if (!res || res->status != 200) {
@@ -211,13 +204,7 @@ hf_files get_repo_files(const std::string & repo_id,
 
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers;
-    headers.emplace("User-Agent", "llama-cpp/" + build_info);
-    headers.emplace("Accept", "application/json");
-    if (!bearer_token.empty()) {
-        headers.emplace("Authorization", "Bearer " + bearer_token);
-    }
-    cli.set_default_headers(headers);
+    set_default_headers(cli, bearer_token);
 
     auto res = cli.Get(parts.path);
     if (!res || res->status != 200) {

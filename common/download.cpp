@@ -441,42 +441,43 @@ int common_download_file_single(const std::string & url,
     return 304; // Not Modified - fake cached response
 }
 
-// "subdir/model-00001-of-00002.gguf" -> "subdir/model", 1, 2
-static std::tuple<std::string, int, int> get_gguf_split_info(const std::string & path) {
-    if (path.empty()) {
-        return {};
-    }
+struct gguf_split_info {
+    std::string prefix;
+    int index = 0;
+    int count = 0;
+};
 
+static gguf_split_info get_gguf_split_info(const std::string & path) {
     static const std::regex re(R"(^(.+)-([0-9]+)-of-([0-9]+)\.gguf$)", std::regex::icase);
-
     std::smatch m;
+
     if (std::regex_match(path, m, re)) {
         return {m[1].str(), std::stoi(m[2].str()), std::stoi(m[3].str())};
     }
     return {};
 }
 
-static hf_cache::hf_files get_split_files(const hf_cache::hf_files & all_files,
-                                          const hf_cache::hf_file & primary_file) {
-    hf_cache::hf_files result;
-    auto [prefix, idx, count] = get_gguf_split_info(primary_file.path);
+static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
+                                          const hf_cache::hf_file  & file) {
+    auto split = get_gguf_split_info(file.path);
 
-    if (count > 1) {
-        for (const auto & f : all_files) {
-            auto [sprefix, sidx, scount] = get_gguf_split_info(f.path);
-            if (scount == count && sprefix == prefix) {
-                result.push_back(f);
-            }
+    if (split.count <= 1) {
+        return {file};
+    }
+    hf_cache::hf_files result;
+
+    for (const auto & f : files) {
+        auto split_f = get_gguf_split_info(f.path);
+        if (split_f.count == split.count && split_f.prefix == split.prefix) {
+            result.push_back(f);
         }
-    } else {
-        result.push_back(primary_file);
     }
     return result;
 }
 
 static hf_cache::hf_files filter_gguf_by_quant(const hf_cache::hf_files & files,
                                                const std::string & quant_tag) {
-    hf_cache::hf_files matches;
+    hf_cache::hf_files result;
     std::regex pattern(quant_tag + "[.-]", std::regex::icase);
 
     for (const auto & f : files) {
@@ -487,10 +488,10 @@ static hf_cache::hf_files filter_gguf_by_quant(const hf_cache::hf_files & files,
             continue;
         }
         if (std::regex_search(f.path, pattern)) {
-            matches.push_back(f);
+            result.push_back(f);
         }
     }
-    return matches;
+    return result;
 }
 
 static void list_available_gguf_files(const hf_cache::hf_files & files) {
