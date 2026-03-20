@@ -159,6 +159,74 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'fullHeightCodeBlocks',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
+	},
+	{
+		key: 'systemMessage',
+		serverKey: 'systemMessage',
+		type: SyncableParameterType.STRING,
+		canSync: true
+	},
+	{
+		key: 'showSystemMessage',
+		serverKey: 'showSystemMessage',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{ key: 'theme', serverKey: 'theme', type: SyncableParameterType.STRING, canSync: true },
+	{
+		key: 'copyTextAttachmentsAsPlainText',
+		serverKey: 'copyTextAttachmentsAsPlainText',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'showRawOutputSwitch',
+		serverKey: 'showRawOutputSwitch',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'alwaysShowSidebarOnDesktop',
+		serverKey: 'alwaysShowSidebarOnDesktop',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'autoShowSidebarOnNewChat',
+		serverKey: 'autoShowSidebarOnNewChat',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'showRawModelNames',
+		serverKey: 'showRawModelNames',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{ key: 'mcpServers', serverKey: 'mcpServers', type: SyncableParameterType.STRING, canSync: true },
+	{
+		key: 'agenticMaxTurns',
+		serverKey: 'agenticMaxTurns',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'agenticMaxToolPreviewLines',
+		serverKey: 'agenticMaxToolPreviewLines',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'showToolCallInProgress',
+		serverKey: 'showToolCallInProgress',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'alwaysShowAgenticTurns',
+		serverKey: 'alwaysShowAgenticTurns',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
 	}
 ];
 
