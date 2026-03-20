@@ -95,9 +95,9 @@ if __name__ == '__main__':
             '-p', 'Hey',
             '--no-warmup',
             '--log-disable',
-            '-no-cnv']
+            '-st']
         if m.hf_file != 'tinyllamas/stories260K.gguf' and 'Mistral-Nemo' not in m.hf_repo:
-            cmd.append('-fa')
+            cmd += ('-fa', 'on')
         try:
             subprocess.check_call(cmd)
         except subprocess.CalledProcessError:
