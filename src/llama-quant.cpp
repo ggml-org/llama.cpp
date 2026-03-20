@@ -1201,6 +1201,133 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     std::unordered_map<std::string, type_choice> bpw_data;
     if (qs.params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); } // ToDo: rethink this condition
 
+    auto has_side_data = [&](const auto * m, const std::string & name, const int64_t n2, const int64_t n_per_row) {
+        if (!m) { return false; }
+        auto it = m->find(name);
+        if (it == m->end()) { return false; }
+        const size_t req = (size_t) n2 * (size_t) n_per_row;
+        const size_t sz = it->second.size();
+        return sz == req || sz == (size_t) n_per_row;
+    };
+
+    // Precompute the Centered‑Normalized Importance Factor (CNIF) scores
+    std::unordered_map<std::string, float> cnif_scores;
+    if (statistics_data && !statistics_data->empty()) {
+        struct tensor_score {
+            std::string name;
+            float score = 0.0f;
+        };
+
+        auto corr_error = [](float x) {
+            if (!std::isfinite(x)) { return 0.0f; }
+            return 1.0f - std::abs(std::clamp(x, -1.0f, 1.0f));
+        };
+
+        auto sort_scores = [](std::vector<tensor_score> & scores) {
+            std::sort(scores.begin(), scores.end(), [](const tensor_score & a, const tensor_score & b) {
+                return a.score < b.score || (a.score == b.score && a.name < b.name);
+            });
+        };
+
+        auto median = [](const auto & values, auto get_value) {
+            const size_t mid = values.size() / 2;
+            if (values.size() % 2 != 0) { return get_value(values[mid]); }
+            return 0.5f * (get_value(values[mid - 1]) + get_value(values[mid]));
+        };
+
+        auto rank = [&](std::vector<tensor_score> & scores, const float beta) {
+            if (scores.empty()) { return; }
+
+            sort_scores(scores);
+
+            if (scores.size() == 1) {
+                cnif_scores[scores[0].name] = 1.0f;
+                return;
+            }
+
+            for (size_t i = 0; i < scores.size();) {
+                size_t j = i + 1;
+                while (j < scores.size() && std::abs(scores[j].score - scores[i].score) <= 1e-6f) { ++j; }
+
+                const float p = 0.5f * (float)(i + j - 1) / (float)(scores.size() - 1);
+                const float scale = std::exp(beta * (2.0f * p - 1.0f));
+                for (size_t k = i; k < j; ++k) { cnif_scores[scores[k].name] = scale; }
+                i = j;
+            }
+        };
+
+        auto cnif = [&](std::vector<tensor_score> & scores, const float beta) {
+            constexpr size_t min_scores = 8;
+            constexpr float eps = 1e-6f;
+            constexpr float mad_factor = 1.4826f; // Median Absolute Deviation estimator for normal distributions
+
+            if (scores.size() < min_scores) {
+                rank(scores, beta);
+                return;
+            }
+
+            sort_scores(scores);
+
+            const float med = median(scores, [](const tensor_score & s) { return s.score; });
+            std::vector<float> deviations;
+            deviations.reserve(scores.size());
+            for (const auto & score : scores) { deviations.push_back(std::abs(score.score - med)); }
+
+            std::sort(deviations.begin(), deviations.end());
+            const float mad = median(deviations, [](float x) { return x; });
+            if (mad <= eps) {
+                rank(scores, beta);
+                return;
+            }
+
+            const float inv_scale = 1.0f / (mad_factor * mad + eps);
+            for (const auto & score : scores) {
+                const float z = std::clamp((score.score - med) * inv_scale, -4.0f, 4.0f);
+                cnif_scores[score.name] = std::exp(beta * std::tanh(0.8f * z));
+            }
+        };
+
+        std::vector<tensor_score> mse_scores;
+        std::vector<tensor_score> wce_scores;
+        mse_scores.reserve(tensors.size());
+        wce_scores.reserve(tensors.size());
+        cnif_scores.reserve(tensors.size());
+
+        for (const auto * tw : tensors) {
+            const ggml_tensor * tensor = tw->tensor;
+            if (!can_quantize(tensor)) { continue; }
+
+            const std::string name = remap_imatrix(ggml_get_name(tensor), mapped);
+            auto it = statistics_data->find(name);
+            if (it == statistics_data->end() || it->second.size() <= (size_t) L2_DIST) { continue; }
+
+            const auto & ts = it->second;
+            const float h_norm = std::isfinite(ts[H_NORM]) ? std::clamp(ts[H_NORM], 0.0f, 100.0f) : 100.0f;
+            const float concentration = 1.0f - h_norm / 100.0f;
+            const float energy = std::isfinite(ts[ENERGY]) ? std::max(0.0f, ts[ENERGY]) : 0.0f;
+            const float l2_dist = std::isfinite(ts[L2_DIST]) ? std::max(0.0f, ts[L2_DIST]) : 0.0f;
+            const float rel_l2 = l2_dist / (std::sqrt(energy) + 1e-12f);
+            const float density = rel_l2 / (1.0f + rel_l2);
+            const float fragility = 0.5f * (corr_error(ts[COSSIM]) + corr_error(ts[PCC]));
+
+            const int64_t n_per_row = tensor->ne[0];
+            const int64_t ne2 = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
+            const bool has_vals = has_side_data(values_data, name, ne2, n_per_row);
+            const bool has_acts = has_side_data(activations_data, name, ne2, n_per_row);
+            const bool use_wce = has_vals && has_acts && is_angle_sensitive(name);
+
+            const float score = use_wce
+                ? 0.75f * concentration + 0.15f * density + 0.10f * fragility
+                : 0.40f * concentration + 0.35f * density + 0.25f * fragility;
+
+            auto & scores = use_wce ? wce_scores : mse_scores;
+            scores.push_back({ name, score });
+        }
+
+        cnif(mse_scores, 0.35f);
+        cnif(wce_scores, 0.25f);
+    }
+
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](
         const llama_model_loader::llama_tensor_weight * tw,
@@ -1423,17 +1550,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             dq_buf.reserve(total_rows_sampled * n_per_row);
         }
 
-        // Kurtosis-Gain error scaling factor
         float scaling_factor = 1.0f;
-        if (statistics_data) {
-            if (auto it = statistics_data->find(remapped_name); it != statistics_data->end() && !it->second.empty()) {
-                const auto & ts = it->second;
-                const float gain = std::isnan(ts[GAIN]) ? 1.0f : ts[GAIN];
-                const float alignment = std::isfinite(ts[COSSIM]) ? std::max(0.0f, 1.0f - ts[COSSIM]) : 0.0f;
-                const float concentration = 1.0f - std::clamp(ts[H_NORM], 0.0f, 100.0f) / 100.0f;
-                scaling_factor = 1.0f + std::log1p(std::max(0.0f, ts[KURTOSIS])) * std::max(1.0f, gain) * (1.0f + alignment) * (1.0f + concentration);
-            }
-        }
+        if (auto it = cnif_scores.find(remapped_name); it != cnif_scores.end()) { scaling_factor = it->second; }
 
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
