@@ -256,11 +256,11 @@
 					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
 					className
 				)}
-				style="max-width: min(calc(100cqw - 9rem), 20rem)"
+				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<ModelId modelId={currentModel} class="min-w-0" showOrgName />
+				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -290,7 +290,7 @@
 										: 'text-muted-foreground',
 							isOpen ? 'text-foreground' : ''
 						)}
-						style="max-width: min(calc(100cqw - 9rem), 20rem)"
+						style="max-width: min(calc(100cqw - 10rem), 20rem)"
 						disabled={disabled || updating}
 					>
 						<Package class="h-3.5 w-3.5" />
@@ -298,7 +298,7 @@
 						{#if selectedOption}
 							<Tooltip.Root>
 								<Tooltip.Trigger class="min-w-0 overflow-hidden">
-									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+									<ModelId modelId={selectedOption.model} class="min-w-0" hideQuantization />
 								</Tooltip.Trigger>
 
 								<Tooltip.Content>
@@ -339,7 +339,7 @@
 									aria-disabled="true"
 									disabled
 								>
-									<ModelId modelId={currentModel} class="flex-1" showOrgName />
+									<ModelId modelId={currentModel} class="flex-1" hideQuantization />
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
@@ -349,7 +349,7 @@
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
 
-							{#snippet modelOption(item: ModelItem, showOrgName: boolean)}
+							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
 								{@const { option, flatIndex } = item}
 								{@const isSelected = currentModel === option.model || activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
@@ -360,7 +360,7 @@
 									{isSelected}
 									{isHighlighted}
 									{isFav}
-									{showOrgName}
+									{hideOrgName}
 									onSelect={handleSelect}
 									onInfoClick={handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}
@@ -408,7 +408,7 @@
 				{#if selectedOption}
 					<Tooltip.Root>
 						<Tooltip.Trigger class="min-w-0 overflow-hidden">
-							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+							<ModelId modelId={selectedOption.model} class="min-w-0" />
 						</Tooltip.Trigger>
 
 						<Tooltip.Content>

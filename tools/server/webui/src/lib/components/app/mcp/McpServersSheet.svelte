@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Settings } from '@lucide/svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import { Switch } from '$lib/components/ui/switch';
-	import { DropdownMenuSearchable, McpActiveServersAvatars } from '$lib/components/app';
+	import { McpActiveServersAvatars, SearchInput } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -47,14 +47,31 @@
 		return mcpServers;
 	});
 
+	let sheetOpen = $state(false);
+
 	function getServerLabel(server: MCPServerSettingsEntry): string {
 		return mcpStore.getServerLabel(server);
 	}
 
-	function handleDropdownOpen(open: boolean) {
+	function handleOpenChange(open: boolean) {
 		if (open) {
+			sheetOpen = true;
+			searchQuery = '';
 			mcpStore.runHealthChecksForServers(mcpServers);
+		} else {
+			sheetOpen = false;
+			searchQuery = '';
 		}
+	}
+
+	function handleSheetOpenChange(open: boolean) {
+		if (!open) {
+			handleOpenChange(false);
+		}
+	}
+
+	export function open() {
+		handleOpenChange(true);
 	}
 
 	function isServerEnabledForChat(serverId: string): boolean {
@@ -67,41 +84,38 @@
 </script>
 
 {#if hasMcpServers}
-	<DropdownMenu.Root
-		onOpenChange={(open) => {
-			if (!open) {
-				searchQuery = '';
-			}
-			handleDropdownOpen(open);
-		}}
+	<button
+		type="button"
+		class="inline-flex cursor-pointer items-center gap-1.5 rounded-sm py-1 disabled:cursor-not-allowed disabled:opacity-60"
+		{disabled}
+		aria-label="MCP Servers"
+		onclick={() => handleOpenChange(true)}
 	>
-		<DropdownMenu.Trigger
-			{disabled}
-			onclick={(e) => {
-				e.preventDefault();
-				e.stopPropagation();
-			}}
-		>
-			<button
-				type="button"
-				class="inline-flex cursor-pointer items-center gap-1.5 rounded-sm py-1 disabled:cursor-not-allowed disabled:opacity-60"
-				{disabled}
-				aria-label="MCP Servers"
-			>
-				{#if hasEnabledMcpServers && mcpFavicons.length > 0}
-					<McpActiveServersAvatars class={className} />
-				{/if}
-			</button>
-		</DropdownMenu.Trigger>
+		{#if hasEnabledMcpServers && mcpFavicons.length > 0}
+			<McpActiveServersAvatars class={className} />
+		{/if}
+	</button>
 
-		<DropdownMenu.Content align="start" class="w-72 pt-0">
-			<DropdownMenuSearchable
-				bind:searchValue={searchQuery}
-				placeholder="Search servers..."
-				emptyMessage="No servers found"
-				isEmpty={filteredMcpServers.length === 0}
-			>
-				<div class="max-h-64 overflow-y-auto">
+	<Sheet.Root bind:open={sheetOpen} onOpenChange={handleSheetOpenChange}>
+		<Sheet.Content side="bottom" class="max-h-[85vh] gap-1">
+			<Sheet.Header>
+				<Sheet.Title>MCP Servers</Sheet.Title>
+
+				<Sheet.Description class="sr-only">
+					Toggle MCP servers for the current conversation
+				</Sheet.Description>
+			</Sheet.Header>
+
+			<div class="flex flex-col gap-1 pb-4">
+				<div class="mb-3 px-4">
+					<SearchInput placeholder="Search servers..." bind:value={searchQuery} />
+				</div>
+
+				<div class="max-h-[60vh] overflow-y-auto px-2">
+					{#if filteredMcpServers.length === 0}
+						<p class="px-3 py-3 text-center text-sm text-muted-foreground">No servers found.</p>
+					{/if}
+
 					{#each filteredMcpServers as server (server.id)}
 						{@const healthState = mcpStore.getHealthCheckState(server.id)}
 						{@const hasError = healthState.status === HealthCheckStatus.ERROR}
@@ -109,7 +123,7 @@
 
 						<button
 							type="button"
-							class="flex w-full items-center justify-between gap-2 px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+							class="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
 							onclick={() => !hasError && toggleServerForChat(server.id)}
 							disabled={hasError}
 						>
@@ -146,17 +160,20 @@
 					{/each}
 				</div>
 
-				{#snippet footer()}
-					<DropdownMenu.Item
-						class="flex cursor-pointer items-center gap-2"
-						onclick={onSettingsClick}
+				<div class="mt-2 border-t px-2 pt-2">
+					<button
+						type="button"
+						class="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 text-sm transition-colors hover:bg-accent"
+						onclick={() => {
+							handleOpenChange(false);
+							onSettingsClick?.();
+						}}
 					>
 						<Settings class="h-4 w-4" />
-
 						<span>Manage MCP Servers</span>
-					</DropdownMenu.Item>
-				{/snippet}
-			</DropdownMenuSearchable>
-		</DropdownMenu.Content>
-	</DropdownMenu.Root>
+					</button>
+				</div>
+			</div>
+		</Sheet.Content>
+	</Sheet.Root>
 {/if}

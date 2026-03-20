@@ -7,6 +7,7 @@
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		McpServersSelector,
+		McpServersSheet,
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
@@ -197,7 +198,6 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 			/>
 		{:else}
 			<ChatFormActionAttachmentsDropdown
@@ -210,17 +210,23 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+			/>
+		{/if}
+	</div>
+
+	<div class="ml-auto flex items-center gap-2">
+		{#if isMobile.current}
+			<McpServersSheet
+				{disabled}
+				onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+			/>
+		{:else}
+			<McpServersSelector
+				{disabled}
+				onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 			/>
 		{/if}
 
-		<McpServersSelector
-			{disabled}
-			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
-		/>
-	</div>
-
-	<div class="ml-auto flex items-center gap-1.5">
 		{#if isMobile.current}
 			<ModelsSelectorSheet
 				disabled={disabled || isOffline}

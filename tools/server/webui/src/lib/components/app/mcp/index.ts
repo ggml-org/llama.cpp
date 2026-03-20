@@ -97,6 +97,21 @@ export { default as McpActiveServersAvatars } from './McpActiveServersAvatars.sv
 export { default as McpServersSelector } from './McpServersSelector.svelte';
 
 /**
+ * **McpServersSheet** - Mobile MCP server toggle sheet
+ *
+ * Bottom sheet variant of McpServersSelector for mobile devices.
+ * Uses Sheet UI instead of dropdown for better touch interaction.
+ *
+ * @example
+ * ```svelte
+ * <McpServersSheet
+ *   onSettingsClick={() => showMcpSettings = true}
+ * />
+ * ```
+ */
+export { default as McpServersSheet } from './McpServersSheet.svelte';
+
+/**
  * **McpCapabilitiesBadges** - Server capabilities display
  *
  * Displays MCP server capabilities as colored badges.

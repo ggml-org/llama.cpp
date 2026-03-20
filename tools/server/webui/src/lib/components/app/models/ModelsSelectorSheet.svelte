@@ -14,6 +14,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
+		ModelId,
 		ModelsSelectorList,
 		SearchInput,
 		TruncatedText
@@ -227,13 +228,22 @@
 								: 'text-muted-foreground',
 					sheetOpen ? 'text-foreground' : ''
 				)}
-				style="max-width: min(calc(100cqw - 9rem), 20rem)"
+				style="max-width: min(calc(100cqw - 10.5rem), 20rem)"
 				disabled={disabled || updating}
 				onclick={() => handleOpenChange(true)}
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<TruncatedText text={selectedOption?.model || 'Select model'} class="min-w-0 font-medium" />
+				{#if !selectedOption}
+					<span class="min-w-0 font-medium">Select model</span>
+				{:else}
+					<ModelId
+						class="text-xs"
+						modelId={selectedOption?.model || ''}
+						hideQuantization
+						hideOrgName
+					/>
+				{/if}
 
 				{#if updating || isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin" />

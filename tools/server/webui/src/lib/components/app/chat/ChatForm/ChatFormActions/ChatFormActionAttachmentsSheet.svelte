@@ -3,7 +3,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { FILE_TYPE_ICONS } from '$lib/constants';
-	import { McpLogo } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -15,7 +14,6 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -29,7 +27,6 @@
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
@@ -38,10 +35,6 @@
 	function handleMcpPromptClick() {
 		sheetOpen = false;
 		onMcpPromptClick?.();
-	}
-
-	function handleMcpSettingsClick() {
-		onMcpSettingsClick?.();
 	}
 
 	function handleMcpResourcesClick() {
@@ -141,12 +134,6 @@
 					<MessageSquare class="h-4 w-4 shrink-0" />
 
 					<span>System Message</span>
-				</button>
-
-				<button type="button" class={sheetItemClass} onclick={handleMcpSettingsClick}>
-					<McpLogo class="h-4 w-4 shrink-0" />
-
-					<span>MCP Servers</span>
 				</button>
 
 				{#if hasMcpPromptsSupport}

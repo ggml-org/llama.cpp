@@ -3,7 +3,6 @@
 	import {
 		Plus,
 		MessageSquare,
-		Settings,
 		Zap,
 		FolderOpen,
 		PencilRuler,
@@ -18,12 +17,10 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Switch } from '$lib/components/ui/switch';
 	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { McpLogo, DropdownMenuSearchable } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { toolsStore, ToolSource } from '$lib/stores/tools.svelte';
+	import { toolsStore, ToolSource, type ToolGroup } from '$lib/stores/tools.svelte';
 
-	import { HealthCheckStatus } from '$lib/enums';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -36,7 +33,6 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -50,7 +46,6 @@
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
@@ -65,34 +60,25 @@
 	let dropdownOpen = $state(false);
 
 	let expandedGroups = new SvelteSet<string>();
-	let groups = $derived(
-		toolsStore.toolGroups.filter(
+	let groups = $derived(toolsStore.toolGroups);
+	let activeGroups = $derived(
+		groups.filter(
 			(g) =>
 				g.source !== ToolSource.MCP ||
 				!g.serverId ||
 				conversationsStore.isMcpServerEnabledForChat(g.serverId)
 		)
 	);
-	let totalToolCount = $derived(groups.reduce((n, g) => n + g.tools.length, 0));
-	let enabledToolCount = $derived(
-		groups.reduce(
-			(n, g) => n + g.tools.filter((t) => toolsStore.isToolEnabled(t.function.name)).length,
-			0
-		)
-	);
-	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
-	let hasMcpServers = $derived(mcpServers.length > 0);
-	let mcpSearchQuery = $state('');
-	let filteredMcpServers = $derived.by(() => {
-		const query = mcpSearchQuery.toLowerCase().trim();
-		if (!query) return mcpServers;
+	let totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
 
-		return mcpServers.filter((s) => {
-			const name = mcpStore.getServerLabel(s).toLowerCase();
-			const url = s.url.toLowerCase();
-			return name.includes(query) || url.includes(query);
-		});
-	});
+	function isGroupDisabled(group: ToolGroup): boolean {
+		return (
+			group.source === ToolSource.MCP &&
+			!!group.serverId &&
+			!conversationsStore.isMcpServerEnabledForChat(group.serverId)
+		);
+	}
+	let hoveredGroup = $state<string | null>(null);
 
 	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
 
@@ -126,30 +112,13 @@
 			mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
 		}
 	}
-
-	function isServerEnabledForChat(serverId: string): boolean {
-		return conversationsStore.isMcpServerEnabledForChat(serverId);
-	}
-
 	async function toggleServerForChat(serverId: string) {
 		await conversationsStore.toggleMcpServerForChat(serverId);
-	}
-
-	function handleMcpSubMenuOpen(open: boolean) {
-		if (open) {
-			mcpSearchQuery = '';
-			mcpStore.runHealthChecksForServers(mcpServers);
-		}
 	}
 
 	function handleMcpPromptClick() {
 		dropdownOpen = false;
 		onMcpPromptClick?.();
-	}
-
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		onMcpSettingsClick?.();
 	}
 
 	function handleMcpResourcesClick() {
@@ -299,7 +268,7 @@
 				</DropdownMenu.SubTrigger>
 
 				<DropdownMenu.SubContent class="w-72 p-0">
-					{#if totalToolCount === 0}
+					{#if totalToolCount === 0 && groups.length === 0}
 						<div class="px-3 py-4 text-center text-sm text-muted-foreground">
 							{#if toolsStore.loading}
 								<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
@@ -311,14 +280,13 @@
 							{/if}
 						</div>
 					{:else}
-						<div class="px-3 py-2 text-xs font-medium text-muted-foreground">
-							{enabledToolCount}/{totalToolCount} tools enabled
-						</div>
-
-						<div class="max-h-80 overflow-y-auto px-1 pb-2">
+						<div class="max-h-80 overflow-y-auto p-2 pr-1">
 							{#each groups as group (group.label)}
+								{@const groupDisabled = isGroupDisabled(group)}
 								{@const isExpanded = expandedGroups.has(group.label)}
-								{@const { checked, indeterminate } = getGroupCheckedState(group)}
+								{@const { checked, indeterminate } = groupDisabled
+									? { checked: false, indeterminate: false }
+									: getGroupCheckedState(group)}
 								{@const favicon = getFavicon(group)}
 
 								<Collapsible.Root
@@ -331,9 +299,20 @@
 										}
 									}}
 								>
-									<div class="flex items-center gap-1">
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<div
+										class="flex items-center gap-1"
+										onmouseenter={() => {
+											if (groupDisabled) hoveredGroup = group.label;
+										}}
+										onmouseleave={() => {
+											if (hoveredGroup === group.label) hoveredGroup = null;
+										}}
+									>
 										<Collapsible.Trigger
-											class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+											class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50 {groupDisabled
+												? 'opacity-40'
+												: ''}"
 										>
 											{#if isExpanded}
 												<ChevronDown class="h-3.5 w-3.5 shrink-0" />
@@ -361,12 +340,23 @@
 											</span>
 										</Collapsible.Trigger>
 
-										<Checkbox
-											{checked}
-											{indeterminate}
-											onCheckedChange={() => toolsStore.toggleGroup(group)}
-											class="mr-2 h-4 w-4 shrink-0"
-										/>
+										{#if groupDisabled && hoveredGroup === group.label && group.serverId}
+											<Switch
+												checked={false}
+												onclick={(e: MouseEvent) => e.stopPropagation()}
+												onCheckedChange={() =>
+													group.serverId && toggleServerForChat(group.serverId)}
+												class="mr-2 shrink-0"
+											/>
+										{:else}
+											<Checkbox
+												{checked}
+												{indeterminate}
+												disabled={groupDisabled}
+												onCheckedChange={() => toolsStore.toggleGroup(group)}
+												class="mr-2 h-4 w-4 shrink-0 {groupDisabled ? 'opacity-40' : ''}"
+											/>
+										{/if}
 									</div>
 
 									<Collapsible.Content>
@@ -374,12 +364,19 @@
 											{#each group.tools as tool (tool.function.name)}
 												<button
 													type="button"
-													class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors hover:bg-muted/50"
-													onclick={() => toolsStore.toggleTool(tool.function.name)}
+													class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors {groupDisabled
+														? 'pointer-events-none opacity-40'
+														: 'hover:bg-muted/50'}"
+													onclick={() =>
+														!groupDisabled && toolsStore.toggleTool(tool.function.name)}
 												>
 													<Checkbox
-														checked={toolsStore.isToolEnabled(tool.function.name)}
-														onCheckedChange={() => toolsStore.toggleTool(tool.function.name)}
+														checked={groupDisabled
+															? false
+															: toolsStore.isToolEnabled(tool.function.name)}
+														disabled={groupDisabled}
+														onCheckedChange={() =>
+															!groupDisabled && toolsStore.toggleTool(tool.function.name)}
 														class="h-4 w-4 shrink-0"
 													/>
 
@@ -393,80 +390,11 @@
 								</Collapsible.Root>
 							{/each}
 						</div>
+
+						<!-- <div class="px-3 py-2 text-xs font-medium text-muted-foreground">
+							{enabledToolCount}/{totalToolCount} tools enabled
+						</div> -->
 					{/if}
-				</DropdownMenu.SubContent>
-			</DropdownMenu.Sub>
-
-			<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
-				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-					<McpLogo class="h-4 w-4" />
-
-					<span>MCP Servers</span>
-				</DropdownMenu.SubTrigger>
-
-				<DropdownMenu.SubContent class="w-72 pt-0">
-					<DropdownMenuSearchable
-						placeholder="Search servers..."
-						bind:searchValue={mcpSearchQuery}
-						emptyMessage={hasMcpServers ? 'No servers found' : 'No MCP servers configured'}
-						isEmpty={filteredMcpServers.length === 0}
-					>
-						<div class="max-h-64 overflow-y-auto">
-							{#each filteredMcpServers as server (server.id)}
-								{@const healthState = mcpStore.getHealthCheckState(server.id)}
-								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
-								{@const isEnabledForChat = isServerEnabledForChat(server.id)}
-
-								<button
-									type="button"
-									class="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-									onclick={() => !hasError && toggleServerForChat(server.id)}
-									disabled={hasError}
-								>
-									<div class="flex min-w-0 flex-1 items-center gap-2">
-										{#if mcpStore.getServerFavicon(server.id)}
-											<img
-												src={mcpStore.getServerFavicon(server.id)}
-												alt=""
-												class="h-4 w-4 shrink-0 rounded-sm"
-												onerror={(e) => {
-													(e.currentTarget as HTMLImageElement).style.display = 'none';
-												}}
-											/>
-										{/if}
-
-										<span class="truncate text-sm">{mcpStore.getServerLabel(server)}</span>
-
-										{#if hasError}
-											<span
-												class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-											>
-												Error
-											</span>
-										{/if}
-									</div>
-
-									<Switch
-										checked={isEnabledForChat}
-										disabled={hasError}
-										onclick={(e: MouseEvent) => e.stopPropagation()}
-										onCheckedChange={() => toggleServerForChat(server.id)}
-									/>
-								</button>
-							{/each}
-						</div>
-
-						{#snippet footer()}
-							<DropdownMenu.Item
-								class="flex cursor-pointer items-center gap-2"
-								onclick={handleMcpSettingsClick}
-							>
-								<Settings class="h-4 w-4" />
-
-								<span>Manage MCP Servers</span>
-							</DropdownMenu.Item>
-						{/snippet}
-					</DropdownMenuSearchable>
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 
