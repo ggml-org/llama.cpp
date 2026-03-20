@@ -1972,7 +1972,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
         inputs.add_generation_prompt = true;
         inputs.use_jinja = true;
-        inputs.messages = {{ "user", "get weather" }};
+        common_chat_message msg;
+        msg.role = "user";
+        msg.content = "get_weather";
+        inputs.messages = { msg };
 
         auto params = common_chat_templates_apply(tmpls.get(), inputs);
         common_peg_arena arena;
