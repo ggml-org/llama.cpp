@@ -5,7 +5,7 @@ import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 
-export type SettingsConfigValue = string | number | boolean;
+export type SettingsConfigValue = string | number | boolean | undefined;
 
 export interface SettingsFieldConfig {
 	key: string;
