@@ -45,7 +45,7 @@ def get_all_tensor_names(model_path: Path) -> list[str]:
     single_file = model_path / MODEL_SAFETENSORS_FILE
     if single_file.exists():
         try:
-            with safe_open(single_file, framework="pt", device="cpu") as f:
+            with safe_open(single_file, framework="pt", device="cpu") as f:  # pyright: ignore[reportGeneralTypeIssues] # ty: ignore[invalid-context-manager]
                 return list(f.keys())
         except Exception as e:
             print(f"Error reading {single_file}: {e}")
@@ -190,7 +190,7 @@ def print_tensor_info(model_path: Path, tensor_name: str, num_values: Optional[i
         tensor_meta = header.get(tensor_name, {})
         dtype_str = tensor_meta.get("dtype")
 
-        with safe_open(file_path, framework="pt", device="cpu") as f:
+        with safe_open(file_path, framework="pt", device="cpu") as f:  # pyright: ignore[reportGeneralTypeIssues] # ty: ignore[invalid-context-manager]
             if tensor_name in f.keys():
                 tensor_slice = f.get_slice(tensor_name)
                 shape = tensor_slice.get_shape()

@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from common import compare_tokens  # type: ignore
+from common import compare_tokens
 
 
 def parse_arguments():

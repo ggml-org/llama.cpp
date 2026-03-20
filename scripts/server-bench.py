@@ -25,7 +25,7 @@ def get_prompts_text(dataset_name: str, n_prompts: int) -> Optional[list[str]]:
     ret = []
     if dataset_name.lower() == "mmlu":
         logger.info("Loading MMLU dataset...")
-        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]  # type: ignore
+        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]
     else:
         return None
     if n_prompts >= 0:
@@ -189,6 +189,7 @@ def benchmark(
 
         data: list[dict] = []
 
+        assert isinstance(prompts, list)
         for i, p in enumerate(prompts):
             if seed_offset >= 0:
                 random.seed(3 * (seed_offset + 1000 * i) + 1)

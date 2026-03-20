@@ -11,7 +11,7 @@ from typing import Any, Callable, Sequence, Mapping, Iterable, Protocol, ClassVa
 try:
     from sentencepiece import SentencePieceProcessor
 except ImportError:
-    SentencePieceProcessor = None
+    SentencePieceProcessor: Any = None
 
 try:
     from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports]
@@ -24,10 +24,10 @@ try:
     )
 except ImportError:
     _mistral_common_installed = False
-    MistralTokenizer = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
-    _filter_valid_tokenizer_files = None
+    MistralTokenizer: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
+    _filter_valid_tokenizer_files: Any = None
 else:
     _mistral_common_installed = True
 
@@ -37,7 +37,7 @@ try:
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.
-    get_one_valid_tokenizer_file = None
+    get_one_valid_tokenizer_file: Any = None
 
 
 import gguf
@@ -703,7 +703,7 @@ class MistralVocab(Vocab):
 
             tokenizer_file_path = base_path / tokenizer_file
 
-        self.tokenizer = MistralTokenizer.from_file(
+        self.tokenizer: Any = MistralTokenizer.from_file(
             tokenizer_file_path
         ).instruct_tokenizer.tokenizer
         self.tokenizer_type = (

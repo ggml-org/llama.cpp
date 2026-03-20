@@ -45,9 +45,9 @@ except ImportError:
     _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
     _mistral_common_installed = False
-    TokenizerVersion = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
+    TokenizerVersion: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
     _mistral_import_error_msg = (
         "Mistral format requires `mistral-common` to be installed. Please run "
         "`pip install mistral-common[image,audio]` to install it."
@@ -220,7 +220,7 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None)
+                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None) # ty: ignore[invalid-assignment]
                     part_names = sorted(part_dict.keys())
             else:
                 weight_map = {}
@@ -5882,7 +5882,7 @@ class InternLM2Model(TextModel):
             logger.error(f'Error: Missing {tokenizer_path}')
             sys.exit(1)
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
 
@@ -6203,7 +6203,7 @@ class BertModel(TextModel):
 
             vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
-            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
             assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
 
@@ -8880,7 +8880,7 @@ class T5Model(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -9017,7 +9017,7 @@ class T5EncoderModel(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -12279,6 +12279,7 @@ class LazyTorchTensor(gguf.LazyBase):
             kwargs = {}
 
         if func is torch.Tensor.numpy:
+            assert len(args)
             return args[0].numpy()
 
         return cls._wrap_fn(func)(*args, **kwargs)
