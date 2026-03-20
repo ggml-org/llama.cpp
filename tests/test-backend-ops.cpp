@@ -3689,6 +3689,12 @@ struct test_gated_delta_net : public test_case {
         : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
           v_repeat(v_repeat), permuted(permuted), kda(kda) {}
 
+    double max_nmse_err() override {
+        // Chunked coopmat output kernel uses f16 intermediates for A_decayed @ vnew GEMM.
+        // Random test data can push exp(gcum) values near f16 limits at longer sequences.
+        return n_seq_tokens >= 64 ? 5e-3 : 1e-7;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q;
         ggml_tensor * k;
@@ -8684,6 +8690,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 4, 1));     // chunked path: S_V=128, n_tokens=4
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 64, 1));    // chunked path: full chunk
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 128, 1));   // chunked path: 2 chunks
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 64, 1, 2));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 2));
