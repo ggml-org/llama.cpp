@@ -771,7 +771,14 @@ struct parser_executor {
             }
 
             if (match == trie::PARTIAL_MATCH) {
-                // Found a partial match extending to end of input, return everything before it
+                // Found a partial match extending to end of input, return everything before it.
+                // In LENIENT (streaming) mode, the partial delimiter match means we don't yet
+                // know whether this is actually the delimiter or just content that happens to
+                // start with the same characters (e.g. "<" partial-matching "</think>").
+                // Return NEED_MORE_INPUT so the AST node isn't marked as definitive.
+                if (ctx.is_lenient()) {
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
