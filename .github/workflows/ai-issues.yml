@@ -70,10 +70,11 @@ jobs:
           - If related issues were found, include a section listing them with links using the following format:
 
           [comment]
-          This issue might be similar or related to:
-          - #[related_issue_number]: [brief description of how they are related, do not repeat the title]
-          - #[related_issue_number]: [brief description of how they are related, do not repeat the title]
-          ...
+          This issue might be similar or related to the following issue(s):
+
+            - #[related_issue_number]: [brief description of how they are related]
+            - #[related_issue_number]: [brief description of how they are related]
+            ...
 
           _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
           [/comment]
