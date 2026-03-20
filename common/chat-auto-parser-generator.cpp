@@ -195,17 +195,30 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
         format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
 
-    // Handle content wrappers if present
-    if (ctx.content && ctx.content->is_always_wrapped()) {
-        auto wrapped_content = ctx.content->build_optional_wrapped(ctx);
-        return ctx.reasoning_parser + wrapped_content + tools_parser + p.end();
-    }
-
     std::string tool_start = "{";
     if (!format.section_start.empty()) {
         tool_start = format.section_start;
     } else if (!format.per_call_start.empty()) {
         tool_start = format.per_call_start;
+    }
+
+    // Handle content wrappers if present
+    if (ctx.content && ctx.content->is_always_wrapped()) {
+        // If the generation_prompt already ends with the content start marker
+        // (e.g. Cohere tool_use templates that unconditionally add <|CHATBOT_TOKEN|>),
+        // don't require the start marker again. Use the same until(tool_start) pattern
+        // as the non-wrapped path so content stops before tool calls.
+        const auto & gp = ctx.inputs.generation_prompt;
+        const auto & cs = ctx.content->start;
+        bool gp_has_start = !gp.empty() && gp.size() >= cs.size() &&
+                            gp.compare(gp.size() - cs.size(), cs.size(), cs) == 0;
+        if (gp_has_start) {
+            return ctx.reasoning_parser +
+                   (force_tools ? p.eps() : p.optional(p.content(p.until(tool_start)))) +
+                   tools_parser + p.end();
+        }
+        auto wrapped_content = ctx.content->build_optional_wrapped(ctx);
+        return ctx.reasoning_parser + wrapped_content + tools_parser + p.end();
     }
 
     return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(p.until(tool_start)))) + tools_parser +

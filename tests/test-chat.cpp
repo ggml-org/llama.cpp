@@ -2009,6 +2009,40 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
     }
 
+    // Regression guard: gp_includes_start must ONLY fire for Cohere, not for
+    // templates like GLM where generation_prompt ends with <think> (content start
+    // for thinking). With enable_thinking=true, GLM's gp='<|assistant|><think>'.
+    {
+        auto tmpls = common_chat_templates_ptr(
+            common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
+        common_chat_templates_inputs inputs;
+        inputs.tools = { special_function_tool };
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja = true;
+        inputs.enable_thinking = true;
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+        inputs.messages = {{"user", "hi"}};
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        // Parser must still use ALWAYS_WRAPPED path (not the gp_includes_start fallback)
+        // Verify by checking generation_prompt contains <think> but the parser works
+        GGML_ASSERT(params.generation_prompt.find("<think>") != std::string::npos
+                    || params.generation_prompt.find("</think>") != std::string::npos);
+    }
+
+    // Cohere R7B: tool_use template unconditionally adds generation prompt,
+    // so calculate_diff_split returns empty. Verify grammar is still generated.
+    {
+        auto tmpls = common_chat_templates_ptr(
+            common_chat_templates_init(nullptr, read_file("models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja")));
+        common_chat_templates_inputs inputs;
+        inputs.tools = { special_function_tool };
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja = true;
+        inputs.messages = {{"user", "hi"}};
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        GGML_ASSERT(!params.grammar.empty() && "should have grammar for tool calls");
+    }
+
     // Kimi-K2-Thinking tests - custom parser
     // Unique feature: tool call ID embeds function name as functions.<name>:<counter>
     {

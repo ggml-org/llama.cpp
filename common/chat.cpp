@@ -1587,6 +1587,22 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
     params.generation_prompt     = diff.right;
 
+    // Some tool_use templates (e.g. Cohere) unconditionally add the generation prompt,
+    // making the diff empty. Fall back to the default template's generation prompt.
+    if (params.generation_prompt.empty() && tmpls->template_tool_use && &tmpl == tmpls->template_tool_use.get()) {
+        auto default_params = params;
+        default_params.add_generation_prompt = false;
+        auto no_gp = common_chat_template_direct_apply(*tmpls->template_default, default_params);
+        default_params.add_generation_prompt = true;
+        auto gp = common_chat_template_direct_apply(*tmpls->template_default, default_params);
+        auto fallback_diff = calculate_diff_split(no_gp, gp);
+        if (!fallback_diff.right.empty()) {
+            LOG_DBG("%s: tool_use template has empty generation_prompt, using default template's: '%s'\n",
+                    __func__, fallback_diff.right.c_str());
+            params.generation_prompt = fallback_diff.right;
+        }
+    }
+
     params.add_generation_prompt = inputs.add_generation_prompt;
 
     params.extra_context = common_chat_extra_context();
