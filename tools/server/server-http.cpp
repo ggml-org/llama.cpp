@@ -227,11 +227,16 @@ bool server_http_context::init(const common_params & params) {
 
     int n_threads_http = params.n_threads_http;
     if (n_threads_http < 1) {
-        // +2 threads for monitoring endpoints
-        n_threads_http = std::max(params.n_parallel + 2, (int32_t) std::thread::hardware_concurrency() - 1);
+        // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
+        n_threads_http = std::max(params.n_parallel + 4, (int32_t) std::thread::hardware_concurrency() - 1);
     }
     LOG_INF("%s: using %d threads for HTTP server\n", __func__, n_threads_http);
-    srv->new_task_queue = [n_threads_http] { return new httplib::ThreadPool(n_threads_http); };
+    srv->new_task_queue = [n_threads_http] {
+        // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible number of threads
+        // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
+        // ref: https://github.com/yhirose/cpp-httplib/pull/2368
+        return new httplib::ThreadPool(n_threads_http, 1024);
+    };
 
     //
     // Web UI setup
