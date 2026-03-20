@@ -2728,27 +2728,16 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
                     if (!stale_pool) {
-                        // In S1 mode (all-weights-host), free immediately instead of
-                        // deferring.  During preload layout switching (PP→TG), deferred
-                        // frees accumulate without being processed, causing temporary
-                        // double-allocation (old + new) that exhausts VRAM.  Since
-                        // preload runs between phases with no outstanding kernels using
-                        // the old layout, immediate free is safe.
-                        if (ggml_backend_sycl_all_weights_host()) {
-                            try {
-                                queue_.wait();
-                                ggml_sycl::alloc_registry::instance().unregister_alloc(stale_ptr);
-                                sycl::free(stale_ptr, queue_);
-                                saturating_sub_used(stale_size);
-                                GGML_SYCL_DEBUG(
-                                    "[UNIFIED-CACHE] layout switch: immediate free ptr=%p size=%zu (S1 mode)\n",
-                                    stale_ptr, stale_size);
-                            } catch (...) {
-                                enqueue_deferred_free(stale_ptr, stale_size);
-                            }
-                        } else {
-                            enqueue_deferred_free(stale_ptr, stale_size);
-                        }
+                        // Always use deferred free for layout switches during inference.
+                        // The previous S1-mode immediate free (queue_.wait() + sycl::free)
+                        // caused a hang on 120B MoE models: the queue_.wait() blocks under
+                        // the rw_mutex_ lock waiting for in-flight MoE kernels to complete,
+                        // but those kernels may take very long (MXFP4 on host-pinned memory
+                        // over PCIe) or never complete if the GPU is stalled.
+                        // Deferred free is safe: the stale pointer won't be reused until
+                        // process_deferred_frees() runs at the next ensure_cached_layout
+                        // entry, by which point the GPU queue has drained.
+                        enqueue_deferred_free(stale_ptr, stale_size);
                     }
                     // Pool entries: sub-allocation abandoned (dead space), chunk stays
                 }
@@ -2838,18 +2827,8 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
                     if (!stale_pool) {
-                        if (ggml_backend_sycl_all_weights_host()) {
-                            try {
-                                queue_.wait();
-                                ggml_sycl::alloc_registry::instance().unregister_alloc(stale_ptr);
-                                sycl::free(stale_ptr, queue_);
-                                saturating_sub_used(stale_size);
-                            } catch (...) {
-                                enqueue_deferred_free(stale_ptr, stale_size);
-                            }
-                        } else {
-                            enqueue_deferred_free(stale_ptr, stale_size);
-                        }
+                        // Always defer free — see comment at layout_mismatch path above.
+                        enqueue_deferred_free(stale_ptr, stale_size);
                     }
                     // Pool entries: memory stays in pool, used_ stays at chunk level
                 }
@@ -3259,9 +3238,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         }
 
         // Wait for fill to complete before any padding memset
-        GGML_SYCL_DEBUG("[DEBUG-FILL] About to wait on fill_event...\n");
         fill_event.wait();
-        GGML_SYCL_DEBUG("[DEBUG-FILL] fill_event.wait() completed\n");
 
         if (request.layout != GGML_LAYOUT_XMX_TILED && request.layout != GGML_LAYOUT_XMX_GEMM_TILED &&
             request.layout != GGML_LAYOUT_ONEDNN_PACKED && request.layout != GGML_LAYOUT_ONEDNN_WOQ &&

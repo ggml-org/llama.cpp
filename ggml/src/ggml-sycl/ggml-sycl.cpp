@@ -35186,7 +35186,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
     }
-
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         ggml_sycl_tp_new_pass();
