@@ -22204,10 +22204,11 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                                     const std::vector<int32_t> * ids_host_override,
                                     bool                         skip_device_copy,
 
-                                    bool force_cache_aos) {
-    GGML_SYCL_DEBUG("[MOE-PTR] ENTER: src0=%s layout=%d allow_all=%d force_aos=%d\n",
+                                    bool force_cache_aos,
+                                    bool skip_cpu_routed_experts) {
+    GGML_SYCL_DEBUG("[MOE-PTR] ENTER: src0=%s layout=%d allow_all=%d force_aos=%d skip_cpu=%d\n",
                     src0 ? (src0->name ? src0->name : "?") : "(null)", (int) layout, allow_all_experts,
-                    force_cache_aos);
+                    force_cache_aos, skip_cpu_routed_experts);
     if (out_event) {
         *out_event = sycl::event{};
     }
@@ -22446,6 +22447,35 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 GGML_SYCL_DEBUG("[MOE] Expert %ld in prefetch pool but layout=%d != AOS, staging via cache\n",
                                 (long) e, (int) layout);
                 // Fall through to cache staging for layout conversion.
+            }
+        }
+
+        // OPT-4: Skip SOA cache staging for experts that will route to CPU dispatch.
+        // When skip_cpu_routed_experts is set (MoE hybrid mode), experts without a
+        // placement table entry or prefetcher cache hit will fall back to CPU anyway.
+        // CPU dispatch reads src0->data directly (host AOS) — no SOA conversion needed.
+        // This avoids wasted ensure_cached_layout overhead and VRAM pressure.
+        if (skip_cpu_routed_experts) {
+            auto &    ptable_skip  = ggml_sycl::get_expert_placement_table();
+            const int pt_lid_skip  = moe_cache_layer_id(src0->name);
+            auto      skip_place   = ptable_skip.get(pt_lid_skip, static_cast<int>(e));
+            if (skip_place.device_ptr == nullptr) {
+                // No placement — check prefetcher LRU caches on all GPUs
+                bool found_in_prefetch = false;
+                const int n_devs = ggml_sycl_info().total_gpu_count;
+                for (int d = 0; d < n_devs && !found_in_prefetch; d++) {
+                    auto & pf = g_expert_prefetchers[d];
+                    if (pf.is_initialized() && pf.get_cached_ptr(pt_lid_skip, static_cast<int>(e))) {
+                        found_in_prefetch = true;
+                    }
+                }
+                if (!found_in_prefetch) {
+                    // Expert has no GPU-resident copy — will route to CPU.
+                    // Leave pointer as nullptr so partition loop sends to cpu_entries.
+                    GGML_SYCL_DEBUG("[MOE-OPT4] Expert %ld skipped (CPU-routed, no GPU copy)\n", (long) e);
+                    stats_miss++;
+                    continue;
+                }
             }
         }
 
@@ -31335,7 +31365,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         // Task 1E: pass pre-resolved ids_host to avoid redundant D2H inside update_moe_ptr_table
         const auto * ids_override = ids_host.empty() ? nullptr : &ids_host;
         if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr, /*allow_all_experts=*/false,
-                                            ids_override, false, /*force_cache_aos=*/need_force_aos)) {
+                                            ids_override, false, /*force_cache_aos=*/need_force_aos,
+                                            /*skip_cpu_routed_experts=*/moe_hybrid_active)) {
             GGML_LOG_ERROR("[MoE] Failed to update expert pointer table for %s\n", src0->name);
         } else if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
             const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
