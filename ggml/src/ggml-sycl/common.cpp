@@ -18,7 +18,9 @@
 #include "unified-cache.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <future>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -435,10 +437,35 @@ void ggml_sycl_clear_staging_cache() {
     g_tp_staging_cache.clear();
 }
 
+// atexit handler: free all tracked host allocations to prevent GPU driver lockup.
+// When a process exits without freeing sycl::malloc_host memory, the Level Zero
+// driver may hold stale GGTT mappings that block future allocations from other processes.
+static void ggml_sycl_cleanup_host_allocations() {
+    std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
+    if (g_sycl_host_alloc_sizes.empty()) return;
+    GGML_LOG_INFO("[SYCL] atexit: freeing %zu host allocations\n", g_sycl_host_alloc_sizes.size());
+    for (auto & [ptr, sz] : g_sycl_host_alloc_sizes) {
+        if (ptr) {
+            try {
+                sycl::free(ptr, dpct::get_in_order_queue());
+            } catch (...) {
+                // Ignore errors during cleanup — driver may already be torn down
+            }
+        }
+    }
+    g_sycl_host_alloc_sizes.clear();
+}
+
 void * ggml_sycl_host_malloc(size_t size) try {
     if (getenv("GGML_SYCL_NO_PINNED") != nullptr) {
         return nullptr;
     }
+
+    // Register cleanup handler once to prevent GPU lockup on exit
+    static std::once_flag cleanup_registered;
+    std::call_once(cleanup_registered, []() {
+        std::atexit(ggml_sycl_cleanup_host_allocations);
+    });
 
     // Warn if allocation exceeds the probed host limit, but attempt it anyway.
     // The limit is based on smallest-device VRAM and is overly conservative —
@@ -486,9 +513,39 @@ void * ggml_sycl_host_malloc(size_t size) try {
         return ptr;
     }
 
-    // Non-TP mode: use default queue for host malloc
+    // Non-TP mode: use default queue for host malloc.
+    // Wrap in a timeout to prevent hanging when the GPU driver is in a bad state
+    // (e.g., after a previous DEVICE_LOST crash that left stale driver resources).
+    // sycl::malloc_host creates GGTT mappings for ALL Level Zero devices — if any
+    // device's driver is hung, the call blocks indefinitely.
+    static constexpr int ALLOC_TIMEOUT_SEC = 30;
     ggml_sycl::unified_cache_add_runtime_host_bytes(size);
-    dpct::err0 err = CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, dpct::get_in_order_queue()));
+    dpct::err0 err = 0;
+    {
+        auto & queue = dpct::get_in_order_queue();
+        auto future = std::async(std::launch::async, [&]() -> void * {
+            void * p = nullptr;
+            try {
+                p = sycl::malloc_host(size, queue);
+            } catch (...) {
+                p = nullptr;
+            }
+            return p;
+        });
+        auto status = future.wait_for(std::chrono::seconds(ALLOC_TIMEOUT_SEC));
+        if (status == std::future_status::ready) {
+            ptr = future.get();
+        } else {
+            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) TIMED OUT after %ds — "
+                           "GPU driver may be in bad state (try: echo 1 | sudo tee "
+                           "/sys/class/drm/card0/device/reset)\n",
+                           size / (1024.0 * 1024.0 * 1024.0), ALLOC_TIMEOUT_SEC);
+            ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
+            // Detach the future — the thread may eventually complete or be killed at exit
+            return nullptr;
+        }
+        if (!ptr) err = 1;
+    }
 
     if (err != 0 || !ptr) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
