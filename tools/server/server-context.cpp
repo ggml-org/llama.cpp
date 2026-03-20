@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <exception>
 #include <memory>
 #include <filesystem>
 
@@ -1152,11 +1153,11 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
-            slot.smpl.reset(common_sampler_init(model, task.params.sampling));
-
-            if (slot.smpl == nullptr) {
-                // for now, the only error that may happen here is invalid grammar
-                send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
+            try {
+                slot.smpl.reset(common_sampler_init(model, task.params.sampling));
+            } catch (std::exception & e) {
+                std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
+                send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
 
@@ -1431,9 +1432,10 @@ private:
             res->tokens  = { tkn.tok };
         }
 
-        res->n_decoded           = slot.n_decoded;
-        res->n_prompt_tokens     = slot.task->n_tokens();
-        res->post_sampling_probs = slot.task->params.post_sampling_probs;
+        res->n_decoded             = slot.n_decoded;
+        res->n_prompt_tokens       = slot.task->n_tokens();
+        res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
+        res->post_sampling_probs   = slot.task->params.post_sampling_probs;
 
         res->verbose           = slot.task->params.verbose;
         res->res_type          = slot.task->params.res_type;
@@ -1478,14 +1480,15 @@ private:
         res->prompt          = slot.task->tokens.detokenize(ctx, true);
         res->response_fields = std::move(slot.task->params.response_fields);
 
-        res->truncated           = slot.truncated;
-        res->n_decoded           = slot.n_decoded;
-        res->n_prompt_tokens     = slot.task->n_tokens();
-        res->n_tokens_cached     = slot.prompt.n_tokens();
-        res->has_new_line        = slot.has_new_line;
-        res->stopping_word       = slot.stopping_word;
-        res->stop                = slot.stop;
-        res->post_sampling_probs = slot.task->params.post_sampling_probs;
+        res->truncated             = slot.truncated;
+        res->n_decoded             = slot.n_decoded;
+        res->n_prompt_tokens       = slot.task->n_tokens();
+        res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
+        res->n_tokens_cached       = slot.prompt.n_tokens();
+        res->has_new_line          = slot.has_new_line;
+        res->stopping_word         = slot.stopping_word;
+        res->stop                  = slot.stop;
+        res->post_sampling_probs   = slot.task->params.post_sampling_probs;
 
         res->verbose           = slot.task->params.verbose;
         res->stream            = slot.task->params.stream;
