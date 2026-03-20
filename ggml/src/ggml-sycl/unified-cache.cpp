@@ -884,6 +884,39 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
                     budget_ / (1024.0f * 1024.0f), staging_size_ / (1024.0f * 1024.0f),
                     dma_reserved_bytes_ / (1024.0f * 1024.0f));
 
+    // Pre-allocate reusable host-pinned staging slots for copy_to_device_async.
+    // This eliminates per-expert sycl::malloc_host / sycl::free churn during
+    // inference — each alloc/free does GGTT page table ops in the kernel driver.
+    // NOTE: We use ggml_sycl_malloc_host directly (not unified_alloc) because
+    // the constructor runs under g_cache_mutex and unified_alloc would deadlock
+    // via unified_cache_add_runtime_host_bytes -> g_cache_mutex.
+    {
+        constexpr size_t k_fallback_chunk = 64 * 1024 * 1024;
+        const size_t     slot_capacity    = staging_size_ > 0 ? staging_size_ : k_fallback_chunk;
+        const size_t     n_slots          = copy_to_device_stage_slots();
+
+        copy_stage_slots_.reserve(n_slots);
+        for (size_t i = 0; i < n_slots; ++i) {
+            try {
+                void * ptr = ggml_sycl_malloc_host(slot_capacity, queue_, "copy_stage_slot_prealloc");
+                if (ptr) {
+                    copy_stage_slot slot{};
+                    slot.ptr       = ptr;
+                    slot.device    = -1;  // host-pinned, no device association
+                    slot.capacity  = slot_capacity;
+                    slot.in_flight = false;
+                    copy_stage_slots_.push_back(slot);
+                } else {
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to pre-allocate staging slot %zu\n", i);
+                }
+            } catch (const sycl::exception & e) {
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to pre-allocate staging slot %zu: %s\n", i, e.what());
+            }
+        }
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Pre-allocated %zu/%zu staging slots (%.1f MB each)\n",
+                        copy_stage_slots_.size(), n_slots, slot_capacity / (1024.0f * 1024.0f));
+    }
+
     // Initialize layout pool for consolidating layout allocations into
     // contiguous chunks (reduces GPU TLB misses from scattered USM mappings).
     layout_pool_ = std::make_unique<sycl_device_pool>(queue_);
@@ -956,9 +989,14 @@ unified_cache::~unified_cache() {
     dma_staging_buffers_.clear();
 
     // Free reusable host-pinned async copy staging slots.
+    // These were allocated with ggml_sycl_malloc_host (not unified_alloc) to
+    // avoid g_cache_mutex deadlock during construction, so free via sycl::free.
     for (auto & slot : copy_stage_slots_) {
         if (slot.ptr != nullptr) {
-            (void) unified_free_ptr(slot.ptr, slot.device);
+            try {
+                sycl::free(slot.ptr, queue_);
+            } catch (...) {
+            }
             slot.ptr = nullptr;
         }
     }
@@ -4317,14 +4355,20 @@ sycl::event unified_cache::copy_to_device_async(void *                          
         while (remaining > 0) {
             const size_t chunk = std::min(remaining, chunk_size);
 
+            // Acquire a pre-allocated staging slot.  Slots are allocated once at
+            // cache construction — no sycl::malloc_host during inference.
             size_t slot_idx = std::numeric_limits<size_t>::max();
+            if (copy_stage_slots_.empty()) {
+                throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                      "Cannot copy non-USM pointer to device: no staging slots pre-allocated");
+            }
             while (slot_idx == std::numeric_limits<size_t>::max()) {
-                bool        need_new_slot = false;
                 sycl::event wait_evt{};
                 bool        has_wait_evt = false;
 
                 {
                     std::lock_guard<std::mutex> lock(copy_stage_mutex_);
+                    // Scan for a free slot with sufficient capacity.
                     for (size_t i = 0; i < copy_stage_slots_.size(); ++i) {
                         const size_t idx  = (copy_stage_next_ + i) % copy_stage_slots_.size();
                         auto &       slot = copy_stage_slots_[idx];
@@ -4342,45 +4386,15 @@ sycl::event unified_cache::copy_to_device_async(void *                          
                     if (slot_idx != std::numeric_limits<size_t>::max()) {
                         break;
                     }
-                    if (copy_stage_slots_.size() < copy_to_device_stage_slots()) {
-                        need_new_slot = true;
-                    } else if (!copy_stage_slots_.empty()) {
-                        const size_t idx = copy_stage_next_ % copy_stage_slots_.size();
-                        copy_stage_next_ = (idx + 1) % copy_stage_slots_.size();
-                        auto & slot      = copy_stage_slots_[idx];
-                        if (slot.in_flight) {
-                            wait_evt     = slot.done_event;
-                            has_wait_evt = true;
-                        }
-                        slot_idx = idx;
-                    } else {
-                        need_new_slot = true;
+                    // All slots busy — wait on the next one in round-robin order.
+                    const size_t idx = copy_stage_next_ % copy_stage_slots_.size();
+                    copy_stage_next_ = (idx + 1) % copy_stage_slots_.size();
+                    auto & slot      = copy_stage_slots_[idx];
+                    if (slot.in_flight) {
+                        wait_evt     = slot.done_event;
+                        has_wait_evt = true;
                     }
-                }
-
-                if (need_new_slot) {
-                    alloc_request req{};
-                    req.queue                               = &queue_;
-                    req.device                              = get_device_id_from_queue(queue_);
-                    req.size                                = chunk;
-                    req.intent.role                         = alloc_role::STAGING;
-                    req.intent.category                     = runtime_category::STAGING;
-                    req.intent.cohort_id                    = "copy_to_device_async";
-                    req.intent.constraints.must_host_pinned = true;
-                    alloc_handle handle{};
-                    if (!unified_alloc(req, &handle) || handle.ptr == nullptr) {
-                        throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
-                                              "Cannot copy non-USM pointer to device: staging allocation failed");
-                    }
-                    std::lock_guard<std::mutex> lock(copy_stage_mutex_);
-                    copy_stage_slot             slot{};
-                    slot.ptr       = handle.ptr;
-                    slot.device    = handle.device;
-                    slot.capacity  = handle.size;
-                    slot.in_flight = false;
-                    copy_stage_slots_.push_back(slot);
-                    slot_idx = copy_stage_slots_.size() - 1;
-                    continue;
+                    slot_idx = idx;
                 }
 
                 if (has_wait_evt) {
