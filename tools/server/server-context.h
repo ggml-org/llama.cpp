@@ -64,6 +64,11 @@ struct server_context {
     // terminate main loop (will unblock start_loop)
     void terminate();
 
+    // auto-save/restore slot state for seamless model hot-swapping in router mode
+    // requires --slot-save-path to be set
+    void auto_save_slots();
+    void auto_restore_slots();
+
     // get the underlaying llama_context, can return nullptr if sleeping
     // not thread-safe, should only be used from the main thread
     llama_context * get_llama_context() const;

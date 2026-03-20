@@ -3092,6 +3092,66 @@ llama_context * server_context::get_llama_context() const {
     return impl->ctx;
 }
 
+void server_context::auto_save_slots() {
+    const auto & params = impl->params_base;
+    if (params.slot_save_path.empty()) {
+        return;
+    }
+
+    for (auto & slot : impl->slots) {
+        if (slot.prompt.tokens.size() == 0) {
+            continue;
+        }
+
+        const std::string model_stem = std::filesystem::path(params.model.path).stem().string();
+        const std::string filepath   = params.slot_save_path + "/" + model_stem;
+
+        const llama_tokens & tokens = slot.prompt.tokens.get_text_tokens();
+        const size_t token_count    = slot.prompt.tokens.size();
+        const size_t nwrite = llama_state_seq_save_file(impl->ctx, filepath.c_str(), slot.id, tokens.data(), token_count);
+
+        slot_checkpoints_save(filepath, slot.prompt.checkpoints);
+
+        SRV_INF("auto-saved slot %d (%zu tokens, %.1f MiB) to %s\n",
+            slot.id, token_count, (float) nwrite / (1024.0f * 1024.0f), filepath.c_str());
+    }
+}
+
+void server_context::auto_restore_slots() {
+    const auto & params = impl->params_base;
+    if (params.slot_save_path.empty()) {
+        return;
+    }
+
+    const std::string model_stem = std::filesystem::path(params.model.path).stem().string();
+    const std::string filepath   = params.slot_save_path + "/" + model_stem;
+
+    if (!std::filesystem::exists(filepath)) {
+        return;
+    }
+
+    for (auto & slot : impl->slots) {
+        llama_tokens tokens;
+        tokens.resize(slot.n_ctx);
+        size_t token_count = 0;
+        const size_t nread = llama_state_seq_load_file(impl->ctx, filepath.c_str(), slot.id, tokens.data(), tokens.size(), &token_count);
+
+        if (nread == 0) {
+            SRV_WRN("auto-restore failed for slot %d from %s\n", slot.id, filepath.c_str());
+            continue;
+        }
+
+        tokens.resize(token_count);
+        slot.prompt.tokens.clear();
+        slot.prompt.tokens.insert(tokens);
+
+        slot_checkpoints_load(filepath, slot.prompt.checkpoints);
+
+        SRV_INF("auto-restored slot %d (%zu tokens, %.1f MiB) from %s\n",
+            slot.id, token_count, (float) nread / (1024.0f * 1024.0f), filepath.c_str());
+    }
+}
+
 server_response_reader server_context::get_response_reader() {
     return impl->get_response_reader();
 }
