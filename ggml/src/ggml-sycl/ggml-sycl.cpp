@@ -970,6 +970,13 @@ static void moe_prestage_popular_experts() {
             sec_budgets.push_back({ dev, sec_total, sec_cache, 0, 0, 0 });
         }
 
+        GGML_LOG_INFO("[MOE-PRESTAGE] Phase 2: %zu secondary device(s) with budget\n",
+                      sec_budgets.size());
+        for (const auto & b : sec_budgets) {
+            GGML_LOG_INFO("[MOE-PRESTAGE] Phase 2: GPU%d budget=%.1f MB\n",
+                          b.dev, b.bytes_remaining / (1024.0 * 1024.0));
+        }
+
         if (!sec_budgets.empty()) {
             // Walk the global priority list.  Phase 1 consumed the hottest
             // experts for GPU0; Phase 2 picks up the remainder for secondary
@@ -1031,11 +1038,48 @@ static void moe_prestage_popular_experts() {
                     continue;
                 }
 
-                void * ptr = ggml_sycl::moe_expert_ensure_soa_cached(
-                    meta->layer_id, meta->expert_idx, budget.dev);
-                if (ptr) {
-                    budget.staged++;
-                    budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
+                // Inline the cache logic (same as Phase 1) instead of calling
+                // moe_expert_ensure_soa_cached(), which would deadlock on
+                // g_moe_expert_meta_mutex (already held by the outer scope).
+                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+                    meta->tensor, meta->extra, meta->expert_idx);
+                if (!key.valid) continue;
+
+                ggml_sycl_reorder_fill_ctx reorder_ctx{};
+                reorder_ctx.type          = meta->type;
+                reorder_ctx.ncols         = meta->ne0;
+                reorder_ctx.nrows         = meta->ne1;
+                reorder_ctx.nbytes        = meta->bytes;
+                reorder_ctx.dst_bytes     = dst_bytes;
+                reorder_ctx.layout        = GGML_LAYOUT_SOA;
+                reorder_ctx.src_is_device = false;
+                reorder_ctx.device_id     = budget.dev;
+
+                ggml_sycl::cache_layout_request req{};
+                req.key              = key;
+                req.src_ptr          = meta->data_ptr;
+                req.src_size         = meta->bytes;
+                req.dst_size         = dst_bytes;
+                req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+                req.layer_id         = meta->layer_id;
+                req.expert_id        = meta->expert_idx;
+                req.layout           = GGML_LAYOUT_SOA;
+                req.validate_content = false;
+                req.fill_fn          = ggml_sycl_fill_reordered_host;
+                req.fill_ctx         = &reorder_ctx;
+
+                try {
+                    auto result = budget.cache->ensure_cached_layout(req, {});
+                    if ((result.status == ggml_sycl::cache_layout_status::READY ||
+                         result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
+                        && result.device_ptr) {
+                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx,
+                                              budget.dev, result.device_ptr);
+                        budget.staged++;
+                        budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
+                    }
+                } catch (...) {
+                    // VRAM exhausted on this secondary device — skip
                 }
             }
 
