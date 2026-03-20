@@ -1946,6 +1946,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             LLAMA_LOG_ERROR("%s: failed to allocate output buffer of size %.2f MiB\n", __func__, new_size / (1024.0 * 1024.0));
             return 0;
         }
+        ggml_backend_buffer_clear(buf_output.get(), 0);
     }
 
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
