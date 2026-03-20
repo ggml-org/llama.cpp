@@ -802,12 +802,27 @@ static void moe_prestage_popular_experts() {
     const size_t expert_bytes = g_moe_expert_meta[0].bytes;
     if (expert_bytes == 0) return;
 
-    // Phase 1: Pre-stage popular experts to GPU0 VRAM (skip if no budget).
-    // When GPU0 VRAM is fully used for dense weights + KV cache (e.g. 120B model),
-    // avail == 0 and Phase 1 is skipped entirely. Phase 2 still runs for secondary GPUs.
+    // Phase 1: Pre-stage popular experts to GPU0 VRAM.
+    // In S1 mode (all_weights_host), the S1-PRELOAD fills VRAM with AOS copies of
+    // weights — available_for_compute() may return 0.  But these AOS entries are
+    // evictable: ensure_cached_layout() does LRU eviction internally.  Use total
+    // managed cache capacity as the budget so hot SOA experts can replace cold AOS
+    // entries.  Unpin expert entries first so the cache can evict them.
+    // For non-S1 mode, use the conservative available_for_compute() budget.
     const int device = 0;
-    size_t avail = ggml_sycl::unified_cache_available_for_compute(device);
     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
+    const bool s1_active = ggml_backend_sycl_all_weights_host();
+    size_t avail;
+    if (s1_active && cache) {
+        // S1 mode: AOS entries are evictable — use total managed capacity.
+        // Unpin so ensure_cached_layout can evict cold AOS entries for hot SOA.
+        cache->unpin_experts();
+        avail = ggml_sycl::unified_cache_total_managed(device);
+        GGML_LOG_INFO("[MOE-PRESTAGE] S1 mode: using total managed budget %zu MB "
+                      "(evictable AOS entries)\n", avail >> 20);
+    } else {
+        avail = ggml_sycl::unified_cache_available_for_compute(device);
+    }
 
     // Build a global priority list shared by Phase 1 (GPU0) and Phase 2 (secondary GPUs).
     // Sort order: popularity rank (ascending), then tensor_role (gate < up < down).
