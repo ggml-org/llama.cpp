@@ -103,8 +103,8 @@ def test_router_models_max_evicts_lru():
 
     candidate_models = [
         "ggml-org/tinygemma3-GGUF:Q8_0",
-        "ggml-org/test-model-stories260K",
-        "ggml-org/test-model-stories260K-infill",
+        "ggml-org/test-model-stories260K:F32",
+        "ggml-org/test-model-stories260K-infill:F32",
     ]
 
     # Load only the first 2 models to fill the cache
