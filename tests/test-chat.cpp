@@ -2005,8 +2005,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             got_runtime_error = true;
             error_msg = e.what();
         }
-        assert(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
-        assert(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
+        GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
+        GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
     }
 
     // Kimi-K2-Thinking tests - custom parser
