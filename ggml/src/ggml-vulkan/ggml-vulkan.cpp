@@ -3435,22 +3435,28 @@ static void ggml_vk_load_shaders(vk_device& device) {
     if (device->fp16) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, )
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if (device->integer_dot_product) {
             CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, _int8)
             CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, _int8)
-        } else {
+        } else
+#endif
+        {
             CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
             CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, )
         }
     } else {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, _fp32)
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, _fp32)
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if (device->integer_dot_product) {
-            CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, _fp32)
-            CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, _fp32)
-        } else {
             CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, _fp32_int8)
             CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, _fp32_int8)
+        } else
+#endif
+        {
+            CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, _fp32)
         }
     }
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
