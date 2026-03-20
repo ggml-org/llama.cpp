@@ -16048,6 +16048,7 @@ static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev)
     case 0xE20C:  // B570
         return 18;
     case 0xE20B:  // B580
+    case 0xE211:  // Pro B60
         return 20;
     default:
         return 0;
