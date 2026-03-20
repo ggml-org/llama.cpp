@@ -139,11 +139,24 @@ static bool glob_match(const std::string & pattern, const std::string & str) {
 
 struct server_tool {
     std::string name;
-    json        definition;
-    bool        permission_write = false;
+    std::string display_name;
+    bool permission_write = false;
+
     virtual ~server_tool() = default;
-    virtual json to_json() = 0;
+    virtual json get_definition() = 0;
     virtual json invoke(json params) = 0;
+
+    json to_json() {
+        return {
+            {"display_name", display_name},
+            {"tool", name},
+            {"type", "builtin"},
+            {"permissions", json{
+                {"write", permission_write}
+            }},
+            {"definition", get_definition()},
+        };
+    }
 };
 
 //
@@ -153,9 +166,13 @@ struct server_tool {
 static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 16 * 1024; // 16 KB
 
 struct server_tool_read_file : server_tool {
-    server_tool_read_file() { name = "read_file"; permission_write = false; }
+    server_tool_read_file() {
+        name = "read_file";
+        display_name = "Read file";
+        permission_write = false;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
@@ -221,7 +238,7 @@ struct server_tool_read_file : server_tool {
             result += out_line;
         }
 
-        return {{"content", result}};
+        return {{"plain_text_response", result}};
     }
 };
 
@@ -232,9 +249,13 @@ struct server_tool_read_file : server_tool {
 static constexpr size_t SERVER_TOOL_FILE_SEARCH_MAX_RESULTS = 100;
 
 struct server_tool_file_glob_search : server_tool {
-    server_tool_file_glob_search() { name = "file_glob_search"; permission_write = false; }
+    server_tool_file_glob_search() {
+        name = "file_glob_search";
+        display_name = "File search";
+        permission_write = false;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
@@ -258,7 +279,8 @@ struct server_tool_file_glob_search : server_tool {
         std::string include = json_value(params, "include", std::string("**"));
         std::string exclude = json_value(params, "exclude", std::string(""));
 
-        json files = json::array();
+        std::ostringstream output_text;
+        size_t count = 0;
 
         std::error_code ec;
         for (const auto & entry : fs::recursive_directory_iterator(base,
@@ -272,13 +294,15 @@ struct server_tool_file_glob_search : server_tool {
             if (!glob_match(include, rel)) continue;
             if (!exclude.empty() && glob_match(exclude, rel)) continue;
 
-            files.push_back(entry.path().string());
-            if (files.size() >= SERVER_TOOL_FILE_SEARCH_MAX_RESULTS) {
+            output_text << entry.path().string() << "\n";
+            if (++count >= SERVER_TOOL_FILE_SEARCH_MAX_RESULTS) {
                 break;
             }
         }
 
-        return {{"files", files}, {"count", files.size()}};
+        output_text << "\n---\nTotal matches: " << count << "\n";
+
+        return {{"plain_text_response", output_text.str()}};
     }
 };
 
@@ -289,9 +313,13 @@ struct server_tool_file_glob_search : server_tool {
 static constexpr size_t SERVER_TOOL_GREP_SEARCH_MAX_RESULTS = 100;
 
 struct server_tool_grep_search : server_tool {
-    server_tool_grep_search() { name = "grep_search"; permission_write = false; }
+    server_tool_grep_search() {
+        name = "grep_search";
+        display_name = "Grep search";
+        permission_write = false;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
@@ -326,7 +354,7 @@ struct server_tool_grep_search : server_tool {
             return {{"error", std::string("invalid regex: ") + e.what()}};
         }
 
-        json matches = json::array();
+        std::ostringstream output_text;
         size_t total = 0;
 
         auto search_file = [&](const fs::path & fpath) {
@@ -337,11 +365,11 @@ struct server_tool_grep_search : server_tool {
             while (std::getline(f, line) && total < SERVER_TOOL_GREP_SEARCH_MAX_RESULTS) {
                 lineno++;
                 if (std::regex_search(line, pattern)) {
-                    json match = {{"file", fpath.string()}, {"content", line}};
+                    output_text << fpath.string() << ":";
                     if (show_lineno) {
-                        match["line"] = lineno;
+                        output_text << lineno << ":";
                     }
-                    matches.push_back(match);
+                    output_text << line << "\n";
                     total++;
                 }
             }
@@ -369,7 +397,9 @@ struct server_tool_grep_search : server_tool {
             return {{"error", "path does not exist: " + path}};
         }
 
-        return {{"matches", matches}, {"count", total}};
+        output_text << "\n\n---\nTotal matches: " << total << "\n";
+
+        return {{"plain_text_response", output_text.str()}};
     }
 };
 
@@ -381,9 +411,13 @@ static constexpr size_t SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE = 16 * 10
 static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;        // seconds
 
 struct server_tool_exec_shell_command : server_tool {
-    server_tool_exec_shell_command() { name = "exec_shell_command"; permission_write = true; }
+    server_tool_exec_shell_command() {
+        name = "exec_shell_command";
+        display_name = "Execute shell command";
+        permission_write = true;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
@@ -418,11 +452,13 @@ struct server_tool_exec_shell_command : server_tool {
 
         auto res = run_process(args, max_output, timeout);
 
-        json out = {{"output", res.output}, {"exit_code", res.exit_code}};
+        std::string text_output = res.output;
+        text_output += string_format("\n[exit code: %d]", res.exit_code);
         if (res.timed_out) {
-            out["timed_out"] = true;
+            text_output += " [exit due to timed out]";
         }
-        return out;
+
+        return {{"plain_text_response", text_output}};
     }
 };
 
@@ -431,14 +467,18 @@ struct server_tool_exec_shell_command : server_tool {
 //
 
 struct server_tool_write_file : server_tool {
-    server_tool_write_file() { name = "write_file"; permission_write = true; }
+    server_tool_write_file() {
+        name = "write_file";
+        display_name = "Write file";
+        permission_write = true;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Write content to a file, creating it (including parent directories) if it does not exist."},
+                {"description", "Write content to a file, creating it (including parent directories) if it does not exist. May use with edit_file for more complex edits."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -478,18 +518,188 @@ struct server_tool_write_file : server_tool {
 };
 
 //
-// edit_file: apply a unified diff via git apply
+// edit_file: edit file content via line-based changes
 //
 
 struct server_tool_edit_file : server_tool {
-    server_tool_edit_file() { name = "edit_file"; permission_write = true; }
+    server_tool_edit_file() {
+        name = "edit_file";
+        display_name = "Edit file";
+        permission_write = true;
+    }
 
-    json to_json() override {
+    json get_definition() override {
         return {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Apply a unified diff to edit one or more files using git apply."},
+                {"description", 
+                    "Edit a file by applying a list of line-based changes. "
+                    "Each change targets a 1-based inclusive line range and has a mode: "
+                    "\"replace\" (replace lines with content), "
+                    "\"delete\" (remove lines, content must be empty string), "
+                    "\"append\" (insert content after line_end). "
+                    "Set line_start to -1 to target the end of file (line_end is ignored in that case). "
+                    "Changes must not overlap. They are applied in reverse line order automatically."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"path",    {{"type", "string"}, {"description", "Path to the file to edit"}}},
+                        {"changes", {
+                            {"type", "array"},
+                            {"description", "List of changes to apply"},
+                            {"items", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"mode",       {{"type", "string"},  {"description", "\"replace\", \"delete\", or \"append\""}}},
+                                    {"line_start", {{"type", "integer"}, {"description", "First line of the range (1-based); use -1 for end of file"}}},
+                                    {"line_end",   {{"type", "integer"}, {"description", "Last line of the range (1-based, inclusive); ignored when line_start is -1"}}},
+                                    {"content",    {{"type", "string"},  {"description", "Content to insert; must be empty string for delete mode"}}},
+                                }},
+                                {"required", json::array({"mode", "line_start", "line_end", "content"})},
+                            }},
+                        }},
+                    }},
+                    {"required", json::array({"path", "changes"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params) override {
+        std::string path = params.at("path").get<std::string>();
+        const json & changes = params.at("changes");
+
+        if (!changes.is_array()) {
+            return {{"error", "\"changes\" must be an array"}};
+        }
+
+        // read file into lines
+        std::ifstream fin(path);
+        if (!fin) {
+            return {{"error", "failed to open file: " + path}};
+        }
+        std::vector<std::string> lines;
+        {
+            std::string line;
+            while (std::getline(fin, line)) {
+                lines.push_back(line);
+            }
+        }
+        fin.close();
+
+        // validate and collect changes, then sort descending by line_start
+        struct change_entry {
+            std::string mode;
+            int line_start; // 1-based
+            int line_end;   // 1-based inclusive
+            std::string content;
+        };
+        std::vector<change_entry> entries;
+        entries.reserve(changes.size());
+
+        for (const auto & ch : changes) {
+            change_entry e;
+            e.mode       = ch.at("mode").get<std::string>();
+            e.line_start = ch.at("line_start").get<int>();
+            e.line_end   = ch.at("line_end").get<int>();
+            e.content    = ch.at("content").get<std::string>();
+
+            if (e.mode != "replace" && e.mode != "delete" && e.mode != "append") {
+                return {{"error", "invalid mode \"" + e.mode + "\"; must be replace, delete, or append"}};
+            }
+            if (e.mode == "delete" && !e.content.empty()) {
+                return {{"error", "content must be empty string for delete mode"}};
+            }
+            int n = (int) lines.size();
+            if (e.line_start == -1) {
+                // -1 means end of file; line_end is ignored — normalize to point past last line
+                e.line_start = n + 1;
+                e.line_end   = n + 1;
+            } else {
+                if (e.line_start < 1 || e.line_end < e.line_start) {
+                    return {{"error", string_format("invalid line range [%d, %d]", e.line_start, e.line_end)}};
+                }
+                if (e.line_end > n) {
+                    return {{"error", string_format("line_end %d exceeds file length %d", e.line_end, n)}};
+                }
+            }
+            entries.push_back(std::move(e));
+        }
+
+        // sort descending so earlier-indexed changes don't shift later ones
+        std::sort(entries.begin(), entries.end(), [](const change_entry & a, const change_entry & b) {
+            return a.line_start > b.line_start;
+        });
+
+        // apply changes (0-based indices internally)
+        for (const auto & e : entries) {
+            int idx_start = e.line_start - 1; // 0-based
+            int idx_end   = e.line_end   - 1; // 0-based inclusive
+
+            // split content into lines (preserve trailing newline awareness)
+            std::vector<std::string> new_lines;
+            if (!e.content.empty()) {
+                std::istringstream ss(e.content);
+                std::string ln;
+                while (std::getline(ss, ln)) {
+                    new_lines.push_back(ln);
+                }
+                // if content ends with \n, getline consumed it — no extra empty line needed
+                // if content does NOT end with \n, last line is still captured correctly
+            }
+
+            if (e.mode == "replace") {
+                // erase [idx_start, idx_end] and insert new_lines
+                lines.erase(lines.begin() + idx_start, lines.begin() + idx_end + 1);
+                lines.insert(lines.begin() + idx_start, new_lines.begin(), new_lines.end());
+            } else if (e.mode == "delete") {
+                lines.erase(lines.begin() + idx_start, lines.begin() + idx_end + 1);
+            } else { // append
+                // idx_end + 1 may equal lines.size() when line_start == -1 (end of file)
+                lines.insert(lines.begin() + idx_end + 1, new_lines.begin(), new_lines.end());
+            }
+        }
+
+        // write file back
+        std::ofstream fout(path, std::ios::binary);
+        if (!fout) {
+            return {{"error", "failed to open file for writing: " + path}};
+        }
+        for (size_t i = 0; i < lines.size(); i++) {
+            fout << lines[i];
+            if (i + 1 < lines.size()) {
+                fout << "\n";
+            }
+        }
+        if (!lines.empty()) {
+            fout << "\n";
+        }
+        if (!fout) {
+            return {{"error", "failed to write file: " + path}};
+        }
+
+        return {{"result", "file edited successfully"}, {"path", path}, {"lines", (int) lines.size()}};
+    }
+};
+
+//
+// apply_diff: apply a unified diff via git apply
+//
+
+struct server_tool_apply_diff : server_tool {
+    server_tool_apply_diff() {
+        name = "apply_diff";
+        display_name = "Apply diff";
+        permission_write = true;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Apply a unified diff to edit one or more files using git apply. Use this instead of edit_file when the changes are complex."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -541,6 +751,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_exec_shell_command>());
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
+    tools.push_back(std::make_unique<server_tool_apply_diff>());
     return tools;
 }
 
