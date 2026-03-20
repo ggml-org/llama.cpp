@@ -27,7 +27,7 @@ jobs:
               "bash": {
                 "*": "deny",
                 "gh issue*": "allow",
-                "gh search*": "allow"
+                "gh search issues*": "allow"
               },
               "webfetch": "deny"
             }
@@ -35,7 +35,7 @@ jobs:
           rm AGENTS.md
           rm CLAUDE.md
 
-          opencode run -m llama.cpp-dgx/ai-review-issues-find-similar --thinking "A new issue has been created:
+          timeout 5m opencode run -m llama.cpp-dgx/ai-review-issues-find-similar --thinking "A new issue has been created:
 
           Issue number: ${{ github.event.issue.number }}
 
@@ -83,4 +83,5 @@ jobs:
             - Post at most ONE comment combining all findings.
             - If you didn't find issues that are related enough, post nothing.
             - You have access only to the 'gh' CLI tool - don't try to use other tools.
+            - If the output from a tool call is too long, try to limit down the search.
           "
