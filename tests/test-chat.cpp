@@ -2009,6 +2009,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
     }
 
+    // Regression: Llama 3.3 tool_start="{" — model output that looks like a tool
+    // call but isn't must not crash. Repro: Llama-3.2-3B temp=0 tools=[get_weather]
+    //   prompt="Write a hello world C program. Just the code, no explanation."
+    //   model outputs: {"name": "main", "parameters": {"argc": "2", ...}}
+    {
+        auto tst = peg_tester("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja", false);
+        tst.test("{\"name\": \"main\", \"parameters\": {\"argc\": \"2\"}}")
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("{\"name\": \"main\", \"parameters\": {\"argc\": \"2\"}}"))
+            .run();
+    }
+
     // Kimi-K2-Thinking tests - custom parser
     // Unique feature: tool call ID embeds function name as functions.<name>:<counter>
     {

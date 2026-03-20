@@ -208,8 +208,21 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
-    return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(p.until(tool_start)))) + tools_parser +
-           p.end();
+    if (force_tools) {
+        return ctx.reasoning_parser + tools_parser + p.end();
+    }
+
+    // For templates like Llama 3.3 where tool_start is "{" (no distinctive marker),
+    // content stops at any brace and tools_parser takes over. If the model output
+    // contains JSON that isn't a valid tool call (e.g. user asked for a JSON schema),
+    // the tools parser fails with nothing to absorb the remaining input.
+    //
+    // Without the fallback: braces in content either silently truncate (partial match)
+    // or crash with HTTP 500 (full parse throws). The content-only branch lets the
+    // parser return the entire output as content when tool parsing fails.
+    auto with_tools = ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
+    auto content_only = ctx.reasoning_parser + p.content(p.rest()) + p.end();
+    return p.choice({with_tools, content_only});
 }
 
 common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx) const {
