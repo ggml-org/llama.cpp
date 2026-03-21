@@ -147,6 +147,7 @@ struct server_slot {
     json json_schema;
 
     common_sampler_ptr smpl;
+    common_sampler_ptr smpl_checkpoint;  // saved sampler state for spec checkpoint
 
     llama_token  sampled; // in speculative mode, this is the last accepted token
 
@@ -182,6 +183,7 @@ struct server_slot {
             spec_session->reset();
         }
         i_batch_dft.clear();
+        smpl_checkpoint.reset();
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -674,6 +676,9 @@ private:
             const auto & cur_with_size = ctx_impl.get_checkpoint(*slot, n_tokens_cur, pos_min, pos_max);
             auto & cur = cur_with_size.checkpoint;
 
+            // save sampler state alongside KV checkpoint
+            slot->smpl_checkpoint.reset(common_sampler_clone(slot->smpl.get()));
+
             SLT_DBG(*slot, "created context checkpoint %zu of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
                     slot->prompt.checkpoints.size(), ctx_impl.params_base.n_ctx_checkpoints,
                     cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
@@ -694,6 +699,11 @@ private:
 
             slot->prompt.tokens.keep_first(ckpt.pos_max + 1);
 
+            // restore sampler state from checkpoint
+            if (slot->smpl_checkpoint) {
+                slot->smpl.reset(common_sampler_clone(slot->smpl_checkpoint.get()));
+            }
+
             // restore_checkpoint only restores recurrent/partial state (PARTIAL_ONLY flag),
             // so attention KV entries at positions beyond the checkpoint remain as orphans
             llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot_id, ckpt.pos_max + 1, -1);
@@ -704,6 +714,7 @@ private:
         void delete_checkpoint() override {
             server_slot * slot = get_slot();
             slot->prompt.checkpoints.pop_back();
+            slot->smpl_checkpoint.reset();
         }
 
     };
