@@ -778,6 +778,8 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue & queue, void * dst
                                                   const std::vector<sycl::event> & deps);
 static size_t ggml_sycl_layout_bytes_for_dims(ggml_type type, int64_t ncols, int64_t nrows,
                                               layout_mode layout, int device_id);
+static bool ggml_sycl_reorder_weight_cpu(void * dst, const void * src,
+                                         const ggml_sycl_reorder_fill_ctx & ctx);
 
 // ---------------------------------------------------------------------------
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
@@ -804,8 +806,8 @@ static void moe_prestage_popular_experts() {
 
     // Phase 1: Pre-stage popular experts to GPU0 VRAM.
     // In S1 mode (all_weights_host), the S1-PRELOAD fills VRAM with AOS copies of
-    // weights — available_for_compute() may return 0.  But these AOS entries are
-    // evictable: ensure_cached_layout() does LRU eviction internally.  Use total
+    // dense weights — available_for_compute() may return 0.  But these AOS entries
+    // are evictable: ensure_cached_layout() does LRU eviction internally.  Use total
     // managed cache capacity as the budget so hot SOA experts can replace cold AOS
     // entries.  Unpin expert entries first so the cache can evict them.
     // For non-S1 mode, use the conservative available_for_compute() budget.
@@ -863,62 +865,154 @@ static void moe_prestage_popular_experts() {
                                          static_cast<size_t>(n_experts_per_layer) * 3;
         const bool budget_tight = (total_slots < full_expert_slots);
 
-        for (const auto * meta : priority_list) {
-            if (static_cast<size_t>(prestaged) >= total_slots) break;
+        // --- Phase 1a: Collect work items that need SOA conversion ---
+        // Instead of doing serial CPU reorder + DMA per expert, we collect all
+        // work items first, then reorder in parallel on CPU, then DMA to device.
+        // This turns ~14s of serial CPU reorder into ~1-2s of parallel work.
+        struct prestage_work_item {
+            const moe_expert_meta *      meta;
+            ggml_sycl_cache_id           key;
+            size_t                       dst_bytes;
+            ggml_sycl_reorder_fill_ctx   reorder_ctx;
+            void *                       reorder_buf;  // host staging for pre-reordered SOA data
+            bool                         ok;           // reorder succeeded
+        };
+        std::vector<prestage_work_item> work_items;
+        work_items.reserve(std::min(total_slots, priority_list.size()));
 
-            // Under tight VRAM budget, skip down_exps tensors.
-            // gate+up are needed first in MoE FFN; down can be prefetched during SiLU.
+        for (const auto * meta : priority_list) {
+            if (work_items.size() >= total_slots) break;
+
             if (budget_tight && meta->tensor_role == MOE_TENSOR_DOWN) {
                 down_deferred++;
                 continue;
             }
 
-            // Skip experts already in VRAM
             auto placement = ptable.get(meta->layer_id, meta->expert_idx);
             if (placement.device_ptr != nullptr) {
                 skipped++;
                 continue;
             }
 
-            // Build cache key
             ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
                 meta->tensor, meta->extra, meta->expert_idx);
             if (!key.valid) continue;
 
-            // Build SOA layout request
             const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
                 meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
             const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
-            ggml_sycl_reorder_fill_ctx reorder_ctx{};
-            reorder_ctx.type        = meta->type;
-            reorder_ctx.ncols       = meta->ne0;
-            reorder_ctx.nrows       = meta->ne1;
-            reorder_ctx.nbytes      = meta->bytes;
-            reorder_ctx.dst_bytes   = dst_bytes;
-            reorder_ctx.layout      = GGML_LAYOUT_SOA;
-            reorder_ctx.src_is_device = false;
-            reorder_ctx.device_id   = device;
+            prestage_work_item item{};
+            item.meta      = meta;
+            item.key       = key;
+            item.dst_bytes = dst_bytes;
+            item.ok        = false;
 
+            item.reorder_ctx.type          = meta->type;
+            item.reorder_ctx.ncols         = meta->ne0;
+            item.reorder_ctx.nrows         = meta->ne1;
+            item.reorder_ctx.nbytes        = meta->bytes;
+            item.reorder_ctx.dst_bytes     = dst_bytes;
+            item.reorder_ctx.layout        = GGML_LAYOUT_SOA;
+            item.reorder_ctx.src_is_device = false;
+            item.reorder_ctx.device_id     = device;
+
+            // Allocate host staging buffer for pre-reordered SOA data.
+            // Using malloc (not sycl::malloc_host) to avoid SYCL overhead per expert.
+            // The cache's copy_to_device_async handles non-USM source by staging
+            // through host-pinned chunks internally.
+            item.reorder_buf = std::malloc(dst_bytes);
+            if (!item.reorder_buf) continue;
+
+            work_items.push_back(item);
+        }
+
+        // --- Phase 1b: Parallel CPU reorder using std::thread ---
+        // The CPU reorder (AOS->SOA) was the #2 bottleneck after L0 driver overhead:
+        // 4.8s CPU / 13.9s idle for 2485 experts, single-threaded.
+        // Using N threads gives ~Nx speedup (limited by DDR5 bandwidth, not cores).
+        if (!work_items.empty()) {
+            const int hw_threads = static_cast<int>(std::thread::hardware_concurrency());
+            const int n_threads  = std::max(1, std::min(hw_threads - 2, 16));
+            const int n_items    = static_cast<int>(work_items.size());
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+
+            if (n_items <= n_threads || n_threads <= 1) {
+                // Few items or single thread: reorder directly
+                for (auto & item : work_items) {
+                    item.ok = ggml_sycl_reorder_weight_cpu(
+                        item.reorder_buf, item.meta->data_ptr, item.reorder_ctx);
+                }
+            } else {
+                // Partition work across threads.  Each thread handles a contiguous
+                // range of work items to minimize false sharing on reorder_buf.
+                std::vector<std::thread> threads;
+                threads.reserve(n_threads);
+                const int items_per_thread = (n_items + n_threads - 1) / n_threads;
+
+                for (int t = 0; t < n_threads; t++) {
+                    const int begin = t * items_per_thread;
+                    const int end   = std::min(begin + items_per_thread, n_items);
+                    if (begin >= end) break;
+
+                    threads.emplace_back([&work_items, begin, end]() {
+                        for (int i = begin; i < end; i++) {
+                            auto & item = work_items[i];
+                            item.ok = ggml_sycl_reorder_weight_cpu(
+                                item.reorder_buf, item.meta->data_ptr, item.reorder_ctx);
+                        }
+                    });
+                }
+                for (auto & t : threads) {
+                    t.join();
+                }
+            }
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double reorder_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            GGML_LOG_INFO("[MOE-PRESTAGE] Parallel CPU reorder: %d experts, %d threads, %.1f ms\n",
+                          n_items, n_threads, reorder_ms);
+        }
+
+        // --- Phase 1c: Feed pre-reordered data to cache with pipelined DMA ---
+        // Each ensure_cached_layout call allocates device memory and copies the
+        // pre-reordered SOA buffer (via copy_to_device_async).  Using
+        // skip_fill_wait=true pipelines the DMA transfers so the host is not
+        // blocked waiting for each individual H2D copy to complete.
+        for (auto & item : work_items) {
+            if (!item.ok) {
+                // Reorder failed — skip this expert
+                std::free(item.reorder_buf);
+                item.reorder_buf = nullptr;
+                continue;
+            }
+
+            // The src_ptr is the pre-reordered host buffer; src_size = dst_size
+            // since both are SOA layout.  fill_fn = nullptr means the cache uses
+            // its default copy_to_device_async path (which handles non-USM source
+            // by staging through host-pinned chunks).
             ggml_sycl::cache_layout_request req{};
-            req.key              = key;
-            req.src_ptr          = meta->data_ptr;
-            req.src_size         = meta->bytes;
-            req.dst_size         = dst_bytes;
+            req.key              = item.key;
+            req.src_ptr          = item.reorder_buf;
+            req.src_size         = item.dst_bytes;
+            req.dst_size         = item.dst_bytes;
             req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-            req.layer_id         = meta->layer_id;
-            req.expert_id        = meta->expert_idx;
+            req.layer_id         = item.meta->layer_id;
+            req.expert_id        = item.meta->expert_idx;
             req.layout           = GGML_LAYOUT_SOA;
             req.validate_content = false;
-            req.fill_fn          = ggml_sycl_fill_reordered_host;
-            req.fill_ctx         = &reorder_ctx;
+            req.skip_fill_wait   = true;
+            req.fill_fn          = nullptr;
+            req.fill_ctx         = nullptr;
 
             try {
                 auto result = cache->ensure_cached_layout(req, {});
                 if (result.status == ggml_sycl::cache_layout_status::READY ||
                     result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                     if (result.device_ptr) {
-                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx, device, result.device_ptr);
+                        ptable.set_device_ptr(item.meta->layer_id, item.meta->expert_idx,
+                                              device, result.device_ptr);
                     }
                     prestaged++;
                 }
@@ -926,6 +1020,24 @@ static void moe_prestage_popular_experts() {
                 // VRAM exhausted — stop pre-staging
                 break;
             }
+        }
+
+        // --- Phase 1d: Wait for all pipelined DMA to complete, then finalize ---
+        if (prestaged > 0) {
+            try {
+                cache->finalize_pending_fills();
+            } catch (...) {
+                // Ignore finalization errors
+            }
+        }
+
+        // Free all staging buffers.  The cache's copy_to_device_async stages
+        // non-USM source data through internal pinned chunks before returning
+        // the event, so the malloc'd buffers are safe to free after
+        // finalize_pending_fills() completes (which waits on ready_events).
+        for (auto & item : work_items) {
+            std::free(item.reorder_buf);
+            item.reorder_buf = nullptr;
         }
     }
 
@@ -978,22 +1090,30 @@ static void moe_prestage_popular_experts() {
         }
 
         if (!sec_budgets.empty()) {
-            // Walk the global priority list.  Phase 1 consumed the hottest
-            // experts for GPU0; Phase 2 picks up the remainder for secondary
-            // GPUs, filling the device with the most remaining budget first.
+            // --- Phase 2a: Collect work items for secondary GPUs ---
+            // Same parallel reorder strategy as Phase 1: collect all work,
+            // reorder in parallel on CPU, then DMA to each device.
+            struct sec_work_item {
+                const moe_expert_meta *      meta;
+                ggml_sycl_cache_id           key;
+                size_t                       dst_bytes;
+                int                          budget_idx;  // index into sec_budgets
+                ggml_sycl_reorder_fill_ctx   reorder_ctx;
+                void *                       reorder_buf;
+                bool                         ok;
+            };
+            std::vector<sec_work_item> sec_work;
+
             for (const auto * meta : priority_list) {
                 if (sec_budgets.empty()) break;
 
                 auto placement = ptable.get(meta->layer_id, meta->expert_idx);
 
-                // Skip experts already on GPU0 (served from GPU0's cache)
                 if (placement.device_ptr != nullptr && placement.device_id == 0) {
                     continue;
                 }
 
-                // Skip experts already on a secondary device
                 if (placement.device_ptr != nullptr && placement.device_id >= 1) {
-                    // Count as skipped for the device that owns it
                     for (auto & b : sec_budgets) {
                         if (b.dev == placement.device_id) {
                             b.skipped++;
@@ -1003,12 +1123,10 @@ static void moe_prestage_popular_experts() {
                     continue;
                 }
 
-                // Compute SOA byte count for budget tracking (device-independent for SOA)
                 const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
                     meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, 0);
                 const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
-                // Find secondary device with most remaining budget that can fit this expert
                 int    best_idx   = -1;
                 size_t best_space = 0;
                 for (int i = 0; i < static_cast<int>(sec_budgets.size()); i++) {
@@ -1019,7 +1137,6 @@ static void moe_prestage_popular_experts() {
                     }
                 }
                 if (best_idx < 0) {
-                    // No secondary device has room — remove exhausted entries
                     sec_budgets.erase(
                         std::remove_if(sec_budgets.begin(), sec_budgets.end(),
                                        [dst_bytes](const sec_budget & b) {
@@ -1031,56 +1148,136 @@ static void moe_prestage_popular_experts() {
 
                 auto & budget = sec_budgets[best_idx];
 
-                // Under tight budget, defer down_exps tensors (same logic as Phase 1).
                 const size_t total_slots = budget.bytes_remaining / dst_bytes;
                 if (total_slots < 32 && meta->tensor_role == MOE_TENSOR_DOWN) {
                     budget.down_deferred++;
                     continue;
                 }
 
-                // Inline the cache logic (same as Phase 1) instead of calling
-                // moe_expert_ensure_soa_cached(), which would deadlock on
-                // g_moe_expert_meta_mutex (already held by the outer scope).
                 ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
                     meta->tensor, meta->extra, meta->expert_idx);
                 if (!key.valid) continue;
 
-                ggml_sycl_reorder_fill_ctx reorder_ctx{};
-                reorder_ctx.type          = meta->type;
-                reorder_ctx.ncols         = meta->ne0;
-                reorder_ctx.nrows         = meta->ne1;
-                reorder_ctx.nbytes        = meta->bytes;
-                reorder_ctx.dst_bytes     = dst_bytes;
-                reorder_ctx.layout        = GGML_LAYOUT_SOA;
-                reorder_ctx.src_is_device = false;
-                reorder_ctx.device_id     = budget.dev;
+                sec_work_item item{};
+                item.meta       = meta;
+                item.key        = key;
+                item.dst_bytes  = dst_bytes;
+                item.budget_idx = best_idx;
+                item.ok         = false;
+
+                item.reorder_ctx.type          = meta->type;
+                item.reorder_ctx.ncols         = meta->ne0;
+                item.reorder_ctx.nrows         = meta->ne1;
+                item.reorder_ctx.nbytes        = meta->bytes;
+                item.reorder_ctx.dst_bytes     = dst_bytes;
+                item.reorder_ctx.layout        = GGML_LAYOUT_SOA;
+                item.reorder_ctx.src_is_device = false;
+                item.reorder_ctx.device_id     = budget.dev;
+
+                item.reorder_buf = std::malloc(dst_bytes);
+                if (!item.reorder_buf) continue;
+
+                // Deduct budget eagerly during collection so device selection
+                // remains accurate for subsequent experts.
+                budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
+
+                sec_work.push_back(item);
+            }
+
+            // --- Phase 2b: Parallel CPU reorder ---
+            if (!sec_work.empty()) {
+                const int hw_threads = static_cast<int>(std::thread::hardware_concurrency());
+                const int n_threads  = std::max(1, std::min(hw_threads - 2, 16));
+                const int n_items    = static_cast<int>(sec_work.size());
+
+                auto t0 = std::chrono::high_resolution_clock::now();
+
+                if (n_items <= n_threads || n_threads <= 1) {
+                    for (auto & item : sec_work) {
+                        item.ok = ggml_sycl_reorder_weight_cpu(
+                            item.reorder_buf, item.meta->data_ptr, item.reorder_ctx);
+                    }
+                } else {
+                    std::vector<std::thread> threads;
+                    threads.reserve(n_threads);
+                    const int items_per_thread = (n_items + n_threads - 1) / n_threads;
+
+                    for (int t = 0; t < n_threads; t++) {
+                        const int begin = t * items_per_thread;
+                        const int end   = std::min(begin + items_per_thread, n_items);
+                        if (begin >= end) break;
+
+                        threads.emplace_back([&sec_work, begin, end]() {
+                            for (int i = begin; i < end; i++) {
+                                auto & item = sec_work[i];
+                                item.ok = ggml_sycl_reorder_weight_cpu(
+                                    item.reorder_buf, item.meta->data_ptr, item.reorder_ctx);
+                            }
+                        });
+                    }
+                    for (auto & t : threads) {
+                        t.join();
+                    }
+                }
+
+                auto t1 = std::chrono::high_resolution_clock::now();
+                double reorder_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                GGML_LOG_INFO("[MOE-PRESTAGE] Phase 2 parallel CPU reorder: %d experts, %d threads, %.1f ms\n",
+                              n_items, n_threads, reorder_ms);
+            }
+
+            // --- Phase 2c: DMA pre-reordered data to secondary devices ---
+            for (auto & item : sec_work) {
+                if (!item.ok) {
+                    std::free(item.reorder_buf);
+                    item.reorder_buf = nullptr;
+                    continue;
+                }
+
+                auto & budget = sec_budgets[item.budget_idx];
 
                 ggml_sycl::cache_layout_request req{};
-                req.key              = key;
-                req.src_ptr          = meta->data_ptr;
-                req.src_size         = meta->bytes;
-                req.dst_size         = dst_bytes;
+                req.key              = item.key;
+                req.src_ptr          = item.reorder_buf;
+                req.src_size         = item.dst_bytes;
+                req.dst_size         = item.dst_bytes;
                 req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                req.layer_id         = meta->layer_id;
-                req.expert_id        = meta->expert_idx;
+                req.layer_id         = item.meta->layer_id;
+                req.expert_id        = item.meta->expert_idx;
                 req.layout           = GGML_LAYOUT_SOA;
                 req.validate_content = false;
-                req.fill_fn          = ggml_sycl_fill_reordered_host;
-                req.fill_ctx         = &reorder_ctx;
+                req.skip_fill_wait   = true;
+                req.fill_fn          = nullptr;
+                req.fill_ctx         = nullptr;
 
                 try {
                     auto result = budget.cache->ensure_cached_layout(req, {});
                     if ((result.status == ggml_sycl::cache_layout_status::READY ||
                          result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
                         && result.device_ptr) {
-                        ptable.set_device_ptr(meta->layer_id, meta->expert_idx,
+                        ptable.set_device_ptr(item.meta->layer_id, item.meta->expert_idx,
                                               budget.dev, result.device_ptr);
                         budget.staged++;
-                        budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
                     }
                 } catch (...) {
                     // VRAM exhausted on this secondary device — skip
                 }
+            }
+
+            // Finalize pending fills on all secondary caches
+            for (const auto & b : sec_budgets) {
+                if (b.staged > 0) {
+                    try {
+                        b.cache->finalize_pending_fills();
+                    } catch (...) {
+                    }
+                }
+            }
+
+            // Free staging buffers
+            for (auto & item : sec_work) {
+                std::free(item.reorder_buf);
+                item.reorder_buf = nullptr;
             }
 
             // Log summary per secondary device
@@ -1981,7 +2178,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 prefetch pool pre-loading complete "
                       "(pool_capacity=%d)\n", prefetcher.pool_capacity());
     } else if (skip_phase3) {
-        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: skipped — S1 mode already cached MoE tensors as AOS in VRAM\n");
+        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: skipped — S1 mode already cached dense weights as AOS in VRAM\n");
     }
 
     // Initialize ExpertPredictor using top-K detected from graph ids tensor.
@@ -2355,8 +2552,9 @@ static bool ggml_sycl_force_vram_enabled() {
     return val != 0;
 }
 
-// SoA layout is ON by default for the unified kernel DMMV path (batch=1).
-// SoA reorders quantized weights so threads read contiguous memory → coalesced access → 2-3x decode speedup.
+// SoA layout is ON by default for all batch sizes (TG and PP).
+// TG: MMVQ reads SOA directly for coalesced access → 2-3x decode speedup.
+// PP: dequant kernel converts SOA→FP16, oneDNN sees FP16 — no AOS needed.
 // Set GGML_SYCL_UNIFIED_SOA=0 to force AoS layout (for debugging or if SoA causes issues).
 static bool ggml_sycl_unified_soa_enabled() {
     static int enabled = -1;
@@ -2866,6 +3064,7 @@ void ggml_sycl_clear_routing_indices_cache() {
 }
 
 static void ggml_sycl_preload_model_weights();
+inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type);
 
 static bool ggml_sycl_copy_trace_enabled() {
     const char * env = std::getenv("GGML_SYCL_COPY_TRACE");
@@ -8452,8 +8651,12 @@ static void ggml_sycl_preload_model_weights() {
                     }
 
                     const size_t src_size = ggml_nbytes(tensor);
-                    const size_t dst_size = src_size;  // AOS: no layout transform
+                    const size_t dst_size = src_size;  // AOS: raw DMA, no layout transform
 
+                    // S1-PRELOAD uploads AOS for fast initial loading (pure DMA).
+                    // The unified dispatch accepts SOA from cache when available,
+                    // and the dequant kernel handles both AOS and SOA input for PP.
+                    // graph_preload_weights converts AOS→SOA on first TG graph.
                     ggml_sycl::cache_layout_request req{};
                     req.key              = cache_key;
                     req.src_ptr          = src_ptr;
@@ -23138,11 +23341,10 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
             }
             layout_mode target = GGML_LAYOUT_AOS;
             if (ggml_backend_sycl_all_weights_host()) {
-                // S1: choose layout based on phase.
-                // PP (non-decode): oneDNN reads AOS from VRAM (fast first-pass, no SOA conversion).
-                // TG (decode): MMVQ reads SOA from VRAM (fast per-token).
-                // This avoids a PP regression — the first PP run would be slow with SOA
-                // because ensure_cached_layout must convert every weight on first access.
+                // S1: PP uses AOS (already cached by S1-PRELOAD), TG uses SOA.
+                // The unified dispatch accepts whatever layout is cached and the
+                // dequant kernel handles both AOS and SOA for PP (SOA→FP16 works).
+                // graph_preload converts AOS→SOA on first TG decode graph.
                 if (is_decode && ggml_is_quantized(src->type) &&
                     ggml_sycl_supports_reorder_mmvq(src->type)) {
                     target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
@@ -23219,21 +23421,32 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
         cache->evict(missing_bytes - cache->available());
         if (cache->available() < missing_bytes) {
             if (ggml_backend_sycl_all_weights_host()) {
-                // S1 mode: weights are GPU-accessible via host-pinned USM.
-                // Per-op dispatch can use SOA from cache for weights that fit,
-                // and fall back to AOS host-pinned for the rest.  Graph replay
-                // can't work with partial caching, but the TG fast-path handles
-                // mixed SOA/AOS gracefully.  Skip preload — don't disable graphs
-                // permanently (a future graph with fewer nodes might fit).
-                GGML_LOG_INFO("[GRAPH-PRELOAD-WEIGHTS] S1 mode: %.1f MB weights exceed %.1f MB cache, "
-                              "using per-op dispatch with on-demand SOA\n",
+                // S1 mode: host-pinned pointers are stable (sycl::malloc_host doesn't move),
+                // so graph recording/replay can use them as fallback for uncached weights.
+                // But graph replay with host-pinned is slower than per-op dispatch with
+                // on-demand SOA caching. Only do partial preload when most weights are
+                // already cached — the few host-pinned fallbacks won't hurt much.
+                const size_t total_bytes = cached_bytes + missing_bytes;
+                const bool   mostly_cached = total_bytes > 0 && cached_bytes > (total_bytes * 9 / 10);
+                if (mostly_cached) {
+                    GGML_LOG_INFO("[GRAPH-PRELOAD-WEIGHTS] S1 mode: %.1f MB exceed %.1f MB cache, "
+                                  "partial preload (%.0f%% cached, host-pinned fallback for remainder)\n",
+                                  missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f),
+                                  100.0 * cached_bytes / total_bytes);
+                    // Fall through to partial preload loop below.
+                } else {
+                    GGML_LOG_INFO("[GRAPH-PRELOAD-WEIGHTS] S1 mode: %.1f MB exceed %.1f MB cache "
+                                  "(%.0f%% cached), using per-op dispatch with on-demand SOA\n",
+                                  missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f),
+                                  100.0 * cached_bytes / total_bytes);
+                    return false;
+                }
+            } else {
+                GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Insufficient cache space: need %.1f MB, have %.1f MB\n",
                               missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f));
+                ctx.weight_streaming_graphs_disabled = true;
                 return false;
             }
-            GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Insufficient cache space: need %.1f MB, have %.1f MB\n",
-                          missing_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f));
-            ctx.weight_streaming_graphs_disabled = true;
-            return false;
         }
     }
     // Pre-load and pin all weights
@@ -24075,9 +24288,14 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
     if (unified_enabled) {
         const bool src1_contiguous = ggml_is_contiguous(src1) && !ggml_is_transposed(src1) && !ggml_is_permuted(src1);
         if (src1_contiguous) {
+            // SOA for quantized types: dequant handles SOA→FP16, oneDNN sees FP16.
+            // Non-quantized types (FP16/FP32) keep AOS.
+            const bool use_soa = ggml_sycl_unified_soa_enabled() &&
+                                 ggml_is_quantized(src0->type) &&
+                                 ggml_sycl_supports_reorder_mmvq(src0->type);
             decision.valid   = true;
             decision.backend = MatmulBackend::UnifiedKernel;
-            decision.layout  = GGML_LAYOUT_AOS;
+            decision.layout  = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
             return decision;
         }
     }
@@ -24114,9 +24332,12 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
     auto set_decision = [&](ggml_sycl_mul_mat_kernel kernel) {
         decision.valid = true;
         if (kernel == ggml_sycl_mul_mat_kernel::UNIFIED_MATMUL) {
+            const bool use_soa = ggml_sycl_unified_soa_enabled() &&
+                                 ggml_is_quantized(src0->type) &&
+                                 ggml_sycl_supports_reorder_mmvq(src0->type);
             decision.backend = MatmulBackend::UnifiedKernel;
             decision.kernel  = kernel;
-            decision.layout  = GGML_LAYOUT_AOS;
+            decision.layout  = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
             return;
         }
         decision.backend = MatmulBackend::LegacyKernel;
@@ -26119,14 +26340,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         // weights by n (output column) instead of m (output row).
         if (decision.valid && decision.backend == ggml_sycl::MatmulBackend::UnifiedKernel) {
             bool unified_dispatched = false;
-#if 1  // ENABLED - with AOS layout check to prevent crash with reordered weights
+#if 1  // ENABLED - unified dispatch with SOA support for all batch sizes
             if (ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(src0->type)) {
-                auto *            extra0      = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                const layout_mode src0_layout = extra0 ? get_effective_layout_mode(extra0) : GGML_LAYOUT_AOS;
-                if (src0_layout != GGML_LAYOUT_AOS && g_ggml_sycl_debug) {
-                    GGML_SYCL_DEBUG("[UNIFIED] tensor reports layout=%d; requesting AoS pointer explicitly\n",
-                                    static_cast<int>(src0_layout));
-                }
                 const bool src1_contiguous =
                     ggml_is_contiguous(src1) && !ggml_is_transposed(src1) && !ggml_is_permuted(src1);
                 if (!src1_contiguous) {
@@ -26147,17 +26362,22 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
 
                     if (!force_legacy) {
-                        // IMPORTANT: unified kernel must use device-accessible pointers.
-                        // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
-                        // SoA layout is default for batch=1 (DMMV path) — coalesced memory access.
-                        // CRITICAL: Only use SoA for batch=1. Larger batches use ESIMD/XMX
-                        // which requires AoS layout. Using SoA with ESIMD causes crashes.
-                        // Set GGML_SYCL_UNIFIED_SOA=0 to disable.
-                        const bool        use_soa          = ggml_sycl_unified_soa_enabled() && (M == 1);
-                        const layout_mode requested_layout = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+                        // SOA layout for all batch sizes when type is quantized.
+                        // TG (M=1): MMVQ reads SOA directly for coalesced access.
+                        // PP (M>1): dequant kernel converts SOA→FP16, oneDNN sees FP16.
+                        // Fallback to AOS if SOA not yet cached (e.g. first PP before TG).
+                        const bool  prefer_soa      = ggml_sycl_unified_soa_enabled() &&
+                                                      ggml_is_quantized(src0->type) &&
+                                                      ggml_sycl_supports_reorder_mmvq(src0->type);
+                        layout_mode requested_layout = prefer_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
                         const char *      src0_ptr_source  = nullptr;
                         const void *      src0_data =
                             ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
+                        // Fallback: if SOA not cached yet, accept AOS — dequant handles both.
+                        if (!src0_data && prefer_soa) {
+                            requested_layout = GGML_LAYOUT_AOS;
+                            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS, &src0_ptr_source);
+                        }
                         const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
                         float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
@@ -26414,7 +26634,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                     "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d "
                                     "src0=%p(%s) src1=%p dst=%p n_batch=%lld\n",
                                     (long long) M, (long long) K, (long long) N, src0->type,
-                                    static_cast<int>(src0_layout), src0_data, src0_ptr_source ? src0_ptr_source : "?",
+                                    static_cast<int>(requested_layout), src0_data, src0_ptr_source ? src0_ptr_source : "?",
                                     src1_data, dst_data, (long long) n_batch);
 
                                 for (int64_t i0 = 0; i0 < n_batch; ++i0) {
