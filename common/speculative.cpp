@@ -1382,9 +1382,10 @@ struct common_speculative_session::impl {
             // Delete Checkpoint
             callback.delete_checkpoint();
             spec_has_ckpt = false;
-        } else {
-            callback.memory_seq_rm(p0, -1);
         }
+        // remove attention KV entries from the bonus token and any
+        // unaccepted drafts beyond p0
+        callback.memory_seq_rm(p0, -1);
     }
 
     void print_stats() const {
