@@ -820,7 +820,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             } else {
                 LLAMA_LOG_WARN("%s: '%s' is not a valid state file, ignoring\n", func, filename);
                 checkpoint_file = filename;
-                //checkpoint_file.clear();
             }
         }
     }

@@ -121,8 +121,8 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
-    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
+    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file] [--prune-layers]\n");
+    printf("       [--keep-split] [--override-kv] [--dry-run] [--target-bpw] [--target-size] [--save-state] [--state-file]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -145,7 +145,7 @@ static void usage(const char * executable) {
     printf("                                      use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type tensor_name=ggml_type\n");
     printf("                                      quantize this tensor to this ggml_type\n");
-    printf("                                      this is an advanced option to selectively quantize tensors. may be specified multiple times.\n");
+    printf("                                      this is an advanced option to selectively quantize tensors; may be specified multiple times.\n");
     printf("                                      example: --tensor-type attn_q=q8_0\n");
     printf("  --tensor-type-file tensor_types.txt\n");
     printf("                                      list of tensors to quantize to a specific ggml_type\n");
@@ -157,11 +157,22 @@ static void usage(const char * executable) {
     printf("  --keep-split\n");
     printf("                                      generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
-    printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
+    printf("                                      override model metadata by key in the quantized model; may be specified multiple times.\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
     printf("                                      calculate and show the final quantization size without performing quantization\n");
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
+    printf("  --target-bpw n\n");
+    printf("                                      target a bits per weight (bpw); must be a positive number between 0.0 and 16.0\n");
+    printf("                                      advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n\n");
+    printf("  --target-size n\n");
+    printf("                                      target a file size; must be a positive number between 0.0 and 16.0\n");
+    printf("                                      advanced option to automatically select quantization types to achieve a total file size\n");
+    printf("                                      allowed units: b, k|kib, m|mib, g|gib, t|tib; defaults to b (bytes) if none is provided\n\n");
+    printf("  --save-state\n");
+    printf("                                      save the bpw computations to <model name>-<model hash>.bpw_state\n\n");
+    printf("  --state-file [filename]\n");
+    printf("                                      file name to use/save; if none is provided, the default name will be used\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
@@ -615,16 +626,16 @@ static bool parse_target_size(const char * data, int64_t & target_size) {
     int64_t mul = 0;
     if (suffix.empty() || suffix == "b") {
         mul = 1;
-    } else if (suffix == "k" || suffix == "kb") {
+    } else if (suffix == "k" || suffix == "kib") {
         mul = 1024;
-    } else if (suffix == "m" || suffix == "mb") {
+    } else if (suffix == "m" || suffix == "mib") {
         mul = 1024 * 1024;
-    } else if (suffix == "g" || suffix == "gb") {
+    } else if (suffix == "g" || suffix == "gib") {
         mul = 1024 * 1024 * 1024;
-    } else if (suffix == "t" || suffix == "tb") {
+    } else if (suffix == "t" || suffix == "tib") {
         mul = 1024LL * 1024 * 1024 * 1024;
     } else {
-        printf("\n%s: invalid unit '%s' in '%s'. Allowed: b, kb, mb, gb, tb (kilo = 1024 bytes)\n\n", __func__, suffix.c_str(), data);
+        printf("\n%s: invalid unit '%s' in '%s'. Allowed: b, k or kib, m or mib, g or gib, t or tib\n\n", __func__, suffix.c_str(), data);
         return false;
     }
 
