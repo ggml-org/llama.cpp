@@ -5747,6 +5747,23 @@ static bool flush_pending_cpu_scatter_if_consumed(const ggml_tensor * consuming_
     return false;  // No overlap — defer the scatter
 }
 
+// ----- Pipeline MoE: environment variable gate -----
+// When GGML_SYCL_PIPELINE_MOE=1, B50 expert compute for layer N overlaps
+// with GPU0 attention for layer N+1.  A background thread waits for B50
+// D2H events and submits H2D scatter on a dedicated copy queue, so the
+// main thread (feeding GPU0's compute queue) never blocks.
+static bool ggml_sycl_pipeline_moe_enabled() {
+    static std::atomic<int> val{ -1 };
+    int                     v = val.load(std::memory_order_acquire);
+    if (v < 0) {
+        const char * env = getenv("GGML_SYCL_PIPELINE_MOE");
+        int          nv  = env ? atoi(env) : 0;  // Default: OFF
+        val.compare_exchange_strong(v, nv, std::memory_order_release, std::memory_order_acquire);
+        v = val.load(std::memory_order_acquire);
+    }
+    return v != 0;
+}
+
 // ----- Deferred secondary GPU scatter (async B50 dispatch) -----
 // Stores scatter metadata from dispatch_experts_secondary_gpu() so
 // B50 GEMM kernels run in parallel with B580 primary GPU dispatch.
@@ -5767,7 +5784,110 @@ struct pending_secondary_scatter {
 
 static thread_local pending_secondary_scatter g_pending_secondary_scatter = {};
 
+// ----- Pipeline MoE: background scatter thread -----
+// When pipeline mode is active, the background thread waits for B50 D2H
+// events and submits H2D scatter on a dedicated copy queue.  The main
+// thread polls the completion flag instead of blocking on B50 events.
+//
+// Double-buffer: scatter slot 0 and 1 alternate between layers.
+// g_pipeline_scatter[slot] holds the scatter from the PREVIOUS layer.
+// The background thread processes it while the current layer runs.
+struct pipeline_scatter_slot {
+    pending_secondary_scatter scatter;
+    sycl::queue *             copy_queue = nullptr;  // Dedicated IOQ on GPU0 for H2D
+    std::atomic<bool>         done{ true };          // true = slot is free/flushed
+    std::atomic<bool>         submitted{ false };    // true = background work queued
+};
+
+static constexpr int                      PIPELINE_SLOTS                     = 2;
+static thread_local pipeline_scatter_slot g_pipeline_scatter[PIPELINE_SLOTS] = {};
+static thread_local int                   g_pipeline_slot_idx                = 0;
+
+// Dedicated copy queue for pipeline scatter (one per device, created lazily).
+// In-order queue on GPU0 for H2D copies that don't block the compute queue.
+static sycl::queue * g_pipeline_copy_queue[GGML_SYCL_MAX_DEVICES] = {};
+static std::mutex    g_pipeline_copy_queue_mutex;
+
+static sycl::queue * get_pipeline_copy_queue(int device) {
+    if (g_pipeline_copy_queue[device]) {
+        return g_pipeline_copy_queue[device];
+    }
+    std::lock_guard<std::mutex> lock(g_pipeline_copy_queue_mutex);
+    if (g_pipeline_copy_queue[device]) {
+        return g_pipeline_copy_queue[device];
+    }
+    auto & dev                    = ggml_sycl_get_device(device);
+    // Create in-order copy queue on same device as compute queue.
+    g_pipeline_copy_queue[device] = new sycl::queue(dev.default_queue().get_context(), dev.default_queue().get_device(),
+                                                    sycl::property_list{ sycl::property::queue::in_order{} });
+    static std::atomic<int> log_count{ 0 };
+    if (log_count.fetch_add(1, std::memory_order_relaxed) < 2) {
+        GGML_LOG_INFO("[PIPELINE-MOE] Created dedicated copy queue for device %d\n", device);
+    }
+    return g_pipeline_copy_queue[device];
+}
+
+// Background flush: wait for B50 events and submit H2D on copy queue.
+// Runs on std::async thread, sets slot.done = true when finished.
+static void pipeline_scatter_background(pipeline_scatter_slot * slot) {
+    try {
+        auto & sc = slot->scatter;
+        if (!sc.stream || sc.entries.empty()) {
+            slot->done.store(true, std::memory_order_release);
+            return;
+        }
+        for (auto & e : sc.entries) {
+            if (e.dst_device && e.out_staging) {
+                if (e.target_queue) {
+                    e.last_event.wait();
+                }
+                slot->copy_queue->memcpy(e.dst_device, e.out_staging, e.bytes);
+            } else if (e.dst_device && !e.out_staging) {
+                slot->copy_queue->memset(e.dst_device, 0, e.bytes);
+            }
+        }
+        // Wait for all H2D copies to land on GPU0 before marking done.
+        slot->copy_queue->wait();
+    } catch (const std::exception & ex) {
+        GGML_LOG_ERROR("[PIPELINE-MOE] Background scatter failed: %s\n", ex.what());
+    }
+    slot->scatter.entries.clear();
+    slot->scatter.stream     = nullptr;
+    slot->scatter.active     = false;
+    slot->scatter.dst_tensor = nullptr;
+    slot->done.store(true, std::memory_order_release);
+}
+
+// Wait for a specific pipeline slot to finish.
+static void pipeline_scatter_wait(int slot_idx) {
+    auto & slot = g_pipeline_scatter[slot_idx];
+    if (slot.done.load(std::memory_order_acquire)) {
+        return;
+    }
+    // Spin-wait briefly, then yield
+    for (int spin = 0; spin < 1000; spin++) {
+        if (slot.done.load(std::memory_order_acquire)) {
+            return;
+        }
+    }
+    while (!slot.done.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+// Wait for ALL pipeline slots to finish.
+static void pipeline_scatter_drain() {
+    for (int i = 0; i < PIPELINE_SLOTS; i++) {
+        pipeline_scatter_wait(i);
+    }
+}
+
 static void flush_pending_secondary_scatter() {
+    // --- Pipeline mode: drain any in-flight background scatters first ---
+    if (ggml_sycl_pipeline_moe_enabled()) {
+        pipeline_scatter_drain();
+    }
+
     if (!g_pending_secondary_scatter.active) return;
 
     try {
@@ -5806,6 +5926,37 @@ static void flush_pending_secondary_scatter() {
 // Selective flush: only flush if the pending scatter's dst_tensor is consumed
 // by the current operation (i.e., dst reads from the pending result).
 static void flush_pending_secondary_scatter_if_consumed(const ggml_tensor * dst) {
+    // --- Pipeline mode: check both pipeline slots and g_pending_secondary_scatter ---
+    if (ggml_sycl_pipeline_moe_enabled()) {
+        // Check pipeline slots: if the op consumes a pipeline slot's dst_tensor,
+        // wait for that slot's background flush to complete.
+        auto slot_consumes = [&](int slot_idx) -> bool {
+            auto & slot = g_pipeline_scatter[slot_idx];
+            if (slot.done.load(std::memory_order_acquire)) {
+                return false;
+            }
+            const ggml_tensor * pdst = slot.scatter.dst_tensor;
+            if (!pdst) {
+                pipeline_scatter_wait(slot_idx);
+                return true;
+            }
+            for (int si = 0; si < GGML_MAX_SRC; si++) {
+                const ggml_tensor * s = dst->src[si];
+                while (s) {
+                    if (s == pdst) {
+                        pipeline_scatter_wait(slot_idx);
+                        return true;
+                    }
+                    s = s->view_src;
+                }
+            }
+            return false;
+        };
+        for (int i = 0; i < PIPELINE_SLOTS; i++) {
+            slot_consumes(i);
+        }
+    }
+
     if (!g_pending_secondary_scatter.active) return;
 
     const ggml_tensor * pending_dst = g_pending_secondary_scatter.dst_tensor;
@@ -5826,10 +5977,50 @@ static void flush_pending_secondary_scatter_if_consumed(const ggml_tensor * dst)
     }
 }
 
+// Start pipeline background flush: move current g_pending_secondary_scatter
+// into a pipeline slot and launch async processing.  Only called when
+// GGML_SYCL_PIPELINE_MOE=1 and multi-GPU is active.
+static void pipeline_scatter_start_async(int device) {
+    if (!g_pending_secondary_scatter.active) {
+        return;
+    }
+
+    // Pick the next slot (ping-pong)
+    int slot_idx        = g_pipeline_slot_idx;
+    g_pipeline_slot_idx = (g_pipeline_slot_idx + 1) % PIPELINE_SLOTS;
+
+    auto & slot = g_pipeline_scatter[slot_idx];
+
+    // Wait for previous occupant to finish
+    pipeline_scatter_wait(slot_idx);
+
+    // Get or create the copy queue
+    slot.copy_queue = get_pipeline_copy_queue(device);
+
+    // Move scatter data into the slot
+    slot.scatter = std::move(g_pending_secondary_scatter);
+
+    // Reset the global scatter
+    g_pending_secondary_scatter.entries.clear();
+    g_pending_secondary_scatter.stream     = nullptr;
+    g_pending_secondary_scatter.active     = false;
+    g_pending_secondary_scatter.dst_tensor = nullptr;
+
+    // Mark slot as in-flight and launch background thread
+    slot.done.store(false, std::memory_order_release);
+    slot.submitted.store(true, std::memory_order_release);
+
+    // Fire-and-forget async: background thread does event wait + H2D copies
+    std::thread([&slot]() { pipeline_scatter_background(&slot); }).detach();
+}
+
 // Public entry point for graph boundary flush
 void ggml_sycl_cpu_tg_flush_pending() {
     flush_pending_cpu_scatter();
     flush_prev_scatter_bufs();  // Final cleanup for last async scatter
+    if (ggml_sycl_pipeline_moe_enabled()) {
+        pipeline_scatter_drain();
+    }
     flush_pending_secondary_scatter();
 }
 
@@ -31273,6 +31464,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
+            // Pipeline MoE: move B50 scatter to background for CPU-TG path
+            if (ggml_sycl_pipeline_moe_enabled() && g_pending_secondary_scatter.active &&
+                g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
+                pipeline_scatter_start_async(ctx.device);
+            }
+
             return;
         }
     }
@@ -32750,6 +32947,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Secondary scatter deferred to selective flush at consumption points.
             // The flush_pending_secondary_scatter_if_consumed() calls in the
             // fast path entry and compute_forward handle the actual flushing.
+            //
+            // Pipeline MoE: when enabled, move the pending scatter into a
+            // background thread that waits for B50 D2H events and submits
+            // H2D copies on a dedicated copy queue.  This frees the main
+            // thread to continue submitting GPU0 work (attention ops for
+            // the next layer) without blocking on B50 completion.
+            if (ggml_sycl_pipeline_moe_enabled() && g_pending_secondary_scatter.active &&
+                g_moe_multi_gpu_active.load(std::memory_order_acquire)) {
+                pipeline_scatter_start_async(ctx.device);
+            }
 
             // --- Record actual expert selections (T6 + T7 integration) ---
             // Feed actual router selections to predictor for accuracy tracking
@@ -34010,6 +34217,20 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     // sycl::context reference that outlives the SYCL runtime, causing
     // a crash during static/thread_local destruction.
     ggml_sycl_cpu_tg_flush_pending();
+    // Clean up pipeline MoE copy queues (must happen before SYCL context teardown)
+    {
+        std::lock_guard<std::mutex> lock(g_pipeline_copy_queue_mutex);
+        for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+            if (g_pipeline_copy_queue[d]) {
+                try {
+                    g_pipeline_copy_queue[d]->wait();
+                } catch (...) {
+                }
+                delete g_pipeline_copy_queue[d];
+                g_pipeline_copy_queue[d] = nullptr;
+            }
+        }
+    }
     // Clean up tensor parallelism resources (including CCL) BEFORE destroying backend
     // This ensures CCL objects are destroyed before MPI finalization starts
     // The function is idempotent - safe to call multiple times
