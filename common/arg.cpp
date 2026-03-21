@@ -10,7 +10,6 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
-#include <stdexcept>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -2207,9 +2206,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--mlock"},
-        "force system to keep model in RAM rather than swapping or compressing",
+        "DEPRECATED: force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
-            throw std::runtime_error("error: --mlock is deprecated. use --load-mode mlock instead");
+            throw std::invalid_argument("--mlock is deprecated. use --load-mode mlock instead");
 
             GGML_UNUSED(params);
         }
@@ -2217,9 +2216,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
-        "whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
+        "DEPRECATED: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
         [](common_params & params, bool value) {
-            throw std::runtime_error("error: --mmap and --no-mmap are deprecated. use --load-mode mmap instead");
+            throw std::invalid_argument("--mmap and --no-mmap are deprecated. use --load-mode mmap instead");
 
             GGML_UNUSED(params);
             GGML_UNUSED(value);
@@ -2228,9 +2227,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-dio", "--direct-io"},
         {"-ndio", "--no-direct-io"},
-        "use DirectIO if available",
+        "DEPRECATED: use DirectIO if available",
         [](common_params & params, bool value) {
-            throw std::invalid_argument("error: -dio/--direct-io and -ndio/--no-direct-io are deprecated. use --load-mode dio instead");
+            throw std::invalid_argument("-dio/--direct-io and -ndio/--no-direct-io are deprecated. use --load-mode dio instead");
 
             GGML_UNUSED(params);
             GGML_UNUSED(value);
