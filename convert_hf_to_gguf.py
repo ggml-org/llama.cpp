@@ -605,7 +605,7 @@ class ModelBase:
     def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
         return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
 
-    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor) -> str:
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
         if "language_model." in name:
             name = name.replace("language_model.", "")
 
@@ -621,8 +621,6 @@ class ModelBase:
             scale_name = new_name.replace(".weight", ".scale")
             logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
             self.gguf_writer.add_tensor(scale_name, scale2_f32)
-
-        return new_name
 
     def _generate_nvfp4_tensors(self):
         # Per-layer expert merging to avoid holding all experts in memory
@@ -5073,9 +5071,9 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
 
         return weight, scale
 
-    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor) -> str:
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
         weight, scale = self._transform_nvfp4_weight(name, weight, scale)
-        return super()._repack_nvfp4(name, weight, scale, scale2)
+        super()._repack_nvfp4(name, weight, scale, scale2)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_k_heads = self.hparams.get("linear_num_key_heads", 0)
