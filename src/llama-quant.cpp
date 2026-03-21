@@ -882,8 +882,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return {};
         }
 
-        LLAMA_LOG_INFO("%s: state file found, resuming tensor quantization\n", func);
-
         std::unordered_map<std::string, type_choice> out;
         uint64_t n = 0;
         ifs.read((char *)& n, sizeof(n));
@@ -2203,14 +2201,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (params->imatrix) {
             if (params->tensor_types || params->pure) {
                 LLAMA_LOG_WARN("%s: --target-bpw/--target-size specified, ignoring all other type overrides\n", __func__);
-            }
-            if (params->activations) {
-                LLAMA_LOG_INFO("%s: imatrix has activations, process will be more accurate\n", __func__);
-            } else {
-                LLAMA_LOG_INFO("%s: imatrix does not have activations, process may be less accurate\n", __func__);
-            }
-            if (params->statistics) {
-                LLAMA_LOG_INFO("%s: imatrix has statistics\n", __func__);
             }
             if (params->importance_pct != 0.0f) {
                 LLAMA_LOG_INFO("%s: marking up to %.2f%% of tensors as important\n", __func__, params->importance_pct);
