@@ -881,9 +881,25 @@ private:
                     SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                     return false;
                 }
+
+                auto spec_params = params_base.speculative;
+
+                // disable checkpoints for standard KV cache models — they gain nothing
+                // from checkpoint save/restore (PARTIAL_ONLY flag is ignored, full KV is
+                // saved) and the non-checkpoint path (memory_seq_rm + rewind) is correct.
+                // checkpoints are only useful for models with state that seq_rm cannot
+                // roll back: recurrent state or hybrid memory.
+                if (spec_params.use_checkpoints) {
+                    const bool needs_checkpoints = llama_model_is_recurrent(model) || llama_model_is_hybrid(model);
+                    if (!needs_checkpoints) {
+                        spec_params.use_checkpoints = false;
+                        SLT_INF(slot, "%s", "disabled spec checkpoints for standard KV cache model\n");
+                    }
+                }
+
                 slot.spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
-                slot.spec_session = std::make_unique<common_speculative_session>(*slot.spec_callback,
-                    params_base.speculative, slot.ctx);
+                slot.spec_session =
+                    std::make_unique<common_speculative_session>(*slot.spec_callback, spec_params, slot.ctx);
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             }
 
