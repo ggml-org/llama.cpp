@@ -720,10 +720,10 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--save-state") == 0) {
             params.save_state = true;
         } else if (strcmp(argv[arg_idx], "--state-file") == 0) {
-            if (arg_idx < argc-1) {
+            if (arg_idx + 1 < argc && argv[arg_idx + 1][0] != '-') {
                 params.state_file = argv[++arg_idx];
             } else {
-                usage(argv[0]);
+                params.state_file = (void *) "";
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
             if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {

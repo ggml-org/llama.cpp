@@ -804,9 +804,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const auto * filename = static_cast<const char*>(qs.params->state_file);
             bool is_valid = false;
 
-            if (std::ifstream(filename, std::ios::binary).good()) {
-                is_valid = true;
-            } else if (qs.params->save_state) {
+            if (filename[0] == '\0') { is_valid = true; }
+            else if (std::ifstream(filename, std::ios::binary).good()) { is_valid = true; }
+            else if (qs.params->save_state) {
                 std::ofstream ofs(filename, std::ios::binary | std::ios::app);
                 if (ofs.is_open()) {
                     is_valid = true;
@@ -816,10 +816,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
 
             if (is_valid) {
-                checkpoint_file = filename;
+                if (filename[0] != '\0') { checkpoint_file = filename; }
             } else {
-                LLAMA_LOG_WARN("%s: '%s' is not a valid state file\n", func, filename);
-                checkpoint_file.clear();
+                LLAMA_LOG_WARN("%s: '%s' is not a valid state file, ignoring\n", func, filename);
+                checkpoint_file = filename;
+                //checkpoint_file.clear();
             }
         }
     }
@@ -916,7 +917,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             out.emplace(std::move(name), std::move(si));
         }
 
-        LLAMA_LOG_INFO("%s: resuming from %s (data for %lu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
+        LLAMA_LOG_INFO("%s: using %s (data for %lu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
         return out;
     };
 
@@ -1197,7 +1198,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     std::unordered_map<std::string, type_choice> bpw_data;
-    if (qs.params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); } // ToDo: rethink this condition
+    if (qs.params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); }
 
     auto has_side_data = [&](const auto * m, const std::string & name, const int64_t n2, const int64_t n_per_row) {
         if (!m) { return false; }
@@ -1208,7 +1209,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return sz == req || sz == (size_t) n_per_row;
     };
 
-    // Precompute the Centered‑Normalized Importance Factor (CNIF) scores
+    // Precompute the Centered‑Normalized Importance Factor (CNIF)
     std::unordered_map<std::string, float> cnif_scores;
     if (statistics_data && !statistics_data->empty()) {
         struct tensor_score {
