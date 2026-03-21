@@ -804,6 +804,12 @@ bool common_speculative_is_compat(llama_context * ctx_tgt) {
         return false;
     }
 
+    // Skip speculative decoding for embedding models
+    // Embedding models don't have output logits needed for speculative decoding
+    if (llama_pooling_type(ctx_tgt) != LLAMA_POOLING_TYPE_NONE) {
+        return false;
+    }
+
     bool res = true;
 
     llama_memory_clear(mem, true);
