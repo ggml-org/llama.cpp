@@ -7165,14 +7165,6 @@ layout_mode ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int devic
 }
 
 static layout_mode ggml_sycl_select_moe_graph_layout(const ggml_tensor * src0, int device, bool host_weights) {
-    // S1 mode with large MoE: use AOS to avoid per-expert SOA conversion thrashing.
-    // The S1-PRELOAD already cached whole MoE tensors as AOS in VRAM.  Per-expert
-    // SOA conversion for 13824+ experts exceeds VRAM and causes 10+ minute thrashing.
-    // AOS is read directly by MMVQ kernels (slower per-token but no conversion cost).
-    // Threshold: 64 experts (same as GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS default).
-    if (host_weights && ggml_backend_sycl_all_weights_host() && src0->ne[2] > 64) {
-        return GGML_LAYOUT_AOS;
-    }
     // Host weights require unified cache staging for XMX MoE layouts. If cache is unavailable,
     // fall back to MMVQ/host-routing requirements to avoid layout mismatches.
     if (host_weights && !ggml_sycl::unified_cache_enabled()) {
@@ -23147,8 +23139,10 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
             layout_mode target = GGML_LAYOUT_AOS;
             if (ggml_backend_sycl_all_weights_host()) {
                 // S1: choose layout based on phase.
-                // PP (non-decode): oneDNN reads AOS from VRAM.
-                // TG (decode): MMVQ reads SOA from VRAM.
+                // PP (non-decode): oneDNN reads AOS from VRAM (fast first-pass, no SOA conversion).
+                // TG (decode): MMVQ reads SOA from VRAM (fast per-token).
+                // This avoids a PP regression — the first PP run would be slow with SOA
+                // because ensure_cached_layout must convert every weight on first access.
                 if (is_decode && ggml_is_quantized(src->type) &&
                     ggml_sycl_supports_reorder_mmvq(src->type)) {
                     target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
