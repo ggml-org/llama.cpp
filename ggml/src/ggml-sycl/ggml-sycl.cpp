@@ -33011,36 +33011,119 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
         } else {
             // ----- Standard (non-hybrid) per-expert dispatch -----
-            for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-                for (int64_t id = 0; id < n_ids; id++) {
-                    const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
-                    const int64_t i11        = id % ne11;
-                    const int64_t i12        = iid1;
-                    const int64_t i1         = id;
-                    const int64_t i2         = i12;
-                    const void *  expert_ptr = nullptr;
-                    if (use_expert_cache) {
-                        if (expert_ptrs_host) {
-                            expert_ptr = expert_ptrs_host[i02];
-                        }
+            // Try batched MMVQ dispatch first to reduce kernel launch overhead
+            // (1 kernel per (layer, tensor_type) instead of 1 per expert).
+            // Controlled by GGML_SYCL_BATCH_EXPERTS env var (default: ON).
+            static std::atomic<int> batch_experts_enabled{ -1 };
+            int batch_experts_val = batch_experts_enabled.load(std::memory_order_acquire);
+            if (batch_experts_val < 0) {
+                const char * env     = getenv("GGML_SYCL_BATCH_EXPERTS");
+                int          new_val = env ? atoi(env) : 1;  // Default: ON
+                batch_experts_enabled.compare_exchange_strong(batch_experts_val, new_val,
+                                                             std::memory_order_release,
+                                                             std::memory_order_acquire);
+                batch_experts_val = batch_experts_enabled.load(std::memory_order_acquire);
+            }
 
-                        if (!expert_ptr) {
-                            GGML_SYCL_DEBUG("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n", layer_id,
-                                            (int) i02);
-                            continue;
+            bool batched_ok = false;
+            if (batch_experts_val != 0) {
+                // Get device pointer table from extra
+                const void * const * expert_ptrs_dev = nullptr;
+                if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
+                    expert_ptrs_dev = static_cast<const void * const *>(
+                        src0_extra->moe_expert_ptrs_device[ctx.device]);
+                }
+
+                if (expert_ptrs_dev) {
+                    // Collect all experts into arrays for batched dispatch
+                    const int64_t total_entries = ids->ne[1] * n_ids;
+                    std::vector<int32_t> gpu_expert_ids;
+                    std::vector<int64_t> gpu_iid1s;
+                    std::vector<int64_t> gpu_id_slots;
+                    gpu_expert_ids.reserve(total_entries);
+                    gpu_iid1s.reserve(total_entries);
+                    gpu_id_slots.reserve(total_entries);
+
+                    for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                        for (int64_t id = 0; id < n_ids; id++) {
+                            const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                            GGML_ASSERT(i02 >= 0 && i02 < n_as);
+
+                            // Verify expert pointer is available
+                            const void * expert_ptr = nullptr;
+                            if (use_expert_cache) {
+                                if (expert_ptrs_host) {
+                                    expert_ptr = expert_ptrs_host[i02];
+                                }
+                            } else {
+                                expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
+                            }
+
+                            if (expert_ptr) {
+                                gpu_expert_ids.push_back(i02);
+                                gpu_iid1s.push_back(iid1);
+                                gpu_id_slots.push_back(id);
+                            }
                         }
-                    } else {
-                        expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
                     }
 
-                    src0_row.data = const_cast<void *>(expert_ptr);
+                    if (!gpu_expert_ids.empty()) {
+                        batched_ok = mmvq_moe_batched_dispatch(
+                            ctx, src0, src1, dst,
+                            expert_ptrs_dev,
+                            gpu_expert_ids.data(),
+                            gpu_iid1s.data(),
+                            gpu_id_slots.data(),
+                            static_cast<int>(gpu_expert_ids.size()),
+                            static_cast<int>(n_as),
+                            n_ids,
+                            route_layout);
+                    }
 
-                    local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
-                    src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
-                    dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
+                    if (batched_ok) {
+                        static std::atomic<int> batch_log{ 0 };
+                        if (batch_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                            GGML_LOG_INFO("[MOE-BATCH] Batched %zu experts in single kernel for %s (layout=%d)\n",
+                                          gpu_expert_ids.size(), src0->name ? src0->name : "?",
+                                          (int) route_layout);
+                        }
+                    }
+                }
+            }
 
-                    ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+            // Fallback: per-expert dispatch if batched path unavailable or disabled
+            if (!batched_ok) {
+                for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+                    for (int64_t id = 0; id < n_ids; id++) {
+                        const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
+                        GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                        const int64_t i11        = id % ne11;
+                        const int64_t i12        = iid1;
+                        const int64_t i1         = id;
+                        const int64_t i2         = i12;
+                        const void *  expert_ptr = nullptr;
+                        if (use_expert_cache) {
+                            if (expert_ptrs_host) {
+                                expert_ptr = expert_ptrs_host[i02];
+                            }
+
+                            if (!expert_ptr) {
+                                GGML_SYCL_DEBUG("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n",
+                                                layer_id, (int) i02);
+                                continue;
+                            }
+                        } else {
+                            expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
+                        }
+
+                        src0_row.data = const_cast<void *>(expert_ptr);
+
+                        local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
+                        src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
+                        dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
+
+                        ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row, &route_layout);
+                    }
                 }
             }
         }

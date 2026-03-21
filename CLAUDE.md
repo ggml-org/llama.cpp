@@ -233,6 +233,7 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 | `GGML_SYCL_FORCE_DMMV=1` | Force DMMV kernels |
 | `GGML_SYCL_ESIMD_MIN_BATCH=N` | Min batch size for ESIMD dispatch |
 | `GGML_SYCL_ONEDNN_PP_MIN_BATCH=N` | Min batch for oneDNN PP path |
+| `GGML_SYCL_BATCH_EXPERTS=0` | Disable batched expert kernel launches (default ON) |
 
 **Persistent TG kernel (experimental, opt-in)**:
 | Variable | Default | Effect |
