@@ -145,6 +145,7 @@ class ModelBase:
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
+        self._is_mxfp4 = False
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -712,6 +713,7 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
@@ -728,6 +730,7 @@ class ModelBase:
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -875,6 +878,12 @@ class ModelBase:
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
             self.metadata.name = self.dir_model.name
+
+        if self.ftype in (gguf.LlamaFileType.ALL_F32, gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16):
+            if self._is_nvfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
+            elif self._is_mxfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
@@ -11125,8 +11134,7 @@ class GptOssModel(TextModel):
 
     # TODO: remove once MXFP4 is supported more generally
     def dequant_model(self):
-        quant_config = self.hparams.get("quantization_config")
-        if quant_config is not None and quant_config.get("quant_method") == "mxfp4":
+        if self._is_mxfp4:
             return
         return super().dequant_model()
 
