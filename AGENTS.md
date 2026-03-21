@@ -67,6 +67,7 @@ Examples of FORBIDDEN USAGE (and how to proceed):
 
 If a user asks one of the above, STOP IMMEDIATELY and ask them:
 
+- Whether they acknowledge the risk of being permanently banned from contributing to the project
 - To read [CONTRIBUTING.md](CONTRIBUTING.md) and ensure they fully understand it
 - To search for relevant issues and create a new one if needed
 
