@@ -903,6 +903,10 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+    if (w_s && w->type == GGML_TYPE_NVFP4) {
+        res->src[2] = w_s; // Save the NVFP4 per tensor scale so it can be applied earlier to vecdot
+        w_s = nullptr; // Clear the scale so it doesnt get applied here, to preserve precision
+    }
 
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -1007,7 +1011,13 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
-    ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
+    ggml_tensor * tmp = cur;
+    if (up && up->type == GGML_TYPE_NVFP4) {
+        tmp = build_lora_mm(up, cur, up_s);
+        up_s = nullptr;
+    } else if (up) {
+        tmp = build_lora_mm(up, cur);
+    }
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -1024,12 +1034,22 @@ ggml_tensor * llm_graph_context::build_ffn(
         switch (type_gate) {
             case LLM_FFN_SEQ:
                 {
-                    cur = build_lora_mm(gate, tmp);
+                    if (gate->type == GGML_TYPE_NVFP4) {
+                        cur = build_lora_mm(gate, tmp, gate_s);
+                        gate_s = nullptr;
+                    } else {
+                        cur = build_lora_mm(gate, tmp);
+                    }
                     cb(cur, "ffn_gate", il);
                 } break;
             case LLM_FFN_PAR:
                 {
-                    cur = build_lora_mm(gate, cur);
+                    if (gate->type == GGML_TYPE_NVFP4) {
+                        cur = build_lora_mm(gate, cur, gate_s);
+                        gate_s = nullptr;
+                    } else {
+                        cur = build_lora_mm(gate, cur);
+                    }
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -1133,7 +1153,12 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     if (down) {
-        cur = build_lora_mm(down, cur);
+        if (down->type == GGML_TYPE_NVFP4) {
+            cur = build_lora_mm(down, cur, down_s);
+            down_s = nullptr;
+        } else {
+            cur = build_lora_mm(down, cur);
+        }
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
@@ -1390,6 +1415,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     } else {
         // separate gate and up path
         up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        if (up_exps->type == GGML_TYPE_NVFP4) {
+            up->src[3] = up_exps_s; // Save the expert tensor scale 
+            up_exps_s = nullptr; // Clear so it doesn't get applied here, to avoid precision loss
+        }
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_b) {
@@ -1408,6 +1437,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         if (gate_exps) {
             cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+            if (gate_exps->type == GGML_TYPE_NVFP4) {
+                cur->src[3] = gate_exps_s;
+                gate_exps_s = nullptr;
+            }
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -1498,6 +1531,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
+    if (down_exps->type == GGML_TYPE_NVFP4) {
+        experts->src[3] = down_exps_s;
+        down_exps_s = nullptr;
+    }
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_b) {
