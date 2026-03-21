@@ -552,15 +552,21 @@ struct moe_warmup_state {
     void init(int nl, int ne) {
         n_layers  = std::min(nl, MOE_MAX_LAYERS);
         n_experts = std::min(ne, MOE_MAX_EXPERTS);
-        // Read env var for warmup token count
+        // Read env var for warmup token count (0 = skip warmup, use gate norms)
         const char * env = getenv("GGML_SYCL_MOE_WARMUP_TOKENS");
-        if (env) warmup_tokens = std::max(1, std::atoi(env));
+        if (env) warmup_tokens = std::max(0, std::atoi(env));
         // Read env var for re-rank interval (0 disables periodic re-ranking)
         const char * rerank_env = getenv("GGML_SYCL_MOE_RERANK_INTERVAL");
         if (rerank_env) rerank_interval = std::max(0, std::atoi(rerank_env));
-        GGML_LOG_INFO("[MOE-WARMUP] Profiling %d layers × %d experts for %d tokens, "
-                      "re-rank every %d tokens\n",
-                      n_layers, n_experts, warmup_tokens, rerank_interval);
+        if (warmup_tokens == 0) {
+            GGML_LOG_INFO("[MOE-WARMUP] Zero-warmup mode: %d layers x %d experts, "
+                          "using gate weight norms for initial placement\n",
+                          n_layers, n_experts);
+        } else {
+            GGML_LOG_INFO("[MOE-WARMUP] Profiling %d layers x %d experts for %d tokens, "
+                          "re-rank every %d tokens\n",
+                          n_layers, n_experts, warmup_tokens, rerank_interval);
+        }
     }
 
     void record(int layer_id, const int32_t * expert_ids, int n_selected) {
@@ -706,6 +712,9 @@ static void moe_apply_popularity_placement() {
     GGML_LOG_INFO("[MOE-WARMUP] Popularity ranks applied. Cache eviction "
                   "now favors popular experts; pre-staging on next dispatch.\n");
 }
+
+// Forward declaration: zero-warmup gate-norm placement (defined before moe_hybrid_init_once).
+static void moe_compute_gate_norm_placement(ggml_cgraph * cgraph, int device);
 
 // ---------------------------------------------------------------------------
 // MoE expert tensor type classification.
@@ -1519,6 +1528,218 @@ struct precomputed_up_result {
     bool                 valid;
 };
 static thread_local std::unordered_map<const void *, precomputed_up_result> g_precomputed_up;
+
+// ---------------------------------------------------------------------------
+// Zero-warmup expert staging via gate weight norm sorting.
+//
+// Computes ||W_gate[i,:]||^2 for each expert row in each layer's
+// ffn_gate_inp tensor.  Higher gate norm correlates with higher routing
+// probability, so sorting by norm gives a good initial popularity ranking
+// without running any inference tokens.
+//
+// Called from moe_hybrid_init_once() when GGML_SYCL_MOE_WARMUP_TOKENS=0.
+// Fills g_moe_warmup.counts with synthetic frequencies proportional to
+// gate norms, then calls moe_apply_popularity_placement() and
+// moe_prestage_popular_experts() to upload hot experts to VRAM immediately.
+// ---------------------------------------------------------------------------
+static void moe_compute_gate_norm_placement(ggml_cgraph * cgraph, int device) {
+    const int nl = g_moe_warmup.n_layers;
+    const int ne = g_moe_warmup.n_experts;
+    if (nl <= 0 || ne <= 0) return;
+
+    // Collect gate_inp tensors from the graph.
+    // Gate tensors appear as src of MUL_MAT ops with name pattern "blk.N.ffn_gate_inp".
+    // Shape: [n_embd, n_experts] stored as f32.
+    struct gate_info {
+        const ggml_tensor * tensor;
+        int                 block_num;
+        int                 n_embd;
+        int                 n_experts;
+    };
+    std::vector<gate_info> gates;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            const ggml_tensor * src = node->src[s];
+            if (!src || !src->name || !src->data) {
+                continue;
+            }
+            if (!strstr(src->name, "ffn_gate_inp")) {
+                continue;
+            }
+            // Skip shared expert gate and bias variants
+            if (strstr(src->name, "ffn_gate_inp_shexp") || strstr(src->name, "ffn_gate_inp_b")) {
+                continue;
+            }
+
+            int block_id = moe_extract_block_number(src->name);
+            if (block_id < 0) {
+                continue;
+            }
+
+            // Check for duplicates (same tensor can appear in multiple nodes)
+            bool dup = false;
+            for (const auto & g : gates) {
+                if (g.block_num == block_id) { dup = true; break; }
+            }
+            if (dup) continue;
+
+            const int gate_n_embd    = static_cast<int>(src->ne[0]);
+            const int gate_n_experts = static_cast<int>(src->ne[1]);
+            if (gate_n_embd <= 0 || gate_n_experts <= 0) {
+                continue;
+            }
+
+            gates.push_back({ src, block_id, gate_n_embd, gate_n_experts });
+        }
+    }
+
+    if (gates.empty()) {
+        GGML_LOG_WARN("[MOE-GATE-NORM] No ffn_gate_inp tensors found in graph, "
+                      "cannot compute gate norms. Falling back to uniform placement.\n");
+        return;
+    }
+
+    GGML_LOG_INFO("[MOE-GATE-NORM] Computing gate weight norms for %zu blocks, "
+                  "%d experts/block\n", gates.size(), ne);
+
+    // For each gate tensor, compute ||W_gate[expert_i,:]||^2 per expert row.
+    // Map block_num to all sequential layer indices in that block (gate/up/down
+    // each have a separate sequential layer index).
+    //
+    // Build block_num -> set of sequential layer indices mapping.
+    std::unordered_map<int, std::vector<int>> block_to_seq_layers;
+    {
+        std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+        for (const auto & [hash_id, seq_id] : g_moe_layer_seq[device]) {
+            for (const auto & meta : g_moe_expert_meta) {
+                if (meta.layer_id == hash_id && meta.expert_idx == 0) {
+                    if (meta.block_num >= 0) {
+                        block_to_seq_layers[meta.block_num].push_back(seq_id);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    int n_blocks_computed = 0;
+    for (const auto & gate : gates) {
+        // Get host-accessible pointer to gate weight data.
+        // Gate weights are f32, typically in host or unified memory.
+        const float * gate_data = nullptr;
+
+        // Check if data is host-accessible
+        sycl::usm::alloc atype = sycl::usm::alloc::unknown;
+        try {
+            atype = ggml_sycl_get_alloc_type(gate.tensor->data);
+        } catch (...) {
+            // get_alloc_type may throw if context is invalid
+        }
+
+        if (atype == sycl::usm::alloc::device) {
+            // Data is in device VRAM — cannot read from host.
+            // This shouldn't happen for gate_inp (usually f32 in host memory).
+            GGML_LOG_WARN("[MOE-GATE-NORM] Gate tensor blk.%d is device-only, skipping\n",
+                          gate.block_num);
+            continue;
+        }
+
+        // Host or shared memory — directly accessible
+        gate_data = static_cast<const float *>(gate.tensor->data);
+        if (!gate_data) {
+            continue;
+        }
+
+        // Compute L2 norm squared for each expert row.
+        // Gate shape: [n_embd, n_experts] — row stride = n_embd floats.
+        const int n_exp  = std::min(gate.n_experts, ne);
+        const int n_embd = gate.n_embd;
+
+        std::vector<double> norms(n_exp, 0.0);
+        for (int e = 0; e < n_exp; e++) {
+            const float * row = gate_data + static_cast<size_t>(e) * n_embd;
+            double        sum = 0.0;
+            for (int d = 0; d < n_embd; d++) {
+                double v = static_cast<double>(row[d]);
+                sum += v * v;
+            }
+            norms[e] = sum;
+        }
+
+        // Convert norms to synthetic frequency counts.
+        // Scale so that the max norm maps to 1000 and min maps to 1.
+        // This preserves relative ordering for moe_apply_popularity_placement().
+        double max_norm = *std::max_element(norms.begin(), norms.end());
+        double min_norm = *std::min_element(norms.begin(), norms.end());
+        double range    = max_norm - min_norm;
+        if (range < 1e-12) range = 1.0;  // all norms equal — uniform counts
+
+        // Find all sequential layer indices for this block
+        auto it = block_to_seq_layers.find(gate.block_num);
+        if (it == block_to_seq_layers.end()) {
+            GGML_LOG_WARN("[MOE-GATE-NORM] No sequential layers found for block %d\n",
+                          gate.block_num);
+            continue;
+        }
+
+        for (int seq_l : it->second) {
+            if (seq_l < 0 || seq_l >= nl) continue;
+            for (int e = 0; e < n_exp; e++) {
+                // Map norm to synthetic count: higher norm = higher count
+                uint32_t count = static_cast<uint32_t>(
+                    1.0 + 999.0 * (norms[e] - min_norm) / range);
+                g_moe_warmup.counts[seq_l][e].store(count, std::memory_order_relaxed);
+            }
+        }
+
+        n_blocks_computed++;
+
+        // Log top-3 experts by gate norm for first few blocks
+        if (n_blocks_computed <= 4) {
+            std::vector<std::pair<double, int>> sorted;
+            sorted.reserve(n_exp);
+            for (int e = 0; e < n_exp; e++) {
+                sorted.push_back({ norms[e], e });
+            }
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto & a, const auto & b) { return a.first > b.first; });
+            if (sorted.size() >= 3) {
+                GGML_LOG_INFO("[MOE-GATE-NORM] Block %d top-3 by norm: "
+                              "expert %d (%.2f), expert %d (%.2f), expert %d (%.2f)\n",
+                              gate.block_num,
+                              sorted[0].second, sorted[0].first,
+                              sorted[1].second, sorted[1].first,
+                              sorted[2].second, sorted[2].first);
+            }
+        }
+    }
+
+    if (n_blocks_computed == 0) {
+        GGML_LOG_WARN("[MOE-GATE-NORM] Failed to compute norms for any block\n");
+        return;
+    }
+
+    GGML_LOG_INFO("[MOE-GATE-NORM] Computed gate norms for %d/%zu blocks, "
+                  "applying popularity placement\n",
+                  n_blocks_computed, gates.size());
+
+    // Apply the synthetic frequency counts as popularity ranks
+    moe_apply_popularity_placement();
+
+    // Pre-stage hot experts to VRAM immediately
+    moe_prestage_popular_experts();
+
+    // Mark warmup as complete — skip the inference-based warmup loop
+    g_moe_warmup.warmup_done.store(true, std::memory_order_release);
+
+    // Enable periodic re-ranking for runtime adaptation
+    g_moe_warmup.enable_reranking();
+
+    GGML_LOG_INFO("[MOE-GATE-NORM] Zero-warmup placement complete. "
+                  "Skipping inference-based warmup entirely.\n");
+}
 
 // Scan a compute graph for MUL_MAT_ID nodes, register experts with the unified cache,
 // and set up prefetcher + predictor.
@@ -2515,6 +2736,15 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             GGML_LOG_INFO("[MOE-FUSION] Paired %d gate→up tensors for fused CPU dispatch\n",
                           n_pairs);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Zero-warmup gate-norm placement: when GGML_SYCL_MOE_WARMUP_TOKENS=0,
+    // compute gate weight norms to rank experts by routing probability and
+    // pre-stage hot experts to VRAM immediately — no inference warmup needed.
+    // -----------------------------------------------------------------------
+    if (g_moe_warmup.warmup_tokens == 0) {
+        moe_compute_gate_norm_placement(cgraph, device);
     }
 }
 
