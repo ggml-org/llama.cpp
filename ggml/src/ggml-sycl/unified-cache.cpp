@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <limits>
 #include <thread>
 #include <unordered_set>
@@ -3916,10 +3917,16 @@ void unified_cache::prefetch_worker_loop() {
         // Wait for a request or shutdown signal
         {
             std::unique_lock<std::mutex> lock(prefetch_mutex_);
-            prefetch_cv_.wait(lock, [this] { return !prefetch_queue_.empty() || prefetch_shutdown_.load(); });
+            prefetch_cv_.wait_for(lock, std::chrono::seconds(2),
+                                  [this] { return !prefetch_queue_.empty() || prefetch_shutdown_.load(); });
 
             if (prefetch_shutdown_.load() && prefetch_queue_.empty()) {
                 return;
+            }
+
+            // Spurious wakeup or timeout with empty queue — loop back
+            if (prefetch_queue_.empty()) {
+                continue;
             }
 
             req = std::move(prefetch_queue_.front());
@@ -3954,10 +3961,14 @@ layer_weight_pointers unified_cache::await_layer(int layer_id) {
     layer_weight_set weights;
     {
         std::unique_lock<std::mutex> lock(layer_state_mutex_);
-        layer_ready_cv_.wait(lock, [this, layer_id] {
+        bool ready = layer_ready_cv_.wait_for(lock, std::chrono::seconds(5), [this, layer_id] {
             auto it = layer_ready_.find(layer_id);
             return it != layer_ready_.end() && it->second;
         });
+        if (!ready) {
+            GGML_LOG_WARN("[PREFETCH] await_layer %d timed out after 5s, falling back to direct lookup\n", layer_id);
+            return {};
+        }
         layout  = layer_layouts_[layer_id];
         weights = layer_weights_[layer_id];
     }
@@ -4046,9 +4057,13 @@ void unified_cache::stop_prefetch_worker() {
     }
     prefetch_cv_.notify_one();
 
-    // Join the worker thread
+    // Join the worker thread with timeout
     if (prefetch_worker_.joinable()) {
-        prefetch_worker_.join();
+        auto future = std::async(std::launch::async, [this] { prefetch_worker_.join(); });
+        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] prefetch worker did not exit within 5s\n");
+            prefetch_worker_.detach();
+        }
     }
 
     prefetch_started_.store(false);

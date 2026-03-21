@@ -10,8 +10,10 @@
 #include "unified-cache.hpp"  // ggml_sycl_is_shutting_down()
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 
 namespace ggml_sycl {
 
@@ -104,13 +106,17 @@ void CpuExpertPool::worker_thread() {
         std::function<void()> task;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] {
+            cv_.wait_for(lock, std::chrono::seconds(2), [this] {
                 return shutting_down_.load(std::memory_order_acquire)
                        || !work_queue_.empty();
             });
             if (shutting_down_.load(std::memory_order_acquire)
                 && work_queue_.empty()) {
                 return;
+            }
+            // Spurious wakeup or timeout with empty queue -- loop back
+            if (work_queue_.empty()) {
+                continue;
             }
             task = std::move(work_queue_.front());
             work_queue_.pop();
@@ -173,7 +179,11 @@ void CpuExpertPool::shutdown() {
 
     for (auto & t : threads_) {
         if (t.joinable()) {
-            t.join();
+            auto future = std::async(std::launch::async, [&t] { t.join(); });
+            if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+                GGML_LOG_WARN("[CPU-EXPERT-POOL] Worker thread did not exit within 5s\n");
+                t.detach();
+            }
         }
     }
     threads_.clear();

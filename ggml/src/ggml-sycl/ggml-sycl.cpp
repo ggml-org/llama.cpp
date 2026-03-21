@@ -764,7 +764,7 @@ struct moe_expert_meta {
     int                     block_num;    // transformer block number (-1 if unknown)
 };
 static std::vector<moe_expert_meta> g_moe_expert_meta;
-static std::mutex                   g_moe_expert_meta_mutex;
+static std::shared_mutex             g_moe_expert_meta_mutex;
 
 // Forward declarations needed by moe_prestage_popular_experts (defined later in file).
 static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *     tensor,
@@ -798,7 +798,7 @@ static void moe_prestage_popular_experts() {
     auto & ptable = ggml_sycl::get_expert_placement_table();
     if (!ptable.is_initialized()) return;
 
-    std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+    std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
     if (g_moe_expert_meta.empty()) return;
 
     // Count unique layer IDs for budget calculations.
@@ -1327,7 +1327,7 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     // Look up expert metadata (type, dims, data pointer)
     const moe_expert_meta * meta = nullptr;
     {
-        std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+        std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
         for (const auto & m : g_moe_expert_meta) {
             if (m.layer_id == layer_idx && m.expert_idx == expert_idx) {
                 meta = &m;
@@ -1625,7 +1625,7 @@ static void moe_compute_gate_norm_placement(ggml_cgraph * cgraph, int device) {
     // Build block_num -> set of sequential layer indices mapping.
     std::unordered_map<int, std::vector<int>> block_to_seq_layers;
     {
-        std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+        std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
         for (const auto & [hash_id, seq_id] : g_moe_layer_seq[device]) {
             for (const auto & meta : g_moe_expert_meta) {
                 if (meta.layer_id == hash_id && meta.expert_idx == 0) {
@@ -1943,7 +1943,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
 
     // Store per-expert metadata for proactive pre-staging after warmup.
     {
-        std::lock_guard<std::mutex> lock(g_moe_expert_meta_mutex);
+        std::unique_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
         g_moe_expert_meta.clear();
         g_moe_expert_meta.reserve(expert_list.size());
         for (const auto & info : expert_list) {
