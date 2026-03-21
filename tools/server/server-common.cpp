@@ -1043,6 +1043,55 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
+    // Reasoning budget: pass parameters through to sampling layer
+    int reasoning_budget = opt.reasoning_budget;
+    if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+        reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+    }
+
+
+    // OpenRouter compatible API
+    if (body.contains("reasoning")) {
+        const auto& reasoning = body["reasoning"];
+
+        if (reasoning.is_boolean()) {
+            bool enabled = reasoning.get<bool>();
+            inputs.enable_thinking = enabled;
+        }
+        else if (reasoning.is_object()) {
+            bool enabled = reasoning.value("enabled", true);
+            inputs.enable_thinking = enabled;
+            if (!enabled) goto or_reason_check_end;
+
+            auto reasoning_max_tokens = reasoning.value("max_tokens", -1);
+            // if specified
+            if (reasoning_max_tokens >= 0) {
+                reasoning_budget = reasoning_max_tokens;
+                goto or_reason_check_end;
+            }
+
+            auto effort = reasoning.value("effort", "auto");
+            if (effort != "auto") {
+                float percent = 0.5;
+                if (effort == "xhigh") {percent = 0.95;
+                } else if (effort == "high") {percent = 0.80;
+                } else if (effort == "medium") {percent = 0.50;
+                } else if (effort == "low") {percent = 0.20;
+                } else if (effort == "minimal") {percent = 0.10;
+                } else if (effort == "none") {
+                    inputs.enable_thinking = false;
+                    goto or_reason_check_end;
+                } else {
+                    throw std::invalid_argument("invalid enum for \"reasoning.effort\" (expected one of [xhigh, high, medium, low, minimal, none], got "+effort+")");
+                }
+
+                auto max_output_tokens = body.value("max_tokens", 65536); // TODO use n_ctx ??
+                reasoning_budget = max_output_tokens * percent;
+            }
+        }
+    }
+    or_reason_check_end:
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
@@ -1105,11 +1154,6 @@ json oaicompat_chat_params_parse(
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = opt.reasoning_budget;
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
-        }
-
         if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
