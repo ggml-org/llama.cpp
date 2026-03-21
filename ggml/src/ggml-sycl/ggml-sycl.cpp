@@ -817,20 +817,29 @@ static void moe_prestage_popular_experts() {
     // In S1 mode (all_weights_host), the S1-PRELOAD fills VRAM with AOS copies of
     // dense weights — available_for_compute() may return 0.  But these AOS entries
     // are evictable: ensure_cached_layout() does LRU eviction internally.  Use total
-    // managed cache capacity as the budget so hot SOA experts can replace cold AOS
-    // entries.  Unpin expert entries first so the cache can evict them.
+    // managed cache capacity MINUS a compute reserve as the budget so hot SOA experts
+    // can replace cold AOS entries while leaving room for compute buffers, KV cache,
+    // and other runtime allocations that will be reserved after prestage.
+    // Without this reserve, prestage fills ALL VRAM and later runtime reservations
+    // trigger "Budget exceeded" when update_reserved_bytes shrinks the budget.
     // For non-S1 mode, use the conservative available_for_compute() budget.
     const int device = 0;
     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
     const bool s1_active = ggml_backend_sycl_all_weights_host();
     size_t avail;
     if (s1_active && cache) {
-        // S1 mode: AOS entries are evictable — use total managed capacity.
-        // Unpin so ensure_cached_layout can evict cold AOS entries for hot SOA.
+        // S1 mode: AOS entries are evictable — use total managed capacity minus
+        // compute reserve.  The reserve ensures space for compute buffers, KV cache,
+        // and runtime allocations that will be added after prestage.
         cache->unpin_experts();
-        avail = ggml_sycl::unified_cache_total_managed(device);
-        GGML_LOG_INFO("[MOE-PRESTAGE] S1 mode: using total managed budget %zu MB "
-                      "(evictable AOS entries)\n", avail >> 20);
+        const size_t total_managed = ggml_sycl::unified_cache_total_managed(device);
+        size_t free_vram = 0, total_vram = 0;
+        ggml_backend_sycl_get_device_memory(device, &free_vram, &total_vram);
+        const size_t compute_reserve = std::max(size_t(256) << 20, total_vram / 10);
+        avail = (total_managed > compute_reserve) ? total_managed - compute_reserve : 0;
+        GGML_LOG_INFO("[MOE-PRESTAGE] S1 mode: total_managed=%zu MB, compute_reserve=%zu MB, "
+                      "prestage budget=%zu MB (evictable AOS entries)\n",
+                      total_managed >> 20, compute_reserve >> 20, avail >> 20);
     } else {
         avail = ggml_sycl::unified_cache_available_for_compute(device);
     }
@@ -1080,9 +1089,14 @@ static void moe_prestage_popular_experts() {
             ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
             if (!sec_cache) continue;
 
-            // Use total cache capacity: after unpinning, init-time entries are
-            // evictable.  ensure_cached_layout handles LRU eviction internally.
-            const size_t sec_total = ggml_sycl::unified_cache_total_managed(dev);
+            // Use total cache capacity minus compute reserve: after unpinning,
+            // init-time entries are evictable.  ensure_cached_layout handles LRU
+            // eviction internally.  Reserve space for compute buffers + runtime.
+            const size_t sec_managed = ggml_sycl::unified_cache_total_managed(dev);
+            size_t sec_free = 0, sec_total_vram = 0;
+            ggml_backend_sycl_get_device_memory(dev, &sec_free, &sec_total_vram);
+            const size_t sec_reserve = std::max(size_t(256) << 20, sec_total_vram / 10);
+            const size_t sec_total   = (sec_managed > sec_reserve) ? sec_managed - sec_reserve : 0;
             if (sec_total == 0 || expert_bytes == 0) continue;
 
             // Unpin expert entries so the cache can evict cold experts when full.
