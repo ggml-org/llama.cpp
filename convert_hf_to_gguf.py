@@ -34,8 +34,8 @@ try:
     from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
     from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
     from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
-        SentencePieceTokenizer, # ty: ignore[unresolved-import]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+        SentencePieceTokenizer,
     )
 
     _mistral_common_installed = True

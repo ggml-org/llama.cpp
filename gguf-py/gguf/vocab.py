@@ -16,11 +16,11 @@ except ImportError:
 try:
     from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
     from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
-        _filter_valid_tokenizer_files, # ty: ignore[unresolved-import]
+    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+        _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
-        SentencePieceTokenizer, # ty: ignore[unresolved-import]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+        SentencePieceTokenizer,
     )
 except ImportError:
     _mistral_common_installed = False
@@ -32,8 +32,8 @@ else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
-        get_one_valid_tokenizer_file, # ty: ignore[unresolved-import]
+    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+        get_one_valid_tokenizer_file,
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.
