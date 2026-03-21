@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, AutoModel
-from common import compare_tokens, exit_with_warning
+from common import compare_tokens, exit_with_warning  # type: ignore[import-not-found]
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
 
