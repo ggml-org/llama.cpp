@@ -1139,6 +1139,11 @@ struct clip_model_loader {
                         }
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
+                    {
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        get_u32(KEY_MIN_DYNAMIC_PATCH, hparams.min_dynamic_patch);
+                        get_u32(KEY_MAX_DYNAMIC_PATCH, hparams.max_dynamic_patch);
+                    } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
@@ -3257,17 +3262,14 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             } break;
         case PROJECTOR_TYPE_INTERNVL: // support dynamic high-resolution
             {
-                std::vector<clip_image_u8_ptr> imgs = internvl_dhr::dynamic_preprocess(*img, 1, 12, params.image_size);
+                std::vector<clip_image_u8_ptr> imgs = internvl_dhr::dynamic_preprocess(*img,
+                     params.min_dynamic_patch, params.max_dynamic_patch, params.image_size);
 
                 for (size_t i = 0; i < imgs.size(); ++i) {
                     clip_image_f32_ptr res(clip_image_f32_init());
                     normalize_image_u8_to_f32(*imgs[i], *res, params.image_mean, params.image_std);
                     res_imgs->entries.push_back(std::move(res));
                 }
-
-                // res_imgs->grid_x = inst.grid_size.width;
-                // res_imgs->grid_y = inst.grid_size.height;
-
             } break;
 
         case PROJECTOR_TYPE_GLM_EDGE:

@@ -1156,6 +1156,12 @@ class GGUFWriter:
     def add_vision_min_pixels(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
 
+    def add_vision_max_dynamic_patch(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MAX_DYNAMIC_PATCH, value)
+
+    def add_vision_min_dynamic_patch(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MIN_DYNAMIC_PATCH, value)
+
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
 

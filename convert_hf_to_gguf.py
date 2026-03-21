@@ -4273,6 +4273,16 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
+
+    min_dynamic_patch: int = 0
+    max_dynamic_patch: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.min_dynamic_patch= self.global_config["min_dynamic_patch"]
+        self.max_dynamic_patch= self.global_config["max_dynamic_patch"]
+
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
         if isinstance(self.hparams_vision['image_size'], list):
@@ -4295,6 +4305,10 @@ class InternVisionModel(MmprojModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+
+        self.gguf_writer.add_vision_min_dynamic_patch(self.min_dynamic_patch)
+        self.gguf_writer.add_vision_max_dynamic_patch(self.max_dynamic_patch)
+
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
