@@ -684,6 +684,7 @@ else:
     sys.exit(1)
 
 
+assert isinstance(hexsha8_baseline, str)
 name_baseline = bench_data.get_commit_name(hexsha8_baseline)
 
 hexsha8_compare = name_compare = None
@@ -717,6 +718,7 @@ else:
     parser.print_help()
     sys.exit(1)
 
+assert isinstance(hexsha8_compare, str)
 name_compare = bench_data.get_commit_name(hexsha8_compare)
 
 # Get tool-specific configuration

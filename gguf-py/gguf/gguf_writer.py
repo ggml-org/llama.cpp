@@ -1300,7 +1300,7 @@ class GGUFWriter:
         else:
             raise ValueError("Invalid GGUF metadata value type or value")
 
-        return kv_data
+        return bytes(kv_data)
 
     @staticmethod
     def format_n_bytes_to_str(num: int) -> str:

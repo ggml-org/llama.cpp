@@ -6,7 +6,7 @@ import re
 from copy import copy
 from enum import Enum
 from inspect import getdoc, isclass
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, get_args, get_origin, get_type_hints
 
 from docstring_parser import parse
 from pydantic import BaseModel, create_model
@@ -1158,7 +1158,7 @@ def create_dynamic_model_from_function(func: Callable[..., Any]):
 
         # Assert that the parameter has a type annotation
         if param.annotation == inspect.Parameter.empty:
-            raise TypeError(f"Parameter '{param.name}' in function '{func.__name__}' lacks a type annotation")
+            raise TypeError(f"""Parameter '{param.name}' in function '{getattr(func, "__name__", "")}' lacks a type annotation""")
 
         # Find the parameter's description in the docstring
         param_doc = next((d for d in docstring.params if d.arg_name == param.name), None)
@@ -1166,7 +1166,7 @@ def create_dynamic_model_from_function(func: Callable[..., Any]):
         # Assert that the parameter has a description
         if not param_doc or not param_doc.description:
             raise ValueError(
-                f"Parameter '{param.name}' in function '{func.__name__}' lacks a description in the docstring")
+                f"""Parameter '{param.name}' in function '{getattr(func, "__name__", "")}' lacks a description in the docstring""")
 
         # Add parameter details to the schema
         param_docs.append((param.name, param_doc))
@@ -1177,7 +1177,7 @@ def create_dynamic_model_from_function(func: Callable[..., Any]):
         dynamic_fields[param.name] = (
             param.annotation if param.annotation != inspect.Parameter.empty else str, default_value)
     # Creating the dynamic model
-    dynamic_model = create_model(f"{func.__name__}", **dynamic_fields)
+    dynamic_model = create_model(f"{getattr(func, '__name__')}", **dynamic_fields)
 
     for name, param_doc in param_docs:
         dynamic_model.model_fields[name].description = param_doc.description
@@ -1285,7 +1285,7 @@ def convert_dictionary_to_pydantic_model(dictionary: dict[str, Any], model_name:
                     if items != {}:
                         array = {"properties": items}
                         array_type = convert_dictionary_to_pydantic_model(array, f"{model_name}_{field_name}_items")
-                        fields[field_name] = (List[array_type], ...)
+                        fields[field_name] = (list[array_type], ...)  # ty: ignore[invalid-type-form]
                     else:
                         fields[field_name] = (list, ...)
                 elif field_type == "object":
