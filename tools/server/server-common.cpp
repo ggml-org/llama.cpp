@@ -9,6 +9,9 @@
 
 #include "server-common.h"
 
+#include <ctime>
+#include <fstream>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <fstream>
@@ -613,6 +616,7 @@ json json_get_nested_values(const std::vector<std::string> & paths, const json &
             result[path] = current;
         }
     }
+
     return result;
 }
 
@@ -763,9 +767,18 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
             return server_tokens(tmp, false);
         }
+<<<<<<< HEAD
    } else {
        throw std::runtime_error("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
    }
+=======
+    } else {
+        throw std::runtime_error(
+            "\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or "
+            "a "
+            "list of mixed strings & tokens.");
+    }
+>>>>>>> 6325a9c4 (server: implement security audit logging functions)
 }
 
 std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
@@ -2070,4 +2083,111 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+// security logging implementation
+static struct common_log * g_security_log = nullptr;
+static std::string         g_security_log_folder;
+static std::string         g_current_log_file;
+static std::mutex          g_security_log_mutex;
+
+static std::string get_current_date_string() {
+    std::time_t t  = std::time(nullptr);
+    std::tm     tm = *std::localtime(&t);
+    char        buffer[11];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", &tm);
+    return std::string(buffer);
+}
+
+static void rotate_security_log_if_needed() {
+    std::lock_guard<std::mutex> lock(g_security_log_mutex);
+
+    if (g_security_log_folder.empty() || !g_security_log) {
+        return;
+    }
+
+    std::string current_date = get_current_date_string();
+    std::string new_log_file = g_security_log_folder + "/security_" + current_date + ".log";
+
+    if (new_log_file != g_current_log_file) {
+        // Close old file if any
+        if (!g_current_log_file.empty()) {
+            common_log_set_file(g_security_log, nullptr);
+        }
+
+        // Create directory if it doesn't exist
+        if (!fs_create_directory_with_parents(g_security_log_folder)) {
+            LOG_WRN("Failed to create security log directory: %s\n", g_security_log_folder.c_str());
+        }
+
+        // Set new log file
+        common_log_set_file(g_security_log, new_log_file.c_str());
+        common_log_set_prefix(g_security_log, false);
+        common_log_set_timestamps(g_security_log, true);
+
+        g_current_log_file = new_log_file;
+
+        LOG_INF("Security logging started: %s\n", new_log_file.c_str());
+    }
+}
+
+void security_log_init(const std::string & folder_path) {
+    std::lock_guard<std::mutex> lock(g_security_log_mutex);
+
+    if (folder_path.empty()) {
+        return;
+    }
+
+    g_security_log_folder = folder_path;
+    g_security_log        = common_log_init();
+
+    if (!g_security_log) {
+        LOG_ERR("Failed to initialize security log\n");
+        return;
+    }
+
+    // Set initial log file
+    rotate_security_log_if_needed();
+}
+
+void security_log_cleanup() {
+    std::lock_guard<std::mutex> lock(g_security_log_mutex);
+
+    if (g_security_log) {
+        common_log_free(g_security_log);
+        g_security_log = nullptr;
+    }
+
+    g_security_log_folder.clear();
+    g_current_log_file.clear();
+}
+
+void security_log_audit_event(const std::string & event_type,
+                              const std::string & endpoint,
+                              const std::string & method,
+                              const std::string & remote_addr,
+                              const std::string & api_key_name,
+                              const std::string & details) {
+    std::lock_guard<std::mutex> lock(g_security_log_mutex);
+
+    if (!g_security_log) {
+        return;
+    }
+
+    // Rotate log file if date changed
+    rotate_security_log_if_needed();
+
+    // Create JSON log entry
+    json log_entry = {
+        {"timestamp",     std::time(nullptr)},
+        { "event_type",   event_type        },
+        { "endpoint",     endpoint          },
+        { "method",       method            },
+        { "remote_addr",  remote_addr       },
+        { "api_key_name", api_key_name      },
+        { "details",      details           }
+    };
+
+    // Write as JSON line
+    common_log_add(g_security_log, GGML_LOG_LEVEL_NONE, "%s\n", log_entry.dump().c_str());
 }

@@ -622,7 +622,8 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
-    std::string media_path; // path to directory for loading media files
+    std::string media_path;           // path to directory for loading media files
+    std::string security_log_folder;  // path to directory for security audit logs
 
     float slot_prompt_similarity = 0.1f;
 
