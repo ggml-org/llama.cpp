@@ -130,6 +130,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_F2LLMV2,          "f2llmv2"          },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -955,6 +956,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_UP_SHEXP,
             };
         case LLM_ARCH_QWEN3:
+        case LLM_ARCH_F2LLMV2:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,

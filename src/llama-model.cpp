@@ -994,6 +994,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
             } break;
         case LLM_ARCH_QWEN3:
+        case LLM_ARCH_F2LLMV2:
             {
                 ml.get_key(LLM_KV_POOLING_TYPE, hparams.pooling_type, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -3632,6 +3633,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_QWEN3:
             case LLM_ARCH_QWEN3VL:
+            case LLM_ARCH_F2LLMV2:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -8666,6 +8668,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_step35_iswa>(*this, params);
             } break;
+        case LLM_ARCH_F2LLMV2:
+            {
+                llm = std::make_unique<llm_build_f2llmv2>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -8916,6 +8922,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_F2LLMV2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
