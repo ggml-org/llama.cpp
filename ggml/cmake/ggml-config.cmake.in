@@ -112,7 +112,8 @@ if(NOT TARGET ggml::ggml)
     add_library(ggml::ggml UNKNOWN IMPORTED)
     set_target_properties(ggml::ggml
         PROPERTIES
-            IMPORTED_LOCATION "${GGML_LIBRARY}")
+            IMPORTED_LOCATION "${GGML_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}")
 
     find_library(GGML_BASE_LIBRARY ggml-base
         REQUIRED
