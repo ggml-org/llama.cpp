@@ -56,6 +56,7 @@ struct server_model_meta {
     std::set<std::string> tags;    // informational tags, not used for routing
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
+    bool is_sleeping = false; // whether the model is in sleeping state (only valid when status == LOADED)
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
@@ -127,7 +128,7 @@ public:
     void unload_all();
 
     // update the status of a model instance (thread-safe)
-    void update_status(const std::string & name, server_model_status status, int exit_code);
+    void update_status(const std::string & name, server_model_status status, int exit_code, bool is_sleeping = false);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model is loaded or failed to load
@@ -140,9 +141,15 @@ public:
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
 
+    // return true if the current process is a child server instance
+    static bool is_child_server();
+
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
     static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
+
+    // notify the router server that the sleeping state has changed
+    static void notify_router_sleeping_state(bool sleeping);
 };
 
 struct server_models_routes {

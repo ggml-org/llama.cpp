@@ -40,6 +40,7 @@ extern char **environ;
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
 #define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
+#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -298,6 +299,7 @@ void server_models::load_models() {
             /* tags         */ {},
             /* port         */ 0,
             /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+            /* is_sleeping  */ false,
             /* last_used    */ 0,
             /* args         */ std::vector<std::string>(),
             /* exit_code    */ 0,
@@ -605,15 +607,15 @@ void server_models::load(const std::string & name) {
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
-            bool state_received = false; // true if child state received
             if (stdout_file) {
                 char buffer[4096];
                 while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
-                    if (!state_received && std::strstr(buffer, CMD_CHILD_TO_ROUTER_READY) != nullptr) {
-                        // child process is ready
-                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
-                        state_received = true;
+                    std::string str(buffer);
+                    if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
+                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0, false);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
+                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0, true);
                     }
                 }
             } else {
@@ -739,13 +741,14 @@ void server_models::unload_all() {
     }
 }
 
-void server_models::update_status(const std::string & name, server_model_status status, int exit_code) {
+void server_models::update_status(const std::string & name, server_model_status status, int exit_code, bool is_sleeping) {
     std::unique_lock<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         auto & meta = it->second.meta;
-        meta.status    = status;
-        meta.exit_code = exit_code;
+        meta.status      = status;
+        meta.is_sleeping = is_sleeping;
+        meta.exit_code   = exit_code;
     }
     cv.notify_all();
 }
@@ -819,6 +822,11 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
+bool server_models::is_child_server() {
+    const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
+    return router_port != nullptr;
+}
+
 std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler) {
     // send a notification to the router server that a model instance is ready
     common_log_pause(common_log_main());
@@ -852,6 +860,13 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
     });
 }
 
+void server_models::notify_router_sleeping_state(bool is_sleeping) {
+    common_log_pause(common_log_main());
+    fflush(stdout);
+    fprintf(stdout, "%s\n", is_sleeping ? CMD_CHILD_TO_ROUTER_SLEEP : CMD_CHILD_TO_ROUTER_READY);
+    fflush(stdout);
+    common_log_resume(common_log_main());
+}
 
 
 //
@@ -987,6 +1002,9 @@ void server_models_routes::init_routes() {
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
+            }
+            if (meta.status == SERVER_MODEL_STATUS_LOADED) {
+                status["sleeping"]  = meta.is_sleeping;
             }
             models_json.push_back(json {
                 {"id",       meta.name},

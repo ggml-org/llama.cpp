@@ -1596,6 +1596,7 @@ Listing all models in cache. The model metadata will also include a field to ind
       "value": "loaded",
       "args": ["llama-server", "-ctx", "4096"]
     },
+    "sleeping": false,
     ...
   }]
 }
@@ -1630,7 +1631,8 @@ The `status` object can be:
 ```json
 "status": {
   "value": "loaded",
-  "args": ["llama-server", "-ctx", "4096"]
+  "args": ["llama-server", "-ctx", "4096"],
+  "sleeping": false
 }
 ```
 
