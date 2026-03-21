@@ -22,6 +22,7 @@ static void test_calculate_diff_split_no_common(testing & t);
 static void test_calculate_diff_split_single_char(testing & t);
 static void test_calculate_diff_split_overlaps(testing & t);
 static void test_calculate_diff_split_tag_boundaries(testing & t);
+static void test_calculate_diff_split_generation_prompt(testing & t);
 static void test_calculate_diff_split(testing & t);
 
 static void test_until_common_prefix_basic(testing & t);
@@ -179,6 +180,7 @@ static void test_calculate_diff_split(testing & t) {
     t.test("calculate_diff_split single char", test_calculate_diff_split_single_char);
     t.test("calculate_diff_split overlaps", test_calculate_diff_split_overlaps);
     t.test("calculate_diff_split tag boundaries", test_calculate_diff_split_tag_boundaries);
+    t.test("calculate_diff_split generation prompt", test_calculate_diff_split_generation_prompt);
 }
 
 static void test_calculate_diff_split_basic(testing & t) {
@@ -499,6 +501,39 @@ static void test_calculate_diff_split_tag_boundaries(testing & t) {
         t.assert_true("special token right ends with |>", result.right.find("<|END_ACTION|>") != std::string::npos);
         t.assert_equal("special token suffix", "<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>",
                        result.suffix);
+    }
+}
+
+static void test_calculate_diff_split_generation_prompt(testing & t) {
+    // ChatML thinking template: left is a prefix of right, generation_prompt is the appended part.
+    // The trailing \n in left matches the trailing \n in the generation_prompt, causing
+    // the suffix matcher to steal it and rotate the diff result.
+    {
+        // Simplified reproduction: left ends with \n, right = left + "<|im_start|>assistant\n<think>\n"
+        std::string left  = "<|im_start|>user\nHello<|im_end|>\n";
+        std::string right = left + "<|im_start|>assistant\n<think>\n";
+        diff_split result = calculate_diff_split(left, right);
+        t.assert_equal("chatml prefix", left, result.prefix);
+        t.assert_equal("chatml left", "", result.left);
+        t.assert_equal("chatml right should be generation prompt",
+                       "<|im_start|>assistant\n<think>\n", result.right);
+        t.assert_equal("chatml suffix", "", result.suffix);
+    }
+
+    {
+        // More realistic: longer conversation ending with tool_response
+        std::string common =
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            "<|im_start|>user\nSearch for files<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\nLet me search.\n</think>\n\n"
+            "<tool_call>\n<function=search>\n</function>\n</tool_call><|im_end|>\n"
+            "<|im_start|>user\n<tool_response>\nNo files found\n</tool_response><|im_end|>\n";
+        std::string left  = common;
+        std::string right = common + "<|im_start|>assistant\n<think>\n";
+        diff_split result = calculate_diff_split(left, right);
+        t.assert_equal("tool_response left", "", result.left);
+        t.assert_equal("tool_response right should be generation prompt",
+                       "<|im_start|>assistant\n<think>\n", result.right);
     }
 }
 
@@ -1292,11 +1327,11 @@ static void test_nemotron_reasoning_detection(testing & t) {
 
     // Check reasoning markers
     t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
-    t.assert_equal("reasoning_end should be '</think>\\n'", "</think>\n", analysis.reasoning.end);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
 
     // Check reasoning mode detection
-    // Nemotron uses forced closed reasoning with add_generation_prompt
-    t.assert_equal("reasoning should be FORCED_CLOSED", reasoning_mode::FORCED_CLOSED, analysis.reasoning.mode);
+    // Nemotron uses tag-based reasoning; prefill handles the template's forced markers
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
 
     // Make sure reasoning markers don't spill over to content markers
     t.assert_equal("content start should be empty", "", analysis.content.start);
