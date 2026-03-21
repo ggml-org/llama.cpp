@@ -54,6 +54,11 @@ void common_speculative_print_stats(const common_speculative * spec);
 // Interactions with server
 //
 
+struct restore_checkpoint_result {
+    size_t    bytes_restored;
+    llama_pos pos_max;
+};
+
 // callback implemented by the server
 struct common_speculative_callback {
     virtual ~common_speculative_callback();
@@ -73,8 +78,7 @@ struct common_speculative_callback {
     virtual size_t create_checkpoint() = 0;
 
     // Restore a checkpoint previously created by create_checkpoint().
-    // Returns the size of the restored checkpoint in bytes.
-    virtual size_t restore_checkpoint(size_t ckpt_size_part_expected) = 0;
+    virtual restore_checkpoint_result restore_checkpoint(size_t ckpt_size_part_expected) = 0;
 
     // Delete a checkpoint previously created by create_checkpoint().
     virtual void delete_checkpoint() = 0;

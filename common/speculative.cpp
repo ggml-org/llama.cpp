@@ -1341,10 +1341,13 @@ struct common_speculative_session::impl {
             if (spec_has_ckpt) {
                 // we need to rollback to the state before sampling the draft tokens
                 // (restore_checkpoint shortens context and slot.prompt.tokens)
-                const size_t n = callback.restore_checkpoint(spec_ckpt_size_part);
-                LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
-                        __func__,
-                        ids.size() - 1, n_draft, n);
+                const auto ckpt_res = callback.restore_checkpoint(spec_ckpt_size_part);
+                LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes, pos_max=%d\n", __func__,
+                        ids.size() - 1, n_draft, ckpt_res.bytes_restored, ckpt_res.pos_max);
+
+                // clean orphaned attention KV entries beyond the checkpoint boundary;
+                // restore_checkpoint only restores recurrent/partial state (PARTIAL_ONLY flag)
+                callback.memory_seq_rm(ckpt_res.pos_max + 1, -1);
 
                 // delete Checkpoint
                 callback.delete_checkpoint();
