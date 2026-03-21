@@ -340,6 +340,8 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
 }
 
 int main(int argc, char ** argv) {
+    common_init_args(argc, argv);
+
     common_params params;
 
     params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs

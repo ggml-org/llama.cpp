@@ -41,6 +41,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <io.h>
+#include <shellapi.h>
 #else
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -54,6 +55,39 @@
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
+#endif
+
+#ifdef _WIN32
+void common_init_args(int & argc, char ** & argv) {
+    int wargc;
+    static std::vector<char*> argv_utf8;
+    static std::vector<std::string> args_utf8;
+    LPWSTR * wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) return;
+
+    args_utf8.resize(wargc);
+    argv_utf8.resize(wargc + 1);
+
+    for (int i = 0; i < wargc; ++i) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
+        if (size > 0) {
+            args_utf8[i].resize(size);
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, &args_utf8[i][0], size, NULL, NULL);
+            args_utf8[i].resize(size - 1);
+            argv_utf8[i] = &args_utf8[i][0];
+        }
+    }
+    argv_utf8[wargc] = nullptr;
+
+    argc = wargc;
+    argv = argv_utf8.data();
+
+    LocalFree(wargv);
+}
+#else
+void common_init_args(int &, char ** &) {
+    // no-op on non-Windows
+}
 #endif
 
 common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
