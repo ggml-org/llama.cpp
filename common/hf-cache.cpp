@@ -9,7 +9,7 @@
 
 #include <filesystem>
 #include <fstream>
-#include <mutex>
+#include <atomic>
 #include <regex> // migration only
 #include <string>
 #include <string_view>
@@ -22,7 +22,10 @@ namespace nl = nlohmann;
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#define HOME_DIR "USERPROFILE"
 #include <windows.h>
+#else
+#define HOME_DIR "HOME"
 #endif
 
 namespace hf_cache {
@@ -30,60 +33,27 @@ namespace hf_cache {
 namespace fs = std::filesystem;
 
 static fs::path get_cache_directory() {
-    const char * hf_hub_cache = std::getenv("HF_HUB_CACHE");
-    if (hf_hub_cache && *hf_hub_cache) {
-        return fs::path(hf_hub_cache);  // assume shell-expanded; add expand logic if you want full parity
-    }
-
-    const char * huggingface_hub_cache = std::getenv("HUGGINGFACE_HUB_CACHE");
-    if (huggingface_hub_cache && *huggingface_hub_cache) {
-        return fs::path(huggingface_hub_cache);
-    }
-
-    const char * hf_home = std::getenv("HF_HOME");
-    if (hf_home && *hf_home) {
-        return fs::path(hf_home) / "hub";
-    }
-
-    const char * xdg_cache_home = std::getenv("XDG_CACHE_HOME");
-    if (xdg_cache_home && *xdg_cache_home) {
-        return fs::path(xdg_cache_home) / "huggingface" / "hub";
-    }
-#if defined(_WIN32)
-    const char * userprofile = std::getenv("USERPROFILE");
-    if (userprofile && *userprofile) {
-        return fs::path(userprofile) / ".cache" / "huggingface" / "hub";
-    }
-#else
-    const char * home = std::getenv("HOME");
-    if (home && *home) {
-        return fs::path(home) / ".cache" / "huggingface" / "hub";
-    }
-#endif
-    throw std::runtime_error("Failed to determine HF cache directory");
-}
-
-static bool symlinks_supported() {
-#ifdef _WIN32
-    static bool supported = false;
-    static std::once_flag once;
-    std::call_once(once, []() {
-        fs::path link = get_cache_directory() / ("link_" + std::to_string(GetCurrentProcessId()));
-
-        std::error_code ec;
-        fs::create_directory_symlink("..", link, ec);
-        supported = !ec;
-
-        if (!ec) {
-            fs::remove(link, ec);
-        } else if (GetLastError() == ERROR_PRIVILEGE_NOT_HELD) {
-            LOG_WRN("symlink creation requires Developer Mode or admin privileges on Windows\n");
+    static const fs::path cache = []() {
+        struct {
+            const char * var;
+            fs::path path;
+        } entries[] = {
+            {"HF_HUB_CACHE",          fs::path()},
+            {"HUGGINGFACE_HUB_CACHE", fs::path()},
+            {"HF_HOME",               fs::path("hub")},
+            {"XDG_CACHE_HOME",        fs::path("huggingface") / "hub"},
+            {HOME_DIR,                fs::path(".cache") / "huggingface" / "hub"}
+        };
+        for (const auto & entry : entries) {
+            if (auto * p = std::getenv(entry.var); p && *p) {
+                fs::path base(p);
+                return entry.path.empty() ? base : base / entry.path;
+            }
         }
-    });
-    return supported;
-#else
-    return true;
-#endif
+        throw std::runtime_error("Failed to determine HF cache directory");
+    }();
+
+    return cache;
 }
 
 static std::string folder_name_to_repo(const std::string & folder) {
@@ -255,13 +225,13 @@ hf_files get_repo_files(const std::string & repo_id,
             fs::path path = file.path;
             fs::path repo_path = get_repo_path(repo_id);
             fs::path snapshots_path = repo_path / "snapshots" / rev / path;
-            fs::path blobs_path = repo_path / "blobs" / file.oid;
 
-            if (symlinks_supported()) {
-                file.local_path = blobs_path.string();
-                file.link_path = snapshots_path.string();
-            } else { // degraded mode
-                file.local_path = snapshots_path.string();
+            file.final_path = snapshots_path.string();
+            file.local_path = file.final_path;
+
+            if (!file.oid.empty() && !fs::exists(snapshots_path)) {
+                fs::path blob_path = repo_path / "blobs" / file.oid;
+                file.local_path = blob_path.string();
             }
 
             files.push_back(file);
@@ -332,6 +302,7 @@ hf_files get_cached_files(const std::string & repo_id) {
                 file.repo_id = _repo_id;
                 file.path = path.generic_string();
                 file.local_path = entry.path().string();
+                file.final_path = file.local_path;
                 files.push_back(std::move(file));
             }
         }
@@ -341,24 +312,46 @@ hf_files get_cached_files(const std::string & repo_id) {
 }
 
 std::string finalize_file(const hf_file & file) {
-    if (file.link_path.empty()) {
-        return file.local_path;
-    }
-
-    fs::path link_path(file.link_path);
-    fs::path local_path(file.local_path);
+    static std::atomic<bool> symlinks_disabled{false};
 
     std::error_code ec;
-    fs::create_directories(link_path.parent_path(), ec);
-    fs::path target_path = fs::relative(local_path, link_path.parent_path(), ec);
-    fs::create_symlink(target_path, link_path, ec);
+    fs::path blob_path(file.local_path);
+    fs::path snapshot_path(file.final_path);
 
-    if (fs::exists(link_path)) {
-        return file.link_path;
+    if (blob_path == snapshot_path || fs::exists(snapshot_path, ec)) {
+        return file.final_path;
     }
 
-    LOG_WRN("%s: failed to create symlink: %s\n", __func__, file.link_path.c_str());
-    return file.local_path;
+    if (!fs::exists(blob_path, ec)) {
+        return file.final_path;
+    }
+
+    fs::create_directories(snapshot_path.parent_path(), ec);
+
+    if (!symlinks_disabled) {
+        fs::path target = fs::relative(blob_path, snapshot_path.parent_path(), ec);
+        if (!ec) {
+            fs::create_symlink(target, snapshot_path, ec);
+        }
+        if (!ec) {
+            return file.final_path;
+        }
+    }
+
+    if (!symlinks_disabled.exchange(true)) {
+        LOG_WRN("%s: failed to create symlink: %s\n", __func__, ec.message().c_str());
+        LOG_WRN("%s: switching to degraded mode\n", __func__);
+    }
+
+    fs::rename(blob_path, snapshot_path, ec);
+    if (ec) {
+        LOG_WRN("%s: failed to move file to snapshots: %s\n", __func__, ec.message().c_str());
+        fs::copy(blob_path, snapshot_path, ec);
+        if (ec) {
+            LOG_ERR("%s: failed to copy file to snapshots: %s\n", __func__, ec.message().c_str());
+        }
+    }
+    return file.final_path;
 }
 
 // delete everything after this line, one day

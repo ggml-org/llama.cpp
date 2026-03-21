@@ -1060,7 +1060,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                printf("%4zu. %s\n", i + 1, models[i].c_str());
+                printf("%4zu. %s\n", i + 1, models[i].to_string().c_str());
             }
             exit(0);
         }

@@ -11,7 +11,7 @@ struct hf_file {
     std::string path;
     std::string url;
     std::string local_path;
-    std::string link_path;
+    std::string final_path;
     std::string oid;
     std::string repo_id;
 };
@@ -24,9 +24,9 @@ hf_files get_repo_files(
     const std::string & bearer_token
 );
 
-hf_files get_cached_files(const std::string & repo_id);
+hf_files get_cached_files(const std::string & repo_id = {});
 
-// Create symlink if link_path is set and returns the snapshot path
+// Create snapshot path (link or move/copy) and return it
 std::string finalize_file(const hf_file & file);
 
 // TODO: Remove later

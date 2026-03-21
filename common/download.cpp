@@ -15,7 +15,7 @@
 #include <map>
 #include <mutex>
 #include <regex>
-#include <set>
+#include <unordered_set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -442,19 +442,50 @@ int common_download_file_single(const std::string & url,
 }
 
 struct gguf_split_info {
-    std::string prefix;
-    int index = 0;
-    int count = 0;
+    std::string prefix; // tag included
+    std::string tag;
+    int index;
+    int count;
 };
 
 static gguf_split_info get_gguf_split_info(const std::string & path) {
-    static const std::regex re(R"(^(.+)-([0-9]+)-of-([0-9]+)\.gguf$)", std::regex::icase);
+    static const std::regex re_split("^(.+)-([0-9]{5})-of-([0-9]{5})$", std::regex::icase);
+    static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
     std::smatch m;
 
-    if (std::regex_match(path, m, re)) {
-        return {m[1].str(), std::stoi(m[2].str()), std::stoi(m[3].str())};
+    std::string prefix = path;
+    string_remove_suffix(prefix, ".gguf");
+
+    int index = 1;
+    int count = 1;
+
+    if (std::regex_match(prefix, m, re_split)) {
+        prefix = m[1].str();
+        index = std::stoi(m[2].str());
+        count = std::stoi(m[3].str());
     }
-    return {};
+
+    std::string tag;
+    if (std::regex_search(prefix, m, re_tag)) {
+        tag = m[1].str();
+        for (char & c : tag) {
+            c = std::toupper((unsigned char)c);
+        }
+    }
+
+    return {std::move(prefix), std::move(tag), index, count};
+}
+
+// Q4_0 -> 4, F16 -> 16, NVFP4 -> 4, Q8_K_M -> 8, etc
+static int extract_quant_bits(const std::string & filename) {
+    auto split = get_gguf_split_info(filename);
+
+    auto pos = split.tag.find_first_of("0123456789");
+    if (pos == std::string::npos) {
+        return 0;
+    }
+
+    return std::stoi(split.tag.substr(pos));
 }
 
 static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
@@ -475,23 +506,75 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
     return result;
 }
 
-static hf_cache::hf_files filter_gguf_by_quant(const hf_cache::hf_files & files,
-                                               const std::string & quant_tag) {
-    hf_cache::hf_files result;
-    std::regex pattern(quant_tag + "[.-]", std::regex::icase);
+static hf_cache::hf_file find_best_mmproj(const hf_cache::hf_files & files,
+                                          const std::string        & model) {
+    hf_cache::hf_file best;
+    size_t best_depth = 0;
+    int best_diff = 0;
+    bool found = false;
+
+    auto model_bits = extract_quant_bits(model);
+    auto model_parts = string_split<std::string>(model, '/');
+    auto model_dir = model_parts.end() - 1;
 
     for (const auto & f : files) {
-        if (!string_ends_with(f.path, ".gguf")) {
+        if (!string_ends_with(f.path, ".gguf") ||
+            f.path.find("mmproj") == std::string::npos) {
             continue;
         }
-        if (f.path.find("mmproj") != std::string::npos) {
+
+        auto mmproj_parts = string_split<std::string>(f.path, '/');
+        auto mmproj_dir = mmproj_parts.end() - 1;
+
+        auto [_, dir] = std::mismatch(model_parts.begin(), model_dir,
+                                      mmproj_parts.begin(), mmproj_dir);
+        if (dir != mmproj_dir) {
             continue;
         }
-        if (std::regex_search(f.path, pattern)) {
-            result.push_back(f);
+
+        size_t depth = dir - mmproj_parts.begin();
+        auto bits = extract_quant_bits(f.path);
+        auto diff = std::abs(bits - model_bits);
+
+        if (!found || depth > best_depth || (depth == best_depth && diff < best_diff)) {
+            best = f;
+            best_depth = depth;
+            best_diff = diff;
+            found = true;
         }
     }
-    return result;
+    return best;
+}
+
+static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
+                                         const std::string        & tag) {
+    std::vector<std::string> tags;
+
+    if (!tag.empty()) {
+        tags.push_back(tag);
+    } else {
+        tags = {"Q4_K_M", "Q4_0"};
+    }
+
+    for (const auto & t : tags) {
+        std::regex pattern(t + "[.-]", std::regex::icase);
+        for (const auto & f : files) {
+            if (string_ends_with(f.path, ".gguf") &&
+                f.path.find("mmproj") == std::string::npos &&
+                std::regex_search(f.path, pattern)) {
+                return f;
+            }
+        }
+    }
+
+    for (const auto & f : files) {
+        if (string_ends_with(f.path, ".gguf") &&
+            f.path.find("mmproj") == std::string::npos) {
+            return f;
+        }
+    }
+
+    return {};
 }
 
 static void list_available_gguf_files(const hf_cache::hf_files & files) {
@@ -504,11 +587,8 @@ static void list_available_gguf_files(const hf_cache::hf_files & files) {
 }
 
 struct hf_plan {
-    hf_cache::hf_file primary;
+    hf_cache::hf_files model_files;
     hf_cache::hf_file mmproj;
-    bool has_primary = false;
-    bool has_mmproj = false;
-    hf_cache::hf_files files;
 };
 
 static hf_plan get_hf_plan(const common_params_model        & model,
@@ -523,94 +603,64 @@ static hf_plan get_hf_plan(const common_params_model        & model,
         return plan;
     }
 
-    hf_cache::hf_files candidates;
+    hf_cache::hf_file primary;
 
     if (!model.hf_file.empty()) {
-        const hf_cache::hf_file * found_file = nullptr;
         for (const auto & f : all) {
             if (f.path == model.hf_file) {
-                found_file = &f;
+                primary = f;
                 break;
             }
         }
-
-        if (!found_file) {
-            LOG_ERR("%s: --hf-file '%s' not found in repository\n", __func__, model.hf_file.c_str());
+        if (primary.path.empty()) {
+            LOG_ERR("%s: file '%s' not found in repository\n", __func__, model.hf_file.c_str());
             list_available_gguf_files(all);
             return plan;
         }
-
-        plan.primary = *found_file;
-        plan.has_primary = true;
-        candidates = get_split_files(all, *found_file);
     } else {
-        std::vector<std::string> search_priority = {!tag.empty() ? tag : "Q4_K_M", "Q4_0"};
-
-        for (const auto & q : search_priority) {
-            candidates = filter_gguf_by_quant(all, q);
-            if (!candidates.empty()) {
-                candidates = get_split_files(all, candidates[0]);
-                break;
-            }
-        }
-
-        if (candidates.empty()) {
-            for (const auto & f : all) {
-                if (string_ends_with(f.path, ".gguf") &&
-                    f.path.find("mmproj") == std::string::npos) {
-                    candidates = get_split_files(all, f);
-                    break;
-                }
-            }
-        }
-
-        if (candidates.empty()) {
+        primary = find_best_model(all, tag);
+        if (primary.path.empty()) {
             LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
             list_available_gguf_files(all);
             return plan;
         }
-
-        plan.primary = candidates[0];
-        plan.has_primary = true;
     }
 
-    for (const auto & f : candidates) {
-        plan.files.push_back(f);
-    }
+    plan.model_files = get_split_files(all, primary);
 
     if (opts.download_mmproj) {
-        for (const auto & f : all) {
-            if (string_ends_with(f.path, ".gguf") &&
-                f.path.find("mmproj") != std::string::npos) {
-                plan.mmproj = f;
-                plan.has_mmproj = true;
-                plan.files.push_back(f);
-                break;
-            }
-        }
+        plan.mmproj = find_best_mmproj(all, primary.path);
     }
 
     return plan;
 }
 
-static std::vector<std::pair<std::string, std::string>> get_url_tasks(const common_params_model & model) {
-    auto [prefix_url, idx, count] = get_gguf_split_info(model.url);
+struct download_task {
+    std::string url;
+    std::string path;
+};
 
-    if (count <= 1) {
+static std::vector<download_task> get_url_tasks(const common_params_model & model) {
+    auto split = get_gguf_split_info(model.url);
+
+    if (split.count <= 1) {
         return {{model.url, model.path}};
     }
 
-    std::vector<std::pair<std::string, std::string>> files;
-
-    size_t pos = prefix_url.rfind('/');
-    std::string prefix_filename = (pos != std::string::npos) ? prefix_url.substr(pos + 1) : prefix_url;
-    std::string prefix_path = (std::filesystem::path(model.path).parent_path() / prefix_filename).string();
-
-    for (int i = 1; i <= count; i++) {
-        std::string suffix = string_format("-%05d-of-%05d.gguf", i, count);
-        files.emplace_back(prefix_url + suffix, prefix_path + suffix);
+    auto filename = split.prefix;
+    if (auto pos = split.prefix.rfind('/'); pos != std::string::npos) {
+        filename = split.prefix.substr(pos + 1);
     }
-    return files;
+
+    auto parent_path = std::filesystem::path(model.path).parent_path();
+    auto prefix_path = (parent_path / filename).string();
+
+    std::vector<download_task> tasks;
+    for (int i = 1; i <= split.count; i++) {
+        auto suffix = string_format("-%05d-of-%05d.gguf", i, split.count);
+        tasks.push_back({split.prefix + suffix, prefix_path + suffix});
+    }
+    return tasks;
 }
 
 common_download_model_result common_download_model(const common_params_model        & model,
@@ -618,32 +668,35 @@ common_download_model_result common_download_model(const common_params_model    
                                                    const common_download_model_opts & opts,
                                                    const common_header_list         & headers) {
     common_download_model_result result;
-    std::vector<std::pair<std::string, std::string>> to_download;
+    std::vector<download_task> tasks;
     hf_plan hf;
 
     bool is_hf = !model.hf_repo.empty();
 
     if (is_hf) {
         hf = get_hf_plan(model, bearer_token, opts);
-        for (const auto & f : hf.files) {
-            to_download.emplace_back(f.url, f.local_path);
+        for (const auto & f : hf.model_files) {
+            tasks.push_back({f.url, f.local_path});
+        }
+        if (!hf.mmproj.path.empty()) {
+            tasks.push_back({hf.mmproj.url, hf.mmproj.local_path});
         }
     } else if (!model.url.empty()) {
-        to_download = get_url_tasks(model);
+        tasks = get_url_tasks(model);
     } else {
         result.model_path = model.path;
         return result;
     }
 
-    if (to_download.empty()) {
+    if (tasks.empty()) {
         return result;
     }
 
     std::vector<std::future<bool>> futures;
-    for (const auto & item : to_download) {
+    for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
-            [u = item.first, p = item.second, &bearer_token, offline = opts.offline, &headers, is_hf]() {
-                int status = common_download_file_single(u, p, bearer_token, offline, headers, is_hf);
+            [&task, &bearer_token, offline = opts.offline, &headers, is_hf]() {
+                int status = common_download_file_single(task.url, task.path, bearer_token, offline, headers, is_hf);
                 return is_http_status_ok(status);
             }
         ));
@@ -656,13 +709,12 @@ common_download_model_result common_download_model(const common_params_model    
     }
 
     if (is_hf) {
-        for (const auto & f : hf.files) {
+        for (const auto & f : hf.model_files) {
             hf_cache::finalize_file(f);
         }
-        if (hf.has_primary) {
-            result.model_path = hf_cache::finalize_file(hf.primary);
-        }
-        if (hf.has_mmproj) {
+        result.model_path = hf.model_files[0].local_path;
+
+        if (!hf.mmproj.path.empty()) {
             result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
         }
     } else {
@@ -793,48 +845,22 @@ std::string common_docker_resolve_model(const std::string & docker) {
     }
 }
 
-std::vector<std::string> common_list_cached_models() {
-    auto files = hf_cache::get_cached_files("");
-    std::set<std::string> models;
+std::vector<common_cached_model_info> common_list_cached_models() {
+    std::unordered_set<std::string> seen;
+    std::vector<common_cached_model_info> result;
+
+    auto files = hf_cache::get_cached_files();
 
     for (const auto & f : files) {
-        std::string tmp = f.path;
-
-        if (!string_remove_suffix(tmp, ".gguf")) {
+        auto split = get_gguf_split_info(f.path);
+        if (split.index != 1 || split.tag.empty() ||
+            split.prefix.find("mmproj") != std::string::npos) {
             continue;
         }
-        if (tmp.find("mmproj") != std::string::npos) {
-            continue;
-        }
-        auto split_pos = tmp.find("-00001-of-");
-
-        if (split_pos == std::string::npos &&
-            tmp.find("-of-") != std::string::npos) {
-            continue;
-        }
-        if (split_pos != std::string::npos) {
-            tmp.erase(split_pos);
-        }
-        auto sep_pos = tmp.find_last_of("-.");
-
-        if (sep_pos == std::string::npos || sep_pos == tmp.size() - 1) {
-            continue;
-        }
-        tmp.erase(0, sep_pos + 1);
-
-        bool is_valid = true;
-        for (char & c : tmp) {
-            unsigned char uc = c;
-            if (!std::isalnum(uc) && uc != '_') {
-                is_valid = false;
-                break;
-            }
-            c = std::toupper(uc);
-        }
-        if (is_valid) {
-            models.insert(f.repo_id + ":" + tmp);
+        if (seen.insert(f.repo_id + ":" + split.tag).second) {
+            result.push_back({f.repo_id, split.tag});
         }
     }
 
-    return {models.begin(), models.end()};
+    return result;
 }
