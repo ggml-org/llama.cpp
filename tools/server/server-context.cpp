@@ -2801,6 +2801,18 @@ private:
             metrics.on_decoded(slots);
 
             if (ret != 0) {
+                // clear speculative draft state for all slots - the draft tokens in
+                // this batch will not be decoded, so sampling them would crash
+                for (auto & slot : slots) {
+                    if (!slot.i_batch_dft.empty()) {
+                        SLT_WRN(slot, "clearing speculative draft state due to decode failure (ret = %d)\n", ret);
+                        slot.i_batch_dft.clear();
+                        if (slot.spec_session) {
+                            slot.spec_session->reset();
+                        }
+                    }
+                }
+
                 {
                     std::string err;
 
