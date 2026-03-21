@@ -38,8 +38,6 @@
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
 #define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
 #define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
-#define KEY_MIN_DYNAMIC_PATCH    "clip.vision.min_dynamic_patch"
-#define KEY_MAX_DYNAMIC_PATCH    "clip.vision.max_dynamic_patch"
 #define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"

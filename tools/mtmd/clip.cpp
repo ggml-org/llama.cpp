@@ -1141,8 +1141,8 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_INTERNVL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
-                        get_u32(KEY_MIN_DYNAMIC_PATCH, hparams.min_dynamic_patch);
-                        get_u32(KEY_MAX_DYNAMIC_PATCH, hparams.max_dynamic_patch);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
@@ -3254,8 +3254,10 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             } break;
         case PROJECTOR_TYPE_INTERNVL: // support dynamic high-resolution
             {
+                int min_patch = params.image_min_pixels / (params.image_size * params.image_size);
+                int max_patch = params.image_max_pixels / (params.image_size * params.image_size);
                 std::vector<clip_image_u8_ptr> imgs = internvl_dhr::dynamic_preprocess(*img,
-                     params.min_dynamic_patch, params.max_dynamic_patch, params.image_size);
+                     min_patch, max_patch, params.image_size);
 
                 for (size_t i = 0; i < imgs.size(); ++i) {
                     clip_image_f32_ptr res(clip_image_f32_init());
@@ -3266,14 +3268,12 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
-        // case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             {
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
                 img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BILINEAR);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
-                // printf("sz = %d \n", sz);
                 //clip_image_save_to_bmp(resized_image, "resized.bmp");
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));

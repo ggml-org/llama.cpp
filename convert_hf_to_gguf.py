@@ -4305,9 +4305,9 @@ class InternVisionModel(MmprojModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
-
-        self.gguf_writer.add_vision_min_dynamic_patch(self.min_dynamic_patch)
-        self.gguf_writer.add_vision_max_dynamic_patch(self.max_dynamic_patch)
+        im2 = self.hparams_vision['image_size']**2
+        self.gguf_writer.add_vision_min_pixels(self.min_dynamic_patch*im2)
+        self.gguf_writer.add_vision_max_pixels(self.max_dynamic_patch*im2)
 
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
