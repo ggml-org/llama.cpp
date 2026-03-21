@@ -2628,7 +2628,7 @@ struct internvl_dhr {
 
         std::vector<clip_image_u8_ptr> processed_images;
 
-        const int orig_width  = image_rgb.nx; //?? is nx width or height?
+        const int orig_width  = image_rgb.nx;
         const int orig_height = image_rgb.ny;
         const float aspect_ratio =
             static_cast<float>(orig_width) / orig_height;
@@ -2661,13 +2661,9 @@ struct internvl_dhr {
         // INTER_LINEAR; switch to INTER_CUBIC for closer PIL fidelity)
         clip_image_u8 resized;
         img_tool::resize(image_rgb, resized, target_size, img_tool::RESIZE_ALGO_BICUBIC);
-        // cv::resize(image_rgb, resized,
-        //         cv::Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
 
         // Slice into blocks
-        const int cols_per_row = target_width / image_size;   // == target_ar.first
-        // std::vector<cv::Mat> processed_images;
-        // processed_images.reserve(blocks + 1);
+        const int cols_per_row = target_width / image_size;
 
         for (int i = 0; i < blocks; ++i) {
             int col = i % cols_per_row;
@@ -2679,7 +2675,6 @@ struct internvl_dhr {
 
             clip_image_u8_ptr img_slice(clip_image_u8_init());
             img_tool::crop(resized, *img_slice, x, y, w, h);
-            // cv::Rect box(col * image_size, row * image_size, image_size, image_size);
             processed_images.push_back(std::move(img_slice));
         }
 
@@ -2687,9 +2682,6 @@ struct internvl_dhr {
 
         // Optional thumbnail
         if (use_thumbnail && blocks != 1) {
-            // cv::Mat thumb;
-            // cv::resize(image_rgb, thumb,
-            //         cv::Size(image_size, image_size), 0, 0, cv::INTER_LINEAR);
             clip_image_u8_ptr thumb(clip_image_u8_init());
             img_tool::resize(image_rgb, *thumb, {image_size, image_size}, img_tool::RESIZE_ALGO_BICUBIC);
             processed_images.push_back(std::move(thumb));
