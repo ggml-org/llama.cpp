@@ -29,8 +29,20 @@ static inline uint64_t hex_get_pktcnt() {
     return pktcnt;
 }
 
-static inline int32_t hex_is_aligned(void * addr, uint32_t align) {
+static inline size_t hmx_ceil_div(size_t num, size_t den) {
+    return (num + den - 1) / den;
+}
+
+static inline int32_t hex_is_aligned(const void * addr, uint32_t align) {
     return ((size_t) addr & (align - 1)) == 0;
+}
+
+static inline size_t hex_align_up(size_t v, size_t align) {
+    return hmx_ceil_div(v, align) * align;
+}
+
+static inline size_t hex_align_down(size_t v, size_t align) {
+    return (v / align) * align;
 }
 
 static inline int32_t hex_is_one_chunk(void * addr, uint32_t n, uint32_t chunk_size) {
@@ -41,6 +53,14 @@ static inline int32_t hex_is_one_chunk(void * addr, uint32_t n, uint32_t chunk_s
 
 static inline uint32_t hex_round_up(uint32_t n, uint32_t m) {
     return m * ((n + m - 1) / m);
+}
+
+static inline size_t hex_smin(size_t a, size_t b) {
+    return a < b ? a : b;
+}
+
+static inline size_t hex_smax(size_t a, size_t b) {
+    return a > b ? a : b;
 }
 
 static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, uint32_t height) {
