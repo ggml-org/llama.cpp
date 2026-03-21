@@ -95,3 +95,57 @@ def test_kv_cache_does_not_leak_across_requests():
     assert server.process.poll() is None, (
         f"Server crashed with return code {server.process.returncode}"
     )
+
+
+@requires_qwen35_08b
+def test_f16_checkpoint_determinism():
+    """10 identical requests must produce identical output with f16 V cache.
+
+    Validates that checkpoint save/restore/cleanup produces bit-exact results.
+    This does NOT test quantized V cache divergence (known limitation).
+    Uses default draft-p-min (no forced rejection) since the test validates
+    determinism under normal operation, not rejection handling.
+    """
+    server = ServerProcess()
+    server.model_hf_repo = None
+    server.model_hf_file = None
+    server.model_file = QWEN35_08B
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.n_gpu_layer = 99
+    server.seed = 3407
+    server.temperature = 0.0
+    server.draft_min = 4
+    server.draft_max = 16
+    server.ctk = "f16"
+    server.ctv = "f16"
+    server.fa = "on"
+    server.extra_args = [
+        "--spec-type", "ngram-mod",
+        "--spec-use-checkpoints", "on",
+        "--ctx-checkpoints", "4",
+        "--no-cache-prompt",
+    ]
+    server.start(timeout_seconds=120)
+
+    # prime ngram model so all test requests use the same speculative path
+    server.make_request("POST", "/completion", data={
+        "prompt": "Write a quicksort implementation in C. Output only code.",
+        "temperature": 0.0, "top_k": 1, "n_predict": 256,
+    })
+
+    outputs = []
+    for i in range(10):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": "Write a quicksort implementation in C. Output only code.",
+            "temperature": 0.0,
+            "top_k": 1,
+            "n_predict": 256,
+        })
+        assert res.status_code == 200, f"Request {i+1} failed: {res.status_code}"
+        outputs.append(res.body["content"])
+
+    assert len(set(outputs)) == 1, (
+        f"Output divergence: {len(set(outputs))} unique outputs across "
+        f"10 identical requests (f16 V cache, Qwen3.5-0.8B)."
+    )
