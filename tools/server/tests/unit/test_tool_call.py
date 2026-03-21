@@ -9,7 +9,7 @@ sys.path.insert(0, str(path))
 
 from utils import *
 from enum import Enum
-from typings import TypedDict
+from typing import TypedDict
 
 server: ServerProcess
 
@@ -30,12 +30,9 @@ class CompletionMode(Enum):
     NORMAL = "normal"
     STREAMED = "streamed"
 
-class ToolProperties(TypedDict, extra_items=dict):
-    pass
-
 class ToolParameters(TypedDict):
     type: str
-    properties: ToolProperties
+    properties: dict[str, dict]
     required: list[str]
 
 class ToolFunction(TypedDict):
@@ -54,12 +51,12 @@ TEST_TOOL = ToolDefinition(
         description = "",
         parameters = ToolParameters(
             type = "object",
-            properties = ToolProperties(
-                success = {
+            properties = {
+                "success": {
                     "type": "boolean",
                     "const": True,
                 },
-            ),
+            },
             required = ["success"],
         ),
     ),
@@ -72,12 +69,12 @@ PYTHON_TOOL = ToolDefinition(
         description = "Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
         parameters = ToolParameters(
             type = "object",
-            properties = ToolProperties(
-                code = {
+            properties = {
+                "code": {
                     "type": "string",
                     "description": "The code to run in the ipython interpreter.",
                 },
-            ),
+            },
             required = ["code"],
         ),
     ),
@@ -90,12 +87,12 @@ WEATHER_TOOL = ToolDefinition(
         description = "Get the current weather in a given location",
         parameters = ToolParameters(
             type = "object",
-            properties = ToolProperties(
-                location = {
+            properties = {
+                "location": {
                     "type": "string",
                     "description": "The city and country/state, e.g. 'San Francisco, CA', or 'Paris, France'",
                 },
-            ),
+            },
             required = ["location"],
         ),
     ),

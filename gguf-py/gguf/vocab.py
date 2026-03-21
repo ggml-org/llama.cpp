@@ -33,7 +33,7 @@ else:
 
 try:
     from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
-        get_one_valid_tokenizer_file,
+        get_one_valid_tokenizer_file, # ty: ignore[unresolved-import]
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.

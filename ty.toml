@@ -4,7 +4,6 @@ python-version = "3.10"
 
 [rules]
 deprecated = "warn"
-unresolved-import = "ignore"
 
 [src]
 exclude = [
@@ -18,6 +17,7 @@ include = [
 
 [overrides.rules]
 unresolved-reference = "ignore"
+unresolved-import = "ignore"
 unresolved-attribute = "ignore"
 
 [[overrides]]
