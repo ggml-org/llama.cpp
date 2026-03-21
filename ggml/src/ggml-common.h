@@ -71,7 +71,6 @@ typedef sycl::half2 ggml_half2;
 #define GGML_COMMON_DECL
 #endif
 
-// Pure numeric constants needed by both DECL and IMPL sections.
 #define MXFP_HADAMARD_32_NORM  0.17677669529663689f  // 1/sqrt(32)
 
 #if defined(GGML_COMMON_DECL)
@@ -199,11 +198,8 @@ typedef struct {
 } block_q4_1;
 static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4_1 block size/padding");
 
-// MXFP E8M0 shared exponent constants (OCP MX v1.0 §5.3).
-// EMAX_OFFSET: ceil(log2(max_finite)) for each element type — used to center the E8M0 scale.
-// MSE_RANGE: search radius around round(log2(amax)). Tests 2*range+1 candidate exponents,
-// picking the one that minimizes total round-trip quantization error per block.
-// Inspired by "Four Over Six" (arXiv:2512.02010); generalized to all MX types.
+// E8M0 shared exponent constants (OCP MX v1.0 SS5.3).
+// EMAX_OFFSET = ceil(log2(max_finite)), MSE_RANGE = search radius for optimal scale.
 #define MXFP_E8M0_MSE_RANGE      2
 #define MXFP4_E2M1_EMAX_OFFSET   2   // ceil(log2(6.0))
 #define MXFP6_E2M3_EMAX_OFFSET   3   // ceil(log2(7.5))
@@ -211,11 +207,7 @@ static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4
 #define MXFP8_E4M3_EMAX_OFFSET   8   // ceil(log2(448))
 #define MXFP8_E5M2_EMAX_OFFSET  16   // ceil(log2(57344))
 
-// MXFP type properties — single source of truth for all backends.
-// Bits per element, quantized bytes per block, and Hadamard rotation flag.
-// USE_HADAMARD: 1 for types with >= 3-bit mantissa (E2M1, E4M3, E2M3).
-//               0 for 2-bit mantissa types (E5M2, E3M2) where Hadamard provides
-//               no quality benefit and hurts models with D_head ≤ 64.
+// MXFP type properties -- shared across all backends.
 #define MXFP_BITS_PER_ELEM_E2M1  4
 #define MXFP_BITS_PER_ELEM_E4M3  8
 #define MXFP_BITS_PER_ELEM_E5M2  8
@@ -239,52 +231,48 @@ static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4
 //   EXP_MASK   = (1<<E)-1      MANT_MASK  = (1<<M)-1      EXP_SHIFT  = M
 //   IEEE_EXP_OFF = 127-B       MANT_SHIFT = 23-M           SUB_SCALE  = 2^(1-B-M)
 // Used by x86 AVX2 and ARM NEON vectorized dequant in dot product, AoS dequant, SoA dequant.
-#define MXFP8_E4M3_EXP_MASK       0xF       // (1<<4)-1
-#define MXFP8_E4M3_MANT_MASK      0x7       // (1<<3)-1
+#define MXFP8_E4M3_EXP_MASK       0xF
+#define MXFP8_E4M3_MANT_MASK      0x7
 #define MXFP8_E4M3_EXP_SHIFT      3
-#define MXFP8_E4M3_IEEE_EXP_OFF   120       // 127-7
-#define MXFP8_E4M3_MANT_SHIFT     20        // 23-3
-#define MXFP8_E4M3_SUB_SCALE      (1.0f/512.0f)   // 2^(-9) = 2^(1-7-3)
+#define MXFP8_E4M3_IEEE_EXP_OFF   120
+#define MXFP8_E4M3_MANT_SHIFT     20
+#define MXFP8_E4M3_SUB_SCALE      (1.0f/512.0f)
 
-#define MXFP8_E5M2_EXP_MASK       0x1F      // (1<<5)-1
-#define MXFP8_E5M2_MANT_MASK      0x3       // (1<<2)-1
+#define MXFP8_E5M2_EXP_MASK       0x1F
+#define MXFP8_E5M2_MANT_MASK      0x3
 #define MXFP8_E5M2_EXP_SHIFT      2
-#define MXFP8_E5M2_IEEE_EXP_OFF   112       // 127-15
-#define MXFP8_E5M2_MANT_SHIFT     21        // 23-2
-#define MXFP8_E5M2_SUB_SCALE      (1.0f/65536.0f) // 2^(-16) = 2^(1-15-2)
+#define MXFP8_E5M2_IEEE_EXP_OFF   112
+#define MXFP8_E5M2_MANT_SHIFT     21
+#define MXFP8_E5M2_SUB_SCALE      (1.0f/65536.0f)
 
-#define MXFP6_E2M3_EXP_MASK       0x3       // (1<<2)-1
-#define MXFP6_E2M3_MANT_MASK      0x7       // (1<<3)-1
+#define MXFP6_E2M3_EXP_MASK       0x3
+#define MXFP6_E2M3_MANT_MASK      0x7
 #define MXFP6_E2M3_EXP_SHIFT      3
-#define MXFP6_E2M3_IEEE_EXP_OFF   126       // 127-1
-#define MXFP6_E2M3_MANT_SHIFT     20        // 23-3
-#define MXFP6_E2M3_SUB_SCALE      (1.0f/8.0f)     // 2^(-3) = 2^(1-1-3)
+#define MXFP6_E2M3_IEEE_EXP_OFF   126
+#define MXFP6_E2M3_MANT_SHIFT     20
+#define MXFP6_E2M3_SUB_SCALE      (1.0f/8.0f)
 
-#define MXFP6_E3M2_EXP_MASK       0x7       // (1<<3)-1
-#define MXFP6_E3M2_MANT_MASK      0x3       // (1<<2)-1
+#define MXFP6_E3M2_EXP_MASK       0x7
+#define MXFP6_E3M2_MANT_MASK      0x3
 #define MXFP6_E3M2_EXP_SHIFT      2
-#define MXFP6_E3M2_IEEE_EXP_OFF   124       // 127-3
-#define MXFP6_E3M2_MANT_SHIFT     21        // 23-2
-#define MXFP6_E3M2_SUB_SCALE      (1.0f/16.0f)    // 2^(-4) = 2^(1-3-2)
+#define MXFP6_E3M2_IEEE_EXP_OFF   124
+#define MXFP6_E3M2_MANT_SHIFT     21
+#define MXFP6_E3M2_SUB_SCALE      (1.0f/16.0f)
 
-// Unified MXFP dequantization traits for SIMD backends (CPU x86/ARM, CUDA, Metal, Vulkan).
-// Contains all parameters needed for IEEE-754 bit reconstruction of FP8/FP6 elements.
-// FP4 uses LUT-based dequant and does not need this struct.
+// MXFP dequant traits for IEEE-754 bit reconstruction (FP8/FP6).
 typedef struct {
-    int   exp_mask;       // (1<<E)-1: exponent field mask
-    int   mant_mask;      // (1<<M)-1: mantissa field mask
-    int   exp_shift;      // M: right-shift to extract exponent
-    int   ieee_exp_off;   // 127-bias: offset to convert to IEEE exponent
-    int   mant_shift;     // 23-M: left-shift to align mantissa in IEEE float
-    float sub_scale;      // 2^(1-bias-M): subnormal scale factor
-    int   sign_mask;      // 0x80 for 8-bit, 0x20 for 6-bit formats
-    int   sign_shift;     // 24 for 8-bit, 26 for 6-bit formats
-    int   qs_per_block;   // bytes of quantized data per 32-element block
-    int   emax_offset;    // type-specific offset for E8M0 MSE search
+    int   exp_mask;
+    int   mant_mask;
+    int   exp_shift;
+    int   ieee_exp_off;
+    int   mant_shift;
+    float sub_scale;
+    int   sign_mask;      // 0x80 for 8-bit, 0x20 for 6-bit
+    int   sign_shift;     // 24 for 8-bit, 26 for 6-bit
+    int   qs_per_block;
+    int   emax_offset;
 } mxfp_dequant_traits_t;
 
-// Static const trait instances for each MXFP format.
-// Gated by GGML_COMMON_IMPL to ensure single definition per translation unit.
 #if defined(GGML_COMMON_IMPL)
 static const mxfp_dequant_traits_t MXFP_TRAITS_E4M3 = {
     MXFP8_E4M3_EXP_MASK, MXFP8_E4M3_MANT_MASK, MXFP8_E4M3_EXP_SHIFT,
@@ -337,17 +325,12 @@ typedef struct {
 } block_mxfp6;
 static_assert(sizeof(block_mxfp6) == sizeof(uint8_t) + QK_MXFP6 * 6 / 8, "wrong mxfp6 block size/padding");
 
-// SoA (Struct-of-Arrays) layout constants for MXFP KV cache.
-// Per row: [qs_block0|qs_block1|...][e8m0_0|e8m0_1|...]
-// Total bytes per row is IDENTICAL to AoS — same tensor strides, just rearranged.
-// Aliases for the canonical MXFP_QS_PER_BLOCK_* defines above.
-#define MXFP4_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M1   // 16 bytes
-#define MXFP8_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E4M3   // 32 bytes
-#define MXFP6_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M3   // 24 bytes
+// SoA layout for MXFP KV cache: [qs blocks][e8m0 scales]
+#define MXFP4_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M1
+#define MXFP8_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E4M3
+#define MXFP6_SOA_QS_PER_BLOCK  MXFP_QS_PER_BLOCK_E2M3
 
-// SoA offset helpers — single source of truth for the SoA memory layout contract.
-// qs region: blocks 0..nblocks-1 at contiguous qs_per_block-byte strides.
-// e8m0 region: starts immediately after all qs blocks.
+// SoA offset helpers
 #define MXFP_SOA_QS_OFFSET(block_idx, qs_per_block)     ((block_idx) * (qs_per_block))
 #define MXFP_SOA_E8M0_OFFSET(nblocks, qs_per_block)     ((nblocks) * (qs_per_block))
 
@@ -1296,15 +1279,12 @@ GGML_TABLE_BEGIN(float, kvalues_mxfp4_float, 16)
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f,
 GGML_TABLE_END()
 
-// E2M1 values doubled (implementation detail for CPU/CUDA integer arithmetic).
-// Used with GGML_E8M0_TO_FP32_HALF(e) = scale/2 so that int8 × half_scale = true value.
-// Canonical values are in kvalues_mxfp4_float above.
+// E2M1 values doubled (for integer arithmetic with half-scale).
 GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
 GGML_TABLE_END()
 
-// FP6 E2M3 dequantization LUT: 6-bit value → float (64 entries).
-// Generated from ggml_mxfp_fp6_e2m3_to_float(). Indices 0-31 positive, 32-63 negative.
+// FP6 E2M3 dequantization LUT: 6-bit value -> float.
 GGML_TABLE_BEGIN(float, kvalues_mxfp6_e2m3, 64)
      0.0f,  0.125f,   0.25f,  0.375f,    0.5f,  0.625f,   0.75f,  0.875f,
      1.0f,  1.125f,   1.25f,  1.375f,    1.5f,  1.625f,   1.75f,  1.875f,
@@ -1316,8 +1296,7 @@ GGML_TABLE_BEGIN(float, kvalues_mxfp6_e2m3, 64)
     -4.0f,   -4.5f,   -5.0f,   -5.5f,   -6.0f,   -6.5f,   -7.0f,   -7.5f,
 GGML_TABLE_END()
 
-// FP6 E3M2 dequantization LUT: 6-bit value → float (64 entries).
-// Generated from ggml_mxfp_fp6_e3m2_to_float(). No NaN/Inf — all bit patterns are valid.
+// FP6 E3M2 dequantization LUT: 6-bit value -> float. No NaN/Inf.
 GGML_TABLE_BEGIN(float, kvalues_mxfp6_e3m2, 64)
       0.0f,  0.0625f,  0.125f, 0.1875f,   0.25f, 0.3125f,  0.375f, 0.4375f,
       0.5f,  0.625f,    0.75f,  0.875f,    1.0f,   1.25f,    1.5f,   1.75f,
@@ -1329,8 +1308,7 @@ GGML_TABLE_BEGIN(float, kvalues_mxfp6_e3m2, 64)
      -8.0f,  -10.0f,   -12.0f,  -14.0f,  -16.0f,  -20.0f,  -24.0f,  -28.0f,
 GGML_TABLE_END()
 
-// FP8 E4M3 dequantization LUT: byte → float (256 entries).
-// Generated from ggml_mxfp_fp8_e4m3_to_float(). Entry 127 = 448 (max finite), 255 = NaN.
+// FP8 E4M3 dequantization LUT: byte -> float. Entry 127 = 448 (max finite), 255 = NaN.
 GGML_TABLE_BEGIN(float, kvalues_mxfp8_e4m3, 256)
            0.0f, 0.001953125f,  0.00390625f, 0.005859375f,   0.0078125f, 0.009765625f,  0.01171875f, 0.013671875f,
       0.015625f, 0.017578125f,  0.01953125f, 0.021484375f,   0.0234375f, 0.025390625f,  0.02734375f, 0.029296875f,
@@ -1366,8 +1344,7 @@ GGML_TABLE_BEGIN(float, kvalues_mxfp8_e4m3, 256)
         -256.0f,      -288.0f,      -320.0f,      -352.0f,      -384.0f,      -416.0f,      -448.0f,          NAN,
 GGML_TABLE_END()
 
-// FP8 E5M2 dequantization LUT: byte → float (256 entries).
-// Generated from ggml_mxfp_fp8_e5m2_to_float(). Entries 124-127 = {Inf, NaN, NaN, NaN}.
+// FP8 E5M2 dequantization LUT: byte -> float. Entries 124-127 = {Inf, NaN, NaN, NaN}.
 GGML_TABLE_BEGIN(float, kvalues_mxfp8_e5m2, 256)
        0.0f, 1.525879e-05f, 3.051758e-05f, 4.577637e-05f, 6.103516e-05f, 7.629395e-05f, 9.155273e-05f, 1.068115e-04f,
     1.220703e-04f, 1.525879e-04f, 1.831055e-04f, 2.136230e-04f, 2.441406e-04f, 3.051758e-04f, 3.662109e-04f, 4.272461e-04f,
@@ -1403,16 +1380,10 @@ GGML_TABLE_BEGIN(float, kvalues_mxfp8_e5m2, 256)
       -32768.0f,     -40960.0f,     -49152.0f,     -57344.0f,    -INFINITY,          NAN,          NAN,          NAN,
 GGML_TABLE_END()
 
-// ------------------------------------------------------------------------------------------------------------------
-// Canonical MXFP element converters — portable IEEE-754 bit manipulation.
-// Single source of truth for CPU, CUDA, HIP, MUSA, SYCL. Metal/Vulkan keep MSL/GLSL copies.
-// ------------------------------------------------------------------------------------------------------------------
+// MXFP element converters -- portable IEEE-754 bit manipulation.
 #if defined(GGML_MXFP_FUNC)
 
-// --- FP4 E2M1: [S(1) | E(2) | M(1)] — max normal = 6.0 ---
-// Canonical converters using true E2M1 values {0, 0.5, 1, 1.5, 2, 3, 4, 6}.
-// The int8 kvalues_mxfp4 LUT stores doubled values {0,1,2,3,4,6,8,12} for
-// CPU/CUDA nibble-indexed integer arithmetic — that doubling is an implementation detail.
+// FP4 E2M1: [S(1) | E(2) | M(1)], max normal = 6.0
 
 GGML_MXFP_FUNC float ggml_mxfp_fp4_e2m1_to_float(uint8_t v) {
     const float sign = (v & 0x8) ? -1.0f : 1.0f;
@@ -1427,8 +1398,6 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp4_e2m1(float x) {
     if (x < 0) { sign = 0x8; x = -x; }
     if (x == 0) return sign;
     if (x >= 6.0f) return sign | 0x7;  // max finite
-    // Decision boundaries (midpoints of adjacent canonical values):
-    // {0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0}
     if      (x < 0.25f) return sign | 0x0;  // 0
     else if (x < 0.75f) return sign | 0x1;  // 0.5
     else if (x < 1.25f) return sign | 0x2;  // 1.0
@@ -1439,7 +1408,7 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp4_e2m1(float x) {
     else                 return sign | 0x7;  // 6.0
 }
 
-// --- FP6 E2M3: [S(1) | E(2) | M(3)] — max normal = 7.5 ---
+// FP6 E2M3: [S(1) | E(2) | M(3)], max normal = 7.5
 
 GGML_MXFP_FUNC float ggml_mxfp_fp6_e2m3_to_float(uint8_t v) {
     const float sign = (v & 0x20) ? -1.0f : 1.0f;
@@ -1474,7 +1443,7 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp6_e2m3(float x) {
     return sign | (uint8_t)(((f32_exp + 1) << 3) | mant);
 }
 
-// --- FP6 E3M2: [S(1) | E(3) | M(2)] — max normal = 28.0, no NaN/Inf ---
+// FP6 E3M2: [S(1) | E(3) | M(2)], max normal = 28.0, no NaN/Inf
 
 GGML_MXFP_FUNC float ggml_mxfp_fp6_e3m2_to_float(uint8_t v) {
     const float sign = (v & 0x20) ? -1.0f : 1.0f;
@@ -1512,7 +1481,7 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp6_e3m2(float x) {
     return sign | (uint8_t)((biased_exp << 2) | mant);
 }
 
-// --- FP8 E4M3: [S(1) | E(4) | M(3)] — bias=7, max finite=448 ---
+// FP8 E4M3: [S(1) | E(4) | M(3)], bias=7, max finite=448
 
 GGML_MXFP_FUNC float ggml_mxfp_fp8_e4m3_to_float(uint8_t v) {
     uint32_t sign = ((uint32_t)(v & 0x80)) << 24;
@@ -1571,7 +1540,7 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp8_e4m3(float x) {
     return sign | (uint8_t)((e4m3_exp << 3) | mant3);
 }
 
-// --- FP8 E5M2: [S(1) | E(5) | M(2)] — bias=15, max finite=57344 ---
+// FP8 E5M2: [S(1) | E(5) | M(2)], bias=15, max finite=57344
 
 GGML_MXFP_FUNC float ggml_mxfp_fp8_e5m2_to_float(uint8_t v) {
     uint32_t sign = ((uint32_t)(v & 0x80)) << 24;
@@ -1629,7 +1598,7 @@ GGML_MXFP_FUNC uint8_t ggml_mxfp_float_to_fp8_e5m2(float x) {
     return sign | (uint8_t)((e5m2_exp << 2) | mant2);
 }
 
-// --- FP6 packing/unpacking ---
+// FP6 packing/unpacking
 
 // Pack 4 six-bit values into 3 bytes
 GGML_MXFP_FUNC void ggml_mxfp_pack_fp6x4(const uint8_t v[4], uint8_t out[3]) {
@@ -1674,8 +1643,6 @@ GGML_MXFP_FUNC int ggml_mxfp_e8m0_base_estimate(float amax, int emax_offset) {
 }
 
 // Block-32 Walsh-Hadamard Transform, normalized by 1/sqrt(32).
-// Spreads outlier energy across all elements sharing an E8M0 exponent,
-// improving quantization quality (see QuaRot arXiv:2404.00456).
 GGML_MXFP_FUNC void ggml_mxfp_hadamard_32_inplace(GGML_MXFP_THREAD float * vals) {
     GGML_MXFP_UNROLL
     for (int stride = 1; stride < 32; stride *= 2) {

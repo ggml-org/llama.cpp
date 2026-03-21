@@ -2,7 +2,6 @@
 #pragma once
 
 // Rename `_generic` functions if no native implementation is available.
-// This effectively selects the generic implementation.
 
 #if defined(GGML_CPU_GENERIC)
 // quants.c

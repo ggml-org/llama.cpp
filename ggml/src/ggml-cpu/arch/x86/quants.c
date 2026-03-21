@@ -3819,18 +3819,13 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
-// ── MXFP FP8/FP6 AVX2 helpers ──────────────────────────────────────────────
-// Shared IEEE-754 bit reconstruction and FP6 unpacking used by vec_dot,
-// dequantize_row, and SoA dequant functions.
+// MXFP FP8/FP6 AVX2 helpers
 
 #if defined(__AVX2__)
 
-// Use shared mxfp_dequant_traits_t from ggml-common.h.
-// Aliases for readability within this file.
 #define mxfp_avx2_traits_t mxfp_dequant_traits_t
 
-// Dequantize 8 raw MXFP values (widened to int32) → 8 IEEE-754 floats.
-// Handles both normal and subnormal paths. Works for any FP6/FP8 format.
+// Dequantize 8 FP8/FP6 values to floats.
 static inline __m256 mxfp_dequant_avx2(
         const __m256i v_raw,
         const __m256i v_exp_mask, const __m256i v_mant_mask,
@@ -3872,9 +3867,9 @@ static inline __m256i unpack_fp6x8_avx2(const uint8_t * qs, int j) {
     return _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)unpacked));
 }
 
-// ── MXFP FP8/FP6 vec_dot ──────────────────────────────────────────────────
+// MXFP FP8/FP6 vec_dot
 
-// Unified FP8 × Q8_0 dot product (works for E4M3 and E5M2).
+// FP8 x Q8_0 dot product (E4M3/E5M2).
 static void ggml_vec_dot_mxfp8_q8_0_avx2(
         int n, float * GGML_RESTRICT s,
         const void * GGML_RESTRICT vx,
@@ -3915,7 +3910,7 @@ static void ggml_vec_dot_mxfp8_q8_0_avx2(
     *s = hsum_float_8(acc);
 }
 
-// Unified FP6 × Q8_0 dot product (works for E2M3 and E3M2).
+// FP6 x Q8_0 dot product (E2M3/E3M2).
 static void ggml_vec_dot_mxfp6_q8_0_avx2(
         int n, float * GGML_RESTRICT s,
         const void * GGML_RESTRICT vx,
@@ -3955,7 +3950,7 @@ static void ggml_vec_dot_mxfp6_q8_0_avx2(
     *s = hsum_float_8(acc);
 }
 
-// ── MXFP FP8/FP6 dequantize_row (AoS) ─────────────────────────────────────
+// MXFP FP8/FP6 dequantize_row (AoS)
 
 static void dequantize_row_mxfp8_avx2(
         const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
@@ -4016,7 +4011,7 @@ static void dequantize_row_mxfp6_avx2(
     }
 }
 
-// ── MXFP SoA dequant (flash attention) ─────────────────────────────────────
+// MXFP SoA dequant (flash attention)
 
 static void dequantize_row_mxfp8_soa_avx2(
         const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k,
@@ -4116,7 +4111,7 @@ static void dequantize_row_mxfp4_soa_avx2(
 
 #endif // __AVX2__
 
-// ── Public dispatch functions ──────────────────────────────────────────────
+// Public dispatch functions
 
 void ggml_vec_dot_mxfp8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);

@@ -264,9 +264,7 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-// Generic MXFP-to-Q8_0 dot product. Dequants one MX block (32 elements)
-// to float via the existing public dequantize_row functions, then dots
-// against Q8_0 int8 values. Reference implementation — not SIMD-optimized.
+// Generic MXFP x Q8_0 dot product (scalar, not SIMD-optimized)
 static void ggml_vec_dot_mxfp_q8_0_impl(
         int n, float * GGML_RESTRICT s,
         const void * GGML_RESTRICT vx, size_t block_size,
@@ -311,8 +309,7 @@ void ggml_vec_dot_mxfp6_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             (ggml_to_float_t)dequantize_row_mxfp6);
 }
 
-// Generic (scalar) dequant wrappers — delegates to ggml-quants.c reference implementations.
-// On x86/ARM, arch-specific SIMD versions override these via the fallback.h mapping.
+// Generic dequant wrappers — arch-specific SIMD versions override via fallback.h.
 void dequantize_row_mxfp8_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     dequantize_row_mxfp8(x, y, k);
 }

@@ -4134,21 +4134,14 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
-// ── MXFP FP8/FP6 NEON helpers ──────────────────────────────────────────────
-// Shared IEEE-754 bit reconstruction and FP6 unpacking used by vec_dot,
-// dequantize_row, and SoA dequant functions.
-//
-// NEON requires vshlq_n_u32 to have a compile-time literal constant, so we use
-// two separate helpers for FP8 (sign at bit 7, shift 24) and FP6 (sign at bit 5,
-// shift 26) rather than a single parameterized function.
+// MXFP FP8/FP6 NEON helpers
+// Separate FP8/FP6 functions because NEON vshlq_n_u32 requires compile-time constants.
 
 #if defined(__ARM_NEON)
 
-// Use shared mxfp_dequant_traits_t from ggml-common.h.
 #define mxfp_neon_traits_t mxfp_dequant_traits_t
 
-// Dequantize 4 raw FP8 values (uint32x4_t) → 4 IEEE-754 floats.
-// Sign bit at position 7, sign shift = 24.
+// Dequantize 4 FP8 values to floats.
 static inline float32x4_t mxfp8_dequant_neon(
         const uint32x4_t v_raw,
         const uint32x4_t v_exp_mask, const uint32x4_t v_mant_mask,
@@ -4172,8 +4165,7 @@ static inline float32x4_t mxfp8_dequant_neon(
     return vbslq_f32(is_sub, sub_val, normal);
 }
 
-// Dequantize 4 raw FP6 values (uint32x4_t) → 4 IEEE-754 floats.
-// Sign bit at position 5, sign shift = 26.
+// Dequantize 4 FP6 values to floats.
 static inline float32x4_t mxfp6_dequant_neon(
         const uint32x4_t v_raw,
         const uint32x4_t v_exp_mask, const uint32x4_t v_mant_mask,
@@ -4229,7 +4221,7 @@ static inline void widen_s8x8_to_f32x4x2(const int8_t * src,
     *hi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(q16)));
 }
 
-// ── MXFP FP8/FP6 vec_dot ──────────────────────────────────────────────────
+// MXFP FP8/FP6 vec_dot
 
 static void ggml_vec_dot_mxfp8_q8_0_neon(
         int n, float * GGML_RESTRICT s,
@@ -4319,7 +4311,7 @@ static void ggml_vec_dot_mxfp6_q8_0_neon(
     *s = vaddvq_f32(vaddq_f32(acc0, acc1));
 }
 
-// ── MXFP FP8/FP6 dequantize_row (AoS) ─────────────────────────────────────
+// MXFP FP8/FP6 dequantize_row (AoS)
 
 static void dequantize_row_mxfp8_neon(
         const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
@@ -4381,7 +4373,7 @@ static void dequantize_row_mxfp6_neon(
     }
 }
 
-// ── MXFP SoA dequant (flash attention) ─────────────────────────────────────
+// MXFP SoA dequant (flash attention)
 
 static void dequantize_row_mxfp8_soa_neon(
         const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k,
@@ -4492,7 +4484,7 @@ static void dequantize_row_mxfp4_soa_neon(
 
 #endif // __ARM_NEON
 
-// ── Public dispatch functions ──────────────────────────────────────────────
+// Public dispatch functions
 
 void ggml_vec_dot_mxfp8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);

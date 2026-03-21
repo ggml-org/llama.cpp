@@ -259,16 +259,12 @@ void quantize_row_q8_1_ref(const float * GGML_RESTRICT x, block_q8_1 * GGML_REST
 
 // ====================== MXFP element conversions (wrappers around ggml-common.h)
 
-// FP8 E4M3: 1 sign, 4 exp (bias 7), 3 mantissa. Max finite: 448, NaN: 0x7F (saturated to max).
 float fp8_e4m3_to_float(uint8_t v)    { return ggml_mxfp_fp8_e4m3_to_float(v); }
 uint8_t float_to_fp8_e4m3_rn(float x) { return ggml_mxfp_float_to_fp8_e4m3(x); }
 
 // ====================== MXFP quantization infrastructure
 //
-// MSE-optimal E8M0 shared exponent: tests ±R candidates around round(log2(amax))
-// and picks whichever minimizes total round-trip quantization error per block.
-// Improves on OCP MX v1.0 §5.3 floor(log2(amax)) by 0.05-0.2 PPL.
-// Ref: OCP MX v1.0 spec, Four Over Six (arXiv:2512.02010)
+// MSE-optimal E8M0: tests candidates around round(log2(amax)), picks lowest quantization error.
 
 typedef struct {
     int      emax_offset;  // type-specific offset to max representable exponent
@@ -279,8 +275,7 @@ typedef struct {
 
 static inline int best_index_mxfp4(float x, float e);
 
-// MXFP4 MSE error using decision boundary quantization with half-scale
-// (kvalues_mxfp4 are doubled E2M1 values, so scale is halved to compensate)
+// MSE error for MXFP4 (kvalues are doubled, so scale is halved)
 static float mse_error_mxfp4(float val, float inv_scale, float scale) {
     const float d = scale * 0.5f;
     const float inv_d = (d > 0.0f) ? 1.0f / d : 0.0f;
@@ -301,7 +296,6 @@ static float mse_error_mxfp4(float val, float inv_scale, float scale) {
 
 static const mxfp_elem_traits_t mxfp4_traits = { MXFP4_E2M1_EMAX_OFFSET, NULL, NULL, mse_error_mxfp4 };
 
-// Find MSE-optimal E8M0 exponent by testing ±R candidates around round(log2(amax))
 static inline uint8_t mxfp_compute_e8m0_mse(const float * x, int qk, const mxfp_elem_traits_t * traits) {
     float amax = 0.0f;
     for (int j = 0; j < qk; j++) {
@@ -336,7 +330,6 @@ static inline uint8_t mxfp_compute_e8m0_mse(const float * x, int qk, const mxfp_
     return (uint8_t)best_e;
 }
 
-// Decision boundary quantization for kvalues_mxfp4 {0,1,2,3,4,6,8,12}
 static inline int best_index_mxfp4(float x, float e) {
     const float inv_e = (e > 0.0f) ? 1.0f / e : 0.0f;
     const float normalized = fabsf(x) * inv_e;
@@ -566,11 +559,6 @@ void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_REST
 }
 
 // ====================== Hadamard rotation
-//
-// 32-element Walsh-Hadamard transform applied before MX quantization to spread
-// outlier energy across the shared-exponent group. Orthogonal (H^T·H = I), so
-// H(K)·H(Q) = K·Q — attention scores are preserved when both K and Q are rotated.
-// Prior art: QuIP# (Tseng et al. 2024), BRQ (Huang et al. 2024)
 
 void ggml_hadamard_32_inplace(float vals[32]) {
     ggml_mxfp_hadamard_32_inplace(vals);
@@ -586,7 +574,6 @@ uint8_t float_to_fp8_e5m2_rn(float x) { return ggml_mxfp_float_to_fp8_e5m2(x); }
 void pack_fp6x4(const uint8_t v[4], uint8_t out[3])   { ggml_mxfp_pack_fp6x4(v, out); }
 void unpack_fp6x4(const uint8_t in[3], uint8_t v[4])   { ggml_mxfp_unpack_fp6x4(in, v); }
 
-// round-trip quantization error for MSE-optimal exponent search
 static float mse_error_fp8_e4m3(float val, float inv_scale, float scale) {
     const float recon = fp8_e4m3_to_float(float_to_fp8_e4m3_rn(val * inv_scale)) * scale;
     const float err = val - recon;
@@ -685,8 +672,6 @@ void dequantize_row_mxfp6(const block_mxfp6 * GGML_RESTRICT x, float * GGML_REST
 }
 
 // ====================== SoA (Struct-of-Arrays) quantize/dequantize for flash attention
-//
-// Layout per row: [qs_block0|qs_block1|...|qs_blockN][e8m0_0|e8m0_1|...|e8m0_N]
 
 void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
     assert(k % QK_MXFP4 == 0);

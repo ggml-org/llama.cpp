@@ -404,8 +404,6 @@ const std::vector<ggml_type> kv_cache_types = {
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
-    // Short aliases: "mxfp4" → E2M1, "mxfp6" → E2M3, "mxfp8" → E4M3.
-    // Full names (mxfp4_e2m1, mxfp8_e4m3, mxfp6_e2m3, etc.) match via ggml_type_name() below.
     if (s == "mxfp4") {
         return GGML_TYPE_MXFP4_E2M1;
     }

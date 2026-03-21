@@ -4909,8 +4909,7 @@ void ggml_compute_forward_get_rows(
     //}
 }
 
-// NEON-optimized Hadamard for ARM platforms; scalar fallback uses ggml_hadamard_32_inplace
-// from ggml-quants.c (the reference implementation).
+// NEON-optimized Hadamard; scalar fallback below
 #if defined(__ARM_NEON)
 static void hadamard_32_inplace(float vals[32]) {
     float32x4_t v0 = vld1q_f32(vals +  0);
@@ -4978,13 +4977,11 @@ static void hadamard_32_inplace(float vals[32]) {
     vst1q_f32(vals + 28, vmulq_f32(v7, norm));
 }
 #else
-// Scalar fallback: delegate to reference implementation in ggml-quants.c
 static void hadamard_32_inplace(float vals[32]) {
     ggml_hadamard_32_inplace(vals);
 }
 #endif
 
-// Apply Hadamard rotation to each 32-element block in a float buffer.
 static void ggml_apply_hadamard_blocks(float * data, int64_t n) {
     GGML_ASSERT(n % 32 == 0);
     for (int64_t i = 0; i < n; i += 32) {
@@ -5031,8 +5028,6 @@ static void ggml_compute_forward_set_rows_f32(
 
     const int32_t apply_hadamard = ((const int32_t *)dst->op_params)[0];
 
-    // For MXFP types, use SoA quantize (canonical FA layout).
-    // For non-MXFP types, use the standard AoS from_float.
     typedef void (*quantize_soa_fn)(const float *, void *, int64_t);
     quantize_soa_fn mxfp_soa_quantize = nullptr;
     ggml_from_float_t from_float = nullptr;
@@ -5046,8 +5041,6 @@ static void ggml_compute_forward_set_rows_f32(
             break;
     }
 
-    // Pre-allocate Hadamard temp buffer once outside the hot loop (nc is constant).
-    // nc == n_embd_k_gqa which is bounded by model architecture (typically <= 8192).
     std::vector<float> had_tmp;
     if (apply_hadamard) {
         had_tmp.resize(nc);
@@ -8275,8 +8268,7 @@ void ggml_compute_forward_top_k(
 typedef void (*mxfp_soa_quantize_fn)(const float *, void *, int64_t);
 typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
 
-// Shared MXFP dispatch parameters for flash attention.
-// Populated once and used by both the one_chunk and tiled paths.
+// MXFP dispatch parameters for flash attention.
 struct mxfp_fa_params {
     mxfp_soa_quantize_fn   q_quantize;
     mxfp_soa_dequantize_fn k_dequantize;
@@ -8287,9 +8279,6 @@ struct mxfp_fa_params {
     int64_t v_soa_elems;
     bool    apply_hadamard;
     // Per-head SoA addressing (avoids dequanting all heads in multihead mode).
-    // qs_per_block: bytes of quantized data per 32-element block.
-    // head_qs_bytes: total qs bytes for one head (blocks_per_head * qs_per_block).
-    // head_e8m0_offset: byte offset from row start to e8m0 region.
     int     k_qs_per_block;
     int     v_qs_per_block;
     int     k_head_qs_bytes;
@@ -8455,9 +8444,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     ggml_vec_dot_t    kq_vec_dot   = nullptr;
     ggml_to_float_t   v_to_float   = nullptr;
 
-    if (is_mxfp_k) {
-        kq_vec_dot = nullptr;
-    } else {
+    if (!is_mxfp_k) {
         ggml_type const k_vec_dot_type = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
         q_to_vec_dot = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
         kq_vec_dot   = ggml_get_type_traits_cpu(k->type)->vec_dot;
@@ -8472,20 +8459,15 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
     int ith = params->ith;
 
-    // Dequant buffers for MXFP SoA — stack-allocated, no heap allocation in the hot path.
-    // In multihead mode, only dequant one head (DK or DV elements) instead of all heads.
-    // DK/DV are bounded by 1024 (asserted below for MXFP).
+    if (is_mxfp_k) { GGML_ASSERT(DK <= 1024); }
+    if (is_mxfp_v) { GGML_ASSERT(DV <= 1024); }
+
     float k_dequant_buf[1024];
     float v_dequant_buf[1024];
 
-    // Per-head SoA temp buffer: holds [qs | e8m0] for one head in multihead mode.
-    // For DK=1024 with MXFP8: 32 blocks * 32 qs + 32 e8m0 = 1056 bytes.
-    // Stack-allocated since sizes are bounded by DK/DV <= 1024.
-    // Max: 1024/32 * 32(qs) + 1024/32 = 1056 bytes (MXFP8).
-    char k_head_soa[1088]; // 1056 rounded up for alignment
+    char k_head_soa[1088]; // max: DK=1024 MXFP8 -> 1056 bytes, rounded up
     char v_head_soa[1088];
 
-    // Thread-local work buffers (constant across ir loop)
     float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32);
     float       * V32   =                 (VKQ32 + 1*DV);
     ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV);
@@ -8521,31 +8503,24 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const int iv3 = iq3 / rv3;
         const int iv2 = iq2 / rv2;
 
-        // Precompute loop-invariant base pointer offsets for K and V.
-        // Only ic varies in the inner loop; head/batch offsets are constant.
         const size_t k_base_offset = ik2*nbk2 + ik3*nbk3;
         const size_t v_base_offset = iv2*nbv2 + iv3*nbv3;
         const char * k_base = (const char *) k->data + k_base_offset;
         const char * v_base = (const char *) v->data + v_base_offset;
 
-        // For multihead MXFP: precompute per-head SoA byte offsets (constant per query row).
-        // head_qs_start: byte offset to this head's qs blocks within the SoA row.
-        // head_e8m0_start: byte offset to this head's e8m0 scales within the SoA row.
+        // Per-head SoA byte offsets
         const int k_head_qs_start   = mxfp.k_multihead ? ik2 * mxfp.k_head_qs_bytes : 0;
         const int k_head_e8m0_start = mxfp.k_multihead ? (int)mxfp.k_head_e8m0_offset + ik2 * mxfp.k_blocks_per_head : 0;
         const int v_head_qs_start   = mxfp.v_multihead ? iv2 * mxfp.v_head_qs_bytes : 0;
         const int v_head_e8m0_start = mxfp.v_multihead ? (int)mxfp.v_head_e8m0_offset + iv2 * mxfp.v_blocks_per_head : 0;
 
-        // Multihead MXFP row base (without head offset) — only ic varies.
         const char * k_row_base = mxfp.k_multihead ? ((const char *) k->data + ik3*nbk3) : nullptr;
         const char * v_row_base = mxfp.v_multihead ? ((const char *) v->data + iv3*nbv3) : nullptr;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         float Q_f32[1024];
         if (is_mxfp_k) {
-            // Q preprocessing: Hadamard → SoA quantize → SoA dequant (round-trip).
-            // Captures the same quantization loss as K, matching GPU MMA semantics.
-            GGML_ASSERT(DK <= 1024);
+            // Q preprocessing: Hadamard + SoA round-trip captures same quantization loss as K.
             if (mxfp.apply_hadamard) {
                 float q_tmp[1024];
                 memcpy(q_tmp, pq, DK * sizeof(float));
@@ -8557,7 +8532,6 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             mxfp.k_dequantize(Q_q, Q_f32, DK);
         } else {
             if (mxfp.apply_hadamard) {
-                GGML_ASSERT(DK <= 1024);
                 float q_tmp[1024];
                 memcpy(q_tmp, pq, DK * sizeof(float));
                 ggml_apply_hadamard_blocks(q_tmp, DK);
@@ -8581,8 +8555,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
             if (is_mxfp_k) {
                 if (mxfp.k_multihead) {
-                    // Multihead: extract this head's SoA blocks into temp buffer, dequant only DK elements.
-                    // Copy qs blocks then e8m0 scales for this head into contiguous [qs|e8m0] layout.
+                    // Extract this head's SoA blocks
                     const char * row = k_row_base + ic*nbk1;
                     memcpy(k_head_soa, row + k_head_qs_start, mxfp.k_head_qs_bytes);
                     memcpy(k_head_soa + mxfp.k_head_qs_bytes, row + k_head_e8m0_start, mxfp.k_blocks_per_head);
@@ -8610,10 +8583,12 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
             if (v_is_f16) {
                 if (s > M) {
+                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M = s;
                     ms = expf(Mold - M);
                     ggml_vec_scale_f16(DV, VKQ16, ms);
                 } else {
+                    // no new maximum, ms == 1.0f, vs != 1.0f
                     vs = expf(s - M);
                 }
 
@@ -8621,10 +8596,12 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) (v_base + ic*nbv1), vs);
             } else {
                 if (s > M) {
+                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M = s;
                     ms = expf(Mold - M);
                     ggml_vec_scale_f32(DV, VKQ32, ms);
                 } else {
+                    // no new maximum, ms == 1.0f, vs != 1.0f
                     vs = expf(s - M);
                 }
 
@@ -8643,6 +8620,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                     v_to_float(v_base + ic*nbv1, V32, DV);
                     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
                 } else {
+                    // V is F32
                     ggml_vec_mad_f32(DV, VKQ32, (const float *) (v_base + ic*nbv1), vs);
                 }
             }
@@ -8782,12 +8760,12 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     static constexpr int Q_TILE_SZ  = ggml_fa_tile_config::Q;
     static constexpr int KV_TILE_SZ = ggml_fa_tile_config::KV;
 
-    // MXFP dequant scratch buffers — allocated once per thread, reused across all tiles.
-    // DK/DV bounded by 1024, so per-head dequant fits in stack buffers.
+    if (is_mxfp_k) { GGML_ASSERT(DK <= 1024); }
+    if (is_mxfp_v) { GGML_ASSERT(DV <= 1024); }
+
     float k_dequant_buf[1024];
     float v_dequant_buf[1024];
 
-    // Per-head SoA temp buffers for multihead extraction (same as one_chunk path).
     char k_head_soa[1088];
     char v_head_soa[1088];
 
@@ -8853,10 +8831,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     if (mxfp.apply_hadamard) {
                         ggml_apply_hadamard_blocks(Q_f32 + tq * DK, DK);
                     }
-                    // SoA round-trip: quantize Q to SoA, then dequant back to float
-                    const size_t q_soa_bytes = ggml_row_size(k->type, DK);
-                    GGML_ASSERT(q_soa_bytes <= 2048);
-                    uint8_t q_mxfp_buf[2048]; // max: DK=1024 * 33/32 = 1056 bytes (MXFP8)
+                    uint8_t q_mxfp_buf[1088]; // max: DK=1024 MXFP8 -> 1056 bytes
                     mxfp.q_quantize(Q_f32 + tq * DK, q_mxfp_buf, DK);
                     mxfp.k_dequantize(q_mxfp_buf, Q_f32 + tq * DK, DK);
                 }
@@ -9234,10 +9209,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int64_t dr = (nr + nchunk - 1) / nchunk;
 
         static constexpr int64_t Q_TILE_SZ  = ggml_fa_tile_config::Q;
-        // Tiled GEMM path: dequant K/V to float, then simd_gemm.
-        // Only for types that natively dequant to float (f32, f16, MXFP).
-        // Standard quant types (q8_0, q4_0) must use the scalar one_chunk path
-        // to preserve vec_dot semantics and produce identical results to master.
+        // Tiled path: f32, f16, and MXFP only (quant types use one_chunk)
         bool use_tiled = !use_ref &&
                                (q->type == GGML_TYPE_F32 &&
                                 kv_is_f32_f16_or_mxfp &&

@@ -150,8 +150,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     }
 }
 
-// MXFP SoA quantize/dequantize (from ggml-quants.h, which is internal to ggml
-// and not in the test include path). Signatures must match ggml-quants.h exactly.
+// MXFP SoA functions (internal to ggml, not in test include path)
 typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
 extern "C" {
     void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
@@ -162,10 +161,7 @@ extern "C" {
     void dequantize_row_mxfp6_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
 }
 
-// Initialize an MXFP tensor with SoA (Struct-of-Arrays) layout.
-// soa_bytes: byte width of one SoA region. Default 0 = ne[0] elements (one ggml row).
-//   For FA K/V tensors, pass nb[1] so that when heads are physically contiguous
-//   within one KV-position stride, the SoA region spans all heads (matching FA's read pattern).
+// Initialize an MXFP tensor with SoA layout (soa_bytes = region width, 0 = one row).
 static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, size_t soa_bytes = 0) {
     GGML_ASSERT(ggml_is_type_mxfp(tensor->type));
 
@@ -189,9 +185,6 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
     std::uniform_real_distribution<float> dist(min, max);
     std::vector<float> region_f32(soa_elems);
 
-    // Iterate over logical SoA regions using tensor strides.
-    // Each SoA region is soa_bytes wide at the innermost stride level.
-    // Outer dimensions (those with stride > soa_bytes) are iterated explicitly.
     const size_t nb1 = tensor->nb[1];
     const size_t nb2 = tensor->nb[2];
     const size_t nb3 = tensor->nb[3];
@@ -199,18 +192,13 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
     const int64_t ne2 = tensor->ne[2];
     const int64_t ne3 = tensor->ne[3];
 
-    // Determine iteration: if soa_bytes == nb1, iterate over (ne1 * ne2 * ne3) regions.
-    // If soa_bytes < nb1 (per-head), iterate over (ne1 * ne2 * ne3) regions with stride nb1.
-    // We use strides to compute offsets, handling views and permutations correctly.
     const int64_t heads_per_region = (int64_t)(soa_bytes / head_row_sz);
     GGML_ASSERT(soa_bytes % head_row_sz == 0 && "soa_bytes must be a multiple of head_row_sz");
 
-    // For multi-head regions, we step by nb1 (KV-position stride) between regions.
-    // For per-head, we step through all dimensions.
     std::vector<uint8_t> buf(ggml_nbytes(tensor), 0);
 
     if (heads_per_region > 1) {
-        // Multi-head SoA: iterate over (kv_positions * batches), each region = nb1 bytes
+        // Multi-head SoA:
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t n_groups = ne2 / heads_per_region;
             for (int64_t ig = 0; ig < n_groups; ig++) {
@@ -222,7 +210,7 @@ static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float 
             }
         }
     } else {
-        // Per-head SoA: one SoA region per ggml row
+        // Per-head SoA:
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             for (int64_t i2 = 0; i2 < ne2; i2++) {
                 for (int64_t i1 = 0; i1 < ne1; i1++) {
@@ -328,7 +316,6 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     bool quantized = ggml_is_quantized(t->type);
     const bool is_mxfp = ggml_is_type_mxfp(t->type);
 
-    // SoA dequant for MXFP readback
     mxfp_soa_dequantize_fn mxfp_dequant_soa = nullptr;
     if (is_mxfp) {
         switch (t->type) {
@@ -4051,7 +4038,6 @@ struct test_mul_mat_id : public test_case {
         return 5e-4;
     }
 
-    // Same Blackwell FP4 tolerance as test_mul_mat above.
     double max_nmse_err(ggml_backend_t backend) override {
         // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
         if (type_a == GGML_TYPE_MXFP4_E2M1 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
@@ -6401,9 +6387,7 @@ struct test_flash_attn_ext : public test_case {
             } else if (strcmp(t->name, "m") == 0) {
                 init_tensor_kq_mask(t);
             } else if ((strcmp(t->name, "k") == 0 || strcmp(t->name, "v") == 0) && ggml_is_type_mxfp(t->type)) {
-                // MXFP K/V tensors use SoA layout. Pass nb[1] (KV-position stride) as the
-                // SoA region width — when heads are physically contiguous within that stride,
-                // the FA kernel dequants the full multi-head region as one SoA block.
+                // MXFP K/V use SoA layout; nb[1] spans all heads in one KV-position stride
                 init_tensor_mxfp_soa(t, -1.0f, 1.0f, t->nb[1]);
             } else {
                 init_tensor_uniform(t);
@@ -8778,7 +8762,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (ggml_type type_V : {GGML_TYPE_MXFP4_E2M1}) {
             if (type_K == type_V) continue;
             for (int nb : {1, 3, 32}) {
-                //                     hsk  hsv  nh  nr23    kv   nb  mask  sinks  bias  softcap prec           type_K  permute             type_V
                 test_cases.emplace_back(new test_flash_attn_ext(
                     128, 128, 4, {1, 1}, 512, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, type_K, {0, 1, 2, 3}, type_V));
             }

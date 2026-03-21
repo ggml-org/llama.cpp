@@ -51,7 +51,6 @@ llama_kv_cache::llama_kv_cache(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                // 2 base tensors (K+V) + 2*n_stream view tensors
                 /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer_kv*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
@@ -140,10 +139,10 @@ llama_kv_cache::llama_kv_cache(
         uint32_t n_embd_k_alloc = n_embd_k_gqa;
         const bool is_mxfp_k = ggml_is_type_mxfp(type_k);
         if (is_mxfp_k) {
-            const int qk = (int)ggml_blck_size(type_k);              // 32 for all MXFP types
+            const int qk = (int)ggml_blck_size(type_k);
             GGML_ASSERT(n_embd_k_gqa % qk == 0 && "MXFP K cache requires n_embd_k_gqa divisible by block size");
             const int blocks = (int)n_embd_k_gqa / qk;
-            const int blocks_aligned = (blocks + 15) & ~15;          // align to 16
+            const int blocks_aligned = (blocks + 15) & ~15;
             n_embd_k_alloc = (uint32_t)(blocks_aligned * qk);
         }
 
