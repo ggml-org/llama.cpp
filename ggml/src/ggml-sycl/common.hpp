@@ -1504,6 +1504,7 @@ void  ggml_sycl_alloc_trace_dump(const char * reason);
 void  ggml_sycl_alloc_trace_record(const char * kind, size_t size, const char * tag);
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag);
+void * ggml_sycl_malloc_host(size_t size, const sycl::context & ctx, const char * tag);
 void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const char * tag);
 
 // Query pointer allocation type via internal registry (no driver round-trip).

@@ -14505,6 +14505,32 @@ void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char 
     return ptr;
 }
 
+void * ggml_sycl_malloc_host(size_t size, const sycl::context & ctx, const char * tag) {
+    // Context-based overload: avoids queue contention when the queue has pending
+    // async operations (e.g. prestage/inference DMA).  The queue-based overload
+    // of sycl::malloc_host may internally synchronise the queue on Level Zero,
+    // causing a hang.  Using the context directly side-steps this entirely.
+    void * ptr = nullptr;
+    try {
+        ptr = sycl::malloc_host(size, ctx);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[SYCL] malloc_host(ctx) failed (%zu bytes, %s): %s\n",
+                      size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    } catch (const std::exception & e) {
+        GGML_LOG_WARN("[SYCL] malloc_host(ctx) failed (%zu bytes, %s): %s\n",
+                      size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    }
+    if (ptr != nullptr) {
+        g_total_host_pinned_bytes.fetch_add(size, std::memory_order_relaxed);
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, -1, ggml_sycl::alloc_type::HOST_PINNED);
+        ggml_sycl_alloc_trace_record("host", size, tag);
+        ggml_sycl::offload_stats_note_host_alloc(tag ? tag : "malloc_host", size);
+    }
+    return ptr;
+}
+
 void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const char * tag) {
     void * ptr = nullptr;
     try {
