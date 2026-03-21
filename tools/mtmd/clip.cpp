@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -2582,6 +2583,119 @@ private:
     }
 };
 
+
+
+struct internvl_dhr {
+    using Ratio = std::pair<int, int>;
+
+    static Ratio find_closest_aspect_ratio(float aspect_ratio,
+                                const std::vector<Ratio>& target_ratios,
+                                int width, int height, int image_size) {
+        float best_ratio_diff = std::numeric_limits<float>::infinity();
+        Ratio best_ratio = {1, 1};
+        long long area = static_cast<long long>(width) * height;
+
+        for (const auto& ratio : target_ratios) {
+            float target_ar = static_cast<float>(ratio.first) / ratio.second;
+            float ratio_diff = std::fabs(aspect_ratio - target_ar);
+
+            if (ratio_diff < best_ratio_diff) {
+                best_ratio_diff = ratio_diff;
+                best_ratio = ratio;
+            } else if (ratio_diff == best_ratio_diff) {
+                long long threshold =
+                    static_cast<long long>(image_size) * image_size *
+                    ratio.first * ratio.second;
+                if (area > threshold / 2) {
+                    best_ratio = ratio;
+                }
+            }
+        }
+        return best_ratio;
+    }
+
+    static std::vector<clip_image_u8_ptr>
+                 dynamic_preprocess(const clip_image_u8 & image_rgb,
+                                   int min_num     = 1,
+                                   int max_num     = 12,
+                                   int image_size  = 448,
+                                   bool use_thumbnail = true) {
+
+        std::vector<clip_image_u8_ptr> processed_images;
+
+        const int orig_width  = image_rgb.nx; //?? is nx width or height?
+        const int orig_height = image_rgb.ny;
+        const float aspect_ratio =
+            static_cast<float>(orig_width) / orig_height;
+
+        // Build target-ratio set  (same logic as the Python set-comprehension)
+        std::set<Ratio> ratio_set;
+        for (int n = min_num; n <= max_num; ++n)
+            for (int i = 1; i <= n; ++i)
+                for (int j = 1; j <= n; ++j)
+                    if (i * j <= max_num && i * j >= min_num)
+                        ratio_set.emplace(i, j);
+
+        // Sort by area  (i*j ascending)
+        std::vector<Ratio> target_ratios(ratio_set.begin(), ratio_set.end());
+        std::sort(target_ratios.begin(), target_ratios.end(),
+                [](const Ratio& a, const Ratio& b) {
+                    return a.first * a.second < b.first * b.second;
+                });
+
+        // Find the best ratio
+        Ratio target_ar = find_closest_aspect_ratio(
+            aspect_ratio, target_ratios, orig_width, orig_height, image_size);
+
+        const int target_width  = image_size * target_ar.first;
+        const int target_height = image_size * target_ar.second;
+        clip_image_size target_size{target_width, target_height};
+        const int blocks        = target_ar.first * target_ar.second;
+
+        // Resize full image  (BILINEAR like PIL.Image.resize default — use
+        // INTER_LINEAR; switch to INTER_CUBIC for closer PIL fidelity)
+        clip_image_u8 resized;
+        img_tool::resize(image_rgb, resized, target_size, img_tool::RESIZE_ALGO_BICUBIC);
+        // cv::resize(image_rgb, resized,
+        //         cv::Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
+
+        // Slice into blocks
+        const int cols_per_row = target_width / image_size;   // == target_ar.first
+        // std::vector<cv::Mat> processed_images;
+        // processed_images.reserve(blocks + 1);
+
+        for (int i = 0; i < blocks; ++i) {
+            int col = i % cols_per_row;
+            int row = i / cols_per_row;
+            int x = col * image_size;
+            int y = row * image_size;
+            int w = image_size;
+            int h = image_size;
+
+            clip_image_u8_ptr img_slice(clip_image_u8_init());
+            img_tool::crop(resized, *img_slice, x, y, w, h);
+            // cv::Rect box(col * image_size, row * image_size, image_size, image_size);
+            processed_images.push_back(std::move(img_slice));
+        }
+
+        assert(static_cast<int>(processed_images.size()) == blocks);
+
+        // Optional thumbnail
+        if (use_thumbnail && blocks != 1) {
+            // cv::Mat thumb;
+            // cv::resize(image_rgb, thumb,
+            //         cv::Size(image_size, image_size), 0, 0, cv::INTER_LINEAR);
+            clip_image_u8_ptr thumb(clip_image_u8_init());
+            img_tool::resize(image_rgb, *thumb, {image_size, image_size}, img_tool::RESIZE_ALGO_BICUBIC);
+            processed_images.push_back(std::move(thumb));
+        }
+
+        return processed_images;
+
+    }
+
+};
+
 /**
  * implementation of LLaVA-UHD:
  *  - https://arxiv.org/pdf/2403.11703
@@ -3141,16 +3255,31 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->grid_x = instructions.grid_size.width;
                 res_imgs->grid_y = instructions.grid_size.height;
             } break;
+        case PROJECTOR_TYPE_INTERNVL: // support dynamic high-resolution
+            {
+                std::vector<clip_image_u8_ptr> imgs = internvl_dhr::dynamic_preprocess(*img, 1, 12, params.image_size);
+
+                for (size_t i = 0; i < imgs.size(); ++i) {
+                    clip_image_f32_ptr res(clip_image_f32_init());
+                    normalize_image_u8_to_f32(*imgs[i], *res, params.image_mean, params.image_std);
+                    res_imgs->entries.push_back(std::move(res));
+                }
+
+                // res_imgs->grid_x = inst.grid_size.width;
+                // res_imgs->grid_y = inst.grid_size.height;
+
+            } break;
 
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
-        case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
+        // case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             {
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
                 img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BILINEAR);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
+                // printf("sz = %d \n", sz);
                 //clip_image_save_to_bmp(resized_image, "resized.bmp");
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
@@ -4100,6 +4229,11 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
 bool clip_is_glm(const struct clip_ctx * ctx) {
     // TODO: remove this function
     return ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE;
+}
+
+bool clip_is_internvl(const struct clip_ctx * ctx) {
+    // TODO: remove this function
+    return ctx->proj_type() == PROJECTOR_TYPE_INTERNVL;
 }
 
 bool clip_is_llava(const struct clip_ctx * ctx) {
