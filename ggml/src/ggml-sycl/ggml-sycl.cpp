@@ -9427,7 +9427,12 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     }
     sycl::queue &              q          = ggml_sycl_get_device(device).default_queue();
     ggml_sycl::unified_cache * cache      = ggml_sycl::get_unified_cache(q);
-    ggml_sycl::host_cache *    host_cache = ggml_sycl::get_host_cache(q);
+    // Defer get_host_cache() to avoid acquiring g_cache_rw_mutex eagerly.
+    // During 120B MoE inference, g_cache_rw_mutex can be held by MoE prestage or
+    // runtime budget updates when this function is called for dense weight
+    // MUL_MAT dispatch.  host_cache is only needed when request_prefer_host
+    // is true (host placement path), so resolve it lazily.
+    ggml_sycl::host_cache *    host_cache = nullptr;
     ggml_sycl_cache_id         cache_key  = ggml_backend_sycl_get_weight_cache_key(tensor, device);
 
     const void *     src_ptr   = tensor->data;
@@ -9592,6 +9597,12 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     bool                      host_needs_fill  = false;
     bool                      host_pinned      = false;
     ggml_sycl::cache_location host_location    = ggml_sycl::cache_location::HOST_MMAP;
+    // Lazily resolve host_cache only when host placement is actually needed.
+    if (!src_is_device && request_prefer_host) {
+        if (!host_cache) {
+            host_cache = ggml_sycl::get_host_cache(q);
+        }
+    }
     if (host_cache && !src_is_device && request_prefer_host) {
         void * host_ptr = host_cache->ensure_cached_alloc(
             cache_key, src_ptr, src_size, dst_size, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, resolved, false,

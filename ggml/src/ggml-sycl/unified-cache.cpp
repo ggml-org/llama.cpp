@@ -32,7 +32,7 @@ namespace ggml_sycl {
 // Per-device cache storage (for PER_DEVICE and AUTO modes)
 static std::unordered_map<int, std::unique_ptr<unified_cache>> g_device_caches;
 static std::unique_ptr<host_cache>                             g_host_cache_shared;
-static std::mutex                                              g_cache_mutex;
+static std::shared_mutex                                       g_cache_rw_mutex;
 static size_t                                                  g_unified_cache_budget      = 0;  // 0 = auto-calculate
 static int                                                     g_unified_cache_budget_pct  = 90;
 static size_t                                                  g_unified_cache_host_budget = 0;  // 0 = auto-calc
@@ -888,8 +888,8 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
     // This eliminates per-expert sycl::malloc_host / sycl::free churn during
     // inference — each alloc/free does GGTT page table ops in the kernel driver.
     // NOTE: We use ggml_sycl_malloc_host directly (not unified_alloc) because
-    // the constructor runs under g_cache_mutex and unified_alloc would deadlock
-    // via unified_cache_add_runtime_host_bytes -> g_cache_mutex.
+    // the constructor runs under g_cache_rw_mutex and unified_alloc would deadlock
+    // via unified_cache_add_runtime_host_bytes -> g_cache_rw_mutex.
     {
         constexpr size_t k_fallback_chunk = 64 * 1024 * 1024;
         const size_t     slot_capacity    = staging_size_ > 0 ? staging_size_ : k_fallback_chunk;
@@ -990,7 +990,7 @@ unified_cache::~unified_cache() {
 
     // Free reusable host-pinned async copy staging slots.
     // These were allocated with ggml_sycl_malloc_host (not unified_alloc) to
-    // avoid g_cache_mutex deadlock during construction, so free via sycl::free.
+    // avoid g_cache_rw_mutex deadlock during construction, so free via sycl::free.
     for (auto & slot : copy_stage_slots_) {
         if (slot.ptr != nullptr) {
             try {
@@ -2620,15 +2620,9 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             if (it != entries_.end()) {
                 if (!it->second.host_resident && it->second.device_ptr) {
                     if (!it->second.pool_allocated) {
-                        try {
-                            queue_.wait();
-                        } catch (...) {
-                        }
-                        try {
-                            sycl::free(it->second.device_ptr, queue_);
-                        } catch (...) {
-                        }
-                        saturating_sub_used(it->second.size);
+                        // Use deferred free to avoid queue_.wait() under rw_mutex_
+                        // which can deadlock when GPU work is in-flight.
+                        enqueue_deferred_free(it->second.device_ptr, it->second.size);
                     }
                     // Pool entries: used_ stays at chunk level
                 }
@@ -2929,11 +2923,24 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             const size_t alloc_cost   = (layout_pool_ && !pool_can_fit) ? layout_pool_->get_default_chunk_size() :
                                                                           (pool_can_fit ? 0 : request.dst_size);
 
-            host_cache * hcache    = get_host_cache(queue_);
+            // Defer get_host_cache() to avoid acquiring g_cache_rw_mutex eagerly.
+            // ensure_cached_layout can be called from ggml_sycl_get_weight_layout_ptr
+            // during inference while another code path (MoE prestage, runtime budget
+            // update, cache registration) holds g_cache_rw_mutex.  Eagerly calling
+            // get_host_cache() here caused a deadlock on 120B MoE inference because
+            // std::shared_mutex is not reentrant.  Resolve hcache lazily only when a host
+            // fallback is actually needed (device alloc failed or prefer_host).
+            host_cache * hcache    = nullptr;
+            auto         lazy_host_cache = [&]() -> host_cache * {
+                if (!hcache) {
+                    hcache = get_host_cache(queue_);
+                }
+                return hcache;
+            };
             bool         force_host = false;
 
             // 1. Honor explicit host preference
-            if (request.prefer_host && hcache) {
+            if (request.prefer_host && lazy_host_cache()) {
                 force_host = true;
             }
 
@@ -2980,7 +2987,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         }
                     }
                     // VRAM is sufficient (or eviction freed enough) — skip budget-based eviction/rejection
-                } else if (hcache) {
+                } else if (lazy_host_cache()) {
                     // VRAM query failed — fall back to budget-based check
                     const size_t base_budget = budget_;
                     while (used_.load() + alloc_cost > base_budget) {
@@ -3038,7 +3045,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         "[UNIFIED-CACHE] skipping host_cache fallback for SOA layout "
                         "(CPU reads AOS directly)\n");
                 } else if (!hcache) {
-                    hcache = get_host_cache(queue_);
+                    hcache = lazy_host_cache();
                 }
                 if (request.layout != GGML_LAYOUT_SOA && hcache) {
                     cache_location host_loc = hcache->get_location(request.key, request.type, request.layer_id,
@@ -3320,23 +3327,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             // This allows waiting threads to see the failure and fall back gracefully.
             it->second.state           = cache_entry_state::FAILED;
             it->second.has_ready_event = false;
-            // Try to free the device memory directly rather than deferring.
-            // The queue may be in a bad state, so wrap in try-catch.
+            // Defer the free to avoid queue_.wait() under rw_mutex_ (deadlock risk).
+            // The deferred free will synchronize via barrier event instead.
             if (it->second.device_ptr) {
                 if (!it->second.pool_allocated) {
-                    try {
-                        // Try to synchronize before freeing to avoid use-after-free
-                        queue_.wait();
-                    } catch (...) {
-                        // Queue in bad state, ignore
-                    }
-                    try {
-                        sycl::free(it->second.device_ptr, queue_);
-                    } catch (...) {
-                        // Free failed - memory may leak, but avoid crash
-                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to free device memory during error recovery\n");
-                    }
-                    saturating_sub_used(it->second.size);
+                    enqueue_deferred_free(it->second.device_ptr, it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -3359,15 +3354,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             it->second.has_ready_event = false;
             if (it->second.device_ptr) {
                 if (!it->second.pool_allocated) {
-                    try {
-                        queue_.wait();
-                    } catch (...) {
-                    }
-                    try {
-                        sycl::free(it->second.device_ptr, queue_);
-                    } catch (...) {
-                    }
-                    saturating_sub_used(it->second.size);
+                    enqueue_deferred_free(it->second.device_ptr, it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -3390,15 +3377,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             it->second.has_ready_event = false;
             if (it->second.device_ptr) {
                 if (!it->second.pool_allocated) {
-                    try {
-                        queue_.wait();
-                    } catch (...) {
-                    }
-                    try {
-                        sycl::free(it->second.device_ptr, queue_);
-                    } catch (...) {
-                    }
-                    saturating_sub_used(it->second.size);
+                    enqueue_deferred_free(it->second.device_ptr, it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -4533,10 +4512,17 @@ void unified_cache::process_deferred_frees() {
             const bool is_pool = layout_pool_ && layout_pool_->owns(it->ptr);
             if (!is_pool) {
                 if (!it->has_event) {
+                    // Instead of queue_.wait() under rw_mutex_ (deadlock risk),
+                    // submit a barrier event and defer to the next cycle.
                     try {
-                        queue_.wait();
+                        it->event     = submit_barrier_all();
+                        it->has_event = true;
                     } catch (...) {
+                        // If barrier submission fails, fall back to skipping
                     }
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free: added barrier for ptr=%p\n", it->ptr);
+                    ++it;
+                    continue;
                 }
                 try {
                     sycl::free(it->ptr, queue_);
@@ -5093,6 +5079,28 @@ static int get_device_id_from_queue(sycl::queue & queue) {
     return dpct::dev_mgr::instance().current_device_id();
 }
 
+// Helper: Resolve effective device ID (GLOBAL mode maps everything to device 0)
+static int resolve_effective_device(int device) {
+    unified_cache_mode mode = get_effective_mode();
+    int effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return -1;
+    }
+    return effective_device;
+}
+
+// Helper: Look up existing cache under shared (read) lock.
+// Returns nullptr if cache doesn't exist yet.  Safe for hot-path use
+// because g_device_caches entries are never erased during inference.
+static unified_cache * get_cache_shared(int effective_device) {
+    std::shared_lock<std::shared_mutex> lock(g_cache_rw_mutex);
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return nullptr;
+    }
+    return it->second.get();
+}
+
 static size_t runtime_reserved_bytes_nolock(int device_id) {
     if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
         return 0;
@@ -5115,9 +5123,9 @@ static size_t runtime_reserved_host_bytes_nolock() {
 
 // Helper: Create cache for a device.
 // deferred_reserved_out: if non-null, stores the reserved bytes that the
-// caller must apply via update_reserved_bytes() AFTER releasing g_cache_mutex.
+// caller must apply via update_reserved_bytes() AFTER releasing g_cache_rw_mutex.
 // This prevents a deadlock: update_reserved_bytes() → recalc → layer streaming
-// → unified_cache_add_runtime_bytes() → tries to re-lock g_cache_mutex.
+// → unified_cache_add_runtime_bytes() → tries to re-lock g_cache_rw_mutex.
 static unified_cache * create_cache_for_device(int device_id, size_t * deferred_reserved_out = nullptr) {
     // Get queue for this device
     sycl::queue & queue = ggml_sycl_get_device(device_id).default_queue();
@@ -5214,9 +5222,9 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
         const size_t baseline       = reserved_total;
         g_runtime_reserved_baseline[device_id].store(baseline, std::memory_order_relaxed);
         const size_t reserved_adjusted = runtime_reserved_adjusted_nolock(device_id);
-        // Defer update_reserved_bytes to caller (after releasing g_cache_mutex)
+        // Defer update_reserved_bytes to caller (after releasing g_cache_rw_mutex)
         // to avoid deadlock: update_reserved_bytes → recalc → layer streaming
-        // → unified_cache_add_runtime_bytes → re-lock g_cache_mutex
+        // → unified_cache_add_runtime_bytes → re-lock g_cache_rw_mutex
         if (deferred_reserved_out) {
             *deferred_reserved_out = reserved_adjusted;
         } else if (reserved_adjusted > 0) {
@@ -5289,15 +5297,26 @@ static host_cache * create_host_cache_for_device(int device_id) {
 }
 
 unified_cache * get_unified_cache(sycl::queue & queue) {
+    unified_cache_mode mode      = get_effective_mode();
+    int                device_id = (mode == unified_cache_mode::GLOBAL) ? 0 : get_device_id_from_queue(queue);
+
+    // Fast path: check under shared lock (no contention during inference)
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        auto it = g_device_caches.find(device_id);
+        if (it != g_device_caches.end()) {
+            return it->second.get();
+        }
+    }
+
+    // Slow path: create cache under exclusive lock
     unified_cache * result           = nullptr;
     size_t          deferred_reserve = 0;
     {
-        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
         g_cache_mode_locked = true;
 
-        unified_cache_mode mode      = get_effective_mode();
-        int                device_id = (mode == unified_cache_mode::GLOBAL) ? 0 : get_device_id_from_queue(queue);
-
+        // Double-check after acquiring write lock
         auto it = g_device_caches.find(device_id);
         if (it != g_device_caches.end()) {
             return it->second.get();
@@ -5313,23 +5332,44 @@ unified_cache * get_unified_cache(sycl::queue & queue) {
 }
 
 host_cache * get_host_cache(sycl::queue & queue) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    int device_id = get_device_id_from_queue(queue);
+
+    // Fast path: check under shared lock
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        if (g_host_cache_shared) {
+            return g_host_cache_shared.get();
+        }
+    }
+
+    // Slow path: create under exclusive lock
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     g_cache_mode_locked = true;
 
-    int device_id = get_device_id_from_queue(queue);
     return create_host_cache_for_device(device_id);
 }
 
 unified_cache * get_unified_cache_for_device(int device_id) {
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device_id;
+
+    // Fast path: check under shared lock (no contention during inference)
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        auto it = g_device_caches.find(effective_device);
+        if (it != g_device_caches.end()) {
+            return it->second.get();
+        }
+    }
+
+    // Slow path: create cache under exclusive lock
     unified_cache * result           = nullptr;
     size_t          deferred_reserve = 0;
     {
-        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
         g_cache_mode_locked = true;
 
-        unified_cache_mode mode             = get_effective_mode();
-        int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device_id;
-
+        // Double-check after acquiring write lock
         auto it = g_device_caches.find(effective_device);
         if (it != g_device_caches.end()) {
             return it->second.get();
@@ -5345,7 +5385,16 @@ unified_cache * get_unified_cache_for_device(int device_id) {
 }
 
 host_cache * get_host_cache_for_device(int device_id) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    // Fast path: check under shared lock
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        if (g_host_cache_shared) {
+            return g_host_cache_shared.get();
+        }
+    }
+
+    // Slow path: create under exclusive lock
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     g_cache_mode_locked = true;
 
     return create_host_cache_for_device(device_id);
@@ -5363,7 +5412,7 @@ bool unified_cache_enabled() {
 }
 
 void set_unified_cache_budget(size_t bytes) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     if (g_cache_mode_locked) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Budget change ignored: cache already initialized\n");
         return;
@@ -5372,7 +5421,7 @@ void set_unified_cache_budget(size_t bytes) {
 }
 
 void set_unified_cache_budget_pct(int pct) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     if (g_cache_mode_locked) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Budget pct change ignored: cache already initialized\n");
         return;
@@ -5386,7 +5435,7 @@ void set_unified_cache_budget_pct(int pct) {
 }
 
 void set_unified_cache_host_budget_pct(int pct) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     if (g_cache_mode_locked) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Host budget pct change ignored: cache already initialized\n");
         return;
@@ -5965,23 +6014,23 @@ void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category 
     if (bytes == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return;
     }
+    // Atomic counter updates — no lock needed
     const size_t new_total =
         g_runtime_reserved_bytes[effective_device].fetch_add(bytes, std::memory_order_relaxed) + bytes;
     g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].fetch_add(bytes, std::memory_order_relaxed);
     GGML_SYCL_DEBUG("[BUDGET] add dev=%d(eff=%d) +%.3f MB cat=%d total=%.1f MB\n",
                     device, effective_device, bytes / (1024.0 * 1024.0),
                     static_cast<int>(cat), new_total / (1024.0 * 1024.0));
-    auto it = g_device_caches.find(effective_device);
-    if (it != g_device_caches.end()) {
+    // Look up cache under shared lock, call update_reserved_bytes outside lock
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (cache) {
         const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
         const size_t adjusted = new_total > baseline ? new_total - baseline : 0;
-        it->second->update_reserved_bytes(adjusted);
+        cache->update_reserved_bytes(adjusted);
     }
 }
 
@@ -5989,41 +6038,39 @@ void unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category 
     if (bytes == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return;
     }
+    // Atomic saturating subtract — no lock needed
     size_t cur  = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
     size_t next = cur > bytes ? cur - bytes : 0;
     g_runtime_reserved_bytes[effective_device].store(next, std::memory_order_relaxed);
     size_t cat_cur  = g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].load(std::memory_order_relaxed);
     size_t cat_next = cat_cur > bytes ? cat_cur - bytes : 0;
     g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].store(cat_next, std::memory_order_relaxed);
-    auto it = g_device_caches.find(effective_device);
-    if (it != g_device_caches.end()) {
+    // Look up cache under shared lock, call update_reserved_bytes outside lock
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (cache) {
         const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
         const size_t adjusted = next > baseline ? next - baseline : 0;
-        it->second->update_reserved_bytes(adjusted);
+        cache->update_reserved_bytes(adjusted);
     }
 }
 
 size_t unified_cache_get_runtime_bytes(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    // Pure atomic read — no lock needed
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return 0;
     }
     return g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
 }
 
 size_t unified_cache_get_runtime_bytes_by_category(int device, runtime_category cat) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    // Pure atomic read — no lock needed
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return 0;
     }
     if (static_cast<int>(cat) >= static_cast<int>(runtime_category::COUNT)) {
@@ -6036,10 +6083,18 @@ void unified_cache_add_runtime_host_bytes(size_t bytes) {
     if (bytes == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    g_runtime_reserved_host_bytes.fetch_add(bytes, std::memory_order_relaxed);
-    if (g_host_cache_shared) {
-        g_host_cache_shared->update_reserved_bytes(g_runtime_reserved_host_bytes.load(std::memory_order_relaxed));
+    // Atomic counter update — no exclusive lock needed
+    const size_t new_total = g_runtime_reserved_host_bytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    // Look up host cache under shared lock for update_reserved_bytes
+    host_cache * hcache = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        if (g_host_cache_shared) {
+            hcache = g_host_cache_shared.get();
+        }
+    }
+    if (hcache) {
+        hcache->update_reserved_bytes(new_total);
     }
 }
 
@@ -6047,31 +6102,37 @@ void unified_cache_sub_runtime_host_bytes(size_t bytes) {
     if (bytes == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    size_t                      cur  = g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
-    size_t                      next = cur > bytes ? cur - bytes : 0;
+    // Atomic saturating subtract — no exclusive lock needed
+    size_t cur  = g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
+    size_t next = cur > bytes ? cur - bytes : 0;
     g_runtime_reserved_host_bytes.store(next, std::memory_order_relaxed);
-    if (g_host_cache_shared) {
-        g_host_cache_shared->update_reserved_bytes(next);
+    // Look up host cache under shared lock for update_reserved_bytes
+    host_cache * hcache = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        if (g_host_cache_shared) {
+            hcache = g_host_cache_shared.get();
+        }
+    }
+    if (hcache) {
+        hcache->update_reserved_bytes(next);
     }
 }
 
 size_t unified_cache_get_runtime_host_bytes() {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    // Pure atomic read — no lock needed
     return g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
 }
 
 // === Budget Query API ===
 
 size_t unified_cache_available_for_compute(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return 0;
     }
-    auto it = g_device_caches.find(effective_device);
-    if (it == g_device_caches.end() || !it->second) {
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
         return 0;
     }
 
@@ -6083,7 +6144,7 @@ size_t unified_cache_available_for_compute(int device) {
     //
     // We still query live VRAM as a safety cap: if the driver reports less free
     // memory than the budget says, use the lower value.
-    const size_t budget_avail = it->second->available_for_compute();
+    const size_t budget_avail = cache->available_for_compute();
     size_t free_vram = 0, total_vram = 0;
     ggml_backend_sycl_get_device_memory(effective_device, &free_vram, &total_vram);
     if (free_vram == 0) {
@@ -6097,47 +6158,41 @@ size_t unified_cache_available_for_compute(int device) {
 }
 
 size_t unified_cache_total_managed(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return 0;
     }
-    auto it = g_device_caches.find(effective_device);
-    if (it == g_device_caches.end() || !it->second) {
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
         return 0;
     }
-    return it->second->base_budget();
+    return cache->base_budget();
 }
 
 size_t unified_cache_weight_bytes(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return 0;
     }
-    auto it = g_device_caches.find(effective_device);
-    if (it == g_device_caches.end() || !it->second) {
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
         return 0;
     }
-    return it->second->weight_bytes();
+    return cache->weight_bytes();
 }
 
 // === Budget Summary Diagnostic ===
 
 void unified_cache_log_budget_summary(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return;
     }
-    auto it = g_device_caches.find(effective_device);
-    if (it == g_device_caches.end() || !it->second) {
+    unified_cache * cache_ptr = get_cache_shared(effective_device);
+    if (!cache_ptr) {
         return;
     }
-    auto &       cache = *it->second;
+    auto &       cache = *cache_ptr;
     const size_t base  = cache.base_budget();
     const size_t wt    = cache.weight_bytes();
     const size_t rt    = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
@@ -6226,21 +6281,19 @@ void unified_cache_log_budget_summary(int device) {
 }
 
 bool unified_cache_is_budget_exceeded(int device) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    unified_cache_mode          mode             = get_effective_mode();
-    int                         effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
-    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
         return false;
     }
-    auto it = g_device_caches.find(effective_device);
-    if (it == g_device_caches.end() || !it->second) {
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
         return false;
     }
-    return it->second->is_budget_exceeded();
+    return cache->is_budget_exceeded();
 }
 
 bool unified_cache_has_evictions() {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
     for (auto & [device_id, cache] : g_device_caches) {
         if (cache && cache->has_evictions()) {
             return true;
@@ -6385,8 +6438,8 @@ bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
 // === MoE Cache Helpers ===
 
 void unpin_all_experts() {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    // Unpin in all caches
+    std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+    // Unpin in all caches (cache pointers stable during inference)
     for (auto & [device_id, cache] : g_device_caches) {
         if (cache) {
             cache->unpin_experts();
@@ -7147,9 +7200,19 @@ void unified_cache_free_partial_entries(int device) {
 }
 
 unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & queue) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    // Fast path: check under shared lock
+    {
+        std::shared_lock<std::shared_mutex> read_lock(g_cache_rw_mutex);
+        auto it = g_device_caches.find(device_id);
+        if (it != g_device_caches.end()) {
+            return it->second.get();
+        }
+    }
 
-    // Return existing cache if already registered
+    // Slow path: create under exclusive lock
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
+
+    // Double-check after acquiring write lock
     auto it = g_device_caches.find(device_id);
     if (it != g_device_caches.end()) {
         return it->second.get();
@@ -7185,7 +7248,7 @@ void shutdown_unified_cache() {
 
     // Clear all device caches
     // The destructors will skip cleanup due to the shutdown flag
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    std::unique_lock<std::shared_mutex> lock(g_cache_rw_mutex);
     g_device_caches.clear();
     g_host_cache_shared.reset();
 
