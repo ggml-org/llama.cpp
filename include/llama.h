@@ -372,6 +372,7 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool attn_weights; // if true, extract attention weights (requires flash_attn disabled)
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -1009,6 +1010,31 @@ extern "C" {
     // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
+
+    //
+    // attention weights API [EXPERIMENTAL]
+    // requires llama_context_params.attn_weights = true and flash_attn disabled
+    //
+
+    // Configure which (layer, head) pairs to extract attention weights from.
+    // By default (if never called), extracts head 0 of the last layer.
+    // layers and heads are parallel arrays of length n_pairs.
+    LLAMA_API void llama_set_attn_heads(
+            struct llama_context * ctx,
+            const int32_t * layers,
+            const int32_t * heads,
+            size_t n_pairs);
+
+    // Get attention weights for the ith output token.
+    // Returns a pointer to [n_pairs * n_ctx] floats where n_ctx = llama_n_ctx(ctx).
+    // Each pair occupies n_ctx floats; only the first llama_get_attn_n_kv() entries per pair are valid.
+    // Pairs are in the order set by llama_set_attn_heads: pair p starts at offset p * n_ctx.
+    // Returns NULL if attention extraction is not enabled or index is invalid.
+    LLAMA_API float * llama_get_attn_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the number of valid KV entries per (layer, head) pair in the attention weight arrays.
+    // Use this to know how many entries to read from each n_ctx-sized chunk.
+    LLAMA_API int32_t llama_get_attn_n_kv(struct llama_context * ctx);
 
     //
     // backend sampling API [EXPERIMENTAL]
