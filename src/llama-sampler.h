@@ -33,10 +33,6 @@ struct llama_sampler_chain {
     mutable int32_t n_sample;
 };
 
-// set trigger_suppressed on a grammar sampler (e.g. to suppress triggers during reasoning)
-// the sampler must have been created by llama_sampler_init_grammar* or this is a no-op
-void llama_sampler_grammar_set_trigger_suppressed(struct llama_sampler * smpl, bool suppressed);
-
 struct llama_sampler * llama_sampler_init_dry_testing(
         int32_t context_size,
         float   dry_multiplier,

@@ -1241,26 +1241,25 @@ private:
             const auto & end_tag   = slot.task->params.thinking_end_tag;
             const auto & start_tag = slot.task->params.thinking_start_tag;
             if (slot.in_reasoning) {
-                // check if the end tag just appeared
-                if (slot.generated_text.size() >= end_tag.size()) {
-                    auto tail = std::string_view(slot.generated_text).substr(
-                        slot.generated_text.size() - end_tag.size());
-                    if (tail == end_tag) {
-                        slot.in_reasoning = false;
-                        common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), false);
-                        SLT_DBG(slot, "reasoning ended, grammar triggers un-suppressed\n%s", "");
-                    }
+                // check if the end tag just appeared at the end of generated_text
+                if (slot.generated_text.size() >= end_tag.size()
+                        && slot.generated_text.compare(
+                            slot.generated_text.size() - end_tag.size(),
+                            end_tag.size(), end_tag) == 0) {
+                    slot.in_reasoning = false;
+                    common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), false);
+                    SLT_DBG(slot, "reasoning ended, grammar triggers un-suppressed\n%s", "");
                 }
             } else {
-                // check if the start tag just appeared
-                if (!start_tag.empty() && slot.generated_text.size() >= start_tag.size()) {
-                    auto tail = std::string_view(slot.generated_text).substr(
-                        slot.generated_text.size() - start_tag.size());
-                    if (tail == start_tag) {
-                        slot.in_reasoning = true;
-                        common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), true);
-                        SLT_DBG(slot, "reasoning started, grammar triggers suppressed\n%s", "");
-                    }
+                // check if the start tag just appeared at the end of generated_text
+                if (!start_tag.empty()
+                        && slot.generated_text.size() >= start_tag.size()
+                        && slot.generated_text.compare(
+                            slot.generated_text.size() - start_tag.size(),
+                            start_tag.size(), start_tag) == 0) {
+                    slot.in_reasoning = true;
+                    common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), true);
+                    SLT_DBG(slot, "reasoning started, grammar triggers suppressed\n%s", "");
                 }
             }
         }

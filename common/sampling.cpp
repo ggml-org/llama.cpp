@@ -483,9 +483,6 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
     }
 }
 
-// forward declaration of internal function (defined in llama-sampler.cpp)
-void llama_sampler_grammar_set_trigger_suppressed(struct llama_sampler * smpl, bool suppressed);
-
 void common_sampler_set_grammar_trigger_suppressed(struct common_sampler * gsmpl, bool suppressed) {
     if (!gsmpl || !gsmpl->grmr) {
         return;
