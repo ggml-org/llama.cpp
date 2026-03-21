@@ -5028,18 +5028,9 @@ static void ggml_compute_forward_set_rows_f32(
 
     const int32_t apply_hadamard = ((const int32_t *)dst->op_params)[0];
 
-    typedef void (*quantize_soa_fn)(const float *, void *, int64_t);
-    quantize_soa_fn mxfp_soa_quantize = nullptr;
-    ggml_from_float_t from_float = nullptr;
-
-    switch (dst->type) {
-        case GGML_TYPE_MXFP4_E2M1: mxfp_soa_quantize = quantize_row_mxfp4_soa;     break;
-        case GGML_TYPE_MXFP8_E4M3: mxfp_soa_quantize = quantize_row_mxfp8_soa;     break;
-        case GGML_TYPE_MXFP6_E2M3: mxfp_soa_quantize = quantize_row_mxfp6_soa; break;
-        default:
-            from_float = ggml_get_type_traits_cpu(dst->type)->from_float;
-            break;
-    }
+    const struct ggml_type_traits_cpu * dst_traits = ggml_get_type_traits_cpu(dst->type);
+    ggml_from_float_t mxfp_soa_quantize = dst_traits->from_float_soa;
+    ggml_from_float_t from_float = mxfp_soa_quantize ? nullptr : dst_traits->from_float;
 
     std::vector<float> had_tmp;
     if (apply_hadamard) {
@@ -8300,21 +8291,13 @@ static mxfp_fa_params mxfp_fa_params_init(
     const bool is_mxfp_v = ggml_is_type_mxfp(v->type);
 
     if (is_mxfp_k) {
-        switch (k->type) {
-            case GGML_TYPE_MXFP4_E2M1: p.q_quantize = quantize_row_mxfp4_soa; p.k_dequantize = dequantize_row_mxfp4_soa_cpu; break;
-            case GGML_TYPE_MXFP8_E4M3: p.q_quantize = quantize_row_mxfp8_soa; p.k_dequantize = dequantize_row_mxfp8_soa_cpu; break;
-            case GGML_TYPE_MXFP6_E2M3: p.q_quantize = quantize_row_mxfp6_soa; p.k_dequantize = dequantize_row_mxfp6_soa_cpu; break;
-            default: GGML_ABORT("unsupported MXFP K type");
-        }
+        const struct ggml_type_traits_cpu * k_traits = ggml_get_type_traits_cpu(k->type);
+        p.q_quantize   = k_traits->from_float_soa;
+        p.k_dequantize = k_traits->to_float_soa;
     }
 
     if (is_mxfp_v) {
-        switch (v->type) {
-            case GGML_TYPE_MXFP4_E2M1: p.v_dequantize = dequantize_row_mxfp4_soa_cpu; break;
-            case GGML_TYPE_MXFP8_E4M3: p.v_dequantize = dequantize_row_mxfp8_soa_cpu; break;
-            case GGML_TYPE_MXFP6_E2M3: p.v_dequantize = dequantize_row_mxfp6_soa_cpu; break;
-            default: GGML_ABORT("unsupported MXFP V type");
-        }
+        p.v_dequantize = ggml_get_type_traits_cpu(v->type)->to_float_soa;
     }
 
     // Hadamard rotation must match K rotation.

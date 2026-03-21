@@ -5639,6 +5639,14 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
             } break;
+        case GGML_TYPE_MXFP8_E4M3:
+            {
+                VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp8, data, nb);
+            } break;
+        case GGML_TYPE_MXFP6_E2M3:
+            {
+                VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp6, data, nb);
+            } break;
         case GGML_TYPE_NVFP4:
             {
                 // UE4M3 scales are uint8_t — all byte values are valid

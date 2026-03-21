@@ -18,6 +18,7 @@
 #include <ggml.h>
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
+#include <ggml-cpu.h>
 #include <ggml-cpp.h>
 
 #include <algorithm>
@@ -150,29 +151,15 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     }
 }
 
-// MXFP SoA functions (internal to ggml, not in test include path)
 typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
-extern "C" {
-    void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
-    void quantize_row_mxfp8_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
-    void quantize_row_mxfp6_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k);
-    void dequantize_row_mxfp4_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
-    void dequantize_row_mxfp8_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
-    void dequantize_row_mxfp6_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k);
-}
 
 // Initialize an MXFP tensor with SoA layout (soa_bytes = region width, 0 = one row).
 static void init_tensor_mxfp_soa(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, size_t soa_bytes = 0) {
     GGML_ASSERT(ggml_is_type_mxfp(tensor->type));
 
-    typedef void (*soa_quantize_fn)(const float *, void *, int64_t);
-    soa_quantize_fn quantize_soa = nullptr;
-    switch (tensor->type) {
-        case GGML_TYPE_MXFP4_E2M1: quantize_soa = quantize_row_mxfp4_soa;  break;
-        case GGML_TYPE_MXFP8_E4M3: quantize_soa = quantize_row_mxfp8_soa;  break;
-        case GGML_TYPE_MXFP6_E2M3: quantize_soa = quantize_row_mxfp6_soa;  break;
-        default: GGML_ABORT("unsupported MXFP type for SoA init");
-    }
+    const auto * traits = ggml_get_type_traits_cpu(tensor->type);
+    GGML_ASSERT(traits->from_float_soa && "MXFP type missing SoA quantize in traits");
+    auto quantize_soa = traits->from_float_soa;
 
     const int     qk         = (int)ggml_blck_size(tensor->type);
     const size_t  block_size = ggml_type_size(tensor->type);
@@ -318,12 +305,8 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
 
     mxfp_soa_dequantize_fn mxfp_dequant_soa = nullptr;
     if (is_mxfp) {
-        switch (t->type) {
-            case GGML_TYPE_MXFP4_E2M1: mxfp_dequant_soa = dequantize_row_mxfp4_soa;      break;
-            case GGML_TYPE_MXFP8_E4M3: mxfp_dequant_soa = dequantize_row_mxfp8_soa;      break;
-            case GGML_TYPE_MXFP6_E2M3: mxfp_dequant_soa = dequantize_row_mxfp6_soa; break;
-            default: GGML_ABORT("unsupported MXFP type in tensor_to_float");
-        }
+        mxfp_dequant_soa = (mxfp_soa_dequantize_fn) ggml_get_type_traits_cpu(t->type)->to_float_soa;
+        GGML_ASSERT(mxfp_dequant_soa && "MXFP type missing SoA dequant in traits");
     }
 
     // access elements by index to avoid gaps in views
