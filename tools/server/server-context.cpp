@@ -3289,7 +3289,7 @@ void server_routes::init_routes() {
     };
 
     this->get_metrics = [this](const server_http_req & req) {
-        auto res = create_response();
+        auto res = create_response(true); // bypass sleep; must not reset idle timer
         if (!params.endpoint_metrics) {
             res->error(format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
@@ -3299,6 +3299,7 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            task.reset_idle_timer = false;
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
@@ -3394,7 +3395,7 @@ void server_routes::init_routes() {
     };
 
     this->get_slots = [this](const server_http_req & req) {
-        auto res = create_response();
+        auto res = create_response(true); // bypass sleep; must not reset idle timer
         if (!params.endpoint_slots) {
             res->error(format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
@@ -3404,6 +3405,7 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            task.reset_idle_timer = false;
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 

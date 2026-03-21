@@ -27,19 +27,23 @@ int server_queue::post(server_task && task, bool front) {
         cleanup_pending_task(task.id_target);
     }
     const int task_id = task.id;
+    const bool should_reset_idle = task.reset_idle_timer;
     QUE_DBG("new task, id = %d, front = %d\n", task_id, front);
     if (front) {
         queue_tasks.push_front(std::move(task));
     } else {
         queue_tasks.push_back(std::move(task));
     }
-    time_last_task = ggml_time_ms();
+    if (should_reset_idle) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
     return task_id;
 }
 
 int server_queue::post(std::vector<server_task> && tasks, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
+    bool should_reset_idle = false;
     for (auto & task : tasks) {
         if (task.id == -1) {
             task.id = id++;
@@ -49,13 +53,18 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
             cleanup_pending_task(task.id_target);
         }
         QUE_DBG("new task, id = %d/%d, front = %d\n", task.id, (int) tasks.size(), front);
+        if (task.reset_idle_timer) {
+            should_reset_idle = true;
+        }
         if (front) {
             queue_tasks.push_front(std::move(task));
         } else {
             queue_tasks.push_back(std::move(task));
         }
     }
-    time_last_task = ggml_time_ms();
+    if (should_reset_idle) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
     return 0;
 }
@@ -63,8 +72,11 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
 void server_queue::defer(server_task && task) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     QUE_DBG("defer task, id = %d\n", task.id);
+    const bool should_reset_idle = task.reset_idle_timer;
     queue_tasks_deferred.push_back(std::move(task));
-    time_last_task = ggml_time_ms();
+    if (should_reset_idle) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
 }
 
@@ -76,12 +88,14 @@ int server_queue::get_new_id() {
 
 void server_queue::pop_deferred_task(int id_slot) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
+    bool should_reset_idle = false;
     if (!queue_tasks_deferred.empty()) {
         // try to find a task that uses the specified slot
         bool found = false;
         for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
             if (it->id_slot == id_slot) {
                 QUE_DBG("pop deferred task (use slot %d), id_task = %d\n", id_slot, it->id);
+                should_reset_idle = it->reset_idle_timer;
                 queue_tasks.emplace_front(std::move(*it));
                 queue_tasks_deferred.erase(it);
                 found = true;
@@ -90,12 +104,15 @@ void server_queue::pop_deferred_task(int id_slot) {
         }
         // if not tasks found using the slot, just pop the first deferred task (default behavior)
         if (!found) {
+            should_reset_idle = queue_tasks_deferred.front().reset_idle_timer;
             QUE_DBG("pop deferred task, id_task = %d\n", queue_tasks_deferred.front().id);
             queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
             queue_tasks_deferred.pop_front();
         }
     }
-    time_last_task = ggml_time_ms();
+    if (should_reset_idle) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
 }
 
@@ -139,6 +156,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
     while (true) {
         QUE_DBG("%s", "processing new tasks\n");
 
+        bool should_reset_idle = false;
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_tasks);
             if (!running) {
@@ -154,6 +172,9 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             lock.unlock();
 
             QUE_DBG("processing task, id = %d\n", task.id);
+            if (task.reset_idle_timer) {
+                should_reset_idle = true;
+            }
             callback_new_task(std::move(task));
         }
         // all tasks in the current loop is processed, slots data is now ready
@@ -161,7 +182,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
 
         // this will run the main inference process for all slots
         callback_update_slots();
-        {
+        if (should_reset_idle) {
             // update_slots() may take a while to finish, we need to make sure it's not counted as idle
             std::unique_lock<std::mutex> lock(mutex_tasks);
             time_last_task = ggml_time_ms();

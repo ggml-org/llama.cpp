@@ -37,3 +37,47 @@ def test_server_sleep():
     res = server.make_request("GET", "/props")
     assert res.status_code == 200
     assert res.body["is_sleeping"] == False
+
+
+def test_metrics_does_not_reset_idle_timer():
+    global server
+    server.sleep_idle_seconds = 2
+    server.server_metrics = True
+    server.start()
+
+    # wait until just before sleep threshold
+    time.sleep(1)
+
+    # query metrics - should NOT reset the idle timer
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+
+    # wait for the remaining time so total elapsed > sleep threshold
+    time.sleep(2)
+
+    # server should be sleeping because metrics did not reset the timer
+    res = server.make_request("GET", "/props")
+    assert res.status_code == 200
+    assert res.body["is_sleeping"] == True
+
+
+def test_slots_does_not_reset_idle_timer():
+    global server
+    server.sleep_idle_seconds = 2
+    server.server_slots = True
+    server.start()
+
+    # wait until just before sleep threshold
+    time.sleep(1)
+
+    # query slots - should NOT reset the idle timer
+    res = server.make_request("GET", "/slots")
+    assert res.status_code == 200
+
+    # wait for the remaining time so total elapsed > sleep threshold
+    time.sleep(2)
+
+    # server should be sleeping because slots did not reset the timer
+    res = server.make_request("GET", "/props")
+    assert res.status_code == 200
+    assert res.body["is_sleeping"] == True
