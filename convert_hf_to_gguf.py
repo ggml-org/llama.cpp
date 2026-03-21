@@ -677,7 +677,7 @@ class ModelBase:
                 if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
                     self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_shapes, bid, proj_type)
             else:
-                new_name = self._repack_nvfp4(name, weight, scale, scale2)
+                self._repack_nvfp4(name, weight, scale, scale2)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
         for (bid, proj_type) in list(expert_blocks.keys()):
