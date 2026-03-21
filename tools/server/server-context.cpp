@@ -693,6 +693,11 @@ private:
             }
 
             slot->prompt.tokens.keep_first(ckpt.pos_max + 1);
+
+            // restore_checkpoint only restores recurrent/partial state (PARTIAL_ONLY flag),
+            // so attention KV entries at positions beyond the checkpoint remain as orphans
+            llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot_id, ckpt.pos_max + 1, -1);
+
             return n;
         }
 
