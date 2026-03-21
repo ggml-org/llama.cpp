@@ -166,7 +166,7 @@ static void usage(const char * executable) {
     printf("                                      target a bits per weight (bpw); must be a positive number between 0.0 and 16.0\n");
     printf("                                      advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n\n");
     printf("  --target-size n\n");
-    printf("                                      target a file size; must be a positive number between 0.0 and 16.0\n");
+    printf("                                      target a file size; must be a positive number\n");
     printf("                                      advanced option to automatically select quantization types to achieve a total file size\n");
     printf("                                      allowed units: b, k|kib, m|mib, g|gib, t|tib; defaults to b (bytes) if none is provided\n\n");
     printf("  --save-state\n");
