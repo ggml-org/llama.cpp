@@ -1517,119 +1517,200 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
         return;
     }
 
-    // Deduplicate activation quantization: tasks sharing the same act_host
-    // pointer and K dimension share one quantized copy.
-    struct act_quant_entry {
-        const float * act_host;
+    // --- Phase 1: Pre-quantize unique activation vectors ---
+    // MoE experts in the same layer share the same activation input.
+    // Quantize once and reuse across all experts with the same act_host/K.
+    struct act_q_key {
+        const float * ptr;
         int           K;
-        std::vector<uint8_t> q_buf;
+
+        bool operator==(const act_q_key & o) const { return ptr == o.ptr && K == o.K; }
     };
-    std::vector<act_quant_entry> quant_entries;
-    std::vector<const uint8_t *> task_act_q(static_cast<size_t>(n_tasks));
+
+    struct act_q_hash {
+        size_t operator()(const act_q_key & k) const {
+            return std::hash<const void *>()(k.ptr) ^ (std::hash<int>()(k.K) << 16);
+        }
+    };
+
+    std::unordered_map<act_q_key, std::vector<uint8_t>, act_q_hash> act_q_map;
 
     for (int t = 0; t < n_tasks; t++) {
-        const float * ah = tasks[t].act_host;
-        int           K  = tasks[t].K;
-        // Check if already quantized
-        const uint8_t * found = nullptr;
-        for (auto & e : quant_entries) {
-            if (e.act_host == ah && e.K == K) {
-                found = e.q_buf.data();
-                break;
-            }
+        const auto & task = tasks[t];
+        if (!task.act_host || !task.weight_gate || !task.weight_up || task.N <= 0 || task.K <= 0) {
+            continue;
         }
-        if (!found) {
-            act_quant_entry entry;
-            entry.act_host = ah;
-            entry.K        = K;
-            const size_t q_row_size = ggml_row_size(vec_dot_type, K);
-            entry.q_buf.resize(q_row_size);
-            from_float_fn(ah, entry.q_buf.data(), K);
-            found = entry.q_buf.data();
-            quant_entries.push_back(std::move(entry));
+        act_q_key key{ task.act_host, task.K };
+        if (act_q_map.count(key)) {
+            continue;
         }
-        task_act_q[t] = found;
+        const size_t q_size = ggml_row_size(vec_dot_type, task.K);
+        auto &       entry  = act_q_map[key];
+        entry.resize(q_size);
+        from_float_fn(task.act_host, entry.data(), task.K);
     }
 
-    // Build flat row list for TBB parallelism
-    struct fused_row_meta {
-        int task_idx;
-        int row_idx;
-    };
-    int total_rows = 0;
-    for (int t = 0; t < n_tasks; t++) {
-        total_rows += tasks[t].N;
+    if (act_q_map.empty()) {
+        return;
     }
 
-    std::vector<fused_row_meta> meta;
-    meta.reserve(static_cast<size_t>(total_rows));
+    // Build per-task Q8 pointer array for O(1) access in the parallel loop.
+    std::vector<const uint8_t *> task_act_q(static_cast<size_t>(n_tasks), nullptr);
     for (int t = 0; t < n_tasks; t++) {
-        for (int r = 0; r < tasks[t].N; r++) {
-            meta.push_back({ t, r });
+        act_q_key key{ tasks[t].act_host, tasks[t].K };
+        auto      it = act_q_map.find(key);
+        if (it != act_q_map.end()) {
+            task_act_q[t] = it->second.data();
         }
+    }
+
+    // --- Phase 2: Cross-expert merged parallel_for ---
+    // Flatten all experts' rows into a single parallel_for for max load balance.
+    // Uses binary search (O(log n_tasks)) to find expert boundaries, matching
+    // the pattern in ggml_sycl_cpu_expert_mul_mat_batched Phase 2.
+    // Each work chunk processes contiguous rows from the same expert, enabling
+    // SIMD multi-row kernels (fused gate+up+SiLU per row).
+    struct fused_task_meta {
+        const ggml_type_traits_cpu * cpu_traits;
+        size_t                       row_stride;
+        int                          prefix_rows;
+    };
+
+    std::vector<fused_task_meta> meta(n_tasks);
+    int                          total_rows = 0;
+    for (int t = 0; t < n_tasks; t++) {
+        meta[t].prefix_rows = total_rows;
+        const auto & task   = tasks[t];
+        if (!task_act_q[t] || !task.weight_gate || !task.weight_up || !task.output_host || task.N <= 0) {
+            meta[t].cpu_traits = nullptr;
+            meta[t].row_stride = 0;
+            continue;
+        }
+        meta[t].cpu_traits = ggml_get_type_traits_cpu(task.type);
+        meta[t].row_stride = ggml_row_size(task.type, task.K);
+        total_rows += task.N;
     }
 
     if (total_rows == 0) {
         return;
     }
 
+    const cpu_expert_fused_task * tasks_ptr = tasks;
+    const uint8_t **              q8_ptrs   = task_act_q.data();
+    const fused_task_meta *       meta_ptr  = meta.data();
+
 #if GGML_SYCL_HAS_TBB
     ggml_sycl_cpu_arena().execute([&] {
         ggml_sycl_tbb::parallel_for(
-            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 16),
-            [&](const ggml_sycl_tbb::blocked_range<int> & r) {
-                for (int flat = r.begin(); flat < r.end(); flat++) {
-                    const auto & m = meta[flat];
-                    const auto & task = tasks[m.task_idx];
-                    const size_t row_stride = ggml_row_size(task.type, task.K);
-                    const void * gate_row = static_cast<const char *>(task.weight_gate)
-                                            + (size_t) m.row_idx * row_stride;
-                    const void * up_row   = static_cast<const char *>(task.weight_up)
-                                            + (size_t) m.row_idx * row_stride;
-                    const uint8_t * act_q = task_act_q[m.task_idx];
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            [tasks_ptr, q8_ptrs, meta_ptr, n_tasks, cpu_traits](const ggml_sycl_tbb::blocked_range<int> & range) {
+                // Binary search for starting task
+                int cur_task = 0;
+                {
+                    int lo = 0, hi = n_tasks;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if (meta_ptr[mid].prefix_rows <= range.begin()) {
+                            cur_task = mid;
+                            lo       = mid + 1;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                }
 
-#if defined(__AVX2__)
-                    if (task.type == GGML_TYPE_Q4_0 && !task.bias_gate && !task.bias_up) {
-                        float fused;
-                        simd_fused_gate_up_silu_q4_0_q8_0(
-                            task.K, &fused, gate_row, up_row, act_q);
-                        task.output_host[m.row_idx] = fused;
+                int flat_r = range.begin();
+                while (flat_r < range.end()) {
+                    while (cur_task + 1 < n_tasks && flat_r >= meta_ptr[cur_task + 1].prefix_rows) {
+                        cur_task++;
+                    }
+                    const auto & m = meta_ptr[cur_task];
+                    if (!m.cpu_traits) {
+                        flat_r++;
                         continue;
                     }
-#endif
-                    float gate_val = 0.0f;
-                    float up_val   = 0.0f;
-                    cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
-                                        gate_row, 0, act_q, 0, 1);
-                    cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
-                                        up_row, 0, act_q, 0, 1);
-                    if (task.bias_gate) { gate_val += task.bias_gate[m.row_idx]; }
-                    if (task.bias_up)   { up_val   += task.bias_up[m.row_idx]; }
-                    task.output_host[m.row_idx] =
-                        fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
+                    const auto & t              = tasks_ptr[cur_task];
+                    int          local_r        = flat_r - m.prefix_rows;
+                    // How many consecutive rows remain in this task within this range?
+                    int          task_rows_left = t.N - local_r;
+                    int          range_left     = range.end() - flat_r;
+                    int          chunk          = std::min(task_rows_left, range_left);
+
+                    // Process contiguous rows from this expert using fused gate+up+SiLU.
+                    const char *    gate_base = static_cast<const char *>(t.weight_gate);
+                    const char *    up_base   = static_cast<const char *>(t.weight_up);
+                    const uint8_t * act_q     = q8_ptrs[cur_task];
+
+                    int i = 0;
+#    if defined(__AVX2__)
+                    if (t.type == GGML_TYPE_Q4_0 && !t.bias_gate && !t.bias_up &&
+                        t.act_variant == CPU_EXPERT_FUSED_ACT_SILU) {
+                        // SIMD fast path: process one row at a time with fused kernel.
+                        // The fused kernel loads each activation block ONCE for both
+                        // gate and up dot products, halving DRAM bandwidth.
+                        for (; i < chunk; i++) {
+                            int   row_idx = local_r + i;
+                            float fused;
+                            simd_fused_gate_up_silu_q4_0_q8_0(t.K, &fused, gate_base + (size_t) row_idx * m.row_stride,
+                                                              up_base + (size_t) row_idx * m.row_stride, act_q);
+                            t.output_host[row_idx] = fused;
+                        }
+                    }
+#    endif
+                    // Generic fallback: vec_dot for gate and up, then activation + mul
+                    for (; i < chunk; i++) {
+                        int          row_idx  = local_r + i;
+                        const void * gate_row = gate_base + (size_t) row_idx * m.row_stride;
+                        const void * up_row   = up_base + (size_t) row_idx * m.row_stride;
+                        float        gate_val = 0.0f;
+                        float        up_val   = 0.0f;
+                        cpu_traits->vec_dot(t.K, &gate_val, sizeof(float), gate_row, 0, act_q, 0, 1);
+                        cpu_traits->vec_dot(t.K, &up_val, sizeof(float), up_row, 0, act_q, 0, 1);
+                        if (t.bias_gate) {
+                            gate_val += t.bias_gate[row_idx];
+                        }
+                        if (t.bias_up) {
+                            up_val += t.bias_up[row_idx];
+                        }
+                        t.output_host[row_idx] = fused_act_apply(gate_val, up_val, t.act_variant, t.alpha, t.limit);
+                    }
+
+                    flat_r += chunk;
                 }
             });
     });
 #else
-    for (int flat = 0; flat < total_rows; flat++) {
-        const auto & m = meta[flat];
-        const auto & task = tasks[m.task_idx];
-        const size_t row_stride = ggml_row_size(task.type, task.K);
-        const void * gate_row = static_cast<const char *>(task.weight_gate)
-                                + (size_t) m.row_idx * row_stride;
-        const void * up_row   = static_cast<const char *>(task.weight_up)
-                                + (size_t) m.row_idx * row_stride;
+    // No-TBB fallback: sequential over flattened rows.
+    int cur_task = 0;
+    for (int flat_r = 0; flat_r < total_rows; flat_r++) {
+        while (cur_task + 1 < n_tasks && flat_r >= meta[cur_task + 1].prefix_rows) {
+            cur_task++;
+        }
+        const auto & m = meta[cur_task];
+        if (!m.cpu_traits) {
+            continue;
+        }
+        const auto & t       = tasks_ptr[cur_task];
+        int          local_r = flat_r - m.prefix_rows;
+
+        const void * gate_row = static_cast<const char *>(t.weight_gate) + (size_t) local_r * m.row_stride;
+        const void * up_row   = static_cast<const char *>(t.weight_up) + (size_t) local_r * m.row_stride;
         float gate_val = 0.0f;
         float up_val   = 0.0f;
-        cpu_traits->vec_dot(task.K, &gate_val, sizeof(float),
-                            gate_row, 0, task_act_q[m.task_idx], 0, 1);
-        cpu_traits->vec_dot(task.K, &up_val, sizeof(float),
-                            up_row, 0, task_act_q[m.task_idx], 0, 1);
-        if (task.bias_gate) { gate_val += task.bias_gate[m.row_idx]; }
-        if (task.bias_up)   { up_val   += task.bias_up[m.row_idx]; }
-        task.output_host[m.row_idx] = fused_act_apply(gate_val, up_val, task.act_variant, task.alpha, task.limit);
+        cpu_traits->vec_dot(t.K, &gate_val, sizeof(float), gate_row, 0, task_act_q[cur_task], 0, 1);
+        cpu_traits->vec_dot(t.K, &up_val, sizeof(float), up_row, 0, task_act_q[cur_task], 0, 1);
+        if (t.bias_gate) {
+            gate_val += t.bias_gate[local_r];
+        }
+        if (t.bias_up) {
+            up_val += t.bias_up[local_r];
+        }
+        t.output_host[local_r] = fused_act_apply(gate_val, up_val, t.act_variant, t.alpha, t.limit);
     }
 #endif
+
+    GGML_SYCL_DEBUG("[EXPERT-CPU] Fused batched gate+up+SiLU: %d tasks, %d total_rows, %d unique activations\n",
+                    n_tasks, total_rows, (int) act_q_map.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -2727,6 +2808,14 @@ static inline void simd_mxfp4_q8_0_4row_tile(
     const __m128i m4b       = _mm_set1_epi8(0x0f);
 
     for (int ib = ib_start; ib < ib_end; ib++) {
+        // Prefetch weight blocks 2 iterations ahead into L1
+        if (ib + 2 < ib_end) {
+            _mm_prefetch((const char *) &x0[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x1[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x2[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x3[ib + 2], _MM_HINT_T0);
+        }
+
         const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
@@ -3121,6 +3210,14 @@ static inline void simd_mxfp4_q8_0_4row_tile_vnni(int                        ib_
             }
 
     for (int ib = ib_start; ib < ib_end; ib++) {
+        // Prefetch weight blocks 2 iterations ahead into L1
+        if (ib + 2 < ib_end) {
+            _mm_prefetch((const char *) &x0[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x1[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x2[ib + 2], _MM_HINT_T0);
+            _mm_prefetch((const char *) &x3[ib + 2], _MM_HINT_T0);
+        }
+
         const float   q8_d = cpu_half_to_f32(y[ib].d);
         const __m256i qy   = _mm256_loadu_si256((const __m256i *) y[ib].qs);
 
