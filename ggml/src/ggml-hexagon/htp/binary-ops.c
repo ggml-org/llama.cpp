@@ -41,8 +41,6 @@ struct htp_binary_context {
     size_t   src0_row_size_aligned;
     size_t   src1_row_size_aligned;
     size_t   dst_row_size_aligned;
-    uint32_t src1_fetch_rows; // 1 or block_max
-    uint32_t src1_dma_stride; // 0 or stride
 };
 
 #define htp_binary_preamble            \
@@ -320,7 +318,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
 
         dma_queue_push_vtcm_to_ddr(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, 0);
         dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
-        dma_queue_push(q, dma_make_ptr(s1_spad, src1_base), bctx->src1_row_size_aligned, bctx->src1_dma_stride, row_size_bytes, current_block_size);
+        dma_queue_push(q, dma_make_ptr(s1_spad, src1_base), bctx->src1_row_size_aligned, nb11, row_size_bytes, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -362,7 +360,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
              uint8_t * s1_next = (uint8_t *)src1->data + p13 * nb13 + p12 * nb12 + p11 * nb11;
 
              dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
-             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, bctx->src1_dma_stride, row_size_bytes, next_block_size);
+             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, nb11, row_size_bytes, next_block_size);
 
              ir_prefetch += next_block_size;
         }
@@ -859,12 +857,6 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 
     bctx.split_at_ne02 = (src0->ne[3] > 1) &&
                          ((src1->ne[2] > 1) || (src1->ne[3] > 1) || !src0_contig_dim2 || !dst_contig_dim2);
-
-    // Precompute specific kernel parameters
-    if (use_vector_same) {
-        bctx.src1_dma_stride = (src1->ne[1] == 1) ? 0 : src1->nb[1];
-        bctx.src1_fetch_rows = (src1->ne[1] == 1) ? 1 : rows_per_buffer;
-    }
 
     worker_callback_t worker_func;
     if (is_add_id) worker_func = binary_job_add_id;
