@@ -3,11 +3,14 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "ggml.h"
 #include "json-schema-to-grammar.h"
+#include "llama.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
+#include <stdexcept>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -2206,25 +2209,47 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--mlock"},
         "force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
-            params.use_mlock = true;
+            throw std::runtime_error("error: --mlock is deprecated. use --load-mode mlock instead");
+
+            GGML_UNUSED(params);
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
-        string_format("whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
+        "whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
         [](common_params & params, bool value) {
-            params.use_mmap = value;
+            throw std::runtime_error("error: --mmap and --no-mmap are deprecated. use --load-mode mmap instead");
+
+            GGML_UNUSED(params);
+            GGML_UNUSED(value);
         }
     ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
         {"-dio", "--direct-io"},
         {"-ndio", "--no-direct-io"},
-        string_format("use DirectIO if available. (default: %s)", params.use_direct_io ? "enabled" : "disabled"),
+        "use DirectIO if available",
         [](common_params & params, bool value) {
-            params.use_direct_io = value;
+            throw std::invalid_argument("error: -dio/--direct-io and -ndio/--no-direct-io are deprecated. use --load-mode dio instead");
+
+            GGML_UNUSED(params);
+            GGML_UNUSED(value);
         }
     ).set_env("LLAMA_ARG_DIO"));
+    add_opt(common_arg(
+        {"-lm", "--load-mode"}, "MODE",
+        "model loading mode (default: mmap)\n"
+        "- mlock: force system to keep model in RAM rather than swapping or compressing.\n"
+        "- mmap: memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
+        "- dio: use DirectIO if available.\n",
+        [](common_params & params, const std::string & value) {
+            if (value == "") { params.load_mode = LLAMA_LOAD_MODE_MMAP; }
+            else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
+            else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
+            else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
+            else { throw std::invalid_argument("invalid value"); }
+        }
+    ));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
