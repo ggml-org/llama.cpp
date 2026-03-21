@@ -1269,7 +1269,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 
 // MiroThinker - uses MCP style toolcalling
 static common_chat_params common_chat_params_init_mirothinker(const common_chat_template &    tmpl,
-                                                          const autoparser::templates_params & inputs) {
+                                                              const autoparser::generation_params & inputs) {
     common_chat_params data;
 
     data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
@@ -1282,9 +1282,10 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
         "</think>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // MiroThinker Thinking format:
@@ -1311,6 +1312,14 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
         const std::string CALL_END      = "</arguments>";
 
         auto end = p.end();
+
+        if (has_response_format) {
+            auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
+            return reasoning + p.space() + p.choice({
+                p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
+                response_format
+            }) + p.end();
+        }
 
         // Content only parser (no tools)
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -1360,7 +1369,7 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO || !has_response_format;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
