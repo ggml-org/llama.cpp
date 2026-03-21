@@ -1748,7 +1748,12 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             int n_early_ok = 0;
             for (int gpu_d = 1; gpu_d < total_gpus && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
                 try {
-                    auto & dev_d = ggml_sycl_get_device(gpu_d);
+                    // Use ggml_sycl_get_gpu_device() which accesses the full
+                    // pre-scheduler-hiding GPU map (gpu_dpct_ids[]).
+                    // ggml_sycl_get_device() uses the scheduler-filtered map and
+                    // falls back to identity for hidden devices, which is wrong
+                    // when non-GPU devices are interleaved in dpct enumeration.
+                    auto & dev_d = ggml_sycl_get_gpu_device(gpu_d);
                     g_secondary_queues[gpu_d] = &dev_d.default_queue();
                     ggml_sycl::unified_cache_register_for_queue(gpu_d, *g_secondary_queues[gpu_d]);
                     n_early_ok++;
@@ -2096,22 +2101,92 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                           first_lid, gpu0_str.c_str(), gpu0_experts.size(), gpu1_experts.size());
         }
 
-        // Log distribution summary
-        // Phase 2 overrides some GPU0 experts → adjust count.
-        size_t n_secondary = 0;
-        for (const auto & b : budgets) {
-            n_secondary += b.n_uploaded;
+        // --- Phase 4: CPU spill for oversized expert sets -----------------------
+        // After Phase 1+2, experts that exceed GPU0+GPU1 VRAM are still assigned
+        // to GPU0 (device_id=0) even though GPU0 can't hold them all.  The fused
+        // dispatch would hang trying to upload 128 experts per layer into 10GB.
+        //
+        // Phase 4 counts GPU0 experts, calculates capacity, and spills excess
+        // to CPU (device_id=-1, device_ptr=nullptr).  The existing CPU dispatch
+        // path (cpu-dispatch.cpp) handles CPU-routed experts via AOS vec_dot.
+        if (!gpu0_can_hold_all && expert_weight_bytes > 0) {
+            // Collect GPU0-assigned expert indices (sorted by popularity for eviction)
+            struct gpu0_expert_info {
+                size_t list_idx;     // index into expert_list
+                int    layer_id;
+                int    expert_idx;
+                int    popularity;   // lower = more popular (keep on GPU)
+            };
+            std::vector<gpu0_expert_info> gpu0_experts_vec;
+
+            for (size_t ei = 0; ei < expert_list.size(); ei++) {
+                auto p = placement_table.get(expert_list[ei].layer_id, expert_list[ei].expert_idx);
+                if (p.device_id == 0) {
+                    gpu0_experts_vec.push_back({
+                        ei, expert_list[ei].layer_id, expert_list[ei].expert_idx,
+                        p.popularity_rank >= 0 ? p.popularity_rank : INT_MAX
+                    });
+                }
+            }
+
+            // GPU0 capacity: how many experts fit in the VRAM budget.
+            // Use the cache budget (accounts for KV, compute, staging reserves).
+            const size_t gpu0_capacity = (gpu0_cache_budget > 0 && expert_weight_bytes > 0)
+                                             ? gpu0_cache_budget / expert_weight_bytes
+                                             : 0;
+
+            if (gpu0_experts_vec.size() > gpu0_capacity) {
+                const size_t to_spill = gpu0_experts_vec.size() - gpu0_capacity;
+
+                // Sort by popularity: evict least popular first (highest rank / unranked)
+                std::sort(gpu0_experts_vec.begin(), gpu0_experts_vec.end(),
+                    [](const gpu0_expert_info & a, const gpu0_expert_info & b) {
+                        return a.popularity > b.popularity;  // descending: least popular first
+                    });
+
+                size_t n_spilled = 0;
+                for (size_t si = 0; si < to_spill && si < gpu0_experts_vec.size(); si++) {
+                    const auto & info = gpu0_experts_vec[si];
+                    auto p = placement_table.get(info.layer_id, info.expert_idx);
+                    p.device_id   = -1;       // CPU-routed
+                    p.device_ptr  = nullptr;   // no VRAM allocation
+                    // Keep host_src_ptr and data_ptr for CPU dispatch AOS access
+                    placement_table.set(info.layer_id, info.expert_idx, p);
+                    n_spilled++;
+                }
+
+                GGML_LOG_INFO("[MOE-PHASE4] CPU spill: GPU0 has %zu experts, capacity=%zu, "
+                              "spilled %zu to CPU (host AOS vec_dot)\n",
+                              gpu0_experts_vec.size(), gpu0_capacity, n_spilled);
+            } else {
+                GGML_LOG_INFO("[MOE-PHASE4] No spill needed: GPU0 has %zu experts, capacity=%zu\n",
+                              gpu0_experts_vec.size(), gpu0_capacity);
+            }
         }
-        size_t n_gpu0_final = n_gpu0 > n_secondary ? n_gpu0 - n_secondary : 0;
-        size_t n_cpu = expert_list.size() > (n_gpu0_final + n_secondary)
-                           ? expert_list.size() - (n_gpu0_final + n_secondary) : 0;
-        std::string dist_summary = "GPU0=" + std::to_string(n_gpu0_final) + "(cache)";
-        for (const auto & b : budgets) {
-            dist_summary += " GPU" + std::to_string(b.dev) + "=" + std::to_string(b.n_uploaded);
+
+        // Log distribution summary (recalculated after Phase 4 spill)
+        {
+            size_t n_gpu0_final = 0, n_secondary_final = 0, n_cpu_final = 0;
+            for (const auto & info : expert_list) {
+                auto p = placement_table.get(info.layer_id, info.expert_idx);
+                if (p.device_id == 0) {
+                    n_gpu0_final++;
+                } else if (p.device_id > 0) {
+                    n_secondary_final++;
+                } else {
+                    n_cpu_final++;
+                }
+            }
+            std::string dist_summary = "GPU0=" + std::to_string(n_gpu0_final) + "(cache)";
+            for (const auto & b : budgets) {
+                dist_summary += " GPU" + std::to_string(b.dev) + "=" + std::to_string(b.n_uploaded);
+            }
+            GGML_LOG_INFO("[MOE-HYBRID] Expert distribution: %s CPU=%zu (%zu total, %.1f KB/expert)\n",
+                          dist_summary.c_str(), n_cpu_final, expert_list.size(),
+                          expert_weight_bytes / 1024.0);
+            GGML_LOG_INFO("[MOE-HYBRID] Phase 4 verify: GPU0=%zu GPU1=%zu CPU=%zu in placement table\n",
+                          n_gpu0_final, n_secondary_final, n_cpu_final);
         }
-        GGML_LOG_INFO("[MOE-HYBRID] Expert distribution: %s CPU=%zu (%zu total, %.1f KB/expert)\n",
-                      dist_summary.c_str(), n_cpu, expert_list.size(),
-                      expert_weight_bytes / 1024.0);
     }
 
     // Log available VRAM per device for expert cache sizing diagnostics.
@@ -6533,8 +6608,15 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
     device_map.swap(gpu_device_map);
 
-    // Store total physical GPU count before any scheduler hiding
+    // Store total physical GPU count and full dpct id map before scheduler hiding.
+    // gpu_dpct_ids[i] = raw dpct index for logical GPU i.  This is needed because
+    // scheduler hiding resizes device_map to [0], and the fallback identity mapping
+    // in ggml_sycl_map_device_id is WRONG when non-GPU devices (CPU OpenCL, iGPU)
+    // are interleaved in dpct enumeration.
     info.total_gpu_count = static_cast<int>(device_map.size());
+    for (int i = 0; i < info.total_gpu_count && i < GGML_SYCL_MAX_DEVICES; ++i) {
+        info.gpu_dpct_ids[i] = device_map[i];
+    }
 
     // When multiple GPUs are visible, expose only the primary GPU (device 0)
     // to the backend scheduler by default.  This prevents pipeline parallelism
@@ -6587,15 +6669,12 @@ static ggml_sycl_device_info ggml_sycl_init() {
     // #endif
     // Initialize device info for ALL physical GPUs (not just scheduler-visible ones)
     // so MoE expert dispatch can access info.devices[1] for secondary GPUs.
-    // For hidden devices (i >= device_count), use identity mapping since
-    // ggml_sycl_map_device_id returns the device index as-is for out-of-range.
+    // Uses gpu_dpct_ids[] (saved before scheduler hiding) for correct dpct lookup.
     for (int i = 0; i < info.total_gpu_count; ++i) {
         info.devices[i].vmm = 0;
 
         dpct::device_info prop;
-        const int         actual_id = (i < static_cast<int>(device_map.size()))
-                                          ? device_map[i]
-                                          : ggml_sycl_map_device_id(i);
+        const int         actual_id = info.gpu_dpct_ids[i];
         auto &            device_i  = dpct::dev_mgr::instance().get_device(actual_id);
         sycl::device      device    = device_i;
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(prop, device)));
@@ -6654,9 +6733,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
     // Post-probe free VRAM check
     for (int i = 0; i < info.total_gpu_count; ++i) {
         size_t post_free = 0, post_total = 0;
-        const int actual_id = (i < static_cast<int>(device_map.size()))
-                                  ? device_map[i]
-                                  : ggml_sycl_map_device_id(i);
+        const int actual_id = info.gpu_dpct_ids[i];
         auto & device_i = dpct::dev_mgr::instance().get_device(actual_id);
         dpct::err0 mem_err = CHECK_TRY_ERROR(device_i.get_memory_info(post_free, post_total));
         if (mem_err == 0) {

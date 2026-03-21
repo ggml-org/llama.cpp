@@ -560,6 +560,12 @@ struct ggml_sycl_device_info {
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = { 0 };
 
+    // Full GPU-to-dpct index map (saved BEFORE scheduler hiding).
+    // gpu_dpct_ids[i] = dpct device index for logical GPU i.
+    // When scheduler hiding reduces device_map to [0], secondary GPUs
+    // are still accessible via dpct::dev_mgr::instance().get_device(gpu_dpct_ids[i]).
+    int gpu_dpct_ids[GGML_SYCL_MAX_DEVICES] = { 0 };
+
     // Host pinned memory limit (probed at init, driver has per-allocation limit)
     size_t host_max_alloc_size = 0;
 
@@ -571,6 +577,16 @@ struct ggml_sycl_device_info {
 const ggml_sycl_device_info & ggml_sycl_info();
 size_t                        ggml_sycl_get_safe_max_alloc_size(int device);
 size_t                        ggml_sycl_get_host_max_alloc_size();
+
+// Access a device by logical GPU index using the full (pre-scheduler-hiding) map.
+// Unlike ggml_sycl_get_device() which uses the scheduler-filtered map and falls
+// back to identity for hidden devices (wrong when non-GPU devices are interleaved
+// in dpct enumeration), this uses gpu_dpct_ids[] which was saved before hiding.
+inline dpct::device_ext & ggml_sycl_get_gpu_device(int gpu_index) {
+    const auto & info = ggml_sycl_info();
+    GGML_ASSERT(gpu_index >= 0 && gpu_index < info.total_gpu_count);
+    return dpct::dev_mgr::instance().get_device(info.gpu_dpct_ids[gpu_index]);
+}
 
 // CPU offload: route host-resident tensor compute to a CPU SYCL device.
 // Off by default; set GGML_SYCL_CPU_OFFLOAD=1 to enable.
