@@ -91,11 +91,11 @@ class __Quant(ABC):
     def __init_subclass__(cls, qtype: GGMLQuantizationType) -> None:
         cls.qtype = qtype
         cls.block_size, cls.type_size = GGML_QUANT_SIZES[qtype]
-        cls.__quantize_lazy = LazyNumpyTensor._wrap_fn(
+        cls.__quantize_lazy: Any = LazyNumpyTensor._wrap_fn(
             cls.__quantize_array,
             meta_noop=(np.uint8, cls.__shape_to_bytes)
         )
-        cls.__dequantize_lazy = LazyNumpyTensor._wrap_fn(
+        cls.__dequantize_lazy: Any = LazyNumpyTensor._wrap_fn(
             cls.__dequantize_array,
             meta_noop=(np.float32, cls.__shape_from_bytes)
         )

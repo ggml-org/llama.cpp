@@ -1234,7 +1234,8 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
-        if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
+        if (weight_to_nz && tensor->type != GGML_TYPE_BF16
+            && is_matmul_weight((const ggml_tensor *) tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
             weight_format_to_nz(tensor, offset, ctx->device);
@@ -1443,7 +1444,8 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
-    } else if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
+    } else if (weight_to_nz && tensor->type != GGML_TYPE_BF16
+               && is_matmul_weight((const ggml_tensor *) tensor)) {
         // NZ format weight are not support quantized yet.
         // If ND tensor transform to NZ, size may changed.
         int64_t shape[] = { tensor->ne[1], tensor->ne[0] };
@@ -2283,6 +2285,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_MUL_MAT:
             {
                 switch (op->src[0]->type) {
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
                         return true;
@@ -2320,6 +2325,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                     case GGML_TYPE_Q8_0:
                         return true;
                     default:
@@ -2332,6 +2340,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                         return true;
                     default:
                         return false;
@@ -2341,20 +2352,30 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_CPY:
             {
                 ggml_tensor * src = op->src[0];
+#ifdef ASCEND_310P
                 if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
                     (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16)) {
-                    // only support F32 and F16.
+                    // only support F32 and F16 on 310P.
                     return false;
                 }
+#else
+                if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16 && op->type != GGML_TYPE_BF16) ||
+                    (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16)) {
+                    // only support F32, F16 and BF16.
+                    return false;
+                }
+#endif
                 return true;
             }
             break;
         case GGML_OP_CONT:
             {
-                // TODO: support GGML_TYPE_BF16
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                         return true;
                     default:
                         return false;
@@ -2501,10 +2522,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
                 if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
                     // different head sizes of K and V are not supported yet
-                    return false;
-                }
-                if (op->src[0]->ne[0] % 16 != 0) {
-                    // TODO: padding to support
                     return false;
                 }
                 float logitSoftcap = 0.0f;
