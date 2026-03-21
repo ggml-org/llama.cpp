@@ -895,6 +895,23 @@ private:
                         spec_params.use_checkpoints = false;
                         SLT_INF(slot, "%s", "disabled spec checkpoints for standard KV cache model\n");
                     }
+
+                    // quantized V cache (not f16/bf16) with speculative checkpoints on
+                    // hybrid models causes non-deterministic output. checkpoint restore
+                    // discards attention KV entries beyond the checkpoint position, forcing
+                    // re-computation in a different batch size. flash attention produces
+                    // slightly different floating-point results depending on batch size,
+                    // and coarse V cache quantization (e.g. q4_0, q8_0) amplifies these
+                    // differences across quantization boundaries, causing cascading drift.
+                    // use f16/bf16 V cache or disable checkpoints to avoid this.
+                    if (needs_checkpoints && llama_model_is_hybrid(model) &&
+                        params_base.cache_type_v != GGML_TYPE_F16 && params_base.cache_type_v != GGML_TYPE_BF16) {
+                        SLT_WRN(slot,
+                                "quantized V cache (%s) with speculative checkpoints on "
+                                "hybrid model may produce non-deterministic output — "
+                                "consider using f16/bf16 V cache for correctness\n",
+                                ggml_type_name(params_base.cache_type_v));
+                    }
                 }
 
                 slot.spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);

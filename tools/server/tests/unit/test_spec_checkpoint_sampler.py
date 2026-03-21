@@ -191,3 +191,70 @@ def test_repetition_penalty_determinism_with_checkpoints():
         f"Without checkpoints:\n{output_base[:200]}\n\n"
         f"With checkpoints:\n{output_ckpt[:200]}"
     )
+
+
+@requires_qwen35_08b
+def test_warning_quantized_v_cache_with_checkpoints():
+    """Warning must be emitted when quantized V cache + checkpoints + hybrid model."""
+    import subprocess
+    import tempfile
+    import time
+
+    server_path = os.environ.get(
+        "LLAMA_SERVER_BIN_PATH", "../../../../build-metal/bin/llama-server"
+    )
+
+    log_fd = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.log')
+    log_path = log_fd.name
+
+    proc = subprocess.Popen(
+        [server_path,
+         "--model", QWEN35_08B,
+         "--host", "127.0.0.1", "--port", "18199",
+         "--ctx-size", "512", "--parallel", "1",
+         "--temp", "0", "--seed", "42",
+         "-ctk", "q8_0", "-ctv", "q4_0",
+         "-fa", "on",
+         "--no-jinja", "--no-slots",
+         "--spec-type", "ngram-mod", "--draft-max", "8",
+         "--spec-use-checkpoints", "on", "--ctx-checkpoints", "4",
+         "--no-cache-prompt"],
+        stdout=log_fd,
+        stderr=subprocess.STDOUT,
+    )
+
+    try:
+        start_time = time.time()
+        ready = False
+        while time.time() - start_time < 120:
+            if proc.poll() is not None:
+                break
+            time.sleep(2)
+            log_fd.flush()
+            with open(log_path) as f:
+                content = f.read()
+            if "listening" in content.lower() or "all slots are idle" in content.lower():
+                ready = True
+                break
+
+        assert ready, "Server failed to start within 120s"
+
+        log_fd.close()
+        with open(log_path) as f:
+            log_content = f.read()
+
+        assert "quantized V cache" in log_content, (
+            f"Expected warning about quantized V cache not found in server log.\n"
+            f"Log tail (500 chars): {log_content[-500:]}"
+        )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass
