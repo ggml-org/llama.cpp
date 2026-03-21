@@ -712,6 +712,7 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
@@ -728,6 +729,7 @@ class ModelBase:
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -11127,8 +11129,7 @@ class GptOssModel(TextModel):
 
     # TODO: remove once MXFP4 is supported more generally
     def dequant_model(self):
-        quant_config = self.hparams.get("quantization_config")
-        if quant_config is not None and quant_config.get("quant_method") == "mxfp4":
+        if self._is_mxfp4:
             return
         return super().dequant_model()
 
