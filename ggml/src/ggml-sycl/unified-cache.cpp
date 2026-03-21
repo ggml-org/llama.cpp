@@ -1286,6 +1286,13 @@ void host_cache::free_pinned_runtime(void * ptr, size_t size) {
     pinned_pool_->deallocate(ptr, size);
 }
 
+size_t host_cache::pre_allocate_pinned(size_t total_bytes) {
+    if (!pinned_pool_) {
+        return 0;
+    }
+    return pinned_pool_->pre_allocate(total_bytes);
+}
+
 void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
                                        const void *                  src_ptr,
                                        size_t                        src_size,

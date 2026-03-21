@@ -169,6 +169,44 @@ void pinned_chunk_pool::deallocate(void * ptr, size_t size) {
     }
 }
 
+size_t pinned_chunk_pool::pre_allocate(size_t total_bytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Calculate how many chunks are needed to cover total_bytes,
+    // minus capacity already available in existing chunks.
+    size_t existing_capacity = 0;
+    for (const auto & c : chunks_) {
+        existing_capacity += (c.size - c.used);
+    }
+    if (existing_capacity >= total_bytes) {
+        GGML_LOG_INFO("[SYCL] Pinned pool pre_allocate: already have %.1f MB free (need %.1f MB)\n",
+                      existing_capacity / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0));
+        return 0;
+    }
+
+    const size_t deficit       = total_bytes - existing_capacity;
+    const size_t chunks_needed = (deficit + chunk_size_ - 1) / chunk_size_;
+    size_t       chunks_grown  = 0;
+
+    for (size_t i = 0; i < chunks_needed; i++) {
+        if (total_allocated_ + chunk_size_ > budget_) {
+            GGML_LOG_WARN("[SYCL] Pinned pool pre_allocate: budget exhausted after %zu/%zu chunks\n",
+                          chunks_grown, chunks_needed);
+            break;
+        }
+        if (!grow(chunk_size_)) {
+            GGML_LOG_WARN("[SYCL] Pinned pool pre_allocate: grow failed at chunk %zu/%zu\n",
+                          chunks_grown, chunks_needed);
+            break;
+        }
+        chunks_grown++;
+    }
+
+    GGML_LOG_INFO("[SYCL] Pinned pool pre_allocate: grew %zu chunks for %.1f MB working set (total=%.1f GB)\n",
+                  chunks_grown, total_bytes / (1024.0 * 1024.0), total_allocated_ / (1024.0 * 1024.0 * 1024.0));
+    return chunks_grown;
+}
+
 size_t pinned_chunk_pool::allocated() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return total_allocated_;

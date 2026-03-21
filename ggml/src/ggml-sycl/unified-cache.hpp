@@ -413,6 +413,11 @@ class host_cache {
     void * allocate_pinned_runtime(size_t size, size_t alignment = 64);
     void   free_pinned_runtime(void * ptr, size_t size);
 
+    // Pre-allocate pinned chunks so that inference-time allocate() never
+    // triggers sycl::malloc_host (which blocks the Level Zero driver).
+    // Call at init time after MoE prestage completes.
+    size_t pre_allocate_pinned(size_t total_bytes);
+
     host_cache(const host_cache &)             = delete;
     host_cache & operator=(const host_cache &) = delete;
     host_cache(host_cache &&)                  = delete;

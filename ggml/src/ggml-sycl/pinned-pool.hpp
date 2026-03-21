@@ -45,6 +45,12 @@ class pinned_chunk_pool {
     // are tracked but memory is only reclaimed when the pool is destroyed.
     void deallocate(void * ptr, size_t size);
 
+    // Pre-allocate enough chunks to hold total_bytes without any runtime allocation.
+    // Call at init time (e.g. after MoE prestage) so that inference-time allocate()
+    // never triggers sycl::malloc_host which blocks the Level Zero driver.
+    // Returns the number of chunks actually allocated.
+    size_t pre_allocate(size_t total_bytes);
+
     // Statistics
     size_t budget() const { return budget_; }
 

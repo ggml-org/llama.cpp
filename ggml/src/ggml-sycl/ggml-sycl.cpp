@@ -2760,6 +2760,32 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     if (g_moe_warmup.warmup_tokens == 0) {
         moe_compute_gate_norm_placement(cgraph, device);
     }
+
+    // -----------------------------------------------------------------------
+    // Pre-allocate pinned host memory chunks so that inference-time allocations
+    // in the host_cache never call sycl::malloc_host (which blocks the Level
+    // Zero driver when the device has pending operations, causing MoE hangs).
+    // Estimate: top-K experts * expert_size * 2 (double-buffer) per MoE layer,
+    // plus generous headroom.  Allocate at least 2 GB to cover the working set
+    // of a 120B MoE model's CPU expert dispatch.
+    // -----------------------------------------------------------------------
+    {
+        auto * hcache = ggml_sycl::get_host_cache_for_device(device);
+        if (hcache) {
+            const size_t estimated_working_set =
+                static_cast<size_t>(n_experts_used > 0 ? n_experts_used : 4)
+                * expert_weight_bytes * 2  // double-buffer
+                * static_cast<size_t>(n_moe_layers > 0 ? std::min(n_moe_layers, 8) : 1);
+            // At least 2 GB to handle burst demand without runtime malloc_host
+            const size_t min_pre_alloc = static_cast<size_t>(2ULL * 1024ULL * 1024ULL * 1024ULL);
+            const size_t pre_alloc_bytes = std::max(estimated_working_set, min_pre_alloc);
+            const size_t chunks_grown = hcache->pre_allocate_pinned(pre_alloc_bytes);
+            if (chunks_grown > 0) {
+                GGML_LOG_INFO("[MOE-HYBRID] Pre-allocated %zu pinned chunks for %.1f MB working set\n",
+                              chunks_grown, pre_alloc_bytes / (1024.0 * 1024.0));
+            }
+        }
+    }
 }
 
 // Layout-size helpers (defined later).
@@ -23354,8 +23380,16 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // avoid blocking CPU reorder on cache miss. Instead, check if the entry is already
         // cached (fast path). On miss, leave pointer as nullptr so the SOA/COALESCED
         // dispatch fails gracefully, and the cascade falls through to AOS which reads
-        // host-pinned data directly via PCIe zero-copy. Simultaneously, submit async
-        // background cache fill so the next token gets a SOA cache hit.
+        // host-pinned data directly via PCIe zero-copy.
+        //
+        // CRITICAL: Do NOT call ensure_cached_layout() on cache miss during inference.
+        // Even with skip_fill_wait=true, ensure_cached_layout may:
+        //   1. Call sycl::malloc_device (blocks Level Zero driver)
+        //   2. Call fill_fn (synchronous CPU SOA reorder on calling thread)
+        //   3. Acquire rw_mutex_ under contention
+        // All three block the inference thread and cause 120B MoE hangs.
+        // The background async prestage (moe_prestage_popular_experts) will
+        // eventually cache the SOA version for future tokens.
         if ((layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) && src0_is_usm_accessible) {
             void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
             if (cached_ptr) {
@@ -23375,13 +23409,44 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 }
                 continue;
             }
-            // Cache miss: skip blocking CPU reorder. Leave pointer as nullptr so
-            // SOA/COALESCED dispatch fails and cascade falls through to AOS.
-            // Submit async background cache fill for future tokens.
-            GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache MISS, deferring to AOS zero-copy + async fill\n", (long) e);
-            req.skip_fill_wait = true;
-            cache->ensure_cached_layout(req, {});
+            // Cache miss: fully non-blocking path. Leave pointer as nullptr so
+            // SOA/COALESCED dispatch fails and cascade falls through to AOS
+            // zero-copy via src0->data (USM host-pinned, GPU-accessible via PCIe).
+            // Do NOT call ensure_cached_layout here — it blocks on malloc + CPU reorder.
+            // The background prestage system will populate the cache for future tokens.
+            GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache MISS, using AOS zero-copy (non-blocking)\n", (long) e);
             stats_miss++;
+            continue;
+        }
+
+        // For AOS layout with USM-accessible source, also use non-blocking zero-copy.
+        // The GPU can read host-pinned AOS data directly via PCIe (~8 GB/s) without
+        // any staging, SOA reorder, or SYCL queue operations. This avoids blocking
+        // on ensure_cached_layout which may call malloc_device/fill_fn/queue.wait.
+        if (layout == GGML_LAYOUT_AOS && src0_is_usm_accessible) {
+            // Fast check: is the entry already cached in VRAM?
+            void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
+            if (cached_ptr) {
+                extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
+                stats_vram_ready++;
+                GGML_SYCL_DEBUG("[OPT-FUSED-AOS] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
+
+                {
+                    auto &    ptable       = ggml_sycl::get_expert_placement_table();
+                    const int pt_layer_id  = moe_cache_layer_id(src0->name);
+                    auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
+                    if (existing.device_id <= 0) {
+                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
+                    }
+                }
+                continue;
+            }
+            // Cache miss: use host-pinned AOS data directly via PCIe zero-copy.
+            // expert_aos points into src0->data which is USM host-pinned.
+            extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = const_cast<uint8_t *>(expert_aos);
+            stats_host_ready++;
+            GGML_SYCL_DEBUG("[OPT-FUSED-AOS] Expert %ld cache MISS, using zero-copy ptr=%p\n",
+                            (long) e, (const void *) expert_aos);
             continue;
         }
 
@@ -32266,7 +32331,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     // Only valid when use_expert_cache is true — src0->data is a host (mmap) pointer.
     // When use_expert_cache is false, src0->data is a device pointer and cannot be
     // dereferenced on the host.
-    const bool use_routing_prestage = use_expert_cache && (n_experts > 64);
+    //
+    // Skip for USM-accessible (host-pinned) sources: the pointer table from
+    // update_moe_ptr_table already provides AOS zero-copy pointers that the GPU
+    // can read directly via PCIe. Doing a blocking ensure_cached_layout here
+    // would stall inference on the first token (malloc_device + memcpy.wait).
+    const sycl::usm::alloc src0_alloc_prestage =
+        src0->data ? ggml_sycl_get_alloc_type(src0->data) : sycl::usm::alloc::unknown;
+    const bool src0_usm_accessible_prestage =
+        (src0_alloc_prestage == sycl::usm::alloc::host || src0_alloc_prestage == sycl::usm::alloc::shared);
+    const bool use_routing_prestage = use_expert_cache && (n_experts > 64) && !src0_usm_accessible_prestage;
     if (use_routing_prestage) {
         // Get expert indices from IDs tensor (already copied to ids_host)
         const int32_t * expert_ids_ptr = ids_host.data();
