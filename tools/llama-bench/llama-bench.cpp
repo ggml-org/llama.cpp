@@ -1068,6 +1068,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.tensor_buft_overrides.empty()) {
         params.tensor_buft_overrides = cmd_params_defaults.tensor_buft_overrides;
     }
+    // check if user specified `--direct-io` without `--mmap`
+    // if so, we disable mmap to avoid the situation where they see no difference
+    if (params.use_mmap.empty() && !params.use_direct_io.empty()) {
+        params.use_mmap.push_back(false);
+    } else if (params.use_mmap.size() > 0 && params.use_direct_io.empty()) {
+        params.use_direct_io.push_back(false);
+    } else if (params.use_mmap.size() != params.use_direct_io.size()) {
+        // if both are specified, they must have the same number of values
+        fprintf(stderr, "error: --mmap and --direct-io must have the same number of values\n");
+        exit(1);
+    } else {
+        for (size_t i = 0; i < params.use_direct_io.size(); ++i) {
+            if (params.use_direct_io[i] == true && params.use_mmap[i] == true) {
+                fprintf(stderr, "error: --direct-io cannot be enabled with --mmap\n");
+                exit(1);
+            }
+        }
+    }
     if (params.use_mmap.empty()) {
         params.use_mmap = cmd_params_defaults.use_mmap;
     }
@@ -2102,10 +2120,11 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "warning: sanitizer enabled, performance may be affected\n");
 #endif
 
+    // parse command line parameters first to exit early if there are problems
+    cmd_params params = parse_cmd_params(argc, argv);
+
     // initialize backends
     ggml_backend_load_all();
-
-    cmd_params params = parse_cmd_params(argc, argv);
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
@@ -2155,6 +2174,12 @@ int main(int argc, char ** argv) {
     auto params_count = params_instances.size();
     for (const auto & inst : params_instances) {
         params_idx++;
+
+        // skip test if use_mmap and use_direct_io are turned on
+        if (inst.use_mmap == true && inst.use_direct_io == true) {
+            continue;
+        }
+
         if (params.progress) {
             fprintf(stderr, "llama-bench: benchmark %d/%zu: starting\n", params_idx, params_count);
         }
