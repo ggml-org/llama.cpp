@@ -1103,6 +1103,13 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
+    // Always pass thinking tags so the slot can track reasoning state
+    // (used to suppress grammar triggers during reasoning blocks)
+    if (!chat_params.thinking_end_tag.empty()) {
+        llama_params["thinking_start_tag"] = chat_params.thinking_start_tag;
+        llama_params["thinking_end_tag"]   = chat_params.thinking_end_tag;
+    }
+
     // Reasoning budget: pass parameters through to sampling layer
     {
         int reasoning_budget = opt.reasoning_budget;

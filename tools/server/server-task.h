@@ -83,6 +83,10 @@ struct task_params {
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
 
+    // thinking/reasoning tags for tracking reasoning state in the slot
+    std::string thinking_start_tag;
+    std::string thinking_end_tag;
+
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 

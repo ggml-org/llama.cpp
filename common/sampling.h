@@ -87,6 +87,10 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
 uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 
+// suppress or un-suppress grammar trigger detection (e.g. during reasoning/thinking blocks)
+// when suppressed, the grammar still buffers tokens but does not check for triggers
+void common_sampler_set_grammar_trigger_suppressed(struct common_sampler * gsmpl, bool suppressed);
+
 // helpers
 
 // access the internal list of current candidate tokens

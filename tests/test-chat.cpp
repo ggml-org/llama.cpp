@@ -936,7 +936,71 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             throw std::runtime_error("Failed to build grammar: " + parser.params_.grammar);
         }
 
-        // Find the earliest trigger position to determine the constrained portion
+        // Determine reasoning regions in tc.input so we can suppress grammar triggers inside them.
+        // A reasoning region spans from thinking_start_tag to thinking_end_tag.
+        // If generation_prompt contains the start tag (without a matching end), reasoning starts
+        // before tc.input, so position 0 is already inside reasoning.
+        std::vector<std::pair<size_t, size_t>> reasoning_regions; // [start, end) in tc.input
+        {
+            const auto & start_tag = parser.params_.thinking_start_tag;
+            const auto & end_tag   = parser.params_.thinking_end_tag;
+            if (!end_tag.empty()) {
+                // check if generation_prompt puts us inside reasoning at the start of tc.input
+                bool in_reasoning = false;
+                if (!start_tag.empty()) {
+                    const auto & gen_prompt = parser.params_.generation_prompt;
+                    auto last_start = gen_prompt.rfind(start_tag);
+                    if (last_start != std::string::npos) {
+                        auto last_end = gen_prompt.rfind(end_tag);
+                        if (last_end == std::string::npos || last_end < last_start) {
+                            in_reasoning = true;
+                        }
+                    }
+                }
+
+                size_t search_from = 0;
+                size_t region_start = in_reasoning ? 0 : std::string::npos;
+
+                while (search_from < tc.input.size()) {
+                    if (in_reasoning) {
+                        auto end_pos = tc.input.find(end_tag, search_from);
+                        if (end_pos != std::string::npos) {
+                            reasoning_regions.push_back({region_start, end_pos + end_tag.size()});
+                            search_from = end_pos + end_tag.size();
+                            in_reasoning = false;
+                        } else {
+                            // reasoning extends to end of input
+                            reasoning_regions.push_back({region_start, tc.input.size()});
+                            break;
+                        }
+                    } else if (!start_tag.empty()) {
+                        auto start_pos = tc.input.find(start_tag, search_from);
+                        if (start_pos != std::string::npos) {
+                            region_start = start_pos;
+                            search_from = start_pos + start_tag.size();
+                            in_reasoning = true;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Helper: check if a position falls inside any reasoning region
+        auto is_in_reasoning = [&reasoning_regions](size_t pos) -> bool {
+            for (const auto & [start, end] : reasoning_regions) {
+                if (pos >= start && pos < end) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Find the earliest trigger position to determine the constrained portion,
+        // skipping triggers that fall inside reasoning regions.
         auto earliest_trigger_pos = std::string::npos;
         for (const auto & trigger : parser.params_.grammar_triggers) {
             size_t      pos = std::string::npos;
@@ -945,14 +1009,34 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                 case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
                     {
                         const auto & word = trigger.value;
-                        pos               = tc.input.find(word);
+                        // find first occurrence outside reasoning
+                        size_t search_from = 0;
+                        while (search_from < tc.input.size()) {
+                            auto found = tc.input.find(word, search_from);
+                            if (found == std::string::npos) {
+                                break;
+                            }
+                            if (!is_in_reasoning(found)) {
+                                pos = found;
+                                break;
+                            }
+                            search_from = found + 1;
+                        }
                         break;
                     }
                 case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
                     {
                         const auto & pattern = std::regex(trigger.value);
-                        if (std::regex_search(tc.input, match, pattern)) {
-                            pos = match.position(pattern.mark_count());
+                        auto search_str = tc.input;
+                        size_t offset = 0;
+                        while (std::regex_search(search_str, match, pattern)) {
+                            auto found = offset + match.position(pattern.mark_count());
+                            if (!is_in_reasoning(found)) {
+                                pos = found;
+                                break;
+                            }
+                            offset += match.position(0) + match.length(0);
+                            search_str = tc.input.substr(offset);
                         }
                         break;
                     }
@@ -970,7 +1054,11 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                             if (mpos == std::string::npos) {
                                 mpos = match.position(0);
                             }
-                            pos = mpos;
+                            // PATTERN_FULL matches the entire input, so if the match position
+                            // is in reasoning, skip it entirely
+                            if (!is_in_reasoning(mpos)) {
+                                pos = mpos;
+                            }
                         }
                         break;
                     }
@@ -1425,6 +1513,50 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
+
+        // tool call segment in reasoning
+        tst.test(
+               "Let's call a tool: <tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Hello, world!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call></think>\n"
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Hello, world!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>"
+            )
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                python_tool
+        })
+            .expect_reasoning("Let's call a tool: <tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Hello, world!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
     }
 
     {

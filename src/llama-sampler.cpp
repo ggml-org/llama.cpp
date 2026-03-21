@@ -2529,6 +2529,16 @@ static struct llama_sampler_i llama_sampler_grammar_i = {
     /* .backend_set_input = */ nullptr,
 };
 
+void llama_sampler_grammar_set_trigger_suppressed(struct llama_sampler * smpl, bool suppressed) {
+    if (!smpl || smpl->iface != &llama_sampler_grammar_i) {
+        return;
+    }
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    if (ctx->grammar) {
+        ctx->grammar->trigger_suppressed = suppressed;
+    }
+}
+
 static struct llama_sampler * llama_sampler_init_grammar_impl(
         const struct llama_vocab * vocab,
                       const char * grammar_str,

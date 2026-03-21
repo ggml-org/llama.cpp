@@ -500,6 +500,10 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
+    // Parse thinking tags for reasoning state tracking (used to suppress grammar triggers during reasoning)
+    params.thinking_start_tag = json_value(data, "thinking_start_tag", std::string());
+    params.thinking_end_tag   = json_value(data, "thinking_end_tag",   std::string());
+
     {
         params.sampling.logit_bias.clear();
 
