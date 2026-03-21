@@ -187,7 +187,9 @@ class ExpertPrefetcher {
     // Monotonic counter, incremented per hint/hint_batch/hint_batch_adaptive call.
     // NOT a true token counter — multiple calls per inference token are expected
     // (one per predicted layer across lookahead depths). Used only for LRU ordering.
-    int64_t current_token_ = 0;
+    // Atomic: incremented outside mutex_ in hint() to avoid locking on the fast
+    // path when only the token counter needs bumping. LRU reads happen under mutex_.
+    std::atomic<int64_t> current_token_{ 0 };
 
     // Lazily allocate the VRAM pool from available budget. Returns false if
     // allocation failed (disables prefetching). Called with mutex_ held.

@@ -6864,7 +6864,7 @@ void ggml_sycl_op_mul_mat_q(
     const dpct::queue_ptr &stream) try {
 
     // Check tiered dispatch for weight tensor
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+    if (src0->name && g_tiered_enabled.load(std::memory_order_relaxed)) {
         ggml_sycl::memory_tier tier;
         bool in_inventory = false;
         void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);

@@ -105,8 +105,8 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
         return false;
     }
 
+    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
-    current_token_++;
     return hint_locked(layer_idx, expert_idx);
 }
 
@@ -131,7 +131,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     auto cached_it = cached_slots_.find(key);
     if (cached_it != cached_slots_.end()) {
         int slot = cached_it->second;
-        vram_pool_[slot].last_used_token = current_token_;
+        vram_pool_[slot].last_used_token = current_token_.load(std::memory_order_relaxed);
         prefetch_hits_++;
         return false;
     }
@@ -178,8 +178,8 @@ void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert
         return;
     }
 
+    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
-    current_token_++;
     for (int eid : expert_indices) {
         hint_locked(layer_idx, eid);
     }
@@ -202,8 +202,8 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 
     // Hold the lock across the entire function to prevent TOCTOU races:
     // budget is computed and consumed atomically within a single critical section.
+    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
-    current_token_++;
 
     gc_completed();
     int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, max_concurrent_dma_) : 8;
@@ -262,7 +262,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         auto cached_it = cached_slots_.find(key);
         if (cached_it != cached_slots_.end()) {
             int slot = cached_it->second;
-            vram_pool_[slot].last_used_token = current_token_;
+            vram_pool_[slot].last_used_token = current_token_.load(std::memory_order_relaxed);
             return vram_pool_[slot].ptr;
         }
 
@@ -406,10 +406,10 @@ void * ExpertPrefetcher::demand_load(int layer_idx, int expert_idx) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto cached_it = cached_slots_.find({layer_idx, expert_idx});
         if (cached_it != cached_slots_.end()) {
-            vram_pool_[cached_it->second].last_used_token = current_token_;
+            vram_pool_[cached_it->second].last_used_token = current_token_.load(std::memory_order_relaxed);
             return vram_pool_[cached_it->second].ptr;
         }
-        current_token_++;
+        current_token_.fetch_add(1, std::memory_order_relaxed);
         hint_locked(layer_idx, expert_idx);
     }
 

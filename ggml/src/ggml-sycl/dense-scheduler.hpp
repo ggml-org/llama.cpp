@@ -7,6 +7,7 @@
 #ifndef GGML_SYCL_DENSE_SCHEDULER_HPP
 #define GGML_SYCL_DENSE_SCHEDULER_HPP
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <mutex>
@@ -63,7 +64,7 @@ class dense_layer_scheduler {
     // Statistics
     size_t slot_size() const { return slot_size_; }
 
-    int current_slot() const { return current_slot_; }
+    int current_slot() const { return current_slot_.load(std::memory_order_relaxed); }
 
     int layer_in_slot(int slot) const { return (slot >= 0 && slot < 2) ? layer_in_slot_[slot] : -1; }
 
@@ -78,11 +79,13 @@ class dense_layer_scheduler {
 
     void * vram_slot_[2] = { nullptr, nullptr };
     size_t slot_size_;
-    int    current_slot_     = 0;
+    // Atomic: allows lock-free reads via current_slot() and has_pending_prefetch().
+    // All mutations still happen under mutex_ for event/callback safety.
+    std::atomic<int> current_slot_{ 0 };
     int    layer_in_slot_[2] = { -1, -1 };
 
-    sycl::event pending_prefetch_;
-    bool        has_pending_prefetch_ = false;
+    sycl::event       pending_prefetch_;
+    std::atomic<bool> has_pending_prefetch_{ false };
 
     host_ptr_callback get_host_ptr_;
 

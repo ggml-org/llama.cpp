@@ -39,7 +39,7 @@ extern void *            get_cached_tensor_ptr(const char *             tensor_n
 // If GGML_SYCL_DEBUG is not available, include common.hpp before this header.
 #define SYCL_TIERED_DISPATCH_CHECK(tensor, kernel_name)                                                           \
     do {                                                                                                          \
-        if ((tensor)->name && g_tiered_enabled.load(std::memory_order_acquire)) {                                 \
+        if ((tensor)->name && g_tiered_enabled.load(std::memory_order_relaxed)) {                                 \
             ggml_sycl::memory_tier _tier;                                                                         \
             bool                   _in_inventory = false;                                                         \
             void *                 _cached_ptr   = get_cached_tensor_ptr((tensor)->name, &_tier, &_in_inventory); \

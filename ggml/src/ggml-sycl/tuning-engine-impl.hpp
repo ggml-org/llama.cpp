@@ -46,8 +46,10 @@ struct TuningEngineConfig {
     // Number of top patterns to benchmark
     size_t top_k_patterns = 5;
 
-    // Background thread sleep interval (ms) when idle
-    uint32_t idle_sleep_ms = 10;
+    // Background thread sleep interval (ms) when idle.
+    // 2 seconds matches Phase 2 worker timeout pattern — avoids excessive
+    // CPU wake-ups while still draining queued observations promptly.
+    uint32_t idle_sleep_ms = 2000;
 
     // Confidence decay rate for refinement phase (not yet implemented)
     float confidence_decay = 0.99f;

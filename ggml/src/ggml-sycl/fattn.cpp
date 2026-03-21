@@ -863,7 +863,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     GGML_ASSERT(!ggml_sycl_tensor_is_weight(V));
 
     // Check tiered dispatch for K/V cache tensors
-    if (g_tiered_enabled.load(std::memory_order_acquire)) {
+    if (g_tiered_enabled.load(std::memory_order_relaxed)) {
         // Check K tensor (name[0] checks if name is non-empty)
         if (K && K->name[0]) {
             ggml_sycl::memory_tier tier;

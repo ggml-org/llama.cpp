@@ -4774,7 +4774,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Streaming/headroom reserves should only activate when the model genuinely
     // doesn't fit, not when S1 is active for a small model.
     const bool model_exceeds_vram = effective_model_size > vram_budget;
-    g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
+    // Write-once at startup — relaxed ordering is sufficient because callers
+    // are sequenced after model load (no cross-thread visibility requirement).
+    g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_relaxed);
 
     GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB, model_size=%.1f MB, exceeds=%s\n", budget_pct,
                   vram_budget / (1024.0 * 1024.0), effective_model_size / (1024.0 * 1024.0),
@@ -4838,7 +4840,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     }
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
-                  free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load() ? "enabled" : "disabled");
+                  free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load(std::memory_order_relaxed) ? "enabled" : "disabled");
 }
 
 // Get the total model size from tensor inventory (for budget calculations)
@@ -4863,7 +4865,7 @@ void ggml_sycl_get_moe_info(size_t * expert_total_bytes, int * n_expert, int * n
 
 bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
-    return g_tiered_enabled.load(std::memory_order_acquire);
+    return g_tiered_enabled.load(std::memory_order_relaxed);
 }
 
 bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend) {
@@ -4933,7 +4935,7 @@ size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend) {
 
 bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
     (void) backend;
-    return g_tiered_enabled.load(std::memory_order_acquire);
+    return g_tiered_enabled.load(std::memory_order_relaxed);
 }
 
 void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses) {
@@ -6387,7 +6389,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
 
     const bool is_input_tensor = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
     const bool tp_enabled      = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
-    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
+    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_relaxed)) {
         sycl::usm::alloc alloc      = sycl::usm::alloc::unknown;
         void *           cached_ptr = ggml_sycl_get_cached_tensor_ptr_for(tensor, device, nullptr, nullptr, &alloc);
         if (cached_ptr != nullptr) {
@@ -9175,7 +9177,7 @@ static void ggml_sycl_preload_model_weights() {
                     // Resolve source pointer (may be tiered/cached)
                     const void *     src_ptr   = tensor->data;
                     sycl::usm::alloc src_alloc = sycl::usm::alloc::unknown;
-                    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
+                    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_relaxed)) {
                         ggml_sycl::memory_tier tier   = ggml_sycl::memory_tier::MMAP;
                         void * cached = ggml_sycl_get_cached_tensor_ptr_for(
                             tensor, device, &tier, nullptr, &src_alloc);
@@ -9437,7 +9439,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
 
     const void *     src_ptr   = tensor->data;
     sycl::usm::alloc src_alloc = sycl::usm::alloc::unknown;
-    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
+    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_relaxed)) {
         ggml_sycl::memory_tier tier   = ggml_sycl::memory_tier::MMAP;
         void *                 cached = ggml_sycl_get_cached_tensor_ptr_for(tensor, device, &tier, nullptr, &src_alloc);
         if (cached) {
@@ -38196,7 +38198,7 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
     int       skipped_weight_count         = 0;
 
     // Check if tiered mode is enabled - if so, weight tensors in HOST need promotion to VRAM
-    const bool tiered_enabled = g_tiered_enabled.load(std::memory_order_acquire);
+    const bool tiered_enabled = g_tiered_enabled.load(std::memory_order_relaxed);
 
     // Get the unified cache for this device
     ggml_sycl::unified_cache * cache = nullptr;
