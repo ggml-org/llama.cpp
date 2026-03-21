@@ -888,14 +888,21 @@ int main(int argc, char ** argv) {
         }
         arg_idx++;
 
-        // If --target-bpw or --target-size are set, select a quantization type unless user specifies type and threads
-        if (argc - arg_idx <= 1 && (params.target_bpw != -1.0f || params.target_size != -1)) {
+        // If --target-bpw or --target-size are set, select a quantization type and ignore any user specified type
+        if (params.target_bpw != -1.0f || params.target_size != -1) {
             auto * ftype = params.target_bpw != -1.0f ? const_cast<char *>(get_ftype(params.target_bpw)) : const_cast<char *>("F16");
-            if (argc == arg_idx) { tmp_argv.push_back(ftype); }
-            else { tmp_argv.insert(tmp_argv.end() - 1, ftype); }
+            bool added_type = false;
+            if (argc == arg_idx) {
+                tmp_argv.push_back(ftype);
+                added_type = true;
+            } else {
+                tmp_argv[arg_idx] = ftype;
+            }
             tmp_argv.push_back(nullptr);
             argv = const_cast<char **>(tmp_argv.data());
-            argc++;
+            if (added_type) {
+                argc++;
+            }
         } else if (argc <= arg_idx) {
             fprintf(stderr, "%s: missing ftype\n", __func__);
             return 1;
