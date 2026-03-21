@@ -984,6 +984,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MUL_MAT",
     "MUL_MAT_ID",
     "OUT_PROD",
+    "OUT_PROD_ID",
 
     "SCALE",
     "SET",
@@ -1057,7 +1058,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1094,6 +1095,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y",
     "X[i]*Y",
     "X*Y",
+    "X_id⊗Y_id",
 
     "x*v",
     "y-\\>view(x)",
@@ -1167,7 +1169,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3308,6 +3310,44 @@ struct ggml_tensor * ggml_out_prod(
     return result;
 }
 
+// ggml_out_prod_id
+//
+// Scattered outer-product for the MUL_MAT_ID backward pass.
+//
+//   a:   [cols, n_expert_used, n_tokens]  F32  — activations (src1 of MUL_MAT_ID)
+//   b:   [rows, n_expert_used, n_tokens]  F32  — upstream gradient
+//   ids: [n_expert_used, n_tokens]        I32  — expert dispatch indices (src2 of MUL_MAT_ID)
+//   result: [cols, rows, n_expert, 1]     F32
+//
+//   result[:, :, e] += sum_{(i,t): ids[i,t]==e} a[:, i, t] ⊗ b[:, i, t]
+//
+// Computes the gradient w.r.t. the expert weight matrices (src0) of MUL_MAT_ID.
+struct ggml_tensor * ggml_out_prod_id(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * ids,
+        int64_t               n_expert) {
+    GGML_ASSERT(a->type   == GGML_TYPE_F32);
+    GGML_ASSERT(b->type   == GGML_TYPE_F32);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(a->ne[1]  == b->ne[1]);   // n_expert_used matches
+    GGML_ASSERT(a->ne[2]  == b->ne[2]);   // n_tokens matches
+    GGML_ASSERT(ids->ne[0] == a->ne[1]);  // n_expert_used matches ids
+    GGML_ASSERT(ids->ne[1] == a->ne[2]);  // n_tokens matches ids
+    GGML_ASSERT(n_expert > 0);
+
+    const int64_t ne[4] = { a->ne[0], b->ne[0], n_expert, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_OUT_PROD_ID;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = ids;
+
+    return result;
+}
+
 // ggml_scale
 
 static struct ggml_tensor * ggml_scale_impl(
@@ -3846,12 +3886,17 @@ struct ggml_tensor * ggml_get_rows_back(
         struct ggml_tensor  * a,
         struct ggml_tensor  * b,
         struct ggml_tensor  * c) {
-    GGML_ASSERT(ggml_is_matrix(a) && ggml_is_vector(b) && b->type == GGML_TYPE_I32);
-    GGML_ASSERT(ggml_is_matrix(c) && (a->ne[0] == c->ne[0]));
+    GGML_ASSERT(b->type == GGML_TYPE_I32);
+    GGML_ASSERT(a->ne[0] == c->ne[0]);
 
+    // Support both 2D and 3D: result shape matches c (the source tensor shape)
     // TODO: implement non F32 return
-    //struct ggml_tensor * result = ggml_new_tensor_2d(ctx, a->type, a->ne[0], b->ne[0]);
-    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c->ne[0], c->ne[1]);
+    struct ggml_tensor * result;
+    if (c->ne[2] > 1) {
+        result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, c->ne[0], c->ne[1], c->ne[2]);
+    } else {
+        result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c->ne[0], c->ne[1]);
+    }
 
     result->op     = GGML_OP_GET_ROWS_BACK;
     result->src[0] = a;
@@ -6070,7 +6115,7 @@ struct ggml_tensor * ggml_opt_step_adamw(
     GGML_ASSERT(ggml_are_same_shape(a, m));
     GGML_ASSERT(ggml_are_same_shape(a, v));
     GGML_ASSERT(adamw_params->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_nelements(adamw_params) == 7);
+    GGML_ASSERT(ggml_nelements(adamw_params) == 8);
 
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
 
@@ -6533,6 +6578,35 @@ static void ggml_compute_backward(
                                 grad)));        // [m,p,qq,rr]
             }
         } break;
+        case GGML_OP_MUL_MAT_ID: {
+            // Backward pass for indirect matrix multiplication (MoE).
+            //
+            // Forward:  dst[rows, n_exp_used, n_tokens] = as[:,:,ids[i,t]] @ b[:,i,t]
+            //   src0 = as  [cols, rows, n_expert]    — expert weight matrices
+            //   src1 = b   [cols, n_exp_used, n_tokens] — token activations
+            //   src2 = ids [n_exp_used, n_tokens]    — expert dispatch indices (I32)
+            //
+            // Gradient w.r.t. src1 (activations):
+            //   grad_b[:,i,t] = as[:,:,ids[i,t]]^T @ grad[:,i,t]
+            //   → computed via MUL_MAT_ID with transposed as
+            //
+            // Gradient w.r.t. src0 (expert weights, only when F32 i.e. LoRA):
+            //   grad_as[:,:,e] += sum_{(i,t): ids[i,t]==e} b[:,i,t] ⊗ grad[:,i,t]
+            //   → computed via OUT_PROD_ID
+            //
+            // Quantized src0 is frozen (stop-gradient) — handled in grads_needed below.
+            if (src0_needs_grads) {
+                const int64_t n_expert = src0->ne[2];
+                struct ggml_tensor * grad_as = ggml_out_prod_id(ctx, src1, grad, src2, n_expert);
+                ggml_add_or_set(ctx, cgraph, isrc0, grad_as);
+            }
+            if (src1_needs_grads) {
+                // Transpose expert matrices: as [cols, rows, n_expert] → as_T [rows, cols, n_expert]
+                struct ggml_tensor * as_T = ggml_cont(ctx, ggml_permute(ctx, src0, 1, 0, 2, 3));
+                struct ggml_tensor * grad_b = ggml_mul_mat_id(ctx, as_T, grad, src2);
+                ggml_add_or_set(ctx, cgraph, isrc1, grad_b);
+            }
+        } break;
         case GGML_OP_SCALE: {
             if (src0_needs_grads) {
                 float s;
@@ -6769,6 +6843,13 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_exp(ctx, src0)));
                     }
                 } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    // d/dx sigmoid(x) = sigmoid(x) * (1 - sigmoid(x)) = tensor - tensor^2
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * dsigmoid = ggml_sub(ctx, tensor, ggml_sqr(ctx, tensor));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dsigmoid));
+                    }
+                } break;
                 case GGML_UNARY_OP_SOFTPLUS: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
@@ -6979,6 +7060,35 @@ void ggml_build_backward_expand(
                 ignore_src[1] = true;
                 break;
 
+            // MUL_MAT_ID: expert dispatch indices (src2) are integer — no gradient.
+            // When src0 is quantized the expert weights are frozen, so stop gradient through
+            // both src0 and src1 (activations have no path to loss without differentiable weights).
+            case GGML_OP_MUL_MAT_ID:
+                if (ggml_is_quantized(node->src[0]->type)) {
+                    ignore_src[0] = true;
+                    ignore_src[1] = true;
+                }
+                ignore_src[2] = true; // ids: integer tensor
+                break;
+
+            // SET_ROWS is a KV-cache scatter write.  The gradient of the written data flows
+            // through the attention read path (GET_ROWS backward), not through this node.
+            case GGML_OP_SET_ROWS:
+                ignore_src[0] = true;
+                ignore_src[1] = true;
+                break;
+
+            // Ops with no backward implementation — stop gradient through all sources so the
+            // backward graph builder never tries to propagate through them.
+            case GGML_OP_SSM_CONV:       // Mamba causal conv1d
+            case GGML_OP_SSM_SCAN:       // Mamba selective scan
+            case GGML_OP_FLASH_ATTN_EXT: // use standard attention for training
+                ignore_src[0] = true;
+                ignore_src[1] = true;
+                ignore_src[2] = true;
+                ignore_src[3] = true;
+                break;
+
             default:
                 break;
         }
@@ -6994,9 +7104,12 @@ void ggml_build_backward_expand(
             continue;
         }
 
-        // inplace operations are currently not supported
-        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
-            node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
+        // inplace operations are currently not supported — warn and skip instead of crashing
+        if (node->view_src && node->op != GGML_OP_CPY && node->op != GGML_OP_VIEW &&
+            node->op != GGML_OP_RESHAPE && node->op != GGML_OP_PERMUTE && node->op != GGML_OP_TRANSPOSE) {
+            GGML_LOG_WARN("%s: skipping unsupported inplace op '%s' in backward graph\n", __func__, ggml_op_name(node->op));
+            continue;
+        }
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);
         GGML_ASSERT(ihash != GGML_HASHSET_FULL);

@@ -3618,32 +3618,108 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         { "-lr", "--learning-rate" }, "ALPHA",
         string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
         [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
         string_format("(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
             (double) params.lr.lr_min),
         [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-decay-epochs", "--learning-rate-decay-epochs"}, "ALPHA",
         string_format("(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)", (double) params.lr.decay_epochs),
         [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-wd", "--weight-decay"}, "WD",
         string_format("adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).", (double) params.lr.wd),
         [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-val-split", "--val-split"}, "FRACTION",
         string_format("fraction of data to use as validation set for training (default: %.2g).", (double) params.val_split),
         [](common_params & params, const std::string & value) { params.val_split = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    // qlora flags
+    add_opt(common_arg(
+        {"--lora-rank"}, "N",
+        string_format("LoRA rank r (default: %d)", params.lora_rank),
+        [](common_params & params, int value) { params.lora_rank = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-alpha"}, "F",
+        string_format("LoRA alpha (default: %d = use rank value)", (int) params.lora_alpha),
+        [](common_params & params, const std::string & value) { params.lora_alpha = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-targets"}, "SUBSTRINGS",
+        string_format("comma-separated substrings of tensor names to add LoRA to (default: %s)", params.lora_targets.c_str()),
+        [](common_params & params, const std::string & value) { params.lora_targets = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-out"}, "FNAME",
+        string_format("output LoRA adapter GGUF path (default: %s)", params.lora_out.c_str()),
+        [](common_params & params, const std::string & value) { params.lora_out = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--train-file"}, "FNAME",
+        "JSONL training dataset (fields: messages|prompt+response|text)",
+        [](common_params & params, const std::string & value) { params.train_file = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--save-every"}, "N",
+        "save adapter checkpoint every N dataset windows during training (default: 0 = only at end)",
+        [](common_params & params, int value) { params.save_every = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--freeze-layers"}, "N",
+        "freeze first N transformer layers — no LoRA adapters allocated for blk.0..blk.N-1 (default: 0 = train all layers)",
+        [](common_params & params, int value) { params.lora_freeze_layers = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grad-checkpoint"}, "N",
+        "gradient checkpointing interval to reduce peak activation VRAM (0 = disabled, default: 0)",
+        [](common_params & params, int value) { params.grad_checkpoint_interval = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--train-on-prompt"},
+        "compute loss on prompt tokens too, not just the response (default: response-only loss)",
+        [](common_params & params) { params.train_on_prompt = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--shuffle-dataset"},
+        "shuffle dataset windows at the start of each epoch (default: sequential order)",
+        [](common_params & params) { params.shuffle_dataset = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-mode"},
+        "enable GRPO IPC training loop (prompts and rewards supplied via stdin/stdout)",
+        [](common_params & params) { params.grpo_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--n-gen"}, "N",
+        string_format("GRPO: number of generations per prompt (default: %d)", params.grpo_n_gen),
+        [](common_params & params, int value) { params.grpo_n_gen = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--n-steps"}, "N",
+        string_format("GRPO: total optimizer steps (default: %d)", params.grpo_n_steps),
+        [](common_params & params, int value) { params.grpo_n_steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-temp"}, "F",
+        string_format("GRPO: sampling temperature for rollout generation (default: %.2f)", (double) params.grpo_temperature),
+        [](common_params & params, const std::string & value) { params.grpo_temperature = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-max-tokens"}, "N",
+        string_format("GRPO: max tokens per generation (default: %d)", params.grpo_max_tokens),
+        [](common_params & params, int value) { params.grpo_max_tokens = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-epochs", "--epochs"}, "N",
         string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
         [](common_params & params, int epochs) { params.lr.epochs = epochs; }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-opt", "--optimizer"}, "sgd|adamw", "adamw or sgd",
         [](common_params & params, const std::string & name) {
@@ -3652,7 +3728,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
             }
         }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"--check"},
         string_format("check rather than generate results (default: %s)", params.check ? "true" : "false"),

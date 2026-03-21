@@ -1551,9 +1551,21 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+
+        // Gradient checkpointing: mark every Nth forward graph node as persistent so the
+        // allocator cannot reuse its memory during backward.  Reduces peak activation VRAM
+        // at the cost of ~0 extra compute (activations are kept, not recomputed).
+        // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
+        int32_t grad_checkpoint_interval;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
+
+    // weights: array of floats, one per dataset window (indexed by idata), already normalized to [0,1].
+    // n_weights: length of the array.
+    // Pass NULL/0 to disable (equivalent to all-ones, i.e. standard SFT).
+    // The pointer must remain valid for the duration of all llama_opt_epoch calls.
+    LLAMA_API void llama_opt_set_reward_weights(const float * weights, int64_t n_weights);
 
     LLAMA_API void llama_opt_epoch(
             struct llama_context    * lctx,
@@ -1562,7 +1574,8 @@ extern "C" {
             ggml_opt_result_t         result_eval,
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
-            ggml_opt_epoch_callback   callback_eval);
+            ggml_opt_epoch_callback   callback_eval,
+            bool                      shuffle);
 
 #ifdef __cplusplus
 }

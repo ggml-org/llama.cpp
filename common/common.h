@@ -105,6 +105,7 @@ enum llama_example {
     LLAMA_EXAMPLE_TTS,
     LLAMA_EXAMPLE_DIFFUSION,
     LLAMA_EXAMPLE_FINETUNE,
+    LLAMA_EXAMPLE_FINETUNE_QLORA,
     LLAMA_EXAMPLE_FIT_PARAMS,
     LLAMA_EXAMPLE_RESULTS,
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
@@ -562,7 +563,26 @@ struct common_params {
     // finetune
     struct lr_opt lr;
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
-    float val_split = 0.05f; // fraction of the data used for the validation set
+    float   val_split              = 0.05f; // fraction of the data used for the validation set
+
+    // qlora fine-tuning
+    int32_t     lora_rank          = 16;              // LoRA rank (r)
+    float       lora_alpha         = 0.0f;            // LoRA alpha (0 = use rank value)
+    std::string lora_targets       = "attn_q,attn_output,ffn_gate,ffn_up,ffn_down"; // comma-separated substrings to match trainable tensors
+    std::string lora_out           = "adapter.gguf";  // output adapter GGUF path
+    std::string train_file         = "";              // JSONL training dataset path
+    int32_t save_every             = 0;     // save checkpoint every N optimizer steps (0 = disabled)
+    int32_t lora_freeze_layers     = 0;     // do not apply LoRA to the first N transformer layers
+    int32_t grad_checkpoint_interval = 0;  // gradient checkpointing interval to reduce peak VRAM (0 = disabled)
+    bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
+    bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
+
+    // grpo training
+    bool    grpo_mode              = false; // enable GRPO IPC training loop
+    int32_t grpo_n_gen             = 8;     // generations per prompt
+    int32_t grpo_n_steps           = 500;   // total GRPO optimizer steps
+    float   grpo_temperature       = 0.8f;  // sampling temperature for rollouts
+    int32_t grpo_max_tokens        = 512;   // max tokens per generation
 
     // embedding
     bool embedding         = false; // get only sentence embedding
