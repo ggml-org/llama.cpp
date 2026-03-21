@@ -724,7 +724,7 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_size(argv[++arg_idx], target_size)) {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--importance-pct") == 0) {
+        } else if (strcmp(argv[arg_idx], "--importance-pct") == 0) { // Experimental feature, may be removed in the future
             if (arg_idx == argc-1 || !parse_importance_pct(argv[++arg_idx], importance_pct)) {
                 usage(argv[0]);
             }

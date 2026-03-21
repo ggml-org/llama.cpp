@@ -1728,6 +1728,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return build_mix();
     }
 
+    // Experimental feature, may be removed in the future
     auto importance_score = [](const std::vector<float> & tstats) -> float {
         if (tstats.size() < 12) { return 0.0f; }
 
