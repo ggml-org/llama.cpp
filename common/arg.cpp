@@ -2249,7 +2249,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
             else { throw std::invalid_argument("invalid value"); }
         }
-    ));
+    ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
