@@ -55,6 +55,15 @@ static std::string llama_format_win_err(DWORD err) {
 }
 #endif
 
+// llama_mmap supports for hugepagesz=2M and 1G
+#ifdef GGML_USING_HUGE_PAGE_2M
+#define HUGE_PAGE_SIZE 2097152
+#endif
+#ifdef GGML_USING_HUGE_PAGE_1G
+#define HUGE_PAGE_SIZE 1073741824
+#endif
+
+
 // llama_file
 
 struct llama_file::impl {
@@ -416,9 +425,16 @@ struct llama_mmap::impl {
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
     impl(struct llama_file * file, size_t prefetch, bool numa) {
-        size = file->size();
         int fd = file->file_id();
         int flags = MAP_SHARED;
+#if defined(GGML_USING_HUGE_PAGE_2M) || defined(GGML_USING_HUGE_PAGE_1G)
+        // hugepage support requires mmap size to be aligned with pagesize
+        // and this is even true for normal 4K page in mmap, only some OS relaxes
+        size = (file->size() + HUGE_PAGE_SIZE - 1) / HUGE_PAGE_SIZE * HUGE_PAGE_SIZE;
+        flags |= MAP_HUGETLB;
+#else
+        size = file->size();
+#endif
         if (numa) { prefetch = 0; }
 #ifdef __linux__
         if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
@@ -427,25 +443,25 @@ struct llama_mmap::impl {
         }
         if (prefetch) { flags |= MAP_POPULATE; }
 #endif
-        addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+        addr = mmap(NULL, size, PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
 
         if (prefetch > 0) {
-            if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
+            if (posix_madvise(addr, std::min(size, prefetch), POSIX_MADV_WILLNEED)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
                         strerror(errno));
             }
         }
         if (numa) {
-            if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
+            if (posix_madvise(addr, size, POSIX_MADV_RANDOM)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
                         strerror(errno));
             }
         }
 
-        mapped_fragments.emplace_back(0, file->size());
+        mapped_fragments.emplace_back(0, size);
     }
 
     static void align_range(size_t * first, size_t * last, size_t page_size) {
@@ -461,7 +477,11 @@ struct llama_mmap::impl {
     }
 
     void unmap_fragment(size_t first, size_t last) {
+#if defined(GGML_USING_HUGE_PAGE_2M) || defined(GGML_USING_HUGE_PAGE_1G)
+        int page_size = HUGE_PAGE_SIZE;
+#else
         int page_size = sysconf(_SC_PAGESIZE);
+#endif
         align_range(&first, &last, page_size);
         size_t len = last - first;
 
