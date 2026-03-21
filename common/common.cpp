@@ -422,10 +422,18 @@ std::string string_strip(const std::string & str) {
 std::string string_get_sortable_timestamp() {
     using clock = std::chrono::system_clock;
 
-    const clock::time_point current_time = clock::now();
-    const time_t as_time_t = clock::to_time_t(current_time);
+    const auto current_time = clock::now();
+    const auto as_time_t = std::chrono::duration_cast<std::chrono::seconds>(current_time.time_since_epoch()).count();
+
+    struct tm timeinfo;
+#ifdef _WIN32
+    gmtime_s(&timeinfo, &as_time_t);
+#else
+    gmtime_r(&as_time_t, &timeinfo);
+#endif
+
     char timestamp_no_ns[100];
-    std::strftime(timestamp_no_ns, 100, "%Y_%m_%d-%H_%M_%S", std::localtime(&as_time_t));
+    std::strftime(timestamp_no_ns, 100, "%Y_%m_%d-%H_%M_%S", &timeinfo);
 
     const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         current_time.time_since_epoch() % 1000000000).count();
