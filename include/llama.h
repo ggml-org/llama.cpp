@@ -557,6 +557,9 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
 
+    // Returns the number of Multi-Token Prediction layers (0 if MTP is not available)
+    LLAMA_API int32_t llama_model_n_mtp_layers(const struct llama_model * model);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
@@ -987,6 +990,11 @@ extern "C" {
     // Negative indices can be used to access logits in reverse order, -1 is the last logit.
     // returns NULL for invalid ids.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
+
+    // Get MTP (Multi-Token Prediction) draft logits for the last output position.
+    // With FastMTP, returns mtp_n_vocab floats (reduced vocabulary). Use llama_get_mtp_n_vocab().
+    LLAMA_API float * llama_get_mtp_logits(struct llama_context * ctx);
+    LLAMA_API int64_t llama_get_mtp_n_vocab(struct llama_context * ctx);
 
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,

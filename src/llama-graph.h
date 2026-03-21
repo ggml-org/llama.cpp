@@ -662,6 +662,10 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
 
+    // MTP (Multi-Token Prediction) output nodes
+    ggml_tensor * t_logits_mtp  = nullptr; // [n_vocab, n_tokens] draft logits from MTP head
+    ggml_tensor * t_embd_mtp    = nullptr; // [n_embd, n_tokens] hidden state from MTP head
+
     std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
     std::map<llama_seq_id, ggml_tensor*> t_candidates;
     std::map<llama_seq_id, ggml_tensor*> t_sampled;

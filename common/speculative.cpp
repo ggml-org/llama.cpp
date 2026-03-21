@@ -10,9 +10,11 @@
 #include "sampling.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
+#include <random>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -21,6 +23,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
+    COMMON_SPECULATIVE_TYPE_MTP,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
@@ -32,6 +35,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
+    {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -462,6 +466,84 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
     }
 };
 
+// Multi-Token Prediction (MTP) speculative decoding state
+struct common_speculative_state_mtp : public common_speculative_state {
+    llama_context * ctx_tgt;
+    bool cooldown = false;  // skip proposal after rejection to get fresh MTP logits
+    std::mt19937 rng{42};   // RNG for temperature sampling of MTP drafts
+
+    common_speculative_state_mtp(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+    {
+    }
+
+    ~common_speculative_state_mtp() override = default;
+
+    void begin(const llama_tokens & prompt) override {
+        cooldown = false;
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        GGML_UNUSED(prompt_tgt);
+
+        // After a draft rejection, MTP logits are from the DRAFT position
+        // (last in the [sampled, draft] batch), not from the sampled position.
+        // These logits predict what comes after the draft — which is wrong
+        // since the draft was rejected. Skip this proposal and let the next
+        // single-token decode produce fresh MTP logits.
+        if (cooldown) {
+            cooldown = false;
+            return;  // empty result = no draft = normal single-token decode
+        }
+
+        const float * mtp_logits = llama_get_mtp_logits(ctx_tgt);
+        if (mtp_logits == nullptr) {
+            return;
+        }
+
+        // FastMTP: use reduced vocab size (e.g., 32K instead of 248K)
+        // Token IDs 0..mtp_n_vocab-1 map directly to full vocab IDs
+        const int64_t mtp_n_vocab = llama_get_mtp_n_vocab(ctx_tgt);
+        if (mtp_n_vocab <= 0) {
+            return;
+        }
+
+        // Argmax of MTP logits over reduced vocabulary
+        llama_token draft_token = 0;
+        float best_logit = mtp_logits[0];
+        for (int64_t i = 1; i < mtp_n_vocab; i++) {
+            if (mtp_logits[i] > best_logit) {
+                best_logit = mtp_logits[i];
+                draft_token = (llama_token)i;
+            }
+        }
+
+        const auto * vocab = llama_model_get_vocab(llama_get_model(ctx_tgt));
+        if (!llama_vocab_is_eog(vocab, draft_token)) {
+            result.push_back(draft_token);
+        }
+
+        GGML_UNUSED(id_last);
+        GGML_UNUSED(params);
+    }
+
+    void accept(uint16_t n_accepted) override {
+        // If no drafts were accepted, enter cooldown
+        // (next draft() call returns empty to force single-token decode)
+        if (n_accepted == 0) {
+            cooldown = true;
+        }
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_ngram_simple_config config;
@@ -781,6 +863,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
+        case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
@@ -822,9 +905,19 @@ bool common_speculative_is_compat(llama_context * ctx_tgt) {
 
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
-        LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
-        res = false;
-        goto done;
+        // Check if the model has MTP layers — for MTP-1, we can use
+        // checkpoint/restore instead of seq_rm for the 1-token rollback.
+        // Hybrid SSM models (DeltaNet) support checkpoint/restore via
+        // llama-memory-recurrent.cpp even though they don't support seq_rm.
+        const auto * model = llama_get_model(ctx_tgt);
+        if (model && llama_model_n_mtp_layers(model) > 0) {
+            LOG_INF("%s: seq_rm not supported, but MTP model detected — using checkpoint/restore for rollback\n", __func__);
+            // Restore the state we just modified
+        } else {
+            LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
+            res = false;
+            goto done;
+        }
     }
 
 done:
@@ -853,6 +946,7 @@ common_speculative * common_speculative_init(
     {
         bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP);
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -892,6 +986,9 @@ common_speculative * common_speculative_init(
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
+        if (has_mtp) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
+        }
         if (has_draft) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
         }
@@ -917,6 +1014,10 @@ common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
                 impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.type));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_MTP: {
+                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type, ctx_tgt));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {

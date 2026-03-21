@@ -74,6 +74,8 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
+    float * get_mtp_logits();
+    int64_t get_mtp_n_vocab() const { return mtp_n_vocab; }
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -267,6 +269,11 @@ private:
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
+
+    // MTP draft logits — with FastMTP, reduced to top-K tokens (e.g., 32K vs 248K)
+    std::vector<float> mtp_logits_buf;
+    bool mtp_logits_valid = false;
+    int64_t mtp_n_vocab = 0;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE

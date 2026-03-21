@@ -5046,6 +5046,55 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
 class Qwen3_5TextModel(_LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # If model has MTP layers, include them in block_count
+        mtp_layers = self.hparams.get("mtp_num_hidden_layers", 0)
+        if mtp_layers > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + mtp_layers
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        mtp_layers = self.hparams.get("mtp_num_hidden_layers", 0)
+        if mtp_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(mtp_layers)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            num_hidden = self.hparams["num_hidden_layers"]
+
+            if "layers." in name:
+                # Remap MTP transformer block tensors to append after main layers
+                # mtp.layers.{k}.* -> model.layers.{k + num_hidden_layers}.*
+                new_bid = (bid or 0) + num_hidden
+                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{new_bid}")
+                yield from super().modify_tensors(data_torch, name, new_bid)
+            else:
+                # Shared MTP weights -> nextn tensor slots
+                from pathlib import Path
+                remapper = {
+                    "mtp.fc":                     "model.layers.{bid}.eh_proj",
+                    "mtp.pre_fc_norm_embedding":  "model.layers.{bid}.enorm",
+                    "mtp.pre_fc_norm_hidden":     "model.layers.{bid}.hnorm",
+                    "mtp.norm":                   "model.layers.{bid}.shared_head.norm",
+                }
+                _n = Path(name)
+                matched = False
+                for prefix, template in remapper.items():
+                    if name.startswith(prefix):
+                        suffix = name[len(prefix):]  # e.g. ".weight"
+                        for b in range(num_hidden, self.block_count):
+                            new_name = template.format(bid=b) + suffix
+                            yield from super().modify_tensors(data_torch, new_name, b)
+                        matched = True
+                        break
+                if not matched:
+                    # Skip unknown MTP tensors (e.g. embed_tokens/lm_head if shared)
+                    pass
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeTextModel(_LinearAttentionVReorderBase):
