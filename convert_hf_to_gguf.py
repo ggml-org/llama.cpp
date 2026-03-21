@@ -31,10 +31,10 @@ import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
 try:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
-    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports] # ty: ignore[unresolved-import]
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 
