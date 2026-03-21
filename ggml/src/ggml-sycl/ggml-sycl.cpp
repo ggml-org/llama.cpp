@@ -9189,27 +9189,49 @@ static void ggml_sycl_preload_model_weights() {
                     }
 
                     const size_t src_size = ggml_nbytes(tensor);
-                    const size_t dst_size = src_size;  // AOS: raw DMA, no layout transform
 
-                    // S1-PRELOAD uploads AOS for fast initial loading (pure DMA).
-                    // The unified dispatch accepts SOA from cache when available,
-                    // and the dequant kernel handles both AOS and SOA input for PP.
-                    // graph_preload_weights converts AOS→SOA on first TG graph.
+                    // S1-PRELOAD: upload SOA directly for quantized types that
+                    // support SOA reorder.  This avoids blocking AOS->SOA conversion
+                    // during inference that causes 120B MoE hangs.
+                    // For non-quantized types (f32, f16), upload as AOS (SOA
+                    // doesn't apply -- these are norm/embedding weights).
+                    const bool use_soa =
+                        ggml_is_quantized(tensor->type) && ggml_sycl_supports_reorder_mmvq(tensor->type);
+                    layout_mode preload_layout = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+                    size_t      dst_size       = src_size;
+
+                    ggml_sycl_reorder_fill_ctx reorder_ctx{};
+                    if (use_soa) {
+                        dst_size              = ggml_sycl_get_padded_weight_bytes(tensor->type, tensor->ne[0], src_size);
+                        reorder_ctx.type      = tensor->type;
+                        reorder_ctx.ncols     = tensor->ne[0];
+                        reorder_ctx.nrows     = ggml_nrows(tensor);
+                        reorder_ctx.nbytes    = src_size;
+                        reorder_ctx.dst_bytes = dst_size;
+                        reorder_ctx.layout    = GGML_LAYOUT_SOA;
+                        reorder_ctx.src_is_device = false;
+                        reorder_ctx.device_id     = device;
+                    }
+
                     ggml_sycl::cache_layout_request req{};
                     req.key              = cache_key;
                     req.src_ptr          = src_ptr;
                     req.src_size         = src_size;
                     req.dst_size         = dst_size;
                     req.type             = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-                    req.layout           = GGML_LAYOUT_AOS;
+                    req.layout           = preload_layout;
                     req.validate_content = false;
-                    req.skip_fill_wait   = true;  // Async — no wait per tensor
+                    req.skip_fill_wait   = true;  // Async -- no wait per tensor
+                    if (use_soa) {
+                        req.fill_fn  = ggml_sycl_fill_reordered_host;
+                        req.fill_ctx = &reorder_ctx;
+                    }
 
                     auto result = cache->ensure_cached_layout(req, {});
                     if (result.status == ggml_sycl::cache_layout_status::READY ||
                         result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                         dense_cached++;
-                        total_bytes += src_size;
+                        total_bytes += dst_size;
                     } else {
                         dense_failed++;
                     }
@@ -9683,6 +9705,56 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         } else if (resolved == GGML_LAYOUT_XMX_TILED) {
             req.fill_fn  = ggml_sycl_fill_xmx_tiled;
             req.fill_ctx = &tiled_ctx;
+        }
+    }
+
+    // Non-blocking fast path for dense weights in S1 mode when model exceeds VRAM.
+    // S1-PRELOAD uploads quantized dense weights as SOA directly to VRAM.
+    // For large models (120B: 60GB model, 12GB VRAM), not all weights fit.
+    // When a non-AOS layout is requested and the entry isn't cached,
+    // ensure_cached_layout would block on:
+    //   1. sycl::malloc_device (Level Zero driver lock)
+    //   2. fill_fn (synchronous CPU reorder on inference thread)
+    //   3. queue.memcpy + event.wait (DMA deadlock on busy queue)
+    // This causes 120B MoE model inference hangs.
+    //
+    // Fix: same pattern as MoE experts (commit 5072e68bf).  Do a pure read-only
+    // cache lookup via try_get_cached_fast().  If the SOA entry was placed by
+    // S1-PRELOAD, use it.  Otherwise return nullptr so the caller falls back
+    // to AOS host-pinned zero-copy via ggml_sycl_get_data_ptr (PCIe ~8 GB/s).
+    // Kernels handle AOS input: MMVQ for TG (batch=1), oneDNN dequants AOS->FP16
+    // for PP, dmmv reads AOS natively.
+    //
+    // Only applies when model exceeds VRAM (120B: 60GB model, 12GB VRAM).
+    // When model fits (Mistral 7B: 4GB model, 10GB budget), ensure_cached_layout
+    // handles layout conversion with eviction during warmup -- no deadlock risk
+    // because the queue is idle and malloc_device succeeds after eviction.
+    if (ggml_backend_sycl_all_weights_host() && resolved != GGML_LAYOUT_AOS) {
+        // Cache the model_exceeds_vram check (expensive: locks + memory queries).
+        static std::atomic<int> s_model_exceeds_vram_cached{ -1 };
+        int                     exceeds = s_model_exceeds_vram_cached.load(std::memory_order_acquire);
+        if (exceeds < 0) {
+            exceeds = ggml_backend_sycl_model_exceeds_vram(nullptr) ? 1 : 0;
+            s_model_exceeds_vram_cached.store(exceeds, std::memory_order_release);
+        }
+        if (exceeds) {
+            void * cached_ptr = cache->try_get_cached_fast(cache_key, resolved);
+            if (cached_ptr) {
+                // SOA/COALESCED/etc. already cached -- use it directly.
+                if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+                    ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
+                                                      onednn_pack_m);
+                }
+                GGML_SYCL_DEBUG("[S1-NONBLOCK] Dense weight %s layout=%d HIT (fast path), ptr=%p\n",
+                                tensor->name ? tensor->name : "(null)", (int) resolved, cached_ptr);
+                return cached_ptr;
+            }
+            // Cache miss for non-AOS layout -- model exceeds VRAM, cannot allocate.
+            // Return nullptr so the caller cascades to AOS (VRAM-cached from
+            // S1-PRELOAD or host-pinned zero-copy).
+            GGML_SYCL_DEBUG("[S1-NONBLOCK] Dense weight %s layout=%d MISS, AOS fallback (model exceeds VRAM)\n",
+                            tensor->name ? tensor->name : "(null)", (int) resolved);
+            return nullptr;
         }
     }
 
