@@ -1,5 +1,7 @@
 #define GGML_COMMON_IMPL_CPP
 #define GGML_COMMON_DECL_CPP
+
+
 #include "ggml-common.h"
 #include "ggml-backend-impl.h"
 
@@ -2742,24 +2744,35 @@ static block_q8_0x4 make_block_q8_0x4(block_q8_0 * in, unsigned int blck_size_in
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave) {
     block_q4_0x4 out;
 
+    // Initialize deltas
     for (int i = 0; i < 4; i++) {
         out.d[i] = in[i].d;
     }
 
-    const int end = QK4_0 * 2 / blck_size_interleave;
+    // Q4_0 = 32, so what has 16 bytes per block? 16 * 4 = 64 bytes total
+    static_assert(sizeof(block_q4_0x4::qs) == 64, "Unexpected block_q4_0x4 size");
+    static_assert(sizeof(block_q4_0::qs) == 16, "Unexpected block_q4_0 size");
+
+    const int end = QK4_0 * 2 / blck_size_interleave; // 64 / blck_size_interleave
 
     if (blck_size_interleave == 8) {
         const uint64_t xor_mask = 0x8888888888888888ULL;
         for (int i = 0; i < end; ++i) {
             int src_id = i % 4;
-            int src_offset = (i / 4) * blck_size_interleave;
-            int dst_offset = i * blck_size_interleave;
+            int src_offset = (i / 4) * blck_size_interleave; // 0, 8
+            int dst_offset = i * blck_size_interleave;        // 0, 8, ..., 56
 
+            // Check limits (GCC needs this to avoid warnings)
+            if (src_offset + 8 > 16 || dst_offset + 8 > 64) {
+                GGML_ASSERT(false && "make_block_q4_0x4: out of bounds");
+            }
+
+            // Copies 8 bytes with memcpy (but GCC still gives a warning)
+            // Solution: use memcpy with a temporary pointer to avoid aliasing problems
             uint64_t elems;
-            // Using memcpy to avoid unaligned memory accesses
-            memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
+            std::memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
             elems ^= xor_mask;
-            memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
+            std::memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
         }
     } else if (blck_size_interleave == 4) {
         const uint32_t xor_mask = 0x88888888;
@@ -2768,13 +2781,57 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_in
             int src_offset = (i / 4) * blck_size_interleave;
             int dst_offset = i * blck_size_interleave;
 
+            if (src_offset + 4 > 16 || dst_offset + 4 > 64) {
+                GGML_ASSERT(false && "make_block_q4_0x4: out of bounds (4)");
+            }
+
             uint32_t elems;
-            memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint32_t));
+            std::memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint32_t));
             elems ^= xor_mask;
-            memcpy(&out.qs[dst_offset], &elems, sizeof(uint32_t));
+            std::memcpy(&out.qs[dst_offset], &elems, sizeof(uint32_t));
         }
     } else {
-        GGML_ASSERT(false);
+        GGML_ASSERT(false && "Unsupported interleave block size for q4_0");
+    }
+
+    return out;
+}
+
+static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_interleave) {
+    block_q4_Kx8 out;
+
+    // Copy deltas and dmins (8 blocks)
+    for (int i = 0; i < 8; i++) {
+        out.d[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
+        out.dmin[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+    }
+
+    // Guaranteed size (QK_K = 256 → qs = 128 bytes/block → 128*8 = 1024 bytes)
+    static_assert(sizeof(block_q4_Kx8::qs) == 1024, "Unexpected block_q4_Kx8::qs size");
+    static_assert(sizeof(block_q4_K::qs) == 128, "Unexpected block_q4_K::qs size");
+
+    const int end = QK_K * 4 / blck_size_interleave; // 1024 / blck_size_interleave
+
+    // Only supports interleave 8 (as used in repackaging).
+    if (blck_size_interleave != 8) {
+        GGML_ASSERT(false && "Unsupported interleave block size for q4_Kx8");
+    }
+
+    // Interleave Q4_K quants: 8 bytes at a time
+    for (int i = 0; i < end; ++i) {
+        int src_id = i % 8;
+        int src_offset = (i / 8) * blck_size_interleave; // 0, 8, ..., 112
+        int dst_offset = i * blck_size_interleave;        // 0, 8, ..., 1016
+
+        // Explicit verification of limits
+        if (src_offset + sizeof(uint64_t) > sizeof(block_q4_K::qs) ||
+            dst_offset + sizeof(uint64_t) > sizeof(block_q4_Kx8::qs)) {
+            GGML_ASSERT(false && "make_block_q4_Kx8: out of bounds");
+        }
+
+        uint64_t elems;
+        std::memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
+        std::memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
     }
 
     return out;
@@ -2787,22 +2844,39 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_in
 static block_q4_0x8 make_block_q4_0x8(block_q4_0 * in, unsigned int blck_size_interleave) {
     block_q4_0x8 out;
 
+    // Initialize deltas (8 blocks)
     for (int i = 0; i < 8; i++) {
         out.d[i] = in[i].d;
     }
 
-    const int end = QK4_0 * 4 / blck_size_interleave;
+    // Guaranteed size (QK4_0 = 32 ? qs = 16 bytes/block ? 16*8 = 128 bytes
+    static_assert(sizeof(block_q4_0x8::qs) == 128, "Unexpected block_q4_0x8 size");
+    static_assert(sizeof(block_q4_0::qs) == 16, "Unexpected block_q4_0 size");
+
+    const int end = QK4_0 * 4 / blck_size_interleave; // 128 / blck_size_interleave
+
+    // It only supports interleave 8 for Q4_0x8.
+    if (blck_size_interleave != 8) {
+        GGML_ASSERT(false && "Unsupported interleave block size for q4_0x8");
+    }
+
     const uint64_t xor_mask = 0x8888888888888888ULL;
 
     for (int i = 0; i < end; ++i) {
         int src_id = i % 8;
-        int src_offset = (i / 8) * blck_size_interleave;
-        int dst_offset = i * blck_size_interleave;
+        int src_offset = (i / 8) * blck_size_interleave; // 0 ou 8
+        int dst_offset = i * blck_size_interleave;        // 0, 8, ..., 120
+
+        // Explicit limit verification (mandatory to avoid warnings)
+        if (src_offset + sizeof(uint64_t) > sizeof(block_q4_0::qs) ||
+            dst_offset + sizeof(uint64_t) > sizeof(block_q4_0x8::qs)) {
+            GGML_ASSERT(false && "make_block_q4_0x8: out of bounds");
+        }
 
         uint64_t elems;
-        memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
+        std::memcpy(&elems, &in[src_id].qs[src_offset], sizeof(uint64_t));
         elems ^= xor_mask;
-        memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
+        std::memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
     }
 
     return out;
@@ -2832,84 +2906,6 @@ static block_q4_0x16 make_block_q4_0x16(block_q4_0 * in, unsigned int blck_size_
 
     return out;
 }
-
-static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_interleave) {
-    block_q4_Kx8 out;
-    //Delta(scale) and dmin values of the eight Q4_K structures are copied onto the output interleaved structure
-    for (int i = 0; i < 8; i++) {
-        out.d[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-    }
-
-    for (int i = 0; i < 8; i++) {
-        out.dmin[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
-    }
-
-    const int end = QK_K * 4 / blck_size_interleave;
-
-    // Interleave Q4_K quants by taking 8 bytes at a time
-    for (int i = 0; i < end; ++i) {
-        int src_id = i % 8;
-        int src_offset = (i / 8) * blck_size_interleave;
-        int dst_offset = i * blck_size_interleave;
-
-        // buffer large enough for the max interleave block size (8 bytes)
-        uint64_t elems;
-        memcpy(&elems, &in[src_id].qs[src_offset], blck_size_interleave);
-        memcpy(&out.qs[dst_offset], &elems, blck_size_interleave);
-    }
-
-    // The below logic is designed so as to unpack and rearrange scales and mins values in Q4_K
-    // Currently the Q4_K structure has 8 scales and 8 mins packed in 12 bytes ( 6 bits for each value)
-    // The output Q4_Kx8 structure has 96 bytes
-    // Every 12 byte is packed such that it contains scales and mins for corresponding sub blocks from Q4_K structure
-    // For eg - First 12 bytes contains 8 scales and 8 mins - each of first sub block from different Q4_K structures
-    uint8_t s[8], m[8];
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            s[j] = in[j].scales[i] & 63;
-            m[j] = in[j].scales[i + 4] & 63;
-        }
-
-        out.scales[i * 12]      = (s[0] & 63) + ((s[4] & 48) << 2);
-        out.scales[i * 12 + 1]  = (s[1] & 63) + ((s[5] & 48) << 2);
-        out.scales[i * 12 + 2]  = (s[2] & 63) + ((s[6] & 48) << 2);
-        out.scales[i * 12 + 3]  = (s[3] & 63) + ((s[7] & 48) << 2);
-        out.scales[i * 12 + 4]  = (m[0] & 63) + ((m[4] & 48) << 2);
-        out.scales[i * 12 + 5]  = (m[1] & 63) + ((m[5] & 48) << 2);
-        out.scales[i * 12 + 6]  = (m[2] & 63) + ((m[6] & 48) << 2);
-        out.scales[i * 12 + 7]  = (m[3] & 63) + ((m[7] & 48) << 2);
-        out.scales[i * 12 + 8]  = (s[4] & 15) + ((m[4] & 15) << 4);
-        out.scales[i * 12 + 9]  = (s[5] & 15) + ((m[5] & 15) << 4);
-        out.scales[i * 12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-        out.scales[i * 12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
-
-    }
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            s[j] = ((in[j].scales[i] & 192) >> 2) | (in[j].scales[i+8] & 15);
-            m[j] = ((in[j].scales[i + 4] & 192) >> 2) | ((in[j].scales[i+8] & 240) >> 4);
-        }
-
-        out.scales[i * 12 + 48] = (s[0] & 63) + ((s[4] & 48) << 2);
-        out.scales[i * 12 + 49] = (s[1] & 63) + ((s[5] & 48) << 2);
-        out.scales[i * 12 + 50] = (s[2] & 63) + ((s[6] & 48) << 2);
-        out.scales[i * 12 + 51] = (s[3] & 63) + ((s[7] & 48) << 2);
-        out.scales[i * 12 + 52] = (m[0] & 63) + ((m[4] & 48) << 2);
-        out.scales[i * 12 + 53] = (m[1] & 63) + ((m[5] & 48) << 2);
-        out.scales[i * 12 + 54] = (m[2] & 63) + ((m[6] & 48) << 2);
-        out.scales[i * 12 + 55] = (m[3] & 63) + ((m[7] & 48) << 2);
-        out.scales[i * 12 + 56] = (s[4] & 15) + ((m[4] & 15) << 4);
-        out.scales[i * 12 + 57] = (s[5] & 15) + ((m[5] & 15) << 4);
-        out.scales[i * 12 + 58] = (s[6] & 15) + ((m[6] & 15) << 4);
-        out.scales[i * 12 + 59] = (s[7] & 15) + ((m[7] & 15) << 4);
-
-    }
-
-    return out;
-}
-
 static block_q4_Kx16 make_block_q4_Kx16(block_q4_K * in, unsigned int blck_size_interleave) {
     block_q4_Kx16 out;
     //Delta(scale) and dmin values of the 16 Q4_K structures are copied onto the output interleaved structure
