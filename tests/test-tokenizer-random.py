@@ -16,8 +16,7 @@ import random
 import unicodedata
 
 from pathlib import Path
-from typing import Any, Iterator, cast
-from typing_extensions import Buffer
+from typing import Any, Iterator
 
 import cffi
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -114,7 +113,7 @@ class LibLlamaModel:
         while num < 0 and len(self.text_buff) < (16 << 20):
             self.text_buff = self.ffi.new("uint8_t[]", -2 * num)
             num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
-        return str(cast(Buffer, self.ffi.buffer(self.text_buff, num)), encoding="utf-8", errors="replace")  # replace errors with '\uFFFD'
+        return str(self.ffi.buffer(self.text_buff, num), encoding="utf-8", errors="replace")  # replace errors with '\uFFFD' # pyright: ignore[reportArgumentType]
 
 
 class Tokenizer:
@@ -438,7 +437,7 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
     decode_errors = 0
     MAX_ERRORS = 10
 
-    logger.info("%s: %s" % (generator.__qualname__, "ini"))
+    logger.info("%s: %s" % (getattr(generator, "__qualname__", ""), "ini"))
     for text in generator:
         # print(repr(text), text.encode())
         # print(repr(text), hex(ord(text[0])), text.encode())
@@ -477,7 +476,7 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
             break
 
     t_total = time.perf_counter() - t_start
-    logger.info(f"{generator.__qualname__}: end,  {t_encode1=:.3f} {t_encode2=:.3f}  {t_decode1=:.3f} {t_decode2=:.3f}  {t_total=:.3f}")
+    logger.info(f"{getattr(generator, '__qualname__', '')}: end,  {t_encode1=:.3f} {t_encode2=:.3f}  {t_decode1=:.3f} {t_decode2=:.3f}  {t_total=:.3f}")
 
 
 def main(argv: list[str] | None = None):
