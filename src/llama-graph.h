@@ -876,6 +876,25 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    // Helpers for phi4flash differential attention -- expose iswa KV cache internals
+    void write_kv_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        int il) const;
+
+    ggml_tensor * read_k_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const;
+
+    ggml_tensor * read_v_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const;
+
+    ggml_tensor * get_kq_mask_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const;
+
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
     ggml_tensor * build_attn(

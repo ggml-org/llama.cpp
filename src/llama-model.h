@@ -232,6 +232,10 @@ struct llama_layer {
     struct ggml_tensor * ssm_b_norm      = nullptr;
     struct ggml_tensor * ssm_c_norm      = nullptr;
 
+    // GMU tensors
+    struct ggml_tensor * gmu_in  = nullptr;
+    struct ggml_tensor * gmu_out = nullptr;
+
     // attention
     struct ggml_tensor * wq        = nullptr;
     struct ggml_tensor * wk        = nullptr;
@@ -253,6 +257,13 @@ struct llama_layer {
     struct ggml_tensor * wv_enc    = nullptr;
     struct ggml_tensor * wo_enc    = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
+
+    //differential attention parameters
+    struct ggml_tensor * attn_lambda_q1 = nullptr;
+    struct ggml_tensor * attn_lambda_q2 = nullptr;
+    struct ggml_tensor * attn_lambda_k1 = nullptr;
+    struct ggml_tensor * attn_lambda_k2 = nullptr;
+    struct ggml_tensor * attn_subln = nullptr;
 
     // attention bias
     struct ggml_tensor * bq   = nullptr;

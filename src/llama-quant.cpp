@@ -690,6 +690,19 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
+        // Add this block to force odd-sized Phi-4-Flash tensors to F16
+        std::string t_name = ggml_get_name(tensor);
+        if (t_name.find("ssm_a") != std::string::npos ||
+            t_name.find("ssm_d") != std::string::npos ||
+            t_name.find("ssm_dt") != std::string::npos ||
+            t_name.find("gmu_") != std::string::npos ||
+            t_name.find("attn_lambda_")  != std::string::npos ||
+            t_name.find("attn_subln")    != std::string::npos ||
+            t_name.find("ffn_norm")      != std::string::npos ||
+            t_name.find("output_norm")   != std::string::npos) {
+
+                new_type = GGML_TYPE_F16; // Downgrade to F16 to save VRAM and bypass Q8 errors!
+        }
         // incompatible tensor shapes are handled here - fallback to a compatible type
         new_type = tensor_type_fallback(qs, tensor, new_type);
     }

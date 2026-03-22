@@ -2281,6 +2281,46 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+// Implementations needed for Phi-4-Mini-Flash-Reasoning
+
+void llm_graph_context::write_kv_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        int il) const {
+    const auto * mctx_iswa = inp->mctx;
+    const bool   is_swa    = hparams.is_swa(il);
+    const auto * mctx_cur  = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+    const auto & k_idxs    = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
+    const auto & v_idxs    = is_swa ? inp->get_v_idxs_swa() : inp->get_v_idxs();
+    ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+    ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+}
+
+ggml_tensor * llm_graph_context::read_k_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const {
+    const auto * mctx_iswa = inp->mctx;
+    const bool   is_swa    = hparams.is_swa(il);
+    const auto * mctx_cur  = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+    return mctx_cur->get_k(ctx0, il);
+}
+
+ggml_tensor * llm_graph_context::read_v_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const {
+    const auto * mctx_iswa = inp->mctx;
+    const bool   is_swa    = hparams.is_swa(il);
+    const auto * mctx_cur  = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+    return mctx_cur->get_v(ctx0, il);
+}
+
+ggml_tensor * llm_graph_context::get_kq_mask_iswa(
+        llm_graph_input_attn_kv_iswa * inp,
+        int il) const {
+    return hparams.is_swa(il) ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+}
+
 // TODO: maybe separate the inner implementation into a separate function
 //       like with the non-sliding window equivalent
 //       once sliding-window hybrid caches are a thing.

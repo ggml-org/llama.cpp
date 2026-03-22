@@ -400,6 +400,7 @@ class MODEL_ARCH(IntEnum):
     PHI2             = auto()
     PHI3             = auto()
     PHIMOE           = auto()
+    PHI4FLASH        = auto()
     PLAMO            = auto()
     PLAMO2           = auto()
     PLAMO3           = auto()
@@ -806,7 +807,13 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM        = auto() # SSM conv
     A_ENC_CONV_PW1         = auto()
     A_ENC_CONV_PW2         = auto()
-
+    GMU_IN                 = auto()
+    GMU_OUT                = auto()
+    ATTN_LAMBDA_Q1         = auto()
+    ATTN_LAMBDA_Q2         = auto()
+    ATTN_LAMBDA_K1         = auto()
+    ATTN_LAMBDA_K2         = auto()
+    ATTN_SUBLN             = auto()
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
@@ -846,6 +853,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
     MODEL_ARCH.PHIMOE:           "phimoe",
+    MODEL_ARCH.PHI4FLASH:        "phi4flash",
     MODEL_ARCH.PLAMO:            "plamo",
     MODEL_ARCH.PLAMO2:           "plamo2",
     MODEL_ARCH.PLAMO3:           "plamo3",
@@ -2050,6 +2058,32 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.PHI4FLASH: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_X,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.GMU_IN,
+        MODEL_TENSOR.GMU_OUT,
+        MODEL_TENSOR.ATTN_LAMBDA_Q1,
+        MODEL_TENSOR.ATTN_LAMBDA_Q2,
+        MODEL_TENSOR.ATTN_LAMBDA_K1,
+        MODEL_TENSOR.ATTN_LAMBDA_K2,
+        MODEL_TENSOR.ATTN_SUBLN,
     ],
     MODEL_ARCH.CODESHELL: [
         MODEL_TENSOR.TOKEN_EMBD,
