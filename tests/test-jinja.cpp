@@ -2285,7 +2285,7 @@ static void test_fuzzing(testing & t) {
         for (const auto & tmpl : malformed) {
             t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
         }
-        std::string tmpl = "{% for message in messages %}{{ message.role }} : {{ message.content }}{% endfor %";
+        std::string tmpl = "{% for message in messages %}{{ message.role | string }} : {{ message.content if ('content' in message and message.content is not none) }}{% endfor %";
         while (tmpl.length() > 0) {
             t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
             tmpl.pop_back();
