@@ -127,7 +127,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
-		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
+		'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 	mcpServerUsageStats:

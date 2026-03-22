@@ -418,7 +418,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -m, --model <filename>                      (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
     printf("  -hf, -hfr, --hf-repo <user>/<model>[:quant] Hugging Face model repository; quant is optional, case-insensitive\n");
     printf("                                              default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n");
-    printf("                                              example: unsloth/phi-4-GGUF:Q4_K_M\n");
+    printf("                                              example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n");
     printf("                                              (default: unused)\n");
     printf("  -hff, --hf-file <file>                      Hugging Face model file. If specified, it will override the quant in --hf-repo\n");
     printf("                                              (default: unused)\n");
