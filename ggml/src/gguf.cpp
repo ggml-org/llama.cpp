@@ -510,6 +510,10 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
                     ok = false;
                 }
             }
+            if (ok && key.empty()) {
+                GGML_LOG_ERROR("%s: key %" PRIi64 " has an empty name\n", __func__, i);
+                ok = false;
+            }
             if (!ok) {
                 break;
             }
