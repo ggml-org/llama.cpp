@@ -2360,10 +2360,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         // to GPU0 (device_id=0) even though GPU0 can't hold them all.  The fused
         // dispatch would hang trying to upload 128 experts per layer into 10GB.
         //
-        // Phase 4 counts GPU0 experts, calculates capacity, and spills excess
-        // to CPU (device_id=-1, device_ptr=nullptr).  The existing CPU dispatch
-        // path (cpu-dispatch.cpp) handles CPU-routed experts via AOS vec_dot.
-        if (!gpu0_can_hold_all && expert_weight_bytes > 0) {
+        // Phase 4 SKIPPED: dispatch handles CPU fallback via device_ptr check.
+        // Experts stay device_id=0 from Phase 1 with device_ptr=nullptr.
+        // Prestage sets device_ptr for popular experts → GPU0 dispatch.
+        // Unprestaged experts (device_ptr==nullptr) → CPU fallback naturally.
+        // Phase 4 had bugs: gate/up/down spilled independently, ran before
+        // popularity ranking. The dispatch fallback chain handles it correctly.
+        if (false) {
             // Collect GPU0-assigned expert indices (sorted by popularity for eviction)
             struct gpu0_expert_info {
                 size_t list_idx;     // index into expert_list
