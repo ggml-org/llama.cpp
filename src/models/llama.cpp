@@ -24,6 +24,9 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
         inp_attn = build_attn_inp_kv();
     }
 
+    // TEST ONLY
+    build_inp_ngram_ids();
+
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
