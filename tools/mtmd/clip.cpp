@@ -2194,16 +2194,16 @@ struct clip_model_loader {
         auto & hparams = model.hparams;
         int min_num = hparams.preproc_min_tiles;
         int max_num = hparams.preproc_max_tiles;
-        for (int n = min_num; n <= max_num; ++n) {
-            for (int i = 1; i <= n; ++i) {
-                for (int j = 1; j <= n; ++j) {
-                    if (i * j <= max_num && i * j >= min_num) {
-                        hparams.image_res_candidates.push_back(clip_image_size{
-                            i*hparams.image_size,
-                            j*hparams.image_size,
+        for (int a = min_num; a <= max_num; ++a) {
+            int b_lo = (min_num + a - 1) / a;
+            int b_hi = max_num / a;
+            b_lo = std::max(b_lo, min_num);
+            b_hi = std::min(b_hi, max_num);
+            for (int b = b_lo; b <= b_hi; ++b) {
+                hparams.image_res_candidates.push_back(clip_image_size{
+                            a*hparams.image_size,
+                            b*hparams.image_size,
                         });
-                    }
-                }
             }
         }
     }
