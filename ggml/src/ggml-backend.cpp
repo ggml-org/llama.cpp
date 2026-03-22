@@ -669,8 +669,10 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
-#define GGML_SCHED_MAX_COPIES 4
+#define GGML_SCHED_MAX_COPIES 16
 #endif
+
+static int sched_n_copies_override = 0;
 
 struct ggml_backend_sched_split {
     int backend_id;
@@ -1652,7 +1654,22 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->debug_realloc = GGML_SCHED_DEBUG_REALLOC ? atoi(GGML_SCHED_DEBUG_REALLOC) : sched->debug_realloc;
 
     sched->n_backends = n_backends;
-    sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+    int n_copies = parallel ? 4 : 1;
+ 
+    if (parallel) {
+        const int override = sched_n_copies_override;
+        if (override > 0) {
+            n_copies = override;
+        }
+    
+        if (n_copies < 1) {
+            n_copies = 1;
+        } else if (n_copies > GGML_SCHED_MAX_COPIES) {
+            n_copies = GGML_SCHED_MAX_COPIES;
+        }
+    }
+ 
+    sched->n_copies = n_copies;
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
@@ -1832,6 +1849,10 @@ int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
 int ggml_backend_sched_get_n_copies(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     return sched->n_copies;
+}
+
+void ggml_backend_sched_set_n_copies(int n_copies) {
+    sched_n_copies_override = n_copies;
 }
 
 int ggml_backend_sched_get_n_backends(ggml_backend_sched_t sched) {
