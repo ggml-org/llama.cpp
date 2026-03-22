@@ -1139,9 +1139,12 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
                     {
+                        // older version of internvl doesn't have min/max tiles, we need to provide default values for them to avoid issues
+                        hparams.preproc_min_tiles = 1;
+                        hparams.preproc_max_tiles = 12;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
-                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles);
-                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles);
+                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
                         set_internvl_dhr_res_candidates(model);
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
@@ -2191,15 +2194,18 @@ struct clip_model_loader {
         auto & hparams = model.hparams;
         int min_num = hparams.preproc_min_tiles;
         int max_num = hparams.preproc_max_tiles;
-        for (int n = min_num; n <= max_num; ++n)
-            for (int i = 1; i <= n; ++i)
-                for (int j = 1; j <= n; ++j)
-                    if (i * j <= max_num && i * j >= min_num)
+        for (int n = min_num; n <= max_num; ++n) {
+            for (int i = 1; i <= n; ++i) {
+                for (int j = 1; j <= n; ++j) {
+                    if (i * j <= max_num && i * j >= min_num) {
                         hparams.image_res_candidates.push_back(clip_image_size{
-                        i*hparams.image_size,
-                        j*hparams.image_size,
-                    });
-
+                            i*hparams.image_size,
+                            j*hparams.image_size,
+                        });
+                    }
+                }
+            }
+        }
     }
 };
 
