@@ -595,10 +595,16 @@ static hf_plan get_hf_plan(const common_params_model        & model,
                            const std::string                & token,
                            const common_download_model_opts & opts) {
     hf_plan plan;
+    hf_cache::hf_files all;
+
     auto [repo, tag] = common_download_split_repo_tag(model.hf_repo);
 
-    auto all = opts.offline ? hf_cache::get_cached_files(repo)
-                            : hf_cache::get_repo_files(repo, token);
+    if (!opts.offline) {
+        all = hf_cache::get_repo_files(repo, token);
+    }
+    if (all.empty()) {
+        all = hf_cache::get_cached_files(repo);
+    }
     if (all.empty()) {
         return plan;
     }
