@@ -999,11 +999,12 @@ void ggml_sycl_tp_cache_ffn_norm(int          layer,
         }
     }
 
-    // Copy current FFN norm output to cache
-    stream->memcpy(entry.data, data, size).wait();
+    // Copy current FFN norm output to cache (in-order queue, no CPU wait needed yet)
+    stream->memcpy(entry.data, data, size);
 
     // DEBUG: Check L31 weight AFTER cache copy
     if (g_ggml_sycl_tp_debug && (layer == 31 || layer == 0)) {
+        stream->wait();  // Debug path only: sync for validation
         uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
 
         struct {
@@ -1025,7 +1026,9 @@ void ggml_sycl_tp_cache_ffn_norm(int          layer,
         }
     }
 
-    // Also copy to device 1's buffer (via host staging)
+    // Also copy to device 1's buffer (via host staging).
+    // D2H on stream (in-order, depends on prior memcpy above).
+    // Must wait for D2H before H2D on stream1 (cross-device).
     void * host_buf = ggml_sycl_malloc_host_tracked_bytes(size, *stream, "tp_host_buf");
     stream->memcpy(host_buf, data, size).wait();
     int dev1 = g_sycl_tp_config.devices[1];
@@ -2129,7 +2132,7 @@ void ggml_sycl_tp_copy_weight_shard(void *              dst_device,
     int64_t ne1 = tensor->ne[1];
 
     if (tp_type == tp_layer_type::TP_COLUMN_PARALLEL) {
-        // Shard ne1 dimension
+        // Shard ne1 dimension — contiguous source region, single H2D copy
         int64_t shard_ne1  = ne1 / world_size;
         int64_t offset_ne1 = rank * shard_ne1;
 
@@ -2139,21 +2142,24 @@ void ggml_sycl_tp_copy_weight_shard(void *              dst_device,
         const char * src = static_cast<const char *>(src_host) + offset_ne1 * row_size;
         stream->memcpy(dst_device, src, shard_size).wait();
     } else if (tp_type == tp_layer_type::TP_ROW_PARALLEL) {
-        // Shard ne0 dimension - more complex due to quantization blocks
+        // Shard ne0 dimension - more complex due to quantization blocks.
+        // Submit all row copies to the in-order queue, then wait once at the end
+        // instead of blocking the CPU on every single row copy.
         int64_t shard_ne0  = ne0 / world_size;
         int64_t offset_ne0 = rank * shard_ne0;
 
         size_t full_row_size  = ggml_row_size(tensor->type, ne0);
         size_t shard_row_size = ggml_row_size(tensor->type, shard_ne0);
 
-        // Copy row by row
         char *       dst = static_cast<char *>(dst_device);
         const char * src = static_cast<const char *>(src_host);
 
         for (int64_t row = 0; row < ne1; row++) {
             size_t src_offset = row * full_row_size + ggml_row_size(tensor->type, offset_ne0);
-            stream->memcpy(dst + row * shard_row_size, src + src_offset, shard_row_size).wait();
+            stream->memcpy(dst + row * shard_row_size, src + src_offset, shard_row_size);
         }
+        // Single wait after all row copies are submitted
+        stream->wait();
     } else {
         // Full copy for non-sharded tensors
         size_t size = ggml_nbytes(tensor);

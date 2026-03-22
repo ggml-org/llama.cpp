@@ -12441,8 +12441,9 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                 return GGML_STATUS_ALLOC_FAILED;
             }
 
-            // Zero-fill the entire buffer (important for row-parallel zero-padding)
-            stream->memset(buf, 0, padded_size).wait();
+            // Zero-fill the entire buffer (important for row-parallel zero-padding).
+            // No .wait() needed: in-order queue serializes with subsequent memcpy in set_tensor.
+            stream->memset(buf, 0, padded_size);
             extra->data_device[device]      = buf;
             extra->data_device_size[device] = padded_size;
             // Store local dimensions for rank 0 (used for tensor->ne update)
@@ -12535,8 +12536,8 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                         device, tensor->name);
                 return GGML_STATUS_ALLOC_FAILED;
             }
-            // Zero padding
-            stream->memset(buf, 0, padded_size).wait();
+            // Zero padding — no .wait() needed: in-order queue serializes with subsequent memcpy.
+            stream->memset(buf, 0, padded_size);
             // DEBUG: Track tensor allocation
             if (g_ggml_sycl_tp_debug && (is_tok_embd || (tensor->name[0] && strstr(tensor->name, "output_norm")))) {
                 sycl::device q_dev = stream->get_device();

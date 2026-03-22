@@ -175,9 +175,10 @@ bool layer_stream_manager::load_layer_sync(int layer_id, int buffer_idx, sycl::q
     const auto & layer = layers_[layer_id];
     if (layer.weights.empty()) return false;
 
-    char * dst_base = static_cast<char *>(buffers_[buffer_idx]);
-    int    copied   = 0;
-    int    skipped  = 0;
+    char *      dst_base = static_cast<char *>(buffers_[buffer_idx]);
+    int         copied   = 0;
+    int         skipped  = 0;
+    sycl::event last_event;
 
     for (const auto & w : layer.weights) {
         if (!w.host_ptr) {
@@ -186,12 +187,14 @@ bool layer_stream_manager::load_layer_sync(int layer_id, int buffer_idx, sycl::q
             skipped++;
             continue;
         }
-        queue.memcpy(dst_base + w.offset_in_layer, w.host_ptr, w.size);
+        last_event = queue.memcpy(dst_base + w.offset_in_layer, w.host_ptr, w.size);
         copied++;
     }
 
-    // Wait for all copies to complete (synchronous)
-    queue.wait();
+    // Wait for last copy event (in-order queue guarantees all prior copies complete)
+    if (copied > 0) {
+        last_event.wait();
+    }
 
     loaded_layers_[buffer_idx] = layer_id;
 

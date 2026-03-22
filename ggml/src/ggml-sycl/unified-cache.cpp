@@ -2133,7 +2133,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
 
                 // Copy new data (only if on device, host_cache already filled host buffer)
                 if (!is_host_resident) {
-                    copy_to_device(new_device_ptr, src_ptr, size);
+                    copy_to_device(new_device_ptr, src_ptr, size).wait();
                 }
 
                 // Update entry with new allocation
@@ -2157,7 +2157,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                     "re-uploading\n",
                     (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
                     (unsigned long long) it->second.content_hash, (unsigned long long) new_hash);
-                copy_to_device(it->second.device_ptr, src_ptr, size);
+                copy_to_device(it->second.device_ptr, src_ptr, size).wait();
                 it->second.content_hash = new_hash;
                 it->second.src_ptr      = src_ptr;
             } else {
@@ -2242,7 +2242,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
         }
     } else {
         // Copy data from source to device
-        copy_to_device(device_ptr, src_ptr, size);
+        copy_to_device(device_ptr, src_ptr, size).wait();
     }
 
     // Compute content hash for new entry (only computed once on cache miss)
@@ -3290,19 +3290,23 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             return result;
         }
 
-        // Wait for fill to complete before any padding memset
-        fill_event.wait();
-
+        // Chain padding after fill via depends_on instead of separate .wait() calls.
+        // Single wait at the end ensures both fill and padding complete before marking READY.
+        sycl::event last_fill_event = fill_event;
         if (request.layout != GGML_LAYOUT_XMX_TILED && request.layout != GGML_LAYOUT_XMX_GEMM_TILED &&
             request.layout != GGML_LAYOUT_ONEDNN_PACKED && request.layout != GGML_LAYOUT_ONEDNN_WOQ &&
             request.dst_size > request.src_size) {
             const size_t pad_bytes = request.dst_size - request.src_size;
             void *       pad_ptr   = static_cast<char *>(device_ptr) + request.src_size;
             GGML_SYCL_DEBUG("[DEBUG-FILL] About to memset padding: pad_ptr=%p pad_bytes=%zu\n", pad_ptr, pad_bytes);
-            // Do padding synchronously - Level Zero has issues with event chains
-            queue_.memset(pad_ptr, 0, pad_bytes).wait();
-            GGML_SYCL_DEBUG("[DEBUG-FILL] Padding memset completed\n");
+            // Chain padding memset after fill via depends_on — no intermediate CPU stall
+            last_fill_event = queue_.submit([&](sycl::handler & cgh) {
+                cgh.depends_on(fill_event);
+                cgh.memset(pad_ptr, 0, pad_bytes);
+            });
+            GGML_SYCL_DEBUG("[DEBUG-FILL] Padding memset submitted\n");
         }
+        last_fill_event.wait();
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] layout fill failed (sycl): %s\n", e.what());
         GGML_LOG_ERROR(
@@ -4263,44 +4267,58 @@ float unified_cache::compute_score(const unified_cache_entry & entry) const {
     return base_score;
 }
 
-void unified_cache::copy_to_device(void * dst, const void * src, size_t size) {
+sycl::event unified_cache::copy_to_device(void * dst, const void * src, size_t size) {
     // Host-pinned USM can be read directly by the GPU via DMA — skip staging.
     const sycl::usm::alloc src_type = ggml_sycl_get_alloc_type(src);
     if (src_type == sycl::usm::alloc::host || src_type == sycl::usm::alloc::device) {
-        queue_.memcpy(dst, src, size).wait();
-        return;
+        return queue_.memcpy(dst, src, size);
     }
     // Use staging buffer for mmap'd / non-USM data
     if (staging_ && size <= staging_size_) {
         std::lock_guard<std::mutex> lock(staging_mutex_);
         // Copy mmap -> staging (may trigger page fault)
         std::memcpy(staging_, src, size);
-        // Copy staging -> device
-        queue_.memcpy(dst, staging_, size).wait();
+        // Copy staging -> device — return event instead of blocking
+        return queue_.memcpy(dst, staging_, size);
     } else if (staging_) {
         std::lock_guard<std::mutex> lock(staging_mutex_);
-        // Chunked transfer for large entries
-        const char *                src_ptr   = static_cast<const char *>(src);
-        char *                      dst_ptr   = static_cast<char *>(dst);
-        size_t                      remaining = size;
+        // Chunked transfer for large entries — must serialize chunks through
+        // the single staging buffer, so each chunk waits on prior via depends_on.
+        const char * src_ptr   = static_cast<const char *>(src);
+        char *       dst_ptr   = static_cast<char *>(dst);
+        size_t       remaining = size;
+        sycl::event  last_event;
 
         while (remaining > 0) {
             size_t chunk = std::min(remaining, staging_size_);
+            // Must wait for previous chunk's GPU read of staging_ to complete
+            // before overwriting staging_ with next chunk's memcpy.
+            if (src_ptr != static_cast<const char *>(src)) {
+                last_event.wait();
+            }
             std::memcpy(staging_, src_ptr, chunk);
-            queue_.memcpy(dst_ptr, staging_, chunk).wait();
+            last_event = queue_.memcpy(dst_ptr, staging_, chunk);
             src_ptr += chunk;
             dst_ptr += chunk;
             remaining -= chunk;
         }
+        // Wait for the final chunk since we hold staging_mutex_ and the staging
+        // buffer must not be reused until the GPU finishes reading it.
+        last_event.wait();
+        return sycl::event{};
     } else {
         // No staging - need temp allocation
         void * temp = ggml_sycl_malloc_host(size, queue_, "unified_cache:host_temp");
         if (temp) {
             std::memcpy(temp, src, size);
-            queue_.memcpy(dst, temp, size).wait();
+            sycl::event evt = queue_.memcpy(dst, temp, size);
+            // Must wait before freeing temp buffer
+            evt.wait();
             sycl::free(temp, queue_);
+            return sycl::event{};
         } else {
             GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to allocate temp staging\n");
+            return sycl::event{};
         }
     }
 }
@@ -4329,7 +4347,7 @@ sycl::event unified_cache::copy_to_device_async(void *                          
         for (const auto & dep : deps) {
             const_cast<sycl::event &>(dep).wait();
         }
-        copy_to_device(dst, src, size);
+        copy_to_device(dst, src, size).wait();
         return submit_barrier_all();
     }
 
@@ -7132,10 +7150,12 @@ void * unified_cache::load_partial_rows(const char * tensor_name,
         return nullptr;
     }
 
-    // Copy AOS data from host to device
-    queue_.memcpy(dev_ptr, src_host, partial_bytes).wait();
+    // Copy AOS data from host to device — no CPU wait needed since the reorder
+    // kernel below is submitted to the same in-order queue_ and will implicitly
+    // depend on this memcpy completing on the GPU.
+    queue_.memcpy(dev_ptr, src_host, partial_bytes);
 
-    // Apply in-place SOA reorder on device
+    // Apply in-place SOA reorder on device (same queue, implicitly ordered)
     bool reordered = reorder_rows_to_soa(static_cast<uint8_t *>(dev_ptr), type,
                                           ncols, row_count, partial_bytes, &queue_);
     if (!reordered) {

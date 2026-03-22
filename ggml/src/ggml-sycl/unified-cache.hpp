@@ -952,8 +952,8 @@ class unified_cache {
     // score = access_count * exp(-decay * age)
     float compute_score(const unified_cache_entry & entry) const;
 
-    // Copy data from mmap to device via staging
-    void        copy_to_device(void * dst, const void * src, size_t size);
+    // Copy data from mmap to device via staging. Returns event for the last transfer.
+    sycl::event copy_to_device(void * dst, const void * src, size_t size);
     sycl::event copy_to_device_async(void * dst, const void * src, size_t size, const std::vector<sycl::event> & deps);
     static bool event_complete(const sycl::event & evt);
     sycl::event submit_barrier(const std::vector<sycl::event> & deps);
