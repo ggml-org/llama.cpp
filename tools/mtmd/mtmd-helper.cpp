@@ -174,6 +174,28 @@ struct decode_embd_batch {
         }
     }
 
+    // M-RoPE for video: 3D positions [temporal, height, width]
+    void set_position_mrope_3d(llama_pos pos_0, int nx, int ny, int nt, llama_seq_id seq_id) {
+        GGML_ASSERT(n_pos_per_embd == 4);
+        seq_id_0[0] = seq_id;
+        for (int t = 0; t < nt; t++) {
+            for (int y = 0; y < ny; y++) {
+                for (int x = 0; x < nx; x++) {
+                    int i = t * ny * nx + y * nx + x;
+                    pos[i                     ] = pos_0 + t;
+                    pos[i + batch.n_tokens    ] = pos_0 + y;
+                    pos[i + batch.n_tokens * 2] = pos_0 + x;
+                    pos[i + batch.n_tokens * 3] = 0;
+                }
+            }
+        }
+        for (int i = 0; i < batch.n_tokens; i++) {
+            batch.n_seq_id[i] = 1;
+            batch.seq_id  [i] = seq_id_0.data();
+            batch.logits  [i] = false;
+        }
+    }
+
     // M-RoPE for audio
     void set_position_mrope_1d(llama_pos pos_0, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
@@ -260,7 +282,12 @@ int32_t mtmd_helper_decode_image_chunk(
             }
             const int nx = mtmd_image_tokens_get_nx(image_tokens);
             const int ny = mtmd_image_tokens_get_ny(image_tokens);
-            batch_embd.set_position_mrope_2d(n_past, nx, ny, seq_id);
+            const int nt = mtmd_image_tokens_get_nt(image_tokens);
+            if (nt > 1) {
+                batch_embd.set_position_mrope_3d(n_past, nx, ny, nt, seq_id);
+            } else {
+                batch_embd.set_position_mrope_2d(n_past, nx, ny, seq_id);
+            }
         } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             batch_embd.set_position_mrope_1d(n_past, seq_id);
         } else {

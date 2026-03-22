@@ -3619,9 +3619,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // set input pixel values
     if (!imgs.is_audio) {
+        // detect number of channels from the buffer size
+        const int nx = imgs.entries[0]->nx;
+        const int ny = imgs.entries[0]->ny;
+        const int n  = nx * ny;
+        const size_t buf_size = imgs.entries[0]->buf.size();
+        const int n_channels = (int)(buf_size / n);
+        GGML_ASSERT(n_channels == 3 || n_channels == 6);
+
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
-            nelem += img->nx * img->ny * 3;
+            nelem += img->nx * img->ny * n_channels;
         }
         std::vector<float> inp_raw(nelem);
 
@@ -3635,21 +3643,21 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         // │     H │  channel = B
         // └─────┘ │
         //   ──────┘ x B
+        //
+        // for 6-channel video input, same layout but with 6 planar channels
 
-        for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx;
-            const int ny = imgs.entries[i]->ny;
-            const int n = nx * ny;
+        for (int b = 0; b < batch_size; b++) {
+            const int cur_nx = imgs.entries[b]->nx;
+            const int cur_ny = imgs.entries[b]->ny;
+            const int cur_n  = cur_nx * cur_ny;
 
-            for (int b = 0; b < batch_size; b++) {
-                float * batch_entry = inp_raw.data() + b * (3*n);
-                for (int y = 0; y < ny; y++) {
-                    for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
-                        size_t base_dst =    y * nx + x;  // idx of the first channel
-                        batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
-                        batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
-                        batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
+            float * batch_entry = inp_raw.data() + b * (n_channels * cur_n);
+            for (int y = 0; y < cur_ny; y++) {
+                for (int x = 0; x < cur_nx; x++) {
+                    size_t base_src = n_channels * (y * cur_nx + x);
+                    size_t base_dst =              y * cur_nx + x;
+                    for (int c = 0; c < n_channels; c++) {
+                        batch_entry[c * cur_n + base_dst] = imgs.entries[b]->buf[base_src + c];
                     }
                 }
             }
