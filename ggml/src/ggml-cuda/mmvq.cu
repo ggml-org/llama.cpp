@@ -352,6 +352,14 @@ static __global__ void mul_mat_vec_q(
         dst += token_idx*stride_col_dst;
     }
 
+    float nvfp4_t_s = 1.0f;
+    if constexpr (type == GGML_TYPE_NVFP4) {
+        if (fusion.nvfp4_t_s) {
+            const float * nvfp4_t_s_data = (const float *) fusion.nvfp4_t_s;
+            nvfp4_t_s = nvfp4_t_s_data[fusion.nvfp4_t_s_ne > 1 ? channel_x : 0];
+        }
+    }
+
     // sum up partial sums and write back result
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
@@ -376,12 +384,18 @@ static __global__ void mul_mat_vec_q(
 
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
             float result = tmp[j][threadIdx.x];
+            if constexpr (type == GGML_TYPE_NVFP4) {
+                result *= nvfp4_t_s;
+            }
             if constexpr (has_fusion) {
                 if (use_bias) {
                     result += x_biases[j];
                 }
                 if (use_gate) {
                     float gate_value = tmp_gate[j][threadIdx.x];
+                    if constexpr (type == GGML_TYPE_NVFP4) {
+                        gate_value *= nvfp4_t_s;
+                    }
                     if (use_gate_bias) {
                         gate_value += gate_biases[j];
                     }
@@ -764,7 +778,18 @@ void ggml_cuda_mul_mat_vec_q(
             GGML_ASSERT(!ids || fusion->gate_bias->ne[1] == src0->ne[2]);
             fusion_local.gate_bias = fusion->gate_bias->data;
         }
+        if (fusion->nvfp4_t_s) {
+            fusion_local.nvfp4_t_s = fusion->nvfp4_t_s->data;
+            fusion_local.nvfp4_t_s_ne = (int32_t) fusion->nvfp4_t_s->ne[0];
+        }
         fusion_local.glu_op = fusion->glu_op;
+    }
+    if (src0->type == GGML_TYPE_NVFP4 && !fusion_local.nvfp4_t_s) {
+        const ggml_tensor * nvfp4_t_s = ids ? ggml_mul_mat_id_get_scale(dst) : ggml_mul_mat_get_scale(dst);
+        if (nvfp4_t_s) {
+            fusion_local.nvfp4_t_s = nvfp4_t_s->data;
+            fusion_local.nvfp4_t_s_ne = (int32_t) nvfp4_t_s->ne[0];
+        }
     }
 
     // If src0 is a temporary compute buffer, clear any potential padding.
@@ -840,6 +865,13 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int stride_col_y = src1_padded_row_size / QK8_1;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
+    if (src0->type == GGML_TYPE_NVFP4) {
+        const ggml_tensor * nvfp4_t_s = ggml_mul_mat_get_scale(dst);
+        if (nvfp4_t_s) {
+            fusion_local.nvfp4_t_s = nvfp4_t_s->data;
+            fusion_local.nvfp4_t_s_ne = (int32_t) nvfp4_t_s->ne[0];
+        }
+    }
     mul_mat_vec_q_switch_type(
         src0_dd_i, src0->type, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
