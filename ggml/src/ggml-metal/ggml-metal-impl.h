@@ -120,6 +120,7 @@
 #define OP_UNARY_NUM_EXP         114
 #define OP_UNARY_NUM_SOFTPLUS    115
 #define OP_UNARY_NUM_EXPM1       116
+#define OP_UNARY_NUM_XIELU       117
 
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
