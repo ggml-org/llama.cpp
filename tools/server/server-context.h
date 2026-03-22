@@ -76,7 +76,7 @@ struct server_context {
     server_context_meta get_meta() const;
 
     // register a callback to be called when sleeping state changes
-    // must be set load_model() is called
+    // must be set before load_model() is called
     void on_sleeping_changed(std::function<void(bool)> callback);
 };
 

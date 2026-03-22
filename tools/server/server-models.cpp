@@ -39,7 +39,7 @@ extern char **environ;
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
+#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
 #define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 
 // address for child process, this is needed because router may run on 0.0.0.0
@@ -770,12 +770,15 @@ bool server_models::ensure_model_ready(const std::string & name) {
     if (meta->is_ready()) {
         return false; // ready for taking requests
     }
+    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
+        return false; // child is sleeping but still running; new request will wake it up
+    }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
         load(name);
     }
 
-    // for loading state
+    // wait for loading to complete
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
     wait_until_loading_finished(name);
 
@@ -1029,7 +1032,7 @@ void server_models_routes::init_routes() {
             return res;
         }
         if (!model->is_running()) {
-            res_err(res, format_error_response("model is not loaded or is loading", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not running", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.unload(model->name);
