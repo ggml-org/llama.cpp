@@ -94,6 +94,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_bf16(
 #pragma unroll
         for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
 #ifdef V_DOT2_F32_F16_AVAILABLE
+            // FIXME replace macros in vector FA kernel with templating and use FP32 for BF16
             ggml_cuda_mad(sum, ggml_cuda_cast<float2>(tmp[k_KQ_1]), __half22float2(((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]));
 #else
             ggml_cuda_mad(sum, ggml_cuda_cast<float2>(tmp[k_KQ_1]), ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
