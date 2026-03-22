@@ -2264,6 +2264,7 @@ static void test_fuzzing(testing & t) {
 
     t.test("malformed templates (should error, not crash)", [&](testing & t) {
         const std::vector<std::string> malformed = {
+            "",
             "{{ x",
             "{% if %}",
             "{% for %}",
@@ -2283,6 +2284,11 @@ static void test_fuzzing(testing & t) {
         };
         for (const auto & tmpl : malformed) {
             t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+        }
+        std::string tmpl = "{% for message in messages %}{{ message.role }} : {{ message.content }}{% endfor %";
+        while (tmpl.length() > 0) {
+            t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+            tmpl.pop_back();
         }
     });
 
