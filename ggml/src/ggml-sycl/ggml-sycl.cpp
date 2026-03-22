@@ -9724,25 +9724,32 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     // Non-blocking fast path for dense weights in S1 mode when model exceeds VRAM.
     // S1-PRELOAD uploads quantized dense weights as SOA directly to VRAM.
     // For large models (120B: 60GB model, 12GB VRAM), not all weights fit.
-    // When a non-AOS layout is requested and the entry isn't cached,
-    // ensure_cached_layout would block on:
+    // When the entry isn't cached, ensure_cached_layout would block on:
     //   1. sycl::malloc_device (Level Zero driver lock)
     //   2. fill_fn (synchronous CPU reorder on inference thread)
     //   3. queue.memcpy + event.wait (DMA deadlock on busy queue)
     // This causes 120B MoE model inference hangs.
     //
+    // This applies to ALL layouts including AOS.  Element-wise ops (MUL, ADD)
+    // call ggml_sycl_get_layout_ptr -> ggml_sycl_get_weight_layout_ptr with
+    // GGML_LAYOUT_AOS for norm scale weights.  Without AOS coverage, the AOS
+    // request falls through to ensure_cached_layout which blocks on SOA fill
+    // for the same tensor on a contended queue.  GDB confirmed: the hang is
+    // in ensure_cached_layout called from ggml_sycl_op_bin_bcast<op_mul>.
+    //
     // Fix: same pattern as MoE experts (commit 5072e68bf).  Do a pure read-only
-    // cache lookup via try_get_cached_fast().  If the SOA entry was placed by
+    // cache lookup via try_get_cached_fast().  If the entry was placed by
     // S1-PRELOAD, use it.  Otherwise return nullptr so the caller falls back
-    // to AOS host-pinned zero-copy via ggml_sycl_get_data_ptr (PCIe ~8 GB/s).
+    // to host-pinned zero-copy via ggml_sycl_get_data_ptr (PCIe ~8 GB/s).
     // Kernels handle AOS input: MMVQ for TG (batch=1), oneDNN dequants AOS->FP16
-    // for PP, dmmv reads AOS natively.
+    // for PP, dmmv reads AOS natively.  Element-wise ops (MUL/ADD) read F32
+    // host-pinned data directly via PCIe zero-copy.
     //
     // Only applies when model exceeds VRAM (120B: 60GB model, 12GB VRAM).
     // When model fits (Mistral 7B: 4GB model, 10GB budget), ensure_cached_layout
     // handles layout conversion with eviction during warmup -- no deadlock risk
     // because the queue is idle and malloc_device succeeds after eviction.
-    if (ggml_backend_sycl_all_weights_host() && resolved != GGML_LAYOUT_AOS) {
+    if (ggml_backend_sycl_all_weights_host()) {
         // Cache the model_exceeds_vram check (expensive: locks + memory queries).
         static std::atomic<int> s_model_exceeds_vram_cached{ -1 };
         int                     exceeds = s_model_exceeds_vram_cached.load(std::memory_order_acquire);
@@ -9753,7 +9760,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         if (exceeds) {
             void * cached_ptr = cache->try_get_cached_fast(cache_key, resolved);
             if (cached_ptr) {
-                // SOA/COALESCED/etc. already cached -- use it directly.
+                // Entry already cached (SOA from S1-PRELOAD, or AOS) -- use directly.
                 if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
                     ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
                                                       onednn_pack_m);
@@ -9762,10 +9769,11 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
                                 tensor->name ? tensor->name : "(null)", (int) resolved, cached_ptr);
                 return cached_ptr;
             }
-            // Cache miss for non-AOS layout -- model exceeds VRAM, cannot allocate.
-            // Return nullptr so the caller cascades to AOS (VRAM-cached from
-            // S1-PRELOAD or host-pinned zero-copy).
-            GGML_SYCL_DEBUG("[S1-NONBLOCK] Dense weight %s layout=%d MISS, AOS fallback (model exceeds VRAM)\n",
+            // Cache miss -- model exceeds VRAM, cannot allocate without blocking.
+            // Return nullptr so the caller cascades to host-pinned zero-copy
+            // (AOS via ggml_sycl_get_data_ptr for element-wise ops, or VRAM-cached
+            // AOS from S1-PRELOAD for MUL_MAT).
+            GGML_SYCL_DEBUG("[S1-NONBLOCK] Dense weight %s layout=%d MISS, fallback (model exceeds VRAM)\n",
                             tensor->name ? tensor->name : "(null)", (int) resolved);
             return nullptr;
         }
