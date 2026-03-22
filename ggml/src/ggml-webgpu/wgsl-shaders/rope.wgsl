@@ -1,137 +1,11 @@
-#define(VARIANTS)
-
-[
-  {
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "ROTATE"]
-  },
-  {
-    "SHADER_SUFFIX": "f32_inplace",
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "ROTATE_INPLACE"]
-  },
-  {
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "ROTATE"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_inplace",
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "ROTATE_INPLACE"]
-  },
-  {
-   "SHADER_SUFFIX": "f32_ff",
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "ROTATE"]
-  },
-  {
-   "SHADER_SUFFIX": "f32_ff_inplace",
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "ROTATE_INPLACE"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_ff",
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "ROTATE"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_ff_inplace",
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "ROTATE_INPLACE"]
-  }
-]
-
-#end(VARIANTS)
-
-#define(DECLS)
-
-#decl(ROTATE)
-fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
-    dst[i_dst0] = {{TYPE}}(out0);
-    dst[i_dst1] = {{TYPE}}(out1);
-}
-#enddecl(ROTATE)
-
-#decl(ROTATE_INPLACE)
-fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
-    src0[i_dst0] = {{TYPE}}(out0);
-    src0[i_dst1] = {{TYPE}}(out1);
-}
-#enddecl(ROTATE_INPLACE)
-
-#decl(NO_FF_FUNC)
-fn freq_factor(i: u32) -> f32 {
-    return 1.0f;
-}
-#enddecl(NO_FF_FUNC)
-
-#decl(FF_FUNC)
-fn freq_factor(i: u32) -> f32 {
-    return src2[params.offset_src2 + i/2];
-}
-#enddecl(FF_FUNC)
-
-#decl(NO_FF_BINDINGS)
-
-@group(0) @binding(2)
-var<storage, read_write> dst: array<{{TYPE}}>;
-
-@group(0) @binding(3)
-var<uniform> params: Params;
-
-#enddecl(NO_FF_BINDINGS)
-
-#decl(NO_FF_BINDINGS_INPLACE)
-
-@group(0) @binding(2)
-var<uniform> params: Params;
-
-#enddecl(NO_FF_BINDINGS_INPLACE)
-
-#decl(FF_BINDINGS)
-
-@group(0) @binding(2)
-var<storage, read_write> src2: array<f32>;
-
-@group(0) @binding(3)
-var<storage, read_write> dst: array<{{TYPE}}>;
-
-@group(0) @binding(4)
-var<uniform> params: Params;
-
-#enddecl(FF_BINDINGS)
-
-#decl(FF_BINDINGS_INPLACE)
-
-@group(0) @binding(2)
-var<storage, read_write> src2: array<f32>;
-
-@group(0) @binding(3)
-var<uniform> params: Params;
-
-#enddecl(FF_BINDINGS_INPLACE)
-
-#end(DECLS)
-
-#define(SHADER)
-
 enable f16;
+
+#ifdef TYPE_F32
+#define DataType f32
+#endif
+#ifdef TYPE_F16
+#define DataType f16
+#endif
 
 struct Params {
     offset_src0: u32,
@@ -168,12 +42,69 @@ struct Params {
 };
 
 @group(0) @binding(0)
-var<storage, read_write> src0: array<{{TYPE}}>;
-
+var<storage, read_write> src0: array<DataType>;
 @group(0) @binding(1)
 var<storage, read_write> src1: array<i32>;
 
-DECLS
+#ifdef INPLACE
+
+#ifdef FF_FUNC
+
+@group(0) @binding(2)
+var<storage, read_write> src2: array<f32>;
+
+@group(0) @binding(3)
+var<uniform> params: Params;
+
+#else
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+#endif
+
+#else
+
+#ifdef FF_FUNC
+@group(0) @binding(2)
+var<storage, read_write> src2: array<f32>;
+
+@group(0) @binding(3)
+var<storage, read_write> dst: array<DataType>;
+
+@group(0) @binding(4)
+var<uniform> params: Params;
+
+#else
+@group(0) @binding(2)
+var<storage, read_write> dst: array<DataType>;
+
+@group(0) @binding(3)
+var<uniform> params: Params;
+#endif
+#endif
+
+#ifdef FF_FUNC
+fn freq_factor(i: u32) -> f32 {
+    return src2[params.offset_src2 + i/2];
+}
+
+#else
+fn freq_factor(i: u32) -> f32 {
+    return 1.0f;
+}
+#endif
+#ifdef INPLACE
+fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
+    src0[i_dst0] = DataType(out0);
+    src0[i_dst1] = DataType(out1);
+}
+#else
+fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
+    dst[i_dst0] = DataType(out0);
+    dst[i_dst1] = DataType(out1);
+}
+#endif
 
 fn rope_yarn_ramp(low: f32, high: f32, i: u32) -> f32 {
     let y = (f32(i / 2) - low) / max(0.001f, high - low);
@@ -184,7 +115,7 @@ fn rope_yarn_ramp(low: f32, high: f32, i: u32) -> f32 {
 // TODO: check performance of instantiating once on the CPU and passed as buffer, since it's repeated per-row
 fn rope_yarn(theta_extrap: f32, i: u32) -> vec2<f32> {
     var mscale = params.attn_factor;
-    var theta = params.freq_scale * theta_extrap;
+    var theta  = params.freq_scale * theta_extrap;
     if (params.ext_factor != 0.0f) {
         let ramp_mix = rope_yarn_ramp(params.corr_dim0, params.corr_dim1, i) * params.ext_factor;
         theta = theta * (1 - ramp_mix) + theta_extrap * ramp_mix;
@@ -211,10 +142,9 @@ fn pair_offset(is_neox: bool, is_mrope: bool, is_vision: bool) -> u32 {
     }
 }
 
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // two elements per thread
+    // two elements per n_threads
     if (gid.x >= params.n_threads) {
         return;
     }
@@ -290,6 +220,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x0 = f32(src0[i_src]);
     let x1 = f32(src0[i_src + pair_offset(is_neox, is_mrope, is_vision)]);
     rotate(i_dst, i_dst + pair_offset(is_neox, is_mrope, is_vision), x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
-}
 
-#end(SHADER)
+}
