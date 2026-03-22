@@ -4191,12 +4191,8 @@ static inline float32x4_t mxfp6_dequant_neon(
 
 // Unpack 4 tightly-packed 6-bit values from 3 bytes, widen to uint32x4_t.
 static inline uint32x4_t unpack_fp6x4_neon(const uint8_t * p) {
-    const uint32_t pk = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
     uint8_t u[4];
-    u[0] = (pk >>  0) & 0x3F;
-    u[1] = (pk >>  6) & 0x3F;
-    u[2] = (pk >> 12) & 0x3F;
-    u[3] = (pk >> 18) & 0x3F;
+    ggml_mxfp_unpack_fp6x4(p, u);
     const uint8x8_t raw8 = vcreate_u8(
         (uint64_t)u[0] | ((uint64_t)u[1] << 8) |
         ((uint64_t)u[2] << 16) | ((uint64_t)u[3] << 24));
@@ -4219,96 +4215,6 @@ static inline void widen_s8x8_to_f32x4x2(const int8_t * src,
     const int16x8_t q16 = vmovl_s8(q8);
     *lo = vcvtq_f32_s32(vmovl_s16(vget_low_s16(q16)));
     *hi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(q16)));
-}
-
-// MXFP FP8/FP6 vec_dot
-
-static void ggml_vec_dot_mxfp8_q8_0_neon(
-        int n, float * GGML_RESTRICT s,
-        const void * GGML_RESTRICT vx,
-        const void * GGML_RESTRICT vy,
-        const mxfp_neon_traits_t * t) {
-    assert(n % QK_MXFP8 == 0);
-    const int nb = n / QK_MXFP8;
-    const block_mxfp8 * GGML_RESTRICT x = vx;
-    const block_q8_0  * GGML_RESTRICT y = vy;
-
-    const uint32x4_t  v_exp_mask  = vdupq_n_u32(t->exp_mask);
-    const uint32x4_t  v_mant_mask = vdupq_n_u32(t->mant_mask);
-    const uint32x4_t  v_ieee_off  = vdupq_n_u32(t->ieee_exp_off);
-    const float32x4_t v_sub_sc    = vdupq_n_f32(t->sub_scale);
-    const int32x4_t   v_neg_exp   = vdupq_n_s32(-(int)t->exp_shift);
-    const int32x4_t   v_mant_sh   = vdupq_n_s32(t->mant_shift);
-
-    float32x4_t acc0 = vdupq_n_f32(0.0f);
-    float32x4_t acc1 = vdupq_n_f32(0.0f);
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const float32x4_t v_scale = vdupq_n_f32(
-            GGML_E8M0_TO_FP32(x[ib].e) * GGML_CPU_FP16_TO_FP32(y[ib].d));
-
-        for (int j = 0; j < 32; j += 8) {
-            uint32x4_t v_lo, v_hi;
-            widen_u8x8_to_u32x4x2(x[ib].qs + j, &v_lo, &v_hi);
-
-            float32x4_t qf_lo, qf_hi;
-            widen_s8x8_to_f32x4x2(y[ib].qs + j, &qf_lo, &qf_hi);
-
-            const float32x4_t val_lo = mxfp8_dequant_neon(v_lo,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-            const float32x4_t val_hi = mxfp8_dequant_neon(v_hi,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-
-            acc0 = vfmaq_f32(acc0, vmulq_f32(val_lo, v_scale), qf_lo);
-            acc1 = vfmaq_f32(acc1, vmulq_f32(val_hi, v_scale), qf_hi);
-        }
-    }
-
-    *s = vaddvq_f32(vaddq_f32(acc0, acc1));
-}
-
-static void ggml_vec_dot_mxfp6_q8_0_neon(
-        int n, float * GGML_RESTRICT s,
-        const void * GGML_RESTRICT vx,
-        const void * GGML_RESTRICT vy,
-        const mxfp_neon_traits_t * t) {
-    assert(n % QK_MXFP6 == 0);
-    const int nb = n / QK_MXFP6;
-    const block_q8_0 * GGML_RESTRICT y = vy;
-
-    const uint32x4_t  v_exp_mask  = vdupq_n_u32(t->exp_mask);
-    const uint32x4_t  v_mant_mask = vdupq_n_u32(t->mant_mask);
-    const uint32x4_t  v_ieee_off  = vdupq_n_u32(t->ieee_exp_off);
-    const float32x4_t v_sub_sc    = vdupq_n_f32(t->sub_scale);
-    const int32x4_t   v_neg_exp   = vdupq_n_s32(-(int)t->exp_shift);
-    const int32x4_t   v_mant_sh   = vdupq_n_s32(t->mant_shift);
-
-    float32x4_t acc0 = vdupq_n_f32(0.0f);
-    float32x4_t acc1 = vdupq_n_f32(0.0f);
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const block_mxfp6 * GGML_RESTRICT xb = ((const block_mxfp6 *)vx) + ib;
-        const float32x4_t v_scale = vdupq_n_f32(
-            GGML_E8M0_TO_FP32(xb->e) * GGML_CPU_FP16_TO_FP32(y[ib].d));
-
-        for (int j = 0; j < 32; j += 8) {
-            const uint32x4_t v_lo = unpack_fp6x4_neon(xb->qs + (j * 3 / 4));
-            const uint32x4_t v_hi = unpack_fp6x4_neon(xb->qs + ((j + 4) * 3 / 4));
-
-            float32x4_t qf_lo, qf_hi;
-            widen_s8x8_to_f32x4x2(y[ib].qs + j, &qf_lo, &qf_hi);
-
-            const float32x4_t val_lo = mxfp6_dequant_neon(v_lo,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-            const float32x4_t val_hi = mxfp6_dequant_neon(v_hi,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-
-            acc0 = vfmaq_f32(acc0, vmulq_f32(val_lo, v_scale), qf_lo);
-            acc1 = vfmaq_f32(acc1, vmulq_f32(val_hi, v_scale), qf_hi);
-        }
-    }
-
-    *s = vaddvq_f32(vaddq_f32(acc0, acc1));
 }
 
 // MXFP SoA dequant (flash attention)
@@ -4423,26 +4329,6 @@ static void dequantize_row_mxfp4_soa_neon(
 #endif // __ARM_NEON
 
 // Public dispatch functions
-
-void ggml_vec_dot_mxfp8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    assert(nrc == 1);
-    UNUSED(nrc); UNUSED(bs); UNUSED(bx); UNUSED(by);
-#if defined(__ARM_NEON)
-    ggml_vec_dot_mxfp8_q8_0_neon(n, s, vx, vy, &MXFP_TRAITS_E4M3);
-#else
-    ggml_vec_dot_mxfp8_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
-}
-
-void ggml_vec_dot_mxfp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    assert(nrc == 1);
-    UNUSED(nrc); UNUSED(bs); UNUSED(bx); UNUSED(by);
-#if defined(__ARM_NEON)
-    ggml_vec_dot_mxfp6_q8_0_neon(n, s, vx, vy, &MXFP_TRAITS_E2M3);
-#else
-    ggml_vec_dot_mxfp6_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
-}
 
 void dequantize_row_mxfp4_soa_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
 #if defined(__ARM_NEON)

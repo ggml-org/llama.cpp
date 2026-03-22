@@ -430,7 +430,9 @@ extern "C" {
         GGML_TYPE_MXFP4       = GGML_TYPE_MXFP4_E2M1, // compat alias
         GGML_TYPE_NVFP4       = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_MXFP8_E4M3  = 41, // MX FP8 E4M3
+        GGML_TYPE_MXFP8       = GGML_TYPE_MXFP8_E4M3, // compat alias
         GGML_TYPE_MXFP6_E2M3  = 42, // MX FP6 E2M3
+        GGML_TYPE_MXFP6       = GGML_TYPE_MXFP6_E2M3, // compat alias
         GGML_TYPE_COUNT        = 43,
     };
 

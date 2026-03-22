@@ -3770,7 +3770,7 @@ static block_mxfp4x4 make_block_mxfp4x4(block_mxfp4 * in, unsigned int blck_size
 }
 
 static int repack_mxfp4_to_mxfp4_4_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
-    GGML_ASSERT(t->type == GGML_TYPE_MXFP4_E2M1);
+    GGML_ASSERT(t->type == GGML_TYPE_MXFP4);
     GGML_ASSERT(interleave_block == 4);
 
     const block_mxfp4   * src = (const block_mxfp4   *)data;
@@ -3827,7 +3827,7 @@ static block_mxfp4x8 make_block_mxfp4x8(block_mxfp4 * in, unsigned int blck_size
 }
 
 static int repack_mxfp4_to_mxfp4_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
-    GGML_ASSERT(t->type == GGML_TYPE_MXFP4_E2M1);
+    GGML_ASSERT(t->type == GGML_TYPE_MXFP4);
     GGML_ASSERT(interleave_block == 8);
 
     const block_mxfp4   * src = (const block_mxfp4   *)data;
@@ -4685,7 +4685,7 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
             #endif
         }
-    } else if (cur->type == GGML_TYPE_MXFP4_E2M1) {
+    } else if (cur->type == GGML_TYPE_MXFP4) {
         if (ggml_cpu_has_avx2()) {
             if (cur->ne[1] % 8 == 0) {
                 return &mxfp4_8x8_q8_0;

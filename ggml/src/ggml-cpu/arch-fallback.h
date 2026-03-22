@@ -15,8 +15,9 @@
 #define ggml_vec_dot_q8_0_q8_0_generic ggml_vec_dot_q8_0_q8_0
 #define ggml_vec_dot_mxfp4_q8_0_generic ggml_vec_dot_mxfp4_q8_0
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
-#define ggml_vec_dot_mxfp8_q8_0_generic ggml_vec_dot_mxfp8_q8_0
-#define ggml_vec_dot_mxfp6_q8_0_generic ggml_vec_dot_mxfp6_q8_0
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
 #define ggml_vec_dot_q2_K_q8_K_generic ggml_vec_dot_q2_K_q8_K
@@ -113,6 +114,9 @@
 // quants.c
 #define quantize_row_q8_K_generic quantize_row_q8_K
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
 #define ggml_vec_dot_iq1_m_q8_K_generic ggml_vec_dot_iq1_m_q8_K
@@ -161,6 +165,9 @@
 #define ggml_vec_dot_iq1_m_q8_K_generic ggml_vec_dot_iq1_m_q8_K
 #define ggml_vec_dot_mxfp4_q8_0_generic ggml_vec_dot_mxfp4_q8_0
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 // repack.cpp
 #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
 #define ggml_quantize_mat_q8_0_4x8_generic ggml_quantize_mat_q8_0_4x8
@@ -201,6 +208,9 @@
 #elif defined(__riscv)
 // quants.c
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 // repack.cpp
 #define ggml_quantize_mat_q8_0_4x1_generic ggml_quantize_mat_q8_0_4x1
 #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
@@ -241,6 +251,9 @@
 // quants.c
 #define quantize_row_q8_K_generic quantize_row_q8_K
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
 #define ggml_vec_dot_q2_K_q8_K_generic ggml_vec_dot_q2_K_q8_K
@@ -291,6 +304,9 @@
 #elif defined(__wasm__)
 // quants.c
 #define ggml_vec_dot_q4_1_q8_1_generic ggml_vec_dot_q4_1_q8_1
+#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
+#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
+#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
 #define ggml_vec_dot_iq2_xxs_q8_K_generic ggml_vec_dot_iq2_xxs_q8_K
@@ -341,11 +357,4 @@
 #define ggml_gemm_mxfp4_8x8_q8_0_generic ggml_gemm_mxfp4_8x8_q8_0
 #define ggml_gemm_q8_0_4x4_q8_0_generic ggml_gemm_q8_0_4x4_q8_0
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
-#endif
-
-// MXFP dequantize fallbacks (same GGML_CPU_GENERIC guard as above)
-#if defined(GGML_CPU_GENERIC)
-#define dequantize_row_mxfp4_soa_cpu_generic dequantize_row_mxfp4_soa_cpu
-#define dequantize_row_mxfp8_soa_cpu_generic dequantize_row_mxfp8_soa_cpu
-#define dequantize_row_mxfp6_soa_cpu_generic dequantize_row_mxfp6_soa_cpu
 #endif

@@ -178,9 +178,9 @@ int main(int argc, char * argv[]) {
                 type == GGML_TYPE_IQ3_S   ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
                 type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
                 type == GGML_TYPE_NVFP4       ? MAX_QUANTIZATION_TOTAL_ERROR_FP4 :
-                type == GGML_TYPE_MXFP4_E2M1 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP4 :
-                type == GGML_TYPE_MXFP6_E2M3 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP6 :
-                type == GGML_TYPE_MXFP8_E4M3 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP8 : MAX_QUANTIZATION_TOTAL_ERROR;
+                type == GGML_TYPE_MXFP4 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP4 :
+                type == GGML_TYPE_MXFP6 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP6 :
+                type == GGML_TYPE_MXFP8 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP8 : MAX_QUANTIZATION_TOTAL_ERROR;
             failed = !(total_error < max_quantization_error);
             num_failed += failed;
             if (failed || verbose) {
@@ -202,7 +202,7 @@ int main(int argc, char * argv[]) {
                                           ? MAX_DOT_PRODUCT_ERROR_TERNARY
                                           : type == GGML_TYPE_NVFP4
                                           ? MAX_DOT_PRODUCT_ERROR_FP4
-                                          : type == GGML_TYPE_MXFP4_E2M1 || type == GGML_TYPE_MXFP6_E2M3 || type == GGML_TYPE_MXFP8_E4M3
+                                          : type == GGML_TYPE_MXFP4 || type == GGML_TYPE_MXFP6 || type == GGML_TYPE_MXFP8
                                           ? MAX_DOT_PRODUCT_ERROR_MXFP
                                           : MAX_DOT_PRODUCT_ERROR;
             failed = !(vec_dot_error < max_allowed_error);
@@ -231,9 +231,9 @@ int main(int argc, char * argv[]) {
 
         const float soa_error = array_rmse(test_data.data(), tmp_out.data(), test_size);
         const float max_soa_error =
-            type == GGML_TYPE_MXFP4_E2M1 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP4 :
-            type == GGML_TYPE_MXFP6_E2M3 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP6 :
-            type == GGML_TYPE_MXFP8_E4M3 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP8 : MAX_QUANTIZATION_TOTAL_ERROR;
+            type == GGML_TYPE_MXFP4 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP4 :
+            type == GGML_TYPE_MXFP6 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP6 :
+            type == GGML_TYPE_MXFP8 ? MAX_QUANTIZATION_TOTAL_ERROR_MXFP8 : MAX_QUANTIZATION_TOTAL_ERROR;
         failed = !(soa_error < max_soa_error);
         num_failed += failed;
         if (failed || verbose) {
@@ -243,7 +243,7 @@ int main(int argc, char * argv[]) {
 
     // MXFP traits: SoA required, MXFP6/MXFP8 are KV-cache-only (no AoS dequant)
     {
-        const ggml_type all_mxfp_types[] = { GGML_TYPE_MXFP4_E2M1, GGML_TYPE_MXFP8_E4M3, GGML_TYPE_MXFP6_E2M3 };
+        const ggml_type all_mxfp_types[] = { GGML_TYPE_MXFP4, GGML_TYPE_MXFP8, GGML_TYPE_MXFP6 };
         for (ggml_type type : all_mxfp_types) {
             const auto * cpu = ggml_get_type_traits_cpu(type);
 
@@ -255,7 +255,7 @@ int main(int argc, char * argv[]) {
         }
 
         // KV-cache-only types: no AoS dequant
-        const ggml_type kv_only_types[] = { GGML_TYPE_MXFP8_E4M3, GGML_TYPE_MXFP6_E2M3 };
+        const ggml_type kv_only_types[] = { GGML_TYPE_MXFP8, GGML_TYPE_MXFP6 };
         for (ggml_type type : kv_only_types) {
             const auto * cpu = ggml_get_type_traits_cpu(type);
             failed = (cpu->to_float != nullptr);
@@ -297,9 +297,9 @@ int main(int argc, char * argv[]) {
         };
 
         const soa_cross_check checks[] = {
-            { GGML_TYPE_MXFP4_E2M1, dequantize_row_mxfp4_soa },
-            { GGML_TYPE_MXFP8_E4M3, dequantize_row_mxfp8_soa },
-            { GGML_TYPE_MXFP6_E2M3, dequantize_row_mxfp6_soa },
+            { GGML_TYPE_MXFP4, dequantize_row_mxfp4_soa },
+            { GGML_TYPE_MXFP8, dequantize_row_mxfp8_soa },
+            { GGML_TYPE_MXFP6, dequantize_row_mxfp6_soa },
         };
 
         for (const auto & c : checks) {
@@ -774,9 +774,9 @@ int main(int argc, char * argv[]) {
     // SoA layout: verify offset macros produce correct byte positions
     {
         const struct { ggml_type type; int qs_per_block; } soa_types[] = {
-            { GGML_TYPE_MXFP4_E2M1, MXFP4_SOA_QS_PER_BLOCK },
-            { GGML_TYPE_MXFP8_E4M3, MXFP8_SOA_QS_PER_BLOCK },
-            { GGML_TYPE_MXFP6_E2M3, MXFP6_SOA_QS_PER_BLOCK },
+            { GGML_TYPE_MXFP4, MXFP4_SOA_QS_PER_BLOCK },
+            { GGML_TYPE_MXFP8, MXFP8_SOA_QS_PER_BLOCK },
+            { GGML_TYPE_MXFP6, MXFP6_SOA_QS_PER_BLOCK },
         };
 
         for (const auto & st : soa_types) {
@@ -864,7 +864,7 @@ int main(int argc, char * argv[]) {
         dequantize_row_mxfp4(aos_q.data(), aos_out.data(), nelems);
 
         // Quantize and dequant via SoA
-        const size_t soa_buf_size = ggml_row_size(GGML_TYPE_MXFP4_E2M1, nelems);
+        const size_t soa_buf_size = ggml_row_size(GGML_TYPE_MXFP4, nelems);
         std::vector<uint8_t> soa_q(soa_buf_size);
         std::vector<float> soa_out(nelems);
         quantize_row_mxfp4_soa(input, soa_q.data(), nelems);
@@ -901,9 +901,9 @@ int main(int argc, char * argv[]) {
         };
 
         const hadamard_pipeline_check pipeline_checks[] = {
-            { "mxfp4",     GGML_TYPE_MXFP4_E2M1, MAX_MXFP_PIPELINE_ERROR_MXFP4 },
-            { "mxfp8",     GGML_TYPE_MXFP8_E4M3, MAX_MXFP_PIPELINE_ERROR_MXFP8 },
-            { "mxfp6",     GGML_TYPE_MXFP6_E2M3, MAX_MXFP_PIPELINE_ERROR_MXFP6 },
+            { "mxfp4",     GGML_TYPE_MXFP4, MAX_MXFP_PIPELINE_ERROR_MXFP4 },
+            { "mxfp8",     GGML_TYPE_MXFP8, MAX_MXFP_PIPELINE_ERROR_MXFP8 },
+            { "mxfp6",     GGML_TYPE_MXFP6, MAX_MXFP_PIPELINE_ERROR_MXFP6 },
         };
 
         for (const auto & p : pipeline_checks) {
@@ -963,7 +963,7 @@ int main(int argc, char * argv[]) {
     // zero block produces E8M0=0
     {
         float zeros[32] = {};
-        const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP8_E4M3, 32);
+        const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP8, 32);
         std::vector<uint8_t> buf(buf_size, 0xFF);  // fill with 0xFF to detect non-writes
 
         quantize_row_mxfp8_soa(zeros, buf.data(), 32);
@@ -991,7 +991,7 @@ int main(int argc, char * argv[]) {
 
         // MXFP4
         {
-            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP4_E2M1, nelems);
+            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP4, nelems);
             std::vector<uint8_t> buf(buf_size);
             std::vector<float> ref_out(nelems);
             std::vector<float> manual_out(nelems);
@@ -1032,7 +1032,7 @@ int main(int argc, char * argv[]) {
 
         // MXFP8
         {
-            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP8_E4M3, nelems);
+            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP8, nelems);
             std::vector<uint8_t> buf(buf_size);
             std::vector<float> ref_out(nelems);
             std::vector<float> manual_out(nelems);
@@ -1069,7 +1069,7 @@ int main(int argc, char * argv[]) {
 
         // MXFP6
         {
-            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP6_E2M3, nelems);
+            const size_t buf_size = ggml_row_size(GGML_TYPE_MXFP6, nelems);
             std::vector<uint8_t> buf(buf_size);
             std::vector<float> ref_out(nelems);
             std::vector<float> manual_out(nelems);

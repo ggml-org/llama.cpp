@@ -672,10 +672,10 @@ void ggml_compute_forward_add(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -1124,10 +1124,10 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -1255,10 +1255,10 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -4345,10 +4345,10 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -4623,10 +4623,10 @@ void ggml_compute_forward_set(
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -4848,10 +4848,10 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -5686,10 +5686,10 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_MXFP4_E2M1:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
-        case GGML_TYPE_MXFP8_E4M3:
-        case GGML_TYPE_MXFP6_E2M3:
+        case GGML_TYPE_MXFP8:
+        case GGML_TYPE_MXFP6:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -8255,30 +8255,64 @@ void ggml_compute_forward_top_k(
     }
 }
 
+// Max head dimension for stack-allocated MXFP buffers.
+static constexpr int64_t MXFP_FA_MAX_D = 1024;
+// SoA buffer size for MXFP_FA_MAX_D with MXFP8 (worst case: 1024 + 32 e8m0 = 1056, rounded up).
+static constexpr int     MXFP_FA_SOA_BUF = 1088;
+
 // SoA function pointer types for MXFP flash attention paths.
 typedef void (*mxfp_soa_quantize_fn)(const float *, void *, int64_t);
 typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
 
+// Per-KV-type MXFP parameters (shared between K and V).
+struct mxfp_kv_params {
+    mxfp_soa_dequantize_fn dequantize;
+    bool    multihead;
+    int64_t soa_elems;
+    int     qs_per_block;
+    int     head_qs_bytes;
+    int64_t head_e8m0_offset;
+    int     blocks_per_head;
+};
+
 // MXFP dispatch parameters for flash attention.
 struct mxfp_fa_params {
-    mxfp_soa_quantize_fn   q_quantize;
-    mxfp_soa_dequantize_fn k_dequantize;
-    mxfp_soa_dequantize_fn v_dequantize;
-    bool    k_multihead;
-    bool    v_multihead;
-    int64_t k_soa_elems;
-    int64_t v_soa_elems;
-    bool    apply_hadamard;
-    // Per-head SoA addressing (avoids dequanting all heads in multihead mode).
-    int     k_qs_per_block;
-    int     v_qs_per_block;
-    int     k_head_qs_bytes;
-    int     v_head_qs_bytes;
-    int64_t k_head_e8m0_offset;
-    int64_t v_head_e8m0_offset;
-    int     k_blocks_per_head;
-    int     v_blocks_per_head;
+    mxfp_soa_quantize_fn q_quantize;
+    mxfp_kv_params k;
+    mxfp_kv_params v;
+    bool apply_hadamard;
 };
+
+// Extract one head's SoA data from a multihead row and dequantize.
+static inline void mxfp_dequant_head(
+        const mxfp_kv_params & kv, const char * row, int head_idx,
+        char * soa_buf, float * out, int64_t D) {
+    if (kv.multihead) {
+        const int qs_off  = head_idx * kv.head_qs_bytes;
+        const int e8m0_off = (int)kv.head_e8m0_offset + head_idx * kv.blocks_per_head;
+        memcpy(soa_buf, row + qs_off, kv.head_qs_bytes);
+        memcpy(soa_buf + kv.head_qs_bytes, row + e8m0_off, kv.blocks_per_head);
+        kv.dequantize(soa_buf, out, D);
+    } else {
+        kv.dequantize(row, out, D);
+    }
+}
+
+// Initialize per-KV-type params from tensor metadata.
+// Multihead detection: nb2 == row_size(D) means heads are contiguous within
+// one KV-position stride, so SoA spans all heads. Otherwise SoA is per-head.
+static mxfp_kv_params mxfp_kv_params_init(ggml_type type, int64_t D, size_t nb2, int64_t ne2) {
+    mxfp_kv_params kv = {};
+    kv.dequantize      = ggml_get_type_traits_cpu(type)->to_float_soa;
+    kv.multihead       = (nb2 == (size_t)ggml_row_size(type, D));
+    kv.soa_elems       = kv.multihead ? ne2 * D : D;
+    kv.qs_per_block    = ggml_mxfp_qs_per_block(type);
+    kv.blocks_per_head = (int)(D / 32);
+    kv.head_qs_bytes   = kv.blocks_per_head * kv.qs_per_block;
+    const int64_t total_blocks = kv.multihead ? ne2 * kv.blocks_per_head : kv.blocks_per_head;
+    kv.head_e8m0_offset = total_blocks * kv.qs_per_block;
+    return kv;
+}
 
 static mxfp_fa_params mxfp_fa_params_init(
         const ggml_tensor * k, const ggml_tensor * v,
@@ -8291,43 +8325,16 @@ static mxfp_fa_params mxfp_fa_params_init(
     const bool is_mxfp_v = ggml_is_type_mxfp(v->type);
 
     if (is_mxfp_k) {
-        const struct ggml_type_traits_cpu * k_traits = ggml_get_type_traits_cpu(k->type);
-        p.q_quantize   = k_traits->from_float_soa;
-        p.k_dequantize = k_traits->to_float_soa;
+        p.q_quantize = ggml_get_type_traits_cpu(k->type)->from_float_soa;
+        p.k = mxfp_kv_params_init(k->type, DK, nbk2, nek2);
     }
-
     if (is_mxfp_v) {
-        p.v_dequantize = ggml_get_type_traits_cpu(v->type)->to_float_soa;
+        p.v = mxfp_kv_params_init(v->type, DV, nbv2, nev2);
     }
 
     // Hadamard rotation must match K rotation.
-    // Skipped for: MLA (DK != DV, V is a view of K).
+    // Skipped for MLA (DK != DV, V is a view of K).
     p.apply_hadamard = is_mxfp_k && (DK == DV) && ggml_mxfp_use_hadamard(k->type);
-
-    // SoA layout detection: in the real KV cache, heads are contiguous within
-    // one KV-position stride (nb[2] == row_size(DK)), so SoA spans all heads.
-    // In test tensors, heads may be at distant offsets (nb[2] >> row_size(DK)),
-    // so SoA is per-head. Detect which case and set dequant parameters accordingly.
-    p.k_multihead = is_mxfp_k && (nbk2 == (size_t)ggml_row_size(k->type, DK));
-    p.k_soa_elems = is_mxfp_k ? (p.k_multihead ? nek2 * DK : DK) : 0;
-    p.v_multihead = is_mxfp_v && (nbv2 == (size_t)ggml_row_size(v->type, DV));
-    p.v_soa_elems = is_mxfp_v ? (p.v_multihead ? nev2 * DV : DV) : 0;
-
-    if (is_mxfp_k) {
-        p.k_qs_per_block    = ggml_mxfp_qs_per_block(k->type);
-        p.k_blocks_per_head = (int)(DK / 32);
-        p.k_head_qs_bytes   = p.k_blocks_per_head * p.k_qs_per_block;
-        const int64_t k_total_blocks = p.k_multihead ? nek2 * p.k_blocks_per_head : p.k_blocks_per_head;
-        p.k_head_e8m0_offset = k_total_blocks * p.k_qs_per_block;
-    }
-
-    if (is_mxfp_v) {
-        p.v_qs_per_block    = ggml_mxfp_qs_per_block(v->type);
-        p.v_blocks_per_head = (int)(DV / 32);
-        p.v_head_qs_bytes   = p.v_blocks_per_head * p.v_qs_per_block;
-        const int64_t v_total_blocks = p.v_multihead ? nev2 * p.v_blocks_per_head : p.v_blocks_per_head;
-        p.v_head_e8m0_offset = v_total_blocks * p.v_qs_per_block;
-    }
 
     return p;
 }
@@ -8430,14 +8437,14 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
     int ith = params->ith;
 
-    if (is_mxfp_k) { GGML_ASSERT(DK <= 1024); }
-    if (is_mxfp_v) { GGML_ASSERT(DV <= 1024); }
+    if (is_mxfp_k) { GGML_ASSERT(DK <= MXFP_FA_MAX_D); }
+    if (is_mxfp_v) { GGML_ASSERT(DV <= MXFP_FA_MAX_D); }
 
-    float k_dequant_buf[1024];
-    float v_dequant_buf[1024];
+    float k_dequant_buf[MXFP_FA_MAX_D];
+    float v_dequant_buf[MXFP_FA_MAX_D];
 
-    char k_head_soa[1088]; // max: DK=1024 MXFP8 -> 1056 bytes, rounded up
-    char v_head_soa[1088];
+    char k_head_soa[MXFP_FA_SOA_BUF]; // max: DK=1024 MXFP8 -> 1056 bytes, rounded up
+    char v_head_soa[MXFP_FA_SOA_BUF];
 
     float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32);
     float       * V32   =                 (VKQ32 + 1*DV);
@@ -8479,31 +8486,25 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const char * k_base = (const char *) k->data + k_base_offset;
         const char * v_base = (const char *) v->data + v_base_offset;
 
-        // Per-head SoA byte offsets
-        const int k_head_qs_start   = mxfp.k_multihead ? ik2 * mxfp.k_head_qs_bytes : 0;
-        const int k_head_e8m0_start = mxfp.k_multihead ? (int)mxfp.k_head_e8m0_offset + ik2 * mxfp.k_blocks_per_head : 0;
-        const int v_head_qs_start   = mxfp.v_multihead ? iv2 * mxfp.v_head_qs_bytes : 0;
-        const int v_head_e8m0_start = mxfp.v_multihead ? (int)mxfp.v_head_e8m0_offset + iv2 * mxfp.v_blocks_per_head : 0;
-
-        const char * k_row_base = mxfp.k_multihead ? ((const char *) k->data + ik3*nbk3) : nullptr;
-        const char * v_row_base = mxfp.v_multihead ? ((const char *) v->data + iv3*nbv3) : nullptr;
+        const char * k_row_base = mxfp.k.multihead ? ((const char *) k->data + ik3*nbk3) : nullptr;
+        const char * v_row_base = mxfp.v.multihead ? ((const char *) v->data + iv3*nbv3) : nullptr;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        float Q_f32[1024];
+        float Q_f32[MXFP_FA_MAX_D];
         if (is_mxfp_k) {
             // Q preprocessing: Hadamard + SoA round-trip captures same quantization loss as K.
             if (mxfp.apply_hadamard) {
-                float q_tmp[1024];
+                float q_tmp[MXFP_FA_MAX_D];
                 memcpy(q_tmp, pq, DK * sizeof(float));
                 ggml_apply_hadamard_blocks(q_tmp, DK);
                 mxfp.q_quantize(q_tmp, Q_q, DK);
             } else {
                 mxfp.q_quantize(pq, Q_q, DK);
             }
-            mxfp.k_dequantize(Q_q, Q_f32, DK);
+            mxfp.k.dequantize(Q_q, Q_f32, DK);
         } else {
             if (mxfp.apply_hadamard) {
-                float q_tmp[1024];
+                float q_tmp[MXFP_FA_MAX_D];
                 memcpy(q_tmp, pq, DK * sizeof(float));
                 ggml_apply_hadamard_blocks(q_tmp, DK);
                 q_to_vec_dot(q_tmp, Q_q, DK);
@@ -8525,15 +8526,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float s; // KQ value
 
             if (is_mxfp_k) {
-                if (mxfp.k_multihead) {
-                    // Extract this head's SoA blocks
-                    const char * row = k_row_base + ic*nbk1;
-                    memcpy(k_head_soa, row + k_head_qs_start, mxfp.k_head_qs_bytes);
-                    memcpy(k_head_soa + mxfp.k_head_qs_bytes, row + k_head_e8m0_start, mxfp.k_blocks_per_head);
-                    mxfp.k_dequantize(k_head_soa, k_dequant_buf, DK);
-                } else {
-                    mxfp.k_dequantize(k_base + ic*nbk1, k_dequant_buf, DK);
-                }
+                const char * k_row = mxfp.k.multihead ? k_row_base + ic*nbk1 : k_base + ic*nbk1;
+                mxfp_dequant_head(mxfp.k, k_row, ik2, k_head_soa, k_dequant_buf, DK);
                 ggml_vec_dot_f32(DK, &s, 0, k_dequant_buf, 0, Q_f32, 0, 1);
             } else {
                 kq_vec_dot(DK, &s, 0, k_base + ic*nbk1, 0, Q_q, 0, 1);
@@ -8577,15 +8571,9 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 }
 
                 // V += v*expf(s - M)
-                if (mxfp.v_dequantize) {
-                    if (mxfp.v_multihead) {
-                        const char * row = v_row_base + ic*nbv1;
-                        memcpy(v_head_soa, row + v_head_qs_start, mxfp.v_head_qs_bytes);
-                        memcpy(v_head_soa + mxfp.v_head_qs_bytes, row + v_head_e8m0_start, mxfp.v_blocks_per_head);
-                        mxfp.v_dequantize(v_head_soa, v_dequant_buf, DV);
-                    } else {
-                        mxfp.v_dequantize(v_base + ic*nbv1, v_dequant_buf, DV);
-                    }
+                if (mxfp.v.dequantize) {
+                    const char * v_row = mxfp.v.multihead ? v_row_base + ic*nbv1 : v_base + ic*nbv1;
+                    mxfp_dequant_head(mxfp.v, v_row, iv2, v_head_soa, v_dequant_buf, DV);
                     ggml_vec_mad_f32(DV, VKQ32, v_dequant_buf, vs);
                 } else if (v_to_float) {
                     v_to_float(v_base + ic*nbv1, V32, DV);
@@ -8731,14 +8719,14 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     static constexpr int Q_TILE_SZ  = ggml_fa_tile_config::Q;
     static constexpr int KV_TILE_SZ = ggml_fa_tile_config::KV;
 
-    if (is_mxfp_k) { GGML_ASSERT(DK <= 1024); }
-    if (is_mxfp_v) { GGML_ASSERT(DV <= 1024); }
+    if (is_mxfp_k) { GGML_ASSERT(DK <= MXFP_FA_MAX_D); }
+    if (is_mxfp_v) { GGML_ASSERT(DV <= MXFP_FA_MAX_D); }
 
-    float k_dequant_buf[1024];
-    float v_dequant_buf[1024];
+    float k_dequant_buf[MXFP_FA_MAX_D];
+    float v_dequant_buf[MXFP_FA_MAX_D];
 
-    char k_head_soa[1088];
-    char v_head_soa[1088];
+    char k_head_soa[MXFP_FA_SOA_BUF];
+    char v_head_soa[MXFP_FA_SOA_BUF];
 
     int ir = ir0;
     while (ir < ir1) {
@@ -8802,9 +8790,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     if (mxfp.apply_hadamard) {
                         ggml_apply_hadamard_blocks(Q_f32 + tq * DK, DK);
                     }
-                    uint8_t q_mxfp_buf[1088]; // max: DK=1024 MXFP8 -> 1056 bytes
+                    uint8_t q_mxfp_buf[MXFP_FA_SOA_BUF];
                     mxfp.q_quantize(Q_f32 + tq * DK, q_mxfp_buf, DK);
-                    mxfp.k_dequantize(q_mxfp_buf, Q_f32 + tq * DK, DK);
+                    mxfp.k.dequantize(q_mxfp_buf, Q_f32 + tq * DK, DK);
                 }
             }
             for (int tq = tile_rows; tq < Q_TILE_SZ; tq++) {
@@ -8854,23 +8842,13 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     for (int64_t dk = 0; dk < DK; dk++) {
                         K_f32[dk * KV_TILE_SZ + tk] = k_f32_src[dk];
                     }
-                } else if (mxfp.k_dequantize) {
-                    if (mxfp.k_multihead) {
-                        // Per-head extraction: copy only this head's SoA blocks + e8m0, dequant DK elements.
-                        const char * row = (const char *)k->data + (ic + tk)*nbk1 + ik3*nbk3;
-                        const int kqs = ik2 * mxfp.k_head_qs_bytes;
-                        const int ke8 = (int)mxfp.k_head_e8m0_offset + ik2 * mxfp.k_blocks_per_head;
-                        memcpy(k_head_soa, row + kqs, mxfp.k_head_qs_bytes);
-                        memcpy(k_head_soa + mxfp.k_head_qs_bytes, row + ke8, mxfp.k_blocks_per_head);
-                        mxfp.k_dequantize(k_head_soa, k_dequant_buf, DK);
-                    } else {
-                        mxfp.k_dequantize(k_data, k_dequant_buf, DK);
-                    }
+                } else if (mxfp.k.dequantize) {
+                    mxfp_dequant_head(mxfp.k, k_data, ik2, k_head_soa, k_dequant_buf, DK);
                     for (int64_t dk = 0; dk < DK; dk++) {
                         K_f32[dk * KV_TILE_SZ + tk] = k_dequant_buf[dk];
                     }
                 } else {
-                    float k_tmp[1024];
+                    float k_tmp[MXFP_FA_MAX_D];
                     k_to_float(k_data, k_tmp, DK);
                     for (int64_t dk = 0; dk < DK; dk++) {
                         K_f32[dk * KV_TILE_SZ + tk] = k_tmp[dk];
@@ -8934,18 +8912,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     ggml_fp16_to_fp32_row((const ggml_fp16_t *)v_data, V32 + tk * DV, DV);
                 } else if (v_type == GGML_TYPE_F32) {
                     memcpy(V32 + tk * DV, v_data, DV * sizeof(float));
-                } else if (mxfp.v_dequantize) {
-                    if (mxfp.v_multihead) {
-                        // Per-head extraction: copy only this head's SoA blocks + e8m0, dequant DV elements.
-                        const char * row = (const char *)v->data + (ic + tk)*nbv1 + iv3*nbv3;
-                        const int vqs = iv2 * mxfp.v_head_qs_bytes;
-                        const int ve8 = (int)mxfp.v_head_e8m0_offset + iv2 * mxfp.v_blocks_per_head;
-                        memcpy(v_head_soa, row + vqs, mxfp.v_head_qs_bytes);
-                        memcpy(v_head_soa + mxfp.v_head_qs_bytes, row + ve8, mxfp.v_blocks_per_head);
-                        mxfp.v_dequantize(v_head_soa, v_dequant_buf, DV);
-                    } else {
-                        mxfp.v_dequantize(v_data, v_dequant_buf, DV);
-                    }
+                } else if (mxfp.v.dequantize) {
+                    mxfp_dequant_head(mxfp.v, v_data, iv2, v_head_soa, v_dequant_buf, DV);
                     memcpy(V32 + tk * DV, v_dequant_buf, DV * sizeof(float));
                 } else {
                     v_to_float(v_data, V32 + tk * DV, DV);

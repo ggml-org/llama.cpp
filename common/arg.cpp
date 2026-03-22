@@ -398,20 +398,20 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
-    GGML_TYPE_MXFP4_E2M1,
-    GGML_TYPE_MXFP8_E4M3,
-    GGML_TYPE_MXFP6_E2M3,
+    GGML_TYPE_MXFP4,
+    GGML_TYPE_MXFP8,
+    GGML_TYPE_MXFP6,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "mxfp4") {
-        return GGML_TYPE_MXFP4_E2M1;
+        return GGML_TYPE_MXFP4;
     }
     if (s == "mxfp6") {
-        return GGML_TYPE_MXFP6_E2M3;
+        return GGML_TYPE_MXFP6;
     }
     if (s == "mxfp8") {
-        return GGML_TYPE_MXFP8_E4M3;
+        return GGML_TYPE_MXFP8;
     }
     for (const auto & type : kv_cache_types) {
         if (ggml_type_name(type) == s) {

@@ -710,7 +710,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_1_ref,
     },
-    [GGML_TYPE_MXFP4_E2M1] = {
+    [GGML_TYPE_MXFP4] = {
         .type_name                = "mxfp4",
         .blck_size                = QK_MXFP4,
         .type_size                = sizeof(block_mxfp4),
@@ -726,21 +726,17 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_nvfp4_ref,
     },
-    [GGML_TYPE_MXFP8_E4M3] = {
+    [GGML_TYPE_MXFP8] = {
         .type_name                = "mxfp8_e4m3",
         .blck_size                = QK_MXFP8,
         .type_size                = sizeof(block_mxfp8),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_mxfp8,
-        .from_float_ref           = (ggml_from_float_t)quantize_row_mxfp8_ref,
     },
-    [GGML_TYPE_MXFP6_E2M3] = {
+    [GGML_TYPE_MXFP6] = {
         .type_name                = "mxfp6_e2m3",
         .blck_size                = QK_MXFP6,
         .type_size                = sizeof(block_mxfp6),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_mxfp6,
-        .from_float_ref           = (ggml_from_float_t)quantize_row_mxfp6_ref,
     },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
@@ -1329,25 +1325,25 @@ bool ggml_is_quantized(enum ggml_type type) {
 }
 
 bool ggml_is_type_mxfp(enum ggml_type type) {
-    return type == GGML_TYPE_MXFP4_E2M1 ||
-           type == GGML_TYPE_MXFP8_E4M3 ||
-           type == GGML_TYPE_MXFP6_E2M3;
+    return type == GGML_TYPE_MXFP4 ||
+           type == GGML_TYPE_MXFP8 ||
+           type == GGML_TYPE_MXFP6;
 }
 
 bool ggml_mxfp_use_hadamard(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_MXFP4_E2M1:  return MXFP_USE_HADAMARD_E2M1;
-        case GGML_TYPE_MXFP8_E4M3:  return MXFP_USE_HADAMARD_E4M3;
-        case GGML_TYPE_MXFP6_E2M3:  return MXFP_USE_HADAMARD_E2M3;
+        case GGML_TYPE_MXFP4:  return MXFP_USE_HADAMARD_E2M1;
+        case GGML_TYPE_MXFP8:  return MXFP_USE_HADAMARD_E4M3;
+        case GGML_TYPE_MXFP6:  return MXFP_USE_HADAMARD_E2M3;
         default: return false;
     }
 }
 
 int ggml_mxfp_qs_per_block(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_MXFP4_E2M1:  return MXFP_QS_PER_BLOCK_E2M1;
-        case GGML_TYPE_MXFP8_E4M3:  return MXFP_QS_PER_BLOCK_E4M3;
-        case GGML_TYPE_MXFP6_E2M3:  return MXFP_QS_PER_BLOCK_E2M3;
+        case GGML_TYPE_MXFP4:  return MXFP_QS_PER_BLOCK_E2M1;
+        case GGML_TYPE_MXFP8:  return MXFP_QS_PER_BLOCK_E4M3;
+        case GGML_TYPE_MXFP6:  return MXFP_QS_PER_BLOCK_E2M3;
         default: return 0;
     }
 }
@@ -7695,10 +7691,10 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q5_0:    result = quantize_q5_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_1:    result = quantize_q5_1(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q8_0:    result = quantize_q8_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_MXFP4_E2M1:   result = quantize_mxfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_NVFP4:         result = quantize_nvfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_MXFP8_E4M3:   result = quantize_mxfp8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_MXFP6_E2M3:   result = quantize_mxfp6(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_MXFP4:    result = quantize_mxfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_NVFP4:    result = quantize_nvfp4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_MXFP8:    GGML_ABORT("MXFP8 is KV-cache-only (SoA layout) — use from_float_soa");
+        case GGML_TYPE_MXFP6:    GGML_ABORT("MXFP6 is KV-cache-only (SoA layout) — use from_float_soa");
         case GGML_TYPE_Q2_K:    result = quantize_q2_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_K:    result = quantize_q3_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K:    result = quantize_q4_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
