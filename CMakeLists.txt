@@ -108,7 +108,7 @@ option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_WEBUI    "llama: build the embedded Web UI for server"  ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_WEBUI    "llama: build the embedded Web UI for server"  ON)
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 
