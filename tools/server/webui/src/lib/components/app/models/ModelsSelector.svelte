@@ -293,7 +293,6 @@
 								isOpen ? 'text-foreground' : ''
 							)}
 							style="max-width: min(calc(100cqw - 9rem), 20rem)"
-							disabled={disabled || updating}
 						>
 							<Package class="h-3.5 w-3.5" />
 
