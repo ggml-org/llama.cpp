@@ -711,7 +711,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_1_ref,
     },
     [GGML_TYPE_MXFP4_E2M1] = {
-        .type_name                = "mxfp4_e2m1",
+        .type_name                = "mxfp4",
         .blck_size                = QK_MXFP4,
         .type_size                = sizeof(block_mxfp4),
         .is_quantized             = true,

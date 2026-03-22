@@ -7,6 +7,7 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
+#include "ggml-quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
@@ -280,7 +281,6 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_MXFP8_E4M3] = {
         .from_float               = quantize_row_mxfp8,
-        .to_float                 = dequantize_row_mxfp8_cpu,
         .from_float_soa           = quantize_row_mxfp8_soa,
         .to_float_soa             = dequantize_row_mxfp8_soa_cpu,
         .vec_dot                  = ggml_vec_dot_mxfp8_q8_0,
@@ -289,7 +289,6 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_MXFP6_E2M3] = {
         .from_float               = quantize_row_mxfp6,
-        .to_float                 = dequantize_row_mxfp6_cpu,
         .from_float_soa           = quantize_row_mxfp6_soa,
         .to_float_soa             = dequantize_row_mxfp6_soa_cpu,
         .vec_dot                  = ggml_vec_dot_mxfp6_q8_0,

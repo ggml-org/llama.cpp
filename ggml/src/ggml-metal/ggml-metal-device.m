@@ -1010,6 +1010,19 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         }
     }
 
+    // MXFP8/MXFP6: no Metal shaders yet — reject for all ops.
+    // MXFP4: has AoS shaders (MUL_MAT, GET_ROWS) but no SoA/flash attention support yet.
+    for (size_t i = 0, n = 3; i < n; ++i) {
+        if (op->src[i] != NULL && ggml_is_type_mxfp(op->src[i]->type)) {
+            if (op->src[i]->type != GGML_TYPE_MXFP4_E2M1) {
+                return false;
+            }
+            if (op->op == GGML_OP_FLASH_ATTN_EXT || op->op == GGML_OP_SET_ROWS) {
+                return false;
+            }
+        }
+    }
+
     switch (op->op) {
         case GGML_OP_SCALE:
         case GGML_OP_FILL:

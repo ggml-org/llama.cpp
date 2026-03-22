@@ -309,13 +309,7 @@ void ggml_vec_dot_mxfp6_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             (ggml_to_float_t)dequantize_row_mxfp6);
 }
 
-// Generic dequant wrappers — arch-specific SIMD versions override via fallback.h.
-void dequantize_row_mxfp8_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    dequantize_row_mxfp8(x, y, k);
-}
-void dequantize_row_mxfp6_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    dequantize_row_mxfp6(x, y, k);
-}
+// Generic SoA dequant wrappers — arch-specific SIMD versions override via fallback.h.
 void dequantize_row_mxfp4_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     dequantize_row_mxfp4_soa(x, y, k);
 }

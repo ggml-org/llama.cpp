@@ -4311,68 +4311,6 @@ static void ggml_vec_dot_mxfp6_q8_0_neon(
     *s = vaddvq_f32(vaddq_f32(acc0, acc1));
 }
 
-// MXFP FP8/FP6 dequantize_row (AoS)
-
-static void dequantize_row_mxfp8_neon(
-        const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
-        const mxfp_neon_traits_t * t) {
-    assert(k % QK_MXFP8 == 0);
-    const int nb = k / QK_MXFP8;
-    const block_mxfp8 * GGML_RESTRICT x = vx;
-
-    const uint32x4_t  v_exp_mask  = vdupq_n_u32(t->exp_mask);
-    const uint32x4_t  v_mant_mask = vdupq_n_u32(t->mant_mask);
-    const uint32x4_t  v_ieee_off  = vdupq_n_u32(t->ieee_exp_off);
-    const float32x4_t v_sub_sc    = vdupq_n_f32(t->sub_scale);
-    const int32x4_t   v_neg_exp   = vdupq_n_s32(-(int)t->exp_shift);
-    const int32x4_t   v_mant_sh   = vdupq_n_s32(t->mant_shift);
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const float32x4_t v_scale = vdupq_n_f32(GGML_E8M0_TO_FP32(x[ib].e));
-
-        for (int j = 0; j < 32; j += 8) {
-            uint32x4_t v_lo, v_hi;
-            widen_u8x8_to_u32x4x2(x[ib].qs + j, &v_lo, &v_hi);
-
-            const float32x4_t val_lo = mxfp8_dequant_neon(v_lo,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-            const float32x4_t val_hi = mxfp8_dequant_neon(v_hi,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-
-            vst1q_f32(y + ib * QK_MXFP8 + j,     vmulq_f32(val_lo, v_scale));
-            vst1q_f32(y + ib * QK_MXFP8 + j + 4, vmulq_f32(val_hi, v_scale));
-        }
-    }
-}
-
-static void dequantize_row_mxfp6_neon(
-        const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
-        const mxfp_neon_traits_t * t) {
-    assert(k % QK_MXFP6 == 0);
-    const int nb = k / QK_MXFP6;
-
-    const uint32x4_t  v_exp_mask  = vdupq_n_u32(t->exp_mask);
-    const uint32x4_t  v_mant_mask = vdupq_n_u32(t->mant_mask);
-    const uint32x4_t  v_ieee_off  = vdupq_n_u32(t->ieee_exp_off);
-    const float32x4_t v_sub_sc    = vdupq_n_f32(t->sub_scale);
-    const int32x4_t   v_neg_exp   = vdupq_n_s32(-(int)t->exp_shift);
-    const int32x4_t   v_mant_sh   = vdupq_n_s32(t->mant_shift);
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const block_mxfp6 * GGML_RESTRICT xb = ((const block_mxfp6 *)vx) + ib;
-        const float32x4_t v_scale = vdupq_n_f32(GGML_E8M0_TO_FP32(xb->e));
-
-        for (int j = 0; j < 32; j += 4) {
-            const uint32x4_t v_raw = unpack_fp6x4_neon(xb->qs + (j * 3 / 4));
-
-            const float32x4_t val = mxfp6_dequant_neon(v_raw,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc, v_neg_exp, v_mant_sh);
-
-            vst1q_f32(y + ib * QK_MXFP6 + j, vmulq_f32(val, v_scale));
-        }
-    }
-}
-
 // MXFP SoA dequant (flash attention)
 
 static void dequantize_row_mxfp8_soa_neon(
@@ -4503,22 +4441,6 @@ void ggml_vec_dot_mxfp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_vec_dot_mxfp6_q8_0_neon(n, s, vx, vy, &MXFP_TRAITS_E2M3);
 #else
     ggml_vec_dot_mxfp6_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
-}
-
-void dequantize_row_mxfp8_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-#if defined(__ARM_NEON)
-    dequantize_row_mxfp8_neon(x, y, k, &MXFP_TRAITS_E4M3);
-#else
-    dequantize_row_mxfp8_cpu_generic(x, y, k);
-#endif
-}
-
-void dequantize_row_mxfp6_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-#if defined(__ARM_NEON)
-    dequantize_row_mxfp6_neon(x, y, k, &MXFP_TRAITS_E2M3);
-#else
-    dequantize_row_mxfp6_cpu_generic(x, y, k);
 #endif
 }
 

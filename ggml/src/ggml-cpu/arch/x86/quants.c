@@ -3950,67 +3950,6 @@ static void ggml_vec_dot_mxfp6_q8_0_avx2(
     *s = hsum_float_8(acc);
 }
 
-// MXFP FP8/FP6 dequantize_row (AoS)
-
-static void dequantize_row_mxfp8_avx2(
-        const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
-        const mxfp_avx2_traits_t * t) {
-    assert(k % QK_MXFP8 == 0);
-    const int nb = k / QK_MXFP8;
-    const block_mxfp8 * GGML_RESTRICT x = vx;
-
-    const __m256i v_exp_mask  = _mm256_set1_epi32(t->exp_mask);
-    const __m256i v_mant_mask = _mm256_set1_epi32(t->mant_mask);
-    const __m256i v_ieee_off  = _mm256_set1_epi32(t->ieee_exp_off);
-    const __m256  v_sub_sc    = _mm256_set1_ps(t->sub_scale);
-    const __m256i v_sign_mask = _mm256_set1_epi32(t->sign_mask);
-    const __m256i v_zero      = _mm256_setzero_si256();
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const __m256 v_scale = _mm256_set1_ps(GGML_E8M0_TO_FP32(x[ib].e));
-
-        for (int j = 0; j < 32; j += 8) {
-            const __m256i v_raw = _mm256_cvtepu8_epi32(
-                _mm_loadl_epi64((const __m128i *)(x[ib].qs + j)));
-
-            const __m256 val = mxfp_dequant_avx2(v_raw,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc,
-                v_sign_mask, v_zero, t->exp_shift, t->sign_shift, t->mant_shift);
-
-            _mm256_storeu_ps(y + ib * QK_MXFP8 + j, _mm256_mul_ps(val, v_scale));
-        }
-    }
-}
-
-static void dequantize_row_mxfp6_avx2(
-        const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k,
-        const mxfp_avx2_traits_t * t) {
-    assert(k % QK_MXFP6 == 0);
-    const int nb = k / QK_MXFP6;
-
-    const __m256i v_exp_mask  = _mm256_set1_epi32(t->exp_mask);
-    const __m256i v_mant_mask = _mm256_set1_epi32(t->mant_mask);
-    const __m256i v_ieee_off  = _mm256_set1_epi32(t->ieee_exp_off);
-    const __m256  v_sub_sc    = _mm256_set1_ps(t->sub_scale);
-    const __m256i v_sign_mask = _mm256_set1_epi32(t->sign_mask);
-    const __m256i v_zero      = _mm256_setzero_si256();
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const block_mxfp6 * GGML_RESTRICT xb = ((const block_mxfp6 *)vx) + ib;
-        const __m256 v_scale = _mm256_set1_ps(GGML_E8M0_TO_FP32(xb->e));
-
-        for (int j = 0; j < 32; j += 8) {
-            const __m256i v_raw = unpack_fp6x8_avx2(xb->qs, j);
-
-            const __m256 val = mxfp_dequant_avx2(v_raw,
-                v_exp_mask, v_mant_mask, v_ieee_off, v_sub_sc,
-                v_sign_mask, v_zero, t->exp_shift, t->sign_shift, t->mant_shift);
-
-            _mm256_storeu_ps(y + ib * QK_MXFP6 + j, _mm256_mul_ps(val, v_scale));
-        }
-    }
-}
-
 // MXFP SoA dequant (flash attention)
 
 static void dequantize_row_mxfp8_soa_avx2(
@@ -4130,22 +4069,6 @@ void ggml_vec_dot_mxfp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_vec_dot_mxfp6_q8_0_avx2(n, s, vx, vy, &MXFP_TRAITS_E2M3);
 #else
     ggml_vec_dot_mxfp6_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
-#endif
-}
-
-void dequantize_row_mxfp8_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-#if defined(__AVX2__)
-    dequantize_row_mxfp8_avx2(x, y, k, &MXFP_TRAITS_E4M3);
-#else
-    dequantize_row_mxfp8_cpu_generic(x, y, k);
-#endif
-}
-
-void dequantize_row_mxfp6_cpu(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-#if defined(__AVX2__)
-    dequantize_row_mxfp6_avx2(x, y, k, &MXFP_TRAITS_E2M3);
-#else
-    dequantize_row_mxfp6_cpu_generic(x, y, k);
 #endif
 }
 

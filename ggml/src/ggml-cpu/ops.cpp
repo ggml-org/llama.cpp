@@ -8313,20 +8313,8 @@ static mxfp_fa_params mxfp_fa_params_init(
     p.v_multihead = is_mxfp_v && (nbv2 == (size_t)ggml_row_size(v->type, DV));
     p.v_soa_elems = is_mxfp_v ? (p.v_multihead ? nev2 * DV : DV) : 0;
 
-    // Per-head SoA addressing for multihead mode.
-    // Precompute byte offsets so the hot loop can skip per-head pointer math.
-    // qs_per_block values from centralized MXFP_QS_PER_BLOCK_* defines in ggml-common.h.
-    auto mxfp_qs_per_block = [](ggml_type type) -> int {
-        switch (type) {
-            case GGML_TYPE_MXFP4_E2M1: return MXFP4_SOA_QS_PER_BLOCK;
-            case GGML_TYPE_MXFP8_E4M3: return MXFP8_SOA_QS_PER_BLOCK;
-            case GGML_TYPE_MXFP6_E2M3: return MXFP6_SOA_QS_PER_BLOCK;
-            default: return 0;
-        }
-    };
-
     if (is_mxfp_k) {
-        p.k_qs_per_block    = mxfp_qs_per_block(k->type);
+        p.k_qs_per_block    = ggml_mxfp_qs_per_block(k->type);
         p.k_blocks_per_head = (int)(DK / 32);
         p.k_head_qs_bytes   = p.k_blocks_per_head * p.k_qs_per_block;
         const int64_t k_total_blocks = p.k_multihead ? nek2 * p.k_blocks_per_head : p.k_blocks_per_head;
@@ -8334,7 +8322,7 @@ static mxfp_fa_params mxfp_fa_params_init(
     }
 
     if (is_mxfp_v) {
-        p.v_qs_per_block    = mxfp_qs_per_block(v->type);
+        p.v_qs_per_block    = ggml_mxfp_qs_per_block(v->type);
         p.v_blocks_per_head = (int)(DV / 32);
         p.v_head_qs_bytes   = p.v_blocks_per_head * p.v_qs_per_block;
         const int64_t v_total_blocks = p.v_multihead ? nev2 * p.v_blocks_per_head : p.v_blocks_per_head;
