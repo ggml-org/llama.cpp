@@ -7,13 +7,13 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <functional>
 #include <cstdint>
+#include <mutex>
+#include <memory>
 
 namespace rknpu2_configuration {
-
-// Forward declaration for packing function pointer
-struct ggml_tensor;
 
 /**
  * @brief Defines a function signature for packing a segment of the weight matrix (B)
@@ -49,49 +49,62 @@ enum Rknpu2NpuType {
 };
 
 /**
- * @brief Describes a single supported matrix multiplication operation on the NPU.
+ * @brief Describes a single supported hardware pipeline available on the NPU.
  *
- * This struct maps a combination of ggml tensor types for weights (src0) and
- * activations (src1) to a specific RKNN matmul type. It also specifies the
- * hardware alignment requirements for the K and N dimensions of the matrices.
+ * This struct encapsulates the specific constraints and capabilities of a 
+ * hardware execution path, including required data types, memory alignment 
+ * rules, and the specific packing function needed to prepare tensor for 
+ * the underlying matrix multiplication operation.
  */
-struct Rknpu2Operation {
-    ggml_type type_w;           // Weight tensor type
-    ggml_type type_a;           // Activation tensor type
-    
+struct Rknpu2HardwarePipeline {
+    std::string pipeline_name;  // The unique hardware pipeline name
+
     Rknpu2NpuType npu_type_a;   // The target data type for activations on the NPU
     Rknpu2NpuType npu_type_c;   // The data type of the result from the NPU
     rknn_matmul_type mm_type;   // Corresponding RKNN operation type
-    
+
     int k_align;                // Required alignment for the K dimension
     int n_align;                // Required alignment for the N dimension
     PackingFunction pack_func;  // Function to pack the weight matrix for this op
+
+    bool use_hadamard;          // Flag for using Hadamard Transform
 };
 
 /**
  * @brief Holds the complete hardware configuration for a specific Rockchip NPU.
  *
  * This includes the device name, number of available NPU cores, and a list of
- * all matrix multiplication operations supported by the hardware.
+ * all available hardware pipelines. It also manages layer-by-layer quantization strategies.
  */
 struct Rknpu2DeviceConfig {
     std::string device_name;
     int core_count;
-    std::vector<Rknpu2Operation> supported_ops;
+    std::vector<Rknpu2HardwarePipeline> hardware_pipelines;
+
+    // Type-specific default patterns mapping
+    std::map<int, std::vector<std::string>> default_patterns;
+
+    // Custom global pattern
+    bool use_custom_pattern = false;
+    std::vector<std::string> custom_hybrid_pattern; 
+
+    // Tensor-Quantization mapping
+    mutable std::shared_ptr<std::mutex> pattern_mutex = std::make_shared<std::mutex>();
+    mutable std::unordered_map<std::string, int> tensor_sequence_map;
+    mutable int global_tensor_counter = 0;
 
     /**
-     * @brief Finds the corresponding operation configuration for the given weight type.
-     * @param w_type The ggml_type of the weight tensor.
-     * @return A pointer to the Rknpu2Operation if found, otherwise nullptr.
+     * @brief Resolves the appropriate hardware pipeline for a given tensor.
+     * Applies layer-by-layer cyclical selection if the active pattern has multiple entries.
      */
-    const Rknpu2Operation* find_op_support(ggml_type w_type) const {
-        for (const auto& op : supported_ops) {
-            if (op.type_w == w_type) {
-                return &op;
-            }
-        }
-        return nullptr;
-    }
+    const Rknpu2HardwarePipeline* resolve_op_support(const struct ggml_tensor* w_tensor) const;
+
+private:
+    /**
+     * @brief Retrieves the active pattern for a given tensor type.
+     * Prioritizes custom ENV variable pattern over default mapping.
+     */
+    const std::vector<std::string>* get_active_pattern(int tensor_type) const;
 };
 
 /**

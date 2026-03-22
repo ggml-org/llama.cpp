@@ -3,6 +3,8 @@
 #include "rknpu2-configuration.h"
 
 #include <arm_neon.h>
+#include <cstdlib>
+#include <sstream>
 
 // --- Anonymous namespace for chip-specific packing functions ---
 
@@ -112,6 +114,18 @@ void pack_B_rk3588_int4(
 
 } // anonymous namespace
 
+namespace {
+    // Function for parsing ENV variable
+    std::vector<std::string> split_string(const std::string& str, char delimiter) {
+        std::vector<std::string> tokens;
+        std::string token;
+        std::istringstream tokenStream(str);
+        while (std::getline(tokenStream, token, delimiter)) {
+            if(!token.empty()) tokens.push_back(token);
+        }
+        return tokens;
+    }
+} // anonymous namespace
 
 namespace rknpu2_configuration {
 
@@ -120,43 +134,156 @@ Rknpu2ConfigManager& Rknpu2ConfigManager::get_instance() {
     return instance;
 }
 
+const std::vector<std::string>* Rknpu2DeviceConfig::get_active_pattern(int tensor_type) const {
+    auto it = default_patterns.find(tensor_type);
+    if (it == default_patterns.end()) {
+        return nullptr;
+    }
+    
+    if (use_custom_pattern && !custom_hybrid_pattern.empty()) {
+        return &custom_hybrid_pattern;
+    }
+    
+    return &it->second;
+}
+
+const Rknpu2HardwarePipeline* Rknpu2DeviceConfig::resolve_op_support(const struct ggml_tensor* w_tensor) const {
+    if (!w_tensor) return nullptr;
+
+    auto find_pipeline = [this](const std::string& name) -> const Rknpu2HardwarePipeline* {
+        for (const auto& pipe : hardware_pipelines) {
+            if (pipe.pipeline_name == name) return &pipe;
+        }
+        return nullptr;
+    };
+
+    // Retrieve active quantization pattern based on tensor type (or custom ENV variable)
+    const std::vector<std::string>* pattern_ptr = get_active_pattern((int)w_tensor->type);
+    
+    // If no pattern is registered for this type and no global override exists, reject operation
+    if (!pattern_ptr || pattern_ptr->empty()) {
+        return nullptr;
+    }
+
+    const auto& pattern = *pattern_ptr;
+
+    // Acquiring the lock on the pattern mutex for thread-safe tensor tracking
+    std::lock_guard<std::mutex> lock(*pattern_mutex);
+
+    // Retrieving the unique tensor name
+    std::string name = w_tensor->name;
+    if (name.empty()) {
+        name = "ptr_" + std::to_string(reinterpret_cast<uintptr_t>(w_tensor));
+    }
+
+    // Assigning the next sequence number if this tensor is seen for the first time
+    if (tensor_sequence_map.find(name) == tensor_sequence_map.end()) {
+        tensor_sequence_map[name] = global_tensor_counter++;
+    }
+
+    // Selecting the pipeline cyclically based on the defined pattern
+    int seq_id = tensor_sequence_map[name];
+    size_t pattern_idx = seq_id % pattern.size();
+
+    const std::string& selected_pipeline = pattern[pattern_idx];
+    const auto* pipeline = find_pipeline(selected_pipeline);
+
+    // If no hardware pipeline exists with this name, reject operation
+    if (!pipeline) {
+        return nullptr;
+    }
+
+    return pipeline;
+}
+
 Rknpu2ConfigManager::Rknpu2ConfigManager() {
+    // Reading custom hybrid pattern ENV variable
+    const char* env_pattern = std::getenv("HYBRID_PATTERN");
+    bool use_custom_pattern = false;
+    std::vector<std::string> custom_pattern;
+
+    if (env_pattern != nullptr) {
+        custom_pattern = split_string(env_pattern, ',');
+        use_custom_pattern = true;
+    }
+
     // --- Define RK3588 Configuration ---
     Rknpu2DeviceConfig rk3588_config;
     rk3588_config.device_name = "RK3588";
     rk3588_config.core_count = 3;
-    rk3588_config.supported_ops = {
+    rk3588_config.hardware_pipelines = {
         {
-            /* .type_w    = */ GGML_TYPE_F16,               // Weights must be converted from F16
-            /* .type_a    = */ GGML_TYPE_F32,
-            /* .npu_type_a = */ NPU_TYPE_FP16,              // Activations must be converted to FP16
-            /* .npu_type_c = */ NPU_TYPE_FP32,              // Result is already in FP32
-            /* .mm_type   = */ RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32,
-            /* .k_align   = */ 32,
-            /* .n_align   = */ 16,
-            /* .pack_func = */ pack_B_rk3588_fp16
+            /* .pipeline_name = */ "FP16_STANDARD",
+            /* .npu_type_a    = */ NPU_TYPE_FP16,
+            /* .npu_type_c    = */ NPU_TYPE_FP32,
+            /* .mm_type       = */ RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 16,
+            /* .pack_func     = */ pack_B_rk3588_fp16,
+            /* .use_hadamard  = */ false
         },
         {
-            /* .type_w    = */ GGML_TYPE_Q8_0,              // Weights must be converted from Q8_0
-            /* .type_a    = */ GGML_TYPE_F32,
-            /* .npu_type_a = */ NPU_TYPE_INT8,              // Activations must be converted to INT8
-            /* .npu_type_c = */ NPU_TYPE_INT32,             // Result must be converted from INT32
-            /* .mm_type   = */ RKNN_INT8_MM_INT8_TO_INT32,
-            /* .k_align   = */ 32,
-            /* .n_align   = */ 32,
-            /* .pack_func = */ pack_B_rk3588_int8
+            /* .pipeline_name = */ "FP16_HADAMARD",
+            /* .npu_type_a    = */ NPU_TYPE_FP16,
+            /* .npu_type_c    = */ NPU_TYPE_FP32,
+            /* .mm_type       = */ RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 16,
+            /* .pack_func     = */ pack_B_rk3588_fp16,
+            /* .use_hadamard  = */ true
         },
         {
-            /* .type_w    = */ GGML_TYPE_Q4_0,              // Weights must be converted from Q4_0
-            /* .type_a    = */ GGML_TYPE_F32,
-            /* .npu_type_a = */ NPU_TYPE_INT4,              // Activations must be converted to INT4
-            /* .npu_type_c = */ NPU_TYPE_INT16,             // Result must be converted from INT16
-            /* .mm_type   = */ RKNN_INT4_MM_INT4_TO_INT16,
-            /* .k_align   = */ 32,
-            /* .n_align   = */ 64,
-            /* .pack_func = */ pack_B_rk3588_int4
+            /* .pipeline_name = */ "INT8_STANDARD",
+            /* .npu_type_a    = */ NPU_TYPE_INT8,
+            /* .npu_type_c    = */ NPU_TYPE_INT32,
+            /* .mm_type       = */ RKNN_INT8_MM_INT8_TO_INT32,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 32,
+            /* .pack_func     = */ pack_B_rk3588_int8,
+            /* .use_hadamard  = */ false
+        },
+        {
+            /* .pipeline_name = */ "INT8_HADAMARD",
+            /* .npu_type_a    = */ NPU_TYPE_INT8,
+            /* .npu_type_c    = */ NPU_TYPE_INT32,
+            /* .mm_type       = */ RKNN_INT8_MM_INT8_TO_INT32,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 32,
+            /* .pack_func     = */ pack_B_rk3588_int8,
+            /* .use_hadamard  = */ true
+        },
+        {
+            /* .pipeline_name = */ "INT4_STANDARD",
+            /* .npu_type_a    = */ NPU_TYPE_INT4,
+            /* .npu_type_c    = */ NPU_TYPE_INT16,
+            /* .mm_type       = */ RKNN_INT4_MM_INT4_TO_INT16,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 64,
+            /* .pack_func     = */ pack_B_rk3588_int4,
+            /* .use_hadamard  = */ false
+        },
+        {
+            /* .pipeline_name = */ "INT4_HADAMARD",
+            /* .npu_type_a    = */ NPU_TYPE_INT4,
+            /* .npu_type_c    = */ NPU_TYPE_INT16,
+            /* .mm_type       = */ RKNN_INT4_MM_INT4_TO_INT16,
+            /* .k_align       = */ 32,
+            /* .n_align       = */ 64,
+            /* .pack_func     = */ pack_B_rk3588_int4,
+            /* .use_hadamard  = */ true
         }
     };
+    
+    // Assigning custom variables
+    rk3588_config.use_custom_pattern = use_custom_pattern;
+    rk3588_config.custom_hybrid_pattern = custom_pattern;
+
+    // Defining default quantization sequences for each supported ggml_type
+    rk3588_config.default_patterns[(int)GGML_TYPE_F16]  = {"FP16_STANDARD"};
+    rk3588_config.default_patterns[(int)GGML_TYPE_Q8_0] = {"INT8_STANDARD"};
+    rk3588_config.default_patterns[(int)GGML_TYPE_Q6_K] = {"INT8_STANDARD", "INT4_HADAMARD"};
+    rk3588_config.default_patterns[(int)GGML_TYPE_Q4_0] = {"INT4_HADAMARD"};
+
     device_configs["RK3588"] = rk3588_config;
 
     // --- Define RK3576 Configuration (Placeholder) ---
