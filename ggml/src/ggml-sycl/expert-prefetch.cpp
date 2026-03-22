@@ -306,9 +306,14 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         completed_count_++;
 
         // Update placement table so the dispatch path finds device_ptr.
+        // Do NOT overwrite CPU-assigned (device_id=-1) experts — they were
+        // intentionally placed on CPU due to VRAM pressure constraints.
         auto & ptable = get_expert_placement_table();
         if (ptable.is_initialized()) {
-            ptable.set_device_ptr(layer_idx, expert_idx, device_id_, it->second.device_ptr);
+            auto existing = ptable.get(layer_idx, expert_idx);
+            if (existing.device_id != -1) {
+                ptable.set_device_ptr(layer_idx, expert_idx, device_id_, it->second.device_ptr);
+            }
         }
 
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
