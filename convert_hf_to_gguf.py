@@ -606,6 +606,7 @@ class ModelBase:
         return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
 
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
+        input_scale_name = name.replace(".weight", ".input_scale")
         if "language_model." in name:
             name = name.replace("language_model.", "")
 
@@ -621,6 +622,13 @@ class ModelBase:
             scale_name = new_name.replace(".weight", ".scale")
             logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
             self.gguf_writer.add_tensor(scale_name, scale2_f32)
+
+        # Save the NVFP4 input_scale (one per NVFP4 tensor) 
+        if input_scale := self.model_tensors.get(input_scale_name):
+            new_input_scale_name = f"{new_name}.input_scale"
+            input_scale_f32 = float(LazyTorchTensor.to_eager(input_scale()).float().item())
+            logger.info(f"  + {new_input_scale_name} (per-tensor NVFP4 input_scale)")
+            self.gguf_writer.add_float32(new_input_scale_name, input_scale_f32)
 
     def _generate_nvfp4_tensors(self):
         # Per-layer expert merging to avoid holding all experts in memory
