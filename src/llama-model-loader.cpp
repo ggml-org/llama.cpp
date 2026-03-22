@@ -513,8 +513,6 @@ llama_model_loader::llama_model_loader(
         const std::string & fname,
         std::vector<std::string> & splits,
         llama_load_mode load_mode,
-        // bool use_mmap,
-        // bool use_direct_io,
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
@@ -552,20 +550,6 @@ llama_model_loader::llama_model_loader(
 
         files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
         contexts.emplace_back(ctx);
-
-        // if (use_mmap && use_direct_io) {
-        //     if (files.back()->has_direct_io()) {
-        //         LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
-        //         use_mmap = false;
-        //     } else {
-        //         LLAMA_LOG_WARN("%s: direct I/O is not available, using mmap\n", __func__);
-        //         use_direct_io = false;
-
-        //         // reopen file using std::fopen for mmap
-        //         files.pop_back();
-        //         files.emplace_back(new llama_file(fname.c_str(), "rb", false));
-        //     }
-        // }
 
         // Save tensors data offset of the main file.
         // For subsidiary files, `meta` tensor data offset must not be used,

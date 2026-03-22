@@ -197,10 +197,10 @@ extern "C" {
     };
 
     enum llama_load_mode {
-        LLAMA_LOAD_MODE_NONE      = 0,
-        LLAMA_LOAD_MODE_MMAP      = 1,
-        LLAMA_LOAD_MODE_MLOCK     = 2,
-        LLAMA_LOAD_MODE_DIRECT_IO = 3,
+        LLAMA_LOAD_MODE_NONE      = 0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP      = 1, // memory map the model
+        LLAMA_LOAD_MODE_MLOCK     = 2, // force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO = 3, // use direct I/O if available
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
