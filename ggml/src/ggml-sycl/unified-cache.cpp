@@ -1323,12 +1323,10 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
     const bool     host_accessible = is_host_accessible_ptr(src_ptr, queue_);
     const bool     can_hash        = validate_content && host_accessible;
     const uint64_t new_hash        = can_hash ? compute_content_hash(src_ptr, src_size) : 0;
-    // When the model exceeds VRAM, GPU must DMA weights from host memory every token.
-    // Pinned host memory allows direct DMA; mmap requires an extra staging copy.
-    // Disable aliasing so weights get copied to the pinned pool instead.
-    const bool     model_exceeds   = ggml_backend_sycl_model_exceeds_vram(nullptr);
-    const bool     can_alias       = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size
-                                     && !model_exceeds;
+    // Always allow aliasing for host-accessible AOS entries with matching sizes.
+    // The unified non-blocking cache handles all model sizes without branching
+    // on model_exceeds_vram.  Pinning of host cache entries is handled separately.
+    const bool     can_alias       = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size;
     const bool     prefer_unpinned = host_cache_prefer_unpinned(type);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -2477,7 +2475,8 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 
 cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_request &     request,
                                                         const std::vector<sycl::event> & deps,
-                                                        sycl::queue * override_queue) {
+                                                        sycl::queue * override_queue,
+                                                        bool non_blocking) {
     cache_layout_result result{};
     result.layout        = request.layout;
     result.onednn_pack_m = request.onednn_pack_m;
@@ -2519,27 +2518,57 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     // Fast path: try read-only lookup first to avoid mutex contention
     // This uses shared_lock internally, allowing concurrent readers
     if (!ggml_sycl_graph_recording_active()) {
-        std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
-        auto                                id_it = id_to_key_.find(request.key);
-        if (id_it != id_to_key_.end()) {
-            auto entry_it = entries_.find(id_it->second);
-            if (entry_it != entries_.end()) {
-                const auto & entry = entry_it->second;
-                // Fast path: entry exists, is READY, and layout matches
-                if (entry.state == cache_entry_state::READY && entry.layout == request.layout &&
-                    entry.size == request.dst_size && !onednn_pack_m_mismatch(entry, request)) {
-                    // Update hit count atomically (acceptable perf tradeoff vs full LRU update)
-                    hits_++;
-                    result.device_ptr    = entry.device_ptr;
-                    result.size          = entry.size;
-                    result.status        = cache_layout_status::READY;
-                    result.host_resident = entry.host_resident;
-                    result.location      = entry.location;
-                    result.onednn_pack_m = entry.onednn_pack_m;
-                    result.event         = submit_barrier(deps);
-                    return result;
+        bool entry_found = false;
+        {
+            std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
+            auto                                id_it = id_to_key_.find(request.key);
+            if (id_it != id_to_key_.end()) {
+                entry_found       = true;
+                auto entry_it = entries_.find(id_it->second);
+                if (entry_it != entries_.end()) {
+                    const auto & entry = entry_it->second;
+                    // Fast path: entry exists, is READY, and layout matches
+                    if (entry.state == cache_entry_state::READY && entry.layout == request.layout &&
+                        entry.size == request.dst_size && !onednn_pack_m_mismatch(entry, request)) {
+                        // Update hit count atomically (acceptable perf tradeoff vs full LRU update)
+                        hits_++;
+                        result.device_ptr    = entry.device_ptr;
+                        result.size          = entry.size;
+                        result.status        = cache_layout_status::READY;
+                        result.host_resident = entry.host_resident;
+                        result.location      = entry.location;
+                        result.onednn_pack_m = entry.onednn_pack_m;
+                        result.event         = submit_barrier(deps);
+                        return result;
+                    }
+                    // Non-blocking: IN_PROGRESS entry with matching layout — return pointer + event
+                    if (non_blocking && entry.state == cache_entry_state::IN_PROGRESS &&
+                        entry.layout == request.layout) {
+                        result.device_ptr    = entry.device_ptr;
+                        result.size          = entry.size;
+                        result.status        = cache_layout_status::IN_PROGRESS;
+                        result.host_resident = entry.host_resident;
+                        result.location      = entry.location;
+                        result.onednn_pack_m = entry.onednn_pack_m;
+                        std::vector<sycl::event> combined_deps = deps;
+                        if (entry.has_ready_event) {
+                            combined_deps.push_back(entry.ready_event);
+                        }
+                        result.event = submit_barrier(combined_deps);
+                        return result;
+                    }
+                    // Entry exists but layout/size mismatch. Fall through to exclusive lock
+                    // which handles layout conversion (evict old, allocate new).
                 }
             }
+        }
+        // Non-blocking: entry truly not found in cache — return FAILED immediately.
+        // Don't allocate, don't fill, don't block. Caller falls back to host-pinned.
+        // When the entry exists (even with wrong layout), allow fall-through to the
+        // exclusive lock path for layout conversion.
+        if (non_blocking && !entry_found) {
+            result.status = cache_layout_status::FAILED;
+            return result;
         }
     }
     // Fall through to slow path with exclusive lock
@@ -6401,12 +6430,7 @@ unified_budget_info unified_cache_get_budget_info(int device) {
     info.n_expert_used       = n_exp_used;
     info.active_expert_bytes = compute_moe_effective_weight_bytes(moe_total, moe_total, n_exp, n_exp_used);
 
-    // Compute model_exceeds_vram directly from model size vs available budget.
-    // No global flag needed — computed on-the-fly from cache state.
-    const size_t model_size    = ggml_sycl_get_model_size();
-    const size_t effective_size = compute_moe_effective_weight_bytes(
-        model_size, moe_total, n_exp, n_exp_used);
-    info.model_exceeds_vram = (model_size > 0) && (effective_size > info.available_for_weights);
+    // model_exceeds_vram removed — unified non-blocking cache handles all model sizes
 
     return info;
 }
@@ -6452,8 +6476,14 @@ bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
 
     auto info = unified_cache_get_budget_info(device);
 
-    // If model already exceeds VRAM, definitely offload KV
-    if (info.model_exceeds_vram) {
+    // Check if weight bytes already exceed available budget (model doesn't fit in VRAM)
+    if (info.weight_bytes > 0 && info.weight_bytes > info.available_for_weights) {
+        return true;
+    }
+
+    // Check total model size vs budget for models not yet fully loaded
+    const size_t model_size = ggml_sycl_get_model_size();
+    if (model_size > 0 && model_size > info.available_for_weights) {
         return true;
     }
 

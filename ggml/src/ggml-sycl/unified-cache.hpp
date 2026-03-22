@@ -632,9 +632,16 @@ class unified_cache {
     // Ensure a weight is cached in a specific layout with graph-safe async fill.
     // When override_queue is non-null, H2D transfers use that queue instead of
     // the cache's internal queue, allowing callers to drive async staging.
+    //
+    // non_blocking mode (for inference hot path):
+    //   - Entry READY: return pointer immediately
+    //   - Entry IN_PROGRESS: return pointer + event (caller can depends_on)
+    //   - Not cached: return FAILED (no alloc, no fill, no block)
+    // When false (default): existing sync behavior for S1-PRELOAD/warmup.
     cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
                                              const std::vector<sycl::event> & deps,
-                                             sycl::queue * override_queue = nullptr);
+                                             sycl::queue * override_queue = nullptr,
+                                             bool non_blocking = false);
 
     // Finalize all IN_PROGRESS entries that were created with skip_fill_wait.
     // Call this after a batch queue.wait() to mark pending entries as READY
@@ -1419,7 +1426,7 @@ struct unified_budget_info {
     size_t runtime_bytes;          // KV + compute + staging + graph
     size_t available_for_weights;  // budget - runtime (what can hold weights)
     int    budget_pct;             // GGML_SYCL_VRAM_BUDGET_PCT value used
-    bool   model_exceeds_vram;     // True if effective model size > available_for_weights (computed on-the-fly)
+    // model_exceeds_vram removed — unified non-blocking cache handles all model sizes
     // MoE expert breakdown (non-zero only for MoE models)
     size_t expert_weight_bytes;  // Total bytes for ALL expert tensors
     size_t active_expert_bytes;  // Estimated bytes for active experts only
