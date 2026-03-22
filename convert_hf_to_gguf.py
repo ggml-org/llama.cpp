@@ -4309,7 +4309,6 @@ class InternVisionModel(MmprojModel):
         self.gguf_writer.add_vision_preproc_min_tiles(self.min_dynamic_tiles)
         self.gguf_writer.add_vision_preproc_max_tiles(self.max_dynamic_tiles)
 
-
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
