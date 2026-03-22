@@ -21,7 +21,7 @@ using hf_files = std::vector<hf_file>;
 // Get files from HF API
 hf_files get_repo_files(
     const std::string & repo_id,
-    const std::string & bearer_token
+    const std::string & token
 );
 
 hf_files get_cached_files(const std::string & repo_id = {});
@@ -30,6 +30,6 @@ hf_files get_cached_files(const std::string & repo_id = {});
 std::string finalize_file(const hf_file & file);
 
 // TODO: Remove later
-void migrate_old_cache_to_hf_cache(const std::string & bearer_token, bool offline = false);
+void migrate_old_cache_to_hf_cache(const std::string & token, bool offline = false);
 
 } // namespace hf_cache
