@@ -2201,9 +2201,9 @@ struct clip_model_loader {
             b_hi = std::min(b_hi, max_num);
             for (int b = b_lo; b <= b_hi; ++b) {
                 hparams.image_res_candidates.push_back(clip_image_size {
-                            a*hparams.image_size,
-                            b*hparams.image_size,
-                        });
+                    a*hparams.image_size,
+                    b*hparams.image_size,
+                });
             }
         }
     }
