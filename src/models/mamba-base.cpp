@@ -8,7 +8,8 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
                                                          ggml_tensor *        cur,
                                                          const llama_model &  model,
                                                          const llama_ubatch & ubatch,
-                                                         int                  il) {
+                                                         int                  il,
+                                                         ggml_tensor **       y_pre_proj) {
     const auto * mctx_cur = inp->mctx;
 
     const auto kv_head = mctx_cur->get_head();
@@ -134,6 +135,13 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
         // TODO: skip computing output earlier for unused tokens
 
         y = ggml_add(ctx0, y, ggml_mul(ctx0, cur, layer.ssm_d));
+
+        // Capture y BEFORE swiglu -- this is what the Python yoco_key_values captures.
+        // The GMU layers need the raw SSM output, not the swiglu'd version.
+        if (y_pre_proj) {
+            *y_pre_proj = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
+        }
+
         y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
         // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}

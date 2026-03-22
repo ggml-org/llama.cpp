@@ -1091,6 +1091,55 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_PHI4FLASH:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                hparams.f_norm_eps = hparams.f_norm_rms_eps;
+                type = LLM_TYPE_UNKNOWN;
+
+                // The GGUF key is "phi4flash.sliding_window" but LLM_KV_ATTENTION_SLIDING_WINDOW
+                // expands to "phi4flash.attention.sliding_window" — name mismatch, so hardcode it.
+                hparams.n_swa = 512;
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+
+                for (uint32_t swa_il = 0; swa_il < hparams.n_layer; ++swa_il) {
+                   // Odd layers 1,3,...,15 use the 512-token SWA window.
+                   // Layer 17 = full attention, layers 18+ = GMU/cross-attn: all dense.
+                   const bool is_swa_layer = ((swa_il % 2) != 0) && (swa_il < 17);
+                   hparams.swa_layers[swa_il] = is_swa_layer ? 1u : 0u;
+                }
+
+                // Standard SSM (Mamba) parameters exist in hparams by default
+                ml.get_key(LLM_KV_SSM_STATE_SIZE, hparams.ssm_d_state, false);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE, hparams.ssm_d_inner, false);
+
+                // ssm_d_conv and ssm_dt_rank are stored in the GGUF as
+                // "phi4flash.ssm_d_conv" and "phi4flash.ssm_dt_rank" which don't
+                // match the standard LLM_KV key names, so read them directly:
+                hparams.ssm_d_conv  = 4;   // phi4flash.ssm_d_conv  = 4  (Mamba-1 conv kernel size)
+                hparams.ssm_dt_rank = 160; // phi4flash.ssm_dt_rank = 160 (dt projection rank)
+       
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    bool is_mamba = (i % 2 == 0);          // Even layers
+                    bool is_gmu   = (i >= 18 && is_mamba); // GMU layers
+
+                    if (is_mamba && !is_gmu) {
+                        // Tell the allocator to build a recurrent cache for this layer!
+                        hparams.recurrent_layer_arr[i] = true;
+
+                        // Mamba layers don't use standard Attention KV caches
+                        hparams.n_head_arr[i] = 0;
+                        hparams.n_head_kv_arr[i] = 0;
+                    } else if (is_gmu) {
+                        // GMU layers also don't use standard KV caches
+                        hparams.recurrent_layer_arr[i] = false;
+                        hparams.n_head_arr[i]    = 0;
+                        hparams.n_head_kv_arr[i] = 0;
+                    } else {
+                        hparams.recurrent_layer_arr[i] = false;
+                    }
+                }
+            } break;
         case LLM_ARCH_PLAMO:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -3824,6 +3873,103 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), { n_embd_head/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
                         layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), { n_embd_head/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
                      }
+                } break;
+            case LLM_ARCH_PHI4FLASH:
+                {
+                    const int64_t d_conv = 4, d_inner = 5120, d_state = 16, dt_rank = 160;
+
+                    hparams.ssm_d_inner = d_inner;
+                    hparams.ssm_d_state = d_state;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"), {n_embd}, 0);
+
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    if (!output) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        bool is_mamba = (i % 2 == 0);
+                        bool is_gmu   = (i >= 18 && is_mamba);
+                        bool is_attn  = !is_mamba || (i == 17);
+
+                        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias",   i), {n_embd}, 0);
+                        layer.ffn_norm    = create_tensor(tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd}, 0);
+                        layer.ffn_norm_b  = create_tensor(tn(LLM_TENSOR_FFN_NORM,  "bias",   i), {n_embd}, 0);
+
+                        // ===== MAMBA LAYERS (even 0,2,...,16) =====
+                        // Rule: HF shape [R,C] saved raw -> ggml ne=[C,R].
+                        if (is_mamba && !is_gmu) {
+                            // HF: [2*d_inner=10240, n_embd=2560] -> ggml ne=[2560, 10240]
+                            layer.ssm_in     = create_tensor(tn(LLM_TENSOR_SSM_IN,       "weight", i), {n_embd,   2*d_inner}, 0);
+
+                            // conv1d saved via squeeze(1) only - ggml ne=[4, 5120] (unchanged)
+                            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv,   d_inner},   0);
+                            layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias",   i), {d_inner},             0);
+
+                            // HF: [dt_rank+2*d_state=192, d_inner=5120] -> ggml ne=[5120, 192]
+                            layer.ssm_x      = create_tensor(tn(LLM_TENSOR_SSM_X,        "weight", i), {d_inner,   dt_rank + 2*d_state}, 0);
+
+                            // HF: [d_inner=5120, dt_rank=160] -> ggml ne=[160, 5120]
+                            layer.ssm_dt     = create_tensor(tn(LLM_TENSOR_SSM_DT,       "weight", i), {dt_rank,   d_inner},             0);
+                            layer.ssm_dt_b   = create_tensor(tn(LLM_TENSOR_SSM_DT,       "bias",   i), {d_inner},                        0);
+
+                            // HF A_log: [d_inner=5120, d_state=16] saved raw -> ggml ne=[16, 5120]
+                            layer.ssm_a      = create_tensor(tn(LLM_TENSOR_SSM_A,                  i), {d_state,   d_inner},             0);
+
+                            // ssm_d is 1D - unchanged
+                            layer.ssm_d      = create_tensor(tn(LLM_TENSOR_SSM_D,                  i), {d_inner},                        0);
+
+                            // HF: [n_embd=2560, d_inner=5120] -> ggml ne=[5120, 2560]
+                            layer.ssm_out    = create_tensor(tn(LLM_TENSOR_SSM_OUT,      "weight", i), {d_inner,    n_embd},             0);
+                        }
+
+                        // ===== GMU LAYERS (even 18,20,...,30) =====
+                        // HF in_proj:  [d_inner=5120, n_embd=2560] -> ggml ne=[2560, 5120]
+                        // HF out_proj: [n_embd=2560, d_inner=5120] -> ggml ne=[5120, 2560]
+                        if (is_gmu) {
+                            layer.gmu_in  = create_tensor(tn(LLM_TENSOR_GMU_IN,  "weight", i), {n_embd,  d_inner}, 0);
+                            layer.gmu_out = create_tensor(tn(LLM_TENSOR_GMU_OUT, "weight", i), {d_inner, n_embd},  0);
+                        }
+
+                        // ===== ATTENTION LAYERS (odd 1-15, 17, odd 19-31) =====
+                        if (is_attn) {
+                            if (i >= 18) {
+                                // Cross-attn: Q-only wqkv, square [n_embd, n_embd] - symmetric, unchanged
+                                layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd}, 0);
+                                layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {n_embd},       TENSOR_NOT_REQUIRED);
+                            } else {
+                                // SWA/full attn: HF Wqkv [5120, n_embd=2560] -> ggml ne=[2560, 5120]
+                                const uint32_t phi4_qkv_dim = 5120;
+                                layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd,       phi4_qkv_dim}, 0);
+                                layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {phi4_qkv_dim}, TENSOR_NOT_REQUIRED);
+                            }
+
+                            // wo: square [n_embd, n_embd] - symmetric, unchanged
+                            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                            layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd},             TENSOR_NOT_REQUIRED);
+
+                            // Lambda vectors (1D - no transpose, unchanged)
+                            layer.attn_lambda_q1 = create_tensor(tn(LLM_TENSOR_ATTN_LAMBDA_Q1, "weight", i), {64},  0);
+                            layer.attn_lambda_q2 = create_tensor(tn(LLM_TENSOR_ATTN_LAMBDA_Q2, "weight", i), {64},  0);
+                            layer.attn_lambda_k1 = create_tensor(tn(LLM_TENSOR_ATTN_LAMBDA_K1, "weight", i), {64},  0);
+                            layer.attn_lambda_k2 = create_tensor(tn(LLM_TENSOR_ATTN_LAMBDA_K2, "weight", i), {64},  0);
+                            layer.attn_subln     = create_tensor(tn(LLM_TENSOR_ATTN_SUBLN,     "weight", i), {128}, 0);
+                        }
+
+                        // ===== FFN (ALL layers) =====
+                        // FFN: combined gate+up as [n_embd, 2*n_ff], no separate ffn_gate
+                        const uint32_t curr_n_ff = 10240;
+                        // DO NOT create ffn_gate - remove that line entirely
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*curr_n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {curr_n_ff,  n_embd},  0);
+                    }
                 } break;
             case LLM_ARCH_PLAMO:
                 {
@@ -8072,6 +8218,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](int32_t il) {
                             return hparams.is_recurrent(il) && hparams.n_ff(il) == 0;
                         };
+                    } else if (arch == LLM_ARCH_PHI4FLASH) {
+                        filter_attn = [&](int32_t il) {
+                            const bool is_mamba = (il % 2 == 0);
+                            const bool is_gmu   = (il >= 18 && is_mamba);
+                            const bool is_cross = (!is_mamba && il > 17);
+                            // SWA layers (1,3,...,15): go to SWA KV cache  (because n_swa_arr[il]=512)
+                            // Full attn layer (17):    go to non-SWA KV cache (because n_swa_arr[17]=0)
+                            // Cross-attn (19-31):      excluded - YOCO K/V managed in the compute graph
+                            // GMU layers (even>=18):   excluded - no KV cache
+                            return !is_mamba && !is_gmu && !is_cross;
+                        };
+                        filter_recr = [&](int32_t il) {
+                            return hparams.is_recurrent(il);
+                        };
                     }
 
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
@@ -8311,6 +8471,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                 } else {
                     llm = std::make_unique<llm_build_phi3<false>>(*this, params);
                 }
+            } break;
+        case LLM_ARCH_PHI4FLASH:
+            {
+                llm = std::make_unique<llm_build_phi4flash>(*this, params);
             } break;
         case LLM_ARCH_PLAMO:
             {

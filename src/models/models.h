@@ -15,7 +15,7 @@ struct llm_build_mamba_base : public llm_graph_context {
 
     virtual ~llm_build_mamba_base() = default;
 
-    ggml_tensor * build_mamba_layer(llm_graph_input_rs * inp, ggml_tensor * cur, const llama_model & model, const llama_ubatch & ubatch, int il);
+    ggml_tensor * build_mamba_layer(llm_graph_input_rs * inp, ggml_tensor * cur, const llama_model & model, const llama_ubatch & ubatch, int il, ggml_tensor ** y_pre_proj = nullptr);
     ggml_tensor * build_mamba2_layer(llm_graph_input_rs * inp, ggml_tensor * cur, const llama_model & model, const llama_ubatch & ubatch, int il) const;
 
 };
@@ -484,6 +484,10 @@ struct llm_build_phi2 : public llm_graph_context {
 template<bool iswa>
 struct llm_build_phi3 : public llm_graph_context {
     llm_build_phi3(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_phi4flash : public llm_build_mamba_base {
+    llm_build_phi4flash(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_plamo2 : public llm_build_mamba_base {

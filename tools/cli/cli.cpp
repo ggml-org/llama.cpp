@@ -508,6 +508,14 @@ int main(int argc, char ** argv) {
             add_system_prompt();
 
             ctx_cli.input_files.clear();
+            // PATCH for cli.cpp: make /clear also reset the model's memory state
+            // (KV cache, Mamba recurrent state, etc.)
+            {
+                llama_context * lctx = ctx_cli.ctx_server.get_llama_context();
+                if (lctx != nullptr) {
+                    llama_memory_clear(llama_get_memory(lctx), true);
+                }
+            }
             console::log("Chat history cleared.\n");
             continue;
         } else if (

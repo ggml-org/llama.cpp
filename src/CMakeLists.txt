@@ -115,6 +115,7 @@ add_library(llama
             models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp
+            models/phi4flash.cpp
             models/plamo.cpp
             models/plamo2.cpp
             models/plamo3.cpp
