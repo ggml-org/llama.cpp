@@ -1631,8 +1631,14 @@ The `status` object can be:
 ```json
 "status": {
   "value": "loaded",
-  "args": ["llama-server", "-ctx", "4096"],
-  "sleeping": false
+  "args": ["llama-server", "-ctx", "4096"]
+}
+```
+
+```json
+"status": {
+  "value": "sleeping",
+  "args": ["llama-server", "-ctx", "4096"]
 }
 ```
 
