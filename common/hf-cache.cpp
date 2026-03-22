@@ -249,16 +249,25 @@ static std::string get_cached_ref(const fs::path & repo_path) {
     if (!fs::is_directory(refs_path)) {
         return {};
     }
+    std::string fallback;
+
     for (const auto & entry : fs::directory_iterator(refs_path)) {
-        if (entry.is_regular_file()) {
-            std::ifstream f(entry.path());
-            std::string commit;
-            if (f && std::getline(f, commit) && !commit.empty()) {
-                return commit;
-            }
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        std::ifstream f(entry.path());
+        std::string commit;
+        if (!f || !std::getline(f, commit) || commit.empty()) {
+            continue;
+        }
+        if (entry.path().filename() == "main") {
+            return commit;
+        }
+        if (fallback.empty()) {
+            fallback = commit;
         }
     }
-    return {};
+    return fallback;
 }
 
 hf_files get_cached_files(const std::string & repo_id) {
