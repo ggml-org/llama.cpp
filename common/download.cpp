@@ -718,7 +718,7 @@ common_download_model_result common_download_model(const common_params_model    
         for (const auto & f : hf.model_files) {
             hf_cache::finalize_file(f);
         }
-        result.model_path = hf.model_files[0].local_path;
+        result.model_path = hf.model_files[0].final_path;
 
         if (!hf.mmproj.path.empty()) {
             result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
