@@ -4280,8 +4280,8 @@ class InternVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
-        self.min_dynamic_tiles = self.global_config["min_dynamic_patch"]
-        self.max_dynamic_tiles = self.global_config["max_dynamic_patch"]
+        self.min_dynamic_tiles = self.global_config.get("min_dynamic_patch", 0)
+        self.max_dynamic_tiles = self.global_config.get("max_dynamic_patch", 0)
 
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
@@ -4305,9 +4305,11 @@ class InternVisionModel(MmprojModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
-
-        self.gguf_writer.add_vision_preproc_min_tiles(self.min_dynamic_tiles)
-        self.gguf_writer.add_vision_preproc_max_tiles(self.max_dynamic_tiles)
+        # older models may not have min/max_dynamic_patch in config
+        if self.min_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_min_tiles(self.min_dynamic_tiles)
+        if self.max_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_max_tiles(self.max_dynamic_tiles)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
