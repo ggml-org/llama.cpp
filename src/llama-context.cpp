@@ -3550,7 +3550,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             template_gpu,
             "  - " + name + " (" + desc + ")",
             std::to_string(total / MiB),
-            std::to_string(free / MiB),
+            std::to_string(static_cast<int64_t>(free) / static_cast<int64_t>(MiB)),
             std::to_string(self / MiB),
             std::to_string(mb.model / MiB),
             std::to_string(mb.context / MiB),
