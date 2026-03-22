@@ -535,6 +535,26 @@ struct ggml_webgpu_mul_mat_shader_decisions {
     uint32_t mul_mat_wg_size;
 };
 
+/** Cpy **/
+
+struct ggml_webgpu_cpy_pipeline_key {
+    ggml_type src_type;
+    ggml_type dst_type;
+
+    bool operator==(const ggml_webgpu_cpy_pipeline_key & other) const {
+        return src_type == other.src_type && dst_type == other.dst_type;
+    }
+};
+
+struct ggml_webgpu_cpy_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_cpy_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
+        return seed;
+    }
+};
+
 class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
@@ -582,6 +602,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
         set_rows_pipelines;
     std::unordered_map<ggml_webgpu_set_pipeline_key, webgpu_pipeline, ggml_webgpu_set_pipeline_key_hash> set_pipelines;
+    std::unordered_map<ggml_webgpu_cpy_pipeline_key, webgpu_pipeline, ggml_webgpu_cpy_pipeline_key_hash> cpy_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -1678,6 +1699,62 @@ class ggml_webgpu_shader_lib {
         flash_attn_pipelines[key] = pipeline;
         return flash_attn_pipelines[key];
     }
+
+    webgpu_pipeline get_cpy_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_cpy_pipeline_key key = {
+            .src_type = context.src0->type,
+            .dst_type = context.dst->type,
+        };
+
+        auto it = cpy_pipelines.find(key);
+        if (it != cpy_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "cpy";
+
+        switch (key.src_type) {
+            case GGML_TYPE_F32:
+                defines.push_back("SRC_F32");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("SRC_F16");
+                variant += "_f16";
+                break;
+            default:
+                GGML_ABORT("Unsupported src type for cpy shader");
+        }
+
+        switch (key.dst_type) {
+            case GGML_TYPE_F32:
+                defines.push_back("DST_F32");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("DST_F16");
+                variant += "_f16";
+                break;
+            case GGML_TYPE_I32:
+                defines.push_back("DST_I32");
+                variant += "_i32";
+                break;
+            default:
+                GGML_ABORT("Unsupported dst type for cpy shader");
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_cpy, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        cpy_pipelines[key]       = pipeline;
+        return cpy_pipelines[key];
+    }
+
 
   private:
     static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device & device,
