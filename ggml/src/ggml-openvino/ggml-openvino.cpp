@@ -97,6 +97,9 @@ struct ggml_backend_openvino_buffer_context {
             ov_buffer = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
         } else {
             data = ggml_aligned_malloc(size);
+            if (data != nullptr) {
+                memset(data, 0, size);
+            }
             ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
         }
 
