@@ -1860,6 +1860,12 @@ struct ggml_tensor_extra_gpu {
     bool        xmx_mxfp4_tiled_conversion_complete[GGML_SYCL_MAX_DEVICES] = { false };
     std::mutex  xmx_tiled_conversion_mutex[GGML_SYCL_MAX_DEVICES];  // Protect concurrent access
 
+    // Pending cache fill event for async ensure_cached_layout.
+    // When a weight is being uploaded to VRAM, this event tracks the DMA completion.
+    // Kernel dispatch sites use depends_on(cache_fill_event) to ensure data is ready.
+    sycl::event cache_fill_event[GGML_SYCL_MAX_DEVICES];
+    bool        cache_fill_pending[GGML_SYCL_MAX_DEVICES] = { false };
+
     // MoE expert pointer table (device + host staging) for per-expert layout access
     void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
     size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
@@ -1877,6 +1883,22 @@ struct ggml_tensor_extra_gpu {
 
 void retain_extra_gpu(ggml_tensor_extra_gpu * extra);
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
+
+// =============================================================================
+// Helper: Collect pending cache fill events from tensor source operands.
+// Kernel dispatch sites call this to get events for depends_on.
+// Consumes the pending flag (one-shot) so subsequent calls see no event.
+// =============================================================================
+inline void ggml_sycl_collect_fill_events(const ggml_tensor * tensor, int device, std::vector<sycl::event> & deps) {
+    if (!tensor || !tensor->extra) {
+        return;
+    }
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+    if (extra->cache_fill_pending[device]) {
+        deps.push_back(extra->cache_fill_event[device]);
+        extra->cache_fill_pending[device] = false;
+    }
+}
 
 // =============================================================================
 // Helper: Get effective reorder_mode from unified layout.mode or legacy path

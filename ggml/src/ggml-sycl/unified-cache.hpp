@@ -264,7 +264,8 @@ struct cache_layout_request {
     int64_t               onednn_pack_m    = 0;
     bool                  validate_content = false;
     bool                  prefer_host      = false;
-    bool                  skip_fill_wait   = false;  // When true, skip fill_event.wait() — caller collects events
+    // skip_fill_wait removed: ensure_cached_layout is always async now.
+    // Fill events are returned in cache_layout_result::event for callers to depends_on.
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
@@ -636,9 +637,8 @@ class unified_cache {
                                              const std::vector<sycl::event> & deps,
                                              sycl::queue * override_queue = nullptr);
 
-    // Finalize all IN_PROGRESS entries that were created with skip_fill_wait.
-    // Call this after a batch queue.wait() to mark pending entries as READY
-    // and apply any deferred padding.
+    // Finalize all IN_PROGRESS entries (ensure_cached_layout is always async now).
+    // Call this after a batch queue.wait() to mark pending entries as READY.
     void finalize_pending_fills();
 
     // === Multi-Device Partial Row Loading ===
@@ -1419,7 +1419,7 @@ struct unified_budget_info {
     size_t runtime_bytes;          // KV + compute + staging + graph
     size_t available_for_weights;  // budget - runtime (what can hold weights)
     int    budget_pct;             // GGML_SYCL_VRAM_BUDGET_PCT value used
-    bool   model_exceeds_vram;     // True if effective model size > available_for_weights (computed on-the-fly)
+    // model_exceeds_vram removed: ensure_cached_layout handles all model sizes async now
     // MoE expert breakdown (non-zero only for MoE models)
     size_t expert_weight_bytes;  // Total bytes for ALL expert tensors
     size_t active_expert_bytes;  // Estimated bytes for active experts only

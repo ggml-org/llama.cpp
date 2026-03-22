@@ -760,57 +760,58 @@ static int64_t tp_local_n_embd_v_gqa(const llm_graph_params & params) {
 }
 
 llm_graph_context::llm_graph_context(const llm_graph_params & params) :
-    arch             (params.arch),
-    hparams          (params.hparams),
-    cparams          (params.cparams),
-    ubatch           (params.ubatch),
-    n_embd           (hparams.n_embd),
-    n_layer          (hparams.n_layer),
-    n_rot            (hparams.n_rot),
-    n_ctx            (cparams.n_ctx),
+    arch(params.arch),
+    hparams(params.hparams),
+    cparams(params.cparams),
+    ubatch(params.ubatch),
+    n_embd(hparams.n_embd),
+    n_layer(hparams.n_layer),
+    n_rot(hparams.n_rot),
+    n_ctx(cparams.n_ctx),
     // Keep n_head and n_head_kv at their full model values
     // tp_n_head() and tp_n_head_kv() provide sharded counts when needed
-    n_head           (hparams.n_head()),
-    n_head_kv        (hparams.n_head_kv()),
-    n_embd_head_k    (hparams.n_embd_head_k),
+    n_head(hparams.n_head()),
+    n_head_kv(hparams.n_head_kv()),
+    n_embd_head_k(hparams.n_embd_head_k),
     // Use TP-sharded GQA dimensions for KV cache sizing
-    n_embd_k_gqa     (tp_local_n_embd_k_gqa(params)),
-    n_embd_head_v    (hparams.n_embd_head_v),
-    n_embd_v_gqa     (tp_local_n_embd_v_gqa(params)),
-    n_expert         (hparams.n_expert),
-    // During warmup, use all experts to ensure JIT compilation of all code paths.
-    // Exception: when model exceeds VRAM (tiered mode), using all experts would cause
-    // OOM trying to stage 128+ experts simultaneously. Use normal n_expert_used instead.
+    n_embd_k_gqa(tp_local_n_embd_k_gqa(params)),
+    n_embd_head_v(hparams.n_embd_head_v),
+    n_embd_v_gqa(tp_local_n_embd_v_gqa(params)),
+    n_expert(hparams.n_expert),
+// During warmup, use all experts to ensure JIT compilation of all code paths.
+// Exception: when VRAM budget is exceeded (tiered mode), using all experts would cause
+// OOM trying to stage 128+ experts simultaneously. Use normal n_expert_used instead.
 #ifdef GGML_USE_SYCL
-    n_expert_used    ((cparams.warmup && !ggml_backend_sycl_model_exceeds_vram(nullptr)) ? hparams.n_expert : hparams.n_expert_used),
+    n_expert_used((cparams.warmup && !ggml_backend_sycl_budget_exceeded(nullptr)) ? hparams.n_expert :
+                                                                                    hparams.n_expert_used),
 #else
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
 #endif
-    freq_base        (cparams.rope_freq_base),
-    freq_scale       (cparams.rope_freq_scale),
-    ext_factor       (cparams.yarn_ext_factor),
-    attn_factor      (cparams.yarn_attn_factor),
-    beta_fast        (cparams.yarn_beta_fast),
-    beta_slow        (cparams.yarn_beta_slow),
-    norm_eps         (hparams.f_norm_eps),
-    norm_rms_eps     (hparams.f_norm_rms_eps),
-    n_tokens         (ubatch.n_tokens),
-    n_outputs        (params.n_outputs),
-    n_ctx_orig       (cparams.n_ctx_orig_yarn),
-    pooling_type     (cparams.pooling_type),
-    rope_type        (hparams.rope_type),
-    sched            (params.sched),
-    backend_cpu      (params.backend_cpu),
-    cvec             (params.cvec),
-    loras            (params.loras),
-    mctx             (params.mctx),
-    cross            (params.cross),
-    cb_func          (params.cb),
-    res              (params.res),
-    ctx0             (res->get_ctx()),
-    gf               (res->get_gf()) {
+    freq_base(cparams.rope_freq_base),
+    freq_scale(cparams.rope_freq_scale),
+    ext_factor(cparams.yarn_ext_factor),
+    attn_factor(cparams.yarn_attn_factor),
+    beta_fast(cparams.yarn_beta_fast),
+    beta_slow(cparams.yarn_beta_slow),
+    norm_eps(hparams.f_norm_eps),
+    norm_rms_eps(hparams.f_norm_rms_eps),
+    n_tokens(ubatch.n_tokens),
+    n_outputs(params.n_outputs),
+    n_ctx_orig(cparams.n_ctx_orig_yarn),
+    pooling_type(cparams.pooling_type),
+    rope_type(hparams.rope_type),
+    sched(params.sched),
+    backend_cpu(params.backend_cpu),
+    cvec(params.cvec),
+    loras(params.loras),
+    mctx(params.mctx),
+    cross(params.cross),
+    cb_func(params.cb),
+    res(params.res),
+    ctx0(res->get_ctx()),
+    gf(res->get_gf()) {
         res->set_params(params);
-    }
+}
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {

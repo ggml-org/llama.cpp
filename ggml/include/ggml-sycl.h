@@ -171,10 +171,10 @@ GGML_BACKEND_API void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t     
 // Returns true if the unified cache system is active (always true by default).
 GGML_BACKEND_API bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend);
 
-// Check if the model size exceeds available VRAM budget (computed on-the-fly).
-// Returns true if model weights need to be streamed from host memory.
-// The unified cache computes this from model size vs VRAM budget — no global flag.
-GGML_BACKEND_API bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend);
+// Check if the model weight budget is exceeded (weights don't fit in VRAM).
+// Returns true when model needs host-streaming or async staging.
+// Uses device 0 by default when backend is NULL.
+GGML_BACKEND_API bool ggml_backend_sycl_budget_exceeded(ggml_backend_t backend);
 
 // Get VRAM budget available for weights (budget minus runtime reservations).
 // Returns 0 if backend is NULL or cache is not initialized.

@@ -1323,12 +1323,11 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
     const bool     host_accessible = is_host_accessible_ptr(src_ptr, queue_);
     const bool     can_hash        = validate_content && host_accessible;
     const uint64_t new_hash        = can_hash ? compute_content_hash(src_ptr, src_size) : 0;
-    // When the model exceeds VRAM, GPU must DMA weights from host memory every token.
+    // When the VRAM budget is exceeded, GPU must DMA weights from host memory every token.
     // Pinned host memory allows direct DMA; mmap requires an extra staging copy.
     // Disable aliasing so weights get copied to the pinned pool instead.
-    const bool     model_exceeds   = ggml_backend_sycl_model_exceeds_vram(nullptr);
-    const bool     can_alias       = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size
-                                     && !model_exceeds;
+    const bool     budget_exceeded = unified_cache_is_budget_exceeded(0);
+    const bool     can_alias = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size && !budget_exceeded;
     const bool     prefer_unpinned = host_cache_prefer_unpinned(type);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -3253,10 +3252,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             GGML_SYCL_DEBUG("[DEBUG-FILL] copy_to_device_async returned\n");
         }
 
-        // When skip_fill_wait is set (bulk preload), skip the synchronous wait
-        // and return the event for the caller to batch-wait later.
-        if (request.skip_fill_wait) {
-            GGML_SYCL_DEBUG("[DEBUG-FILL] skip_fill_wait: returning event for batch wait\n");
+        // Always async: submit padding if needed, then return IN_PROGRESS with event.
+        // Callers propagate the event to kernel dispatch via depends_on.
+        // No synchronous wait — this is the unified path for all model sizes.
+        {
+            GGML_SYCL_DEBUG("[DEBUG-FILL] async fill: returning event for caller depends_on\n");
 
             // Submit padding async if needed (implicitly ordered after fill on in-order queue)
             sycl::event last_event = fill_event;
@@ -3289,24 +3289,6 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             result.event         = last_event;
             return result;
         }
-
-        // Chain padding after fill via depends_on instead of separate .wait() calls.
-        // Single wait at the end ensures both fill and padding complete before marking READY.
-        sycl::event last_fill_event = fill_event;
-        if (request.layout != GGML_LAYOUT_XMX_TILED && request.layout != GGML_LAYOUT_XMX_GEMM_TILED &&
-            request.layout != GGML_LAYOUT_ONEDNN_PACKED && request.layout != GGML_LAYOUT_ONEDNN_WOQ &&
-            request.dst_size > request.src_size) {
-            const size_t pad_bytes = request.dst_size - request.src_size;
-            void *       pad_ptr   = static_cast<char *>(device_ptr) + request.src_size;
-            GGML_SYCL_DEBUG("[DEBUG-FILL] About to memset padding: pad_ptr=%p pad_bytes=%zu\n", pad_ptr, pad_bytes);
-            // Chain padding memset after fill via depends_on — no intermediate CPU stall
-            last_fill_event = queue_.submit([&](sycl::handler & cgh) {
-                cgh.depends_on(fill_event);
-                cgh.memset(pad_ptr, 0, pad_bytes);
-            });
-            GGML_SYCL_DEBUG("[DEBUG-FILL] Padding memset submitted\n");
-        }
-        last_fill_event.wait();
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] layout fill failed (sycl): %s\n", e.what());
         GGML_LOG_ERROR(
@@ -3395,25 +3377,10 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         return result;
     }
 
-    // All operations completed synchronously - mark as READY immediately.
-    // We avoid returning events because Level Zero driver has issues with event handling
-    // that can cause crashes when events are waited on multiple times or in certain patterns.
-    {
-        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-        auto                                it = entries_.find(key);
-        if (it != entries_.end()) {
-            it->second.has_ready_event = false;
-            it->second.state           = cache_entry_state::READY;
-        }
-    }
-    entry_cv_.notify_all();
-
-    result.device_ptr    = device_ptr;
-    result.size          = request.dst_size;
-    result.status        = cache_layout_status::READY;
-    result.host_resident = false;
-    result.location      = cache_location::DEVICE;
-    // Don't set result.event - no need to wait since everything is done synchronously
+    // Unreachable: the try block always returns (async path or exception).
+    // Keep this as a safety fallback to satisfy the compiler.
+    result.status     = cache_layout_status::FAILED;
+    result.device_ptr = nullptr;
     return result;
 }
 
@@ -6401,13 +6368,6 @@ unified_budget_info unified_cache_get_budget_info(int device) {
     info.n_expert_used       = n_exp_used;
     info.active_expert_bytes = compute_moe_effective_weight_bytes(moe_total, moe_total, n_exp, n_exp_used);
 
-    // Compute model_exceeds_vram directly from model size vs available budget.
-    // No global flag needed — computed on-the-fly from cache state.
-    const size_t model_size    = ggml_sycl_get_model_size();
-    const size_t effective_size = compute_moe_effective_weight_bytes(
-        model_size, moe_total, n_exp, n_exp_used);
-    info.model_exceeds_vram = (model_size > 0) && (effective_size > info.available_for_weights);
-
     return info;
 }
 
@@ -6452,8 +6412,8 @@ bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
 
     auto info = unified_cache_get_budget_info(device);
 
-    // If model already exceeds VRAM, definitely offload KV
-    if (info.model_exceeds_vram) {
+    // If weight usage exceeds available budget, definitely offload KV
+    if (info.weight_bytes > info.available_for_weights) {
         return true;
     }
 
