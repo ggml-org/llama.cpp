@@ -17,7 +17,6 @@
 #include <cstring>
 #include <fstream>
 #include <map>
-#include <set>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -1141,8 +1140,9 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_INTERNVL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
-                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
-                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles);
+                        set_internvl_dhr_res_candidates(model);
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
@@ -2186,6 +2186,21 @@ struct clip_model_loader {
             }
         }
     }
+
+    static void set_internvl_dhr_res_candidates(clip_model & model) {
+        auto & hparams = model.hparams;
+        int min_num = hparams.preproc_min_tiles;
+        int max_num = hparams.preproc_max_tiles;
+        for (int n = min_num; n <= max_num; ++n)
+            for (int i = 1; i <= n; ++i)
+                for (int j = 1; j <= n; ++j)
+                    if (i * j <= max_num && i * j >= min_num)
+                        hparams.image_res_candidates.push_back(clip_image_size{
+                        i*hparams.image_size,
+                        j*hparams.image_size,
+                    });
+
+    }
 };
 
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params) {
@@ -2588,111 +2603,6 @@ private:
     }
 };
 
-
-
-struct internvl_dhr {
-    using Ratio = std::pair<int, int>;
-
-    static Ratio find_closest_aspect_ratio(float aspect_ratio,
-                                const std::vector<Ratio>& target_ratios,
-                                int width, int height, int image_size) {
-        float best_ratio_diff = std::numeric_limits<float>::infinity();
-        Ratio best_ratio = {1, 1};
-        long long area = static_cast<long long>(width) * height;
-
-        for (const auto& ratio : target_ratios) {
-            float target_ar = static_cast<float>(ratio.first) / ratio.second;
-            float ratio_diff = std::fabs(aspect_ratio - target_ar);
-
-            if (ratio_diff < best_ratio_diff) {
-                best_ratio_diff = ratio_diff;
-                best_ratio = ratio;
-            } else if (ratio_diff == best_ratio_diff) {
-                long long threshold =
-                    static_cast<long long>(image_size) * image_size *
-                    ratio.first * ratio.second;
-                if (area > threshold / 2) {
-                    best_ratio = ratio;
-                }
-            }
-        }
-        return best_ratio;
-    }
-
-    static std::vector<clip_image_u8_ptr>
-                 dynamic_preprocess(const clip_image_u8 & image_rgb,
-                                   int min_num     = 1,
-                                   int max_num     = 12,
-                                   int image_size  = 448,
-                                   bool use_thumbnail = true) {
-
-        std::vector<clip_image_u8_ptr> processed_images;
-
-        const int orig_width  = image_rgb.nx;
-        const int orig_height = image_rgb.ny;
-        const float aspect_ratio =
-            static_cast<float>(orig_width) / orig_height;
-
-        // Build target-ratio set  (same logic as the Python set-comprehension)
-        std::set<Ratio> ratio_set;
-        for (int n = min_num; n <= max_num; ++n)
-            for (int i = 1; i <= n; ++i)
-                for (int j = 1; j <= n; ++j)
-                    if (i * j <= max_num && i * j >= min_num)
-                        ratio_set.emplace(i, j);
-
-        // Sort by area  (i*j ascending)
-        std::vector<Ratio> target_ratios(ratio_set.begin(), ratio_set.end());
-        std::sort(target_ratios.begin(), target_ratios.end(),
-                [](const Ratio& a, const Ratio& b) {
-                    return a.first * a.second < b.first * b.second;
-                });
-
-        // Find the best ratio
-        Ratio target_ar = find_closest_aspect_ratio(
-            aspect_ratio, target_ratios, orig_width, orig_height, image_size);
-
-        const int target_width  = image_size * target_ar.first;
-        const int target_height = image_size * target_ar.second;
-        clip_image_size target_size{target_width, target_height};
-        const int blocks        = target_ar.first * target_ar.second;
-
-        // Resize full image  (BILINEAR like PIL.Image.resize default — use
-        // INTER_LINEAR; switch to INTER_CUBIC for closer PIL fidelity)
-        clip_image_u8 resized;
-        img_tool::resize(image_rgb, resized, target_size, img_tool::RESIZE_ALGO_BICUBIC);
-
-        // Slice into blocks
-        const int cols_per_row = target_width / image_size;
-
-        for (int i = 0; i < blocks; ++i) {
-            int col = i % cols_per_row;
-            int row = i / cols_per_row;
-            int x = col * image_size;
-            int y = row * image_size;
-            int w = image_size;
-            int h = image_size;
-
-            clip_image_u8_ptr img_slice(clip_image_u8_init());
-            img_tool::crop(resized, *img_slice, x, y, w, h);
-            processed_images.push_back(std::move(img_slice));
-        }
-
-        assert(static_cast<int>(processed_images.size()) == blocks);
-
-        // Optional thumbnail
-        if (use_thumbnail && blocks != 1) {
-            clip_image_u8_ptr thumb(clip_image_u8_init());
-            img_tool::resize(image_rgb, *thumb, {image_size, image_size}, img_tool::RESIZE_ALGO_BICUBIC);
-            processed_images.push_back(std::move(thumb));
-        }
-
-        return processed_images;
-
-    }
-
-};
-
 /**
  * implementation of LLaVA-UHD:
  *  - https://arxiv.org/pdf/2403.11703
@@ -2837,17 +2747,22 @@ struct llava_uhd {
         return res;
     }
 
-    static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
+    static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst, bool overview_first = true) {
         std::vector<clip_image_u8_ptr> output;
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
         img_tool::resize(*img, *resized_img, inst.overview_size, inst.interpolation_overview,
                          inst.padding_overview, inst.pad_color_overview);
-        output.push_back(std::move(resized_img));
+        if (overview_first) {
+            output.push_back(std::move(resized_img));
+        }
 
         if (inst.slices.empty()) {
             // no slices, just return the resized image
+            if (!overview_first) {
+                output.push_back(std::move(resized_img));
+            }
             return output;
         }
 
@@ -2866,6 +2781,10 @@ struct llava_uhd {
             clip_image_u8_ptr img_slice(clip_image_u8_init());
             img_tool::crop(*refined_img, *img_slice, x, y, w, h);
             output.push_back(std::move(img_slice));
+        }
+
+        if (!overview_first) {
+            output.push_back(std::move(resized_img));
         }
 
         return output;
@@ -3254,10 +3173,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             } break;
         case PROJECTOR_TYPE_INTERNVL: // support dynamic high-resolution
             {
-                int min_patch = params.image_min_pixels / (params.image_size * params.image_size);
-                int max_patch = params.image_max_pixels / (params.image_size * params.image_size);
-                std::vector<clip_image_u8_ptr> imgs = internvl_dhr::dynamic_preprocess(*img,
-                     min_patch, max_patch, params.image_size);
+                GGML_ASSERT(!params.image_res_candidates.empty());
+                auto const inst = llava_uhd::get_slice_instructions(ctx, original_size);
+                std::vector<clip_image_u8_ptr> imgs = llava_uhd::slice_image(img, inst, false);
 
                 for (size_t i = 0; i < imgs.size(); ++i) {
                     clip_image_f32_ptr res(clip_image_f32_init());
@@ -3265,7 +3183,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     res_imgs->entries.push_back(std::move(res));
                 }
             } break;
-
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
@@ -4223,11 +4140,6 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
 bool clip_is_glm(const struct clip_ctx * ctx) {
     // TODO: remove this function
     return ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE;
-}
-
-bool clip_is_internvl(const struct clip_ctx * ctx) {
-    // TODO: remove this function
-    return ctx->proj_type() == PROJECTOR_TYPE_INTERNVL;
 }
 
 bool clip_is_llava(const struct clip_ctx * ctx) {
