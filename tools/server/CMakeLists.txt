@@ -36,7 +36,7 @@ set(TARGET_SRCS
     server-models.h
 )
 
-option(LLAMA_BUILD_WEBUI "Build the embedded Web UI" ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_WEBUI "Build the embedded Web UI" ON)
 
 if (LLAMA_BUILD_WEBUI)
     set(PUBLIC_ASSETS
