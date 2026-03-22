@@ -357,6 +357,11 @@ static void process_handler_response(server_http_req_ptr && request, server_http
     if (response->is_stream()) {
         res.status = response->status;
         set_headers(res, response->headers);
+        // Prevent reverse proxies (e.g. nginx) from buffering the SSE stream.
+        // Without these, nginx holds the entire response before forwarding,
+        // causing the client to hang on "processing..." forever.
+        res.set_header("X-Accel-Buffering", "no");
+        res.set_header("Cache-Control",     "no-cache");
         std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
         std::shared_ptr<server_http_req> q_ptr = std::move(request);
