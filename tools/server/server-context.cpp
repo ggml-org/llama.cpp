@@ -587,7 +587,6 @@ private:
     std::set<std::string> model_tags;    // informational tags
 
     bool sleeping = false;
-    std::function<void(bool)> callback_on_sleeping_changed;
 
     void destroy() {
         llama_init.reset();
@@ -861,7 +860,6 @@ private:
         });
         queue_tasks.on_sleeping_state([this](bool sleeping) {
             handle_sleeping_state(sleeping);
-            callback_on_sleeping_changed(sleeping);
         });
 
         metrics.init();
@@ -3036,7 +3034,7 @@ struct server_res_generator : server_http_res {
 };
 
 void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
-    impl->callback_on_sleeping_changed = std::move(callback);
+    impl->queue_tasks.on_sleeping_state(std::move(callback));
 }
 
 
