@@ -3280,6 +3280,28 @@ struct ggml_tensor * ggml_mul_mat_id(
     return result;
 }
 
+GGML_API void ggml_mul_mat_add_scale(
+        struct ggml_tensor * a,
+        struct ggml_tensor * scale) {
+    a->src[2] = scale;
+}
+
+GGML_API const struct ggml_tensor * ggml_mul_mat_get_scale(
+        const struct ggml_tensor * a) {
+    return a->src[2];
+}
+
+GGML_API void ggml_mul_mat_id_add_scale(
+        struct ggml_tensor * a,
+        struct ggml_tensor * scale) {
+    a->src[3] = scale;
+}
+
+GGML_API const struct ggml_tensor * ggml_mul_mat_id_get_scale(
+        const struct ggml_tensor * a) {
+    return a->src[3];
+}
+
 // ggml_out_prod
 
 static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {

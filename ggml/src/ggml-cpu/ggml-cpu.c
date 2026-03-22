@@ -1225,10 +1225,10 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
                     // NVFP4's per tensor scale needs to be applied with the vecdot
                     // this should be put into a future traits based approach to be cleaner
-                    if (src0->type == GGML_TYPE_NVFP4 && dst->src[2]) {
-                        float nvfp4_t_s = ((const float *) dst->src[2]->data)[0];
-                        if (dst->src[2]->ne[0] > 1) {
-                            nvfp4_t_s = ((const float *) dst->src[2]->data)[i02];
+                    if (src0->type == GGML_TYPE_NVFP4) {
+                        float nvfp4_t_s = ((const float *) ggml_mul_mat_get_scale(dst)->data)[0];
+                        if (ggml_mul_mat_get_scale(dst)->ne[0] > 1) {
+                            nvfp4_t_s = ((const float *) ggml_mul_mat_get_scale(dst)->data)[i02];
                         }
                         tmp[ir0 - iir0] = tmp[ir0 - iir0] * nvfp4_t_s;
                     }
@@ -1501,10 +1501,10 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
 
-                    if (src0->type == GGML_TYPE_NVFP4 && dst->src[3]) {
-                        float nvfp4_t_s = ((const float *) dst->src[3]->data)[0];
-                        if (dst->src[3]->ne[0] > 1) {
-                            nvfp4_t_s = ((const float *) dst->src[3]->data)[cur_a];
+                    if (src0->type == GGML_TYPE_NVFP4) {
+                        float nvfp4_t_s = ((const float *) ggml_mul_mat_id_get_scale(dst)->data)[0];
+                        if (ggml_mul_mat_id_get_scale(dst)->ne[0] > 1) {
+                            nvfp4_t_s = ((const float *) ggml_mul_mat_id_get_scale(dst)->data)[cur_a];
                         }
                         tmp[ir0 - iir0] = tmp[ir0 - iir0] * nvfp4_t_s;
                     }

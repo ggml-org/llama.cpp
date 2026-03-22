@@ -904,7 +904,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
     if (w_s && w->type == GGML_TYPE_NVFP4) {
-        res->src[2] = w_s; // Save the NVFP4 per tensor scale so it can be applied earlier to vecdot
+        ggml_mul_mat_add_scale(res, w_s); // Save the NVFP4 per tensor scale so it can be applied earlier to vecdot
         w_s = nullptr; // Clear the scale so it doesnt get applied here, to preserve precision
     }
 
@@ -1416,7 +1416,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         // separate gate and up path
         up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         if (up_exps->type == GGML_TYPE_NVFP4) {
-            up->src[3] = up_exps_s; // Save the expert tensor scale 
+            ggml_mul_mat_id_add_scale(up, up_exps_s); // Save the expert tensor scale
             up_exps_s = nullptr; // Clear so it doesn't get applied here, to avoid precision loss
         }
         cb(up, "ffn_moe_up", il);
@@ -1438,7 +1438,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         if (gate_exps) {
             cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
             if (gate_exps->type == GGML_TYPE_NVFP4) {
-                cur->src[3] = gate_exps_s;
+                ggml_mul_mat_id_add_scale(cur, gate_exps_s);
                 gate_exps_s = nullptr;
             }
             cb(cur, "ffn_moe_gate", il);
@@ -1532,7 +1532,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
     if (down_exps->type == GGML_TYPE_NVFP4) {
-        experts->src[3] = down_exps_s;
+        ggml_mul_mat_id_add_scale(experts, down_exps_s);
         down_exps_s = nullptr;
     }
     cb(experts, "ffn_moe_down", il);
