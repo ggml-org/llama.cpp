@@ -185,7 +185,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_score, "indexer_score", il);
 
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
-                ggml_tensor * top_k = ggml_cont(ctx0, ggml_argsort_top_k(ctx0, indexer_score, n_top_k));
+                ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
                 cb(top_k, "top_k", il);
 
                 // prepare new kq mask - starts filled with -INFINITY
