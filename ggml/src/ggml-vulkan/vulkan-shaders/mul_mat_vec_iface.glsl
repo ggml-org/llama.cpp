@@ -15,6 +15,9 @@ layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16
 #if defined(A_TYPE_PACKED32)
 layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
 #endif
+#if defined(USE_SHMEM_STAGING)
+layout (binding = 0) readonly buffer A_RAW_U64 {uint64_t data_a_u64[];};
+#endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 #ifdef B_TYPE_VEC2

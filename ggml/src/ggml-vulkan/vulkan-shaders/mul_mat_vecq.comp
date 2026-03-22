@@ -2,6 +2,10 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_integer_dot_product : require
+#if defined(USE_SHMEM_STAGING)
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#endif
 
 #define MMQ
 #define B_TYPE block_q8_1_x4
@@ -25,8 +29,57 @@ uint a_offset, b_offset, d_offset;
 int32_t cache_b_qs[K_PER_ITER / 4];
 vec2 cache_b_ds;
 
+// =====================================================================
+// Shared memory staging: raw u64 approach for coalesced access
+// =====================================================================
+#if defined(USE_SHMEM_STAGING)
+
+#define SHMEM_THREADS_PER_BLOCK (QUANT_K / K_PER_ITER)
+#define SHMEM_BLOCKS_PER_TILE (BLOCK_SIZE / SHMEM_THREADS_PER_BLOCK)
+#define SHMEM_TILE_K (SHMEM_BLOCKS_PER_TILE * QUANT_K)
+
+// Per-type struct size in bytes
+#if defined(DATA_A_Q4_0)
+#define SHMEM_BLOCK_BYTES 18
+#elif defined(DATA_A_Q4_1)
+#define SHMEM_BLOCK_BYTES 20
+#elif defined(DATA_A_Q5_0)
+#define SHMEM_BLOCK_BYTES 22
+#elif defined(DATA_A_Q5_1)
+#define SHMEM_BLOCK_BYTES 24
+#elif defined(DATA_A_Q8_0)
+#define SHMEM_BLOCK_BYTES 34
+#elif defined(DATA_A_MXFP4)
+#define SHMEM_BLOCK_BYTES 17
+#elif defined(DATA_A_Q2_K)
+#define SHMEM_BLOCK_BYTES 84
+#elif defined(DATA_A_Q3_K)
+#define SHMEM_BLOCK_BYTES 110
+#elif defined(DATA_A_Q4_K)
+#define SHMEM_BLOCK_BYTES 144
+#elif defined(DATA_A_Q5_K)
+#define SHMEM_BLOCK_BYTES 176
+#elif defined(DATA_A_Q6_K)
+#define SHMEM_BLOCK_BYTES 210
+#elif defined(DATA_A_IQ1_S)
+#define SHMEM_BLOCK_BYTES 50
+#elif defined(DATA_A_IQ1_M)
+#define SHMEM_BLOCK_BYTES 56
+#endif
+
+// u64 words per row-tile: tile bytes + max 7 alignment + 7 rounding + 1 read spillover
+#define SHMEM_U64_PER_ROW ((SHMEM_BLOCKS_PER_TILE * SHMEM_BLOCK_BYTES + 14) / 8 + 1)
+
+shared uint64_t shmem_raw[NUM_ROWS * SHMEM_U64_PER_ROW];
+
+#endif // USE_SHMEM_STAGING
+
 #include "mul_mat_vecq_funcs.glsl"
 
+// =====================================================================
+// Standard (non-shmem) iteration
+// =====================================================================
+#if !defined(USE_SHMEM_STAGING)
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         const uint col = i*BLOCK_SIZE + tid*K_PER_ITER;
@@ -74,21 +127,107 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         }
     }
 }
+#endif // !USE_SHMEM_STAGING
 
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint tid = gl_LocalInvocationID.x;
 
     get_offsets(a_offset, b_offset, d_offset);
+#if defined(USE_SHMEM_STAGING)
+    const uint a_offset_blocks = a_offset;  // in QUANT_K-block units (before conversion)
+#endif
     a_offset *= QUANT_K / QUANT_K_Q8_1;
     b_offset /= QUANT_K_Q8_1;
 
     FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
-
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
             temp[j][n] = FLOAT_TYPE(0.0f);
         }
     }
+
+#if defined(USE_SHMEM_STAGING)
+    // Shared memory staging: tile-based iteration with raw u64 loads
+
+    const uint total_blocks_per_row = p.ncols / QUANT_K;
+    const uint row_base_block_0 = first_row * total_blocks_per_row + a_offset_blocks;
+    const uint num_tiles = (total_blocks_per_row + SHMEM_BLOCKS_PER_TILE - 1u) / SHMEM_BLOCKS_PER_TILE;
+
+    const uint threads_per_sub_block = 32u / K_PER_ITER;
+
+    for (uint tile = 0u; tile < num_tiles; ++tile) {
+        const uint blocks_remaining = total_blocks_per_row - tile * SHMEM_BLOCKS_PER_TILE;
+        const uint blocks_in_tile = min(blocks_remaining, SHMEM_BLOCKS_PER_TILE);
+
+        // Load tile data into u64 shared memory with alignment handling
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint first_byte = (row_base_block_0 + n * total_blocks_per_row + tile * SHMEM_BLOCKS_PER_TILE) * SHMEM_BLOCK_BYTES;
+            const uint align = first_byte & 7u;
+            const uint load_u64 = (first_byte - align) >> 3u;
+            const uint u64_count = (blocks_in_tile * SHMEM_BLOCK_BYTES + align + 7u) >> 3u;
+            const uint dst_base = n * SHMEM_U64_PER_ROW;
+            for (uint w = tid; w < u64_count; w += BLOCK_SIZE) {
+                shmem_raw[dst_base + w] = data_a_u64[load_u64 + w];
+            }
+        }
+
+        barrier();
+
+        const uint global_col = tile * SHMEM_TILE_K + tid * K_PER_ITER;
+        if (global_col < p.ncols) {
+            const uint ib = tid / threads_per_sub_block;
+            const uint iqs = tid % threads_per_sub_block;
+
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                const uint b_block_idx = (j * p.batch_stride_b + global_col) / QUANT_K_Q8_1 + b_offset;
+                const uint b_block_idx_outer = b_block_idx / 4;
+                const uint b_block_idx_inner = b_block_idx % 4;
+                cache_b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
+#if QUANT_R == 2
+                cache_b_qs[0] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs];
+                cache_b_qs[1] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs + 4];
+#else
+#if K_PER_ITER == 8
+                cache_b_qs[0] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 2];
+                cache_b_qs[1] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 2 + 1];
+#elif K_PER_ITER == 16
+                cache_b_qs[0] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 4    ];
+                cache_b_qs[1] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 4 + 1];
+                cache_b_qs[2] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 4 + 2];
+                cache_b_qs[3] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + iqs * 4 + 3];
+#elif K_PER_ITER == 32
+                cache_b_qs[0] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8    ];
+                cache_b_qs[1] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 1];
+                cache_b_qs[2] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 2];
+                cache_b_qs[3] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 3];
+                cache_b_qs[4] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 4];
+                cache_b_qs[5] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 5];
+                cache_b_qs[6] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 6];
+                cache_b_qs[7] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + 7];
+#endif
+#endif
+
+                [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                    const uint row_off = ((row_base_block_0 + n * total_blocks_per_row + tile * SHMEM_BLOCKS_PER_TILE) * SHMEM_BLOCK_BYTES) & 7u;
+#if defined(DATA_A_QUANT_K)
+                    const uint ib_a = n * SHMEM_U64_PER_ROW * 8 + row_off + (ib / 8) * SHMEM_BLOCK_BYTES;
+                    temp[j][n] += mmvq_dot_product(ib_a, (ib % 8) * 8 + iqs * 4);
+#elif defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
+                    const uint ib_a = n * SHMEM_U64_PER_ROW * 8 + row_off + (ib / 8) * SHMEM_BLOCK_BYTES;
+                    temp[j][n] += mmvq_dot_product(ib_a, ib % 8);
+#else
+                    const uint ib_a = n * SHMEM_U64_PER_ROW * 8 + row_off + ib * SHMEM_BLOCK_BYTES;
+                    temp[j][n] += mmvq_dot_product(ib_a, iqs);
+#endif
+                }
+            }
+        }
+
+        barrier();
+    }
+
+#else
+    // Standard iteration with direct global memory access
 
     uint num_iters = p.ncols / (K_PER_ITER * BLOCK_SIZE);
     if (num_iters * K_PER_ITER * BLOCK_SIZE + K_PER_ITER*tid < p.ncols) {
@@ -99,7 +238,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     uint i = 0;
     while (i < unrolled_iters) {
-        // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
             iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
             i++;
@@ -110,7 +248,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     unrolled_iters = num_iters & ~(unroll_count - 1);
 
     while (i < unrolled_iters) {
-        // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
             iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
             i++;
@@ -120,6 +257,8 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
         i++;
     }
+
+#endif
 
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
