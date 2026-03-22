@@ -293,6 +293,10 @@ class LlamaBenchData:
         for t in self.repo.tags:
             if t.name == name:
                 return t.commit.hexsha[:self.build_len]
+        for remote in self.repo.remotes:
+            for ref in remote.refs:
+                if ref.name == name or ref.remote_head == name:
+                    return ref.commit.hexsha[:self.build_len]
         for c in self.repo.iter_commits("--all"):
             if c.hexsha[:self.build_len] == name[:self.build_len]:
                 return c.hexsha[:self.build_len]
@@ -680,6 +684,7 @@ else:
     sys.exit(1)
 
 
+assert isinstance(hexsha8_baseline, str)
 name_baseline = bench_data.get_commit_name(hexsha8_baseline)
 
 hexsha8_compare = name_compare = None
@@ -713,6 +718,7 @@ else:
     parser.print_help()
     sys.exit(1)
 
+assert isinstance(hexsha8_compare, str)
 name_compare = bench_data.get_commit_name(hexsha8_compare)
 
 # Get tool-specific configuration

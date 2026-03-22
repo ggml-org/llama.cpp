@@ -26,6 +26,19 @@ import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
+import {
+	ISO_DATE_TIME_SEPARATOR,
+	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
+	ISO_TIMESTAMP_SLICE_LENGTH,
+	EXPORT_CONV_ID_TRIM_LENGTH,
+	EXPORT_CONV_NONALNUM_REPLACEMENT,
+	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
+	ISO_TIME_SEPARATOR,
+	ISO_TIME_SEPARATOR_REPLACEMENT,
+	NON_ALPHANUMERIC_REGEX,
+	MULTIPLE_UNDERSCORE_REGEX,
+	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
+} from '$lib/constants';
 
 class ConversationsStore {
 	/**
@@ -49,7 +62,37 @@ class ConversationsStore {
 	isInitialized = $state(false);
 
 	/** Pending MCP server overrides for new conversations (before first message) */
-	pendingMcpServerOverrides = $state<McpServerOverride[]>([]);
+	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
+
+	/** Load MCP default overrides from localStorage */
+	private static loadMcpDefaults(): McpServerOverride[] {
+		if (typeof globalThis.localStorage === 'undefined') return [];
+		try {
+			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+			if (!raw) return [];
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter(
+				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
+			) as McpServerOverride[];
+		} catch {
+			return [];
+		}
+	}
+
+	/** Persist MCP default overrides to localStorage */
+	private saveMcpDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		const plain = this.pendingMcpServerOverrides.map((o) => ({
+			serverId: o.serverId,
+			enabled: o.enabled
+		}));
+		if (plain.length > 0) {
+			localStorage.setItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY, JSON.stringify(plain));
+		} else {
+			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+		}
+	}
 
 	/** Callback for title update confirmation dialog */
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
@@ -249,6 +292,8 @@ class ConversationsStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
+		// reload MCP defaults so new chats inherit persisted state
+		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
 	}
 
 	/**
@@ -585,6 +630,7 @@ class ConversationsStore {
 				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
 			}
 		}
+		this.saveMcpDefaults();
 	}
 
 	/**
@@ -609,6 +655,7 @@ class ConversationsStore {
 	 */
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
+		this.saveMcpDefaults();
 	}
 
 	/**
@@ -618,6 +665,66 @@ class ConversationsStore {
 	 *
 	 *
 	 */
+
+	/**
+	 * Generates a sanitized filename for a conversation export
+	 * @param conversation - The conversation metadata
+	 * @param msgs - Optional array of messages belonging to the conversation
+	 * @returns The generated filename string
+	 */
+	generateConversationFilename(
+		conversation: { id?: string; name?: string },
+		msgs?: DatabaseMessage[]
+	): string {
+		const conversationName = (conversation.name ?? '').trim().toLowerCase();
+
+		const sanitizedName = conversationName
+			.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
+			.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
+			.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
+
+		// If we have messages, use the timestamp of the newest message
+		const referenceDate = msgs?.length
+			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
+			: new Date();
+
+		const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
+		const formattedDate = iso
+			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
+			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
+		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
+		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+	}
+
+	/**
+	 * Triggers a browser download of the provided exported conversation data
+	 * @param data - The exported conversation payload (either a single conversation or array of them)
+	 * @param filename - Filename; if omitted, a deterministic name is generated
+	 */
+	downloadConversationFile(data: ExportedConversations, filename?: string): void {
+		// Choose the first conversation or message
+		const conversation =
+			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
+		const msgs =
+			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
+
+		if (!conversation) {
+			console.error('Invalid data: missing conversation');
+			return;
+		}
+
+		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
+
+		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = downloadFilename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
 
 	/**
 	 * Downloads a conversation as JSON file.
@@ -636,40 +743,7 @@ class ConversationsStore {
 			messages = await DatabaseService.getConversationMessages(convId);
 		}
 
-		this.triggerDownload({ conv: conversation, messages });
-	}
-
-	/**
-	 * Exports all conversations with their messages as a JSON file
-	 * @returns The list of exported conversations
-	 */
-	async exportAllConversations(): Promise<DatabaseConversation[]> {
-		const allConversations = await DatabaseService.getAllConversations();
-
-		if (allConversations.length === 0) {
-			throw new Error('No conversations to export');
-		}
-
-		const allData = await Promise.all(
-			allConversations.map(async (conv) => {
-				const messages = await DatabaseService.getConversationMessages(conv.id);
-				return { conv, messages };
-			})
-		);
-
-		const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `all_conversations_${new Date().toISOString().split('T')[0]}.json`;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
-
-		toast.success(`All conversations (${allConversations.length}) prepared for download`);
-
-		return allConversations;
+		this.downloadConversationFile({ conv: conversation, messages });
 	}
 
 	/**
@@ -742,37 +816,6 @@ class ConversationsStore {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
 		return result;
-	}
-
-	/**
-	 * Triggers file download in browser
-	 */
-	private triggerDownload(data: ExportedConversations, filename?: string): void {
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-
-		if (!conversation) {
-			console.error('Invalid data: missing conversation');
-			return;
-		}
-
-		const conversationName = conversation.name?.trim() || '';
-		const truncatedSuffix = conversationName
-			.toLowerCase()
-			.replace(/[^a-z0-9]/gi, '_')
-			.replace(/_+/g, '_')
-			.substring(0, 20);
-		const downloadFilename = filename || `conversation_${conversation.id}_${truncatedSuffix}.json`;
-
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = downloadFilename;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
 	}
 }
 

@@ -270,6 +270,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
+    [GGML_TYPE_NVFP4] = {
+        .from_float               = quantize_row_nvfp4,
+        .vec_dot                  = ggml_vec_dot_nvfp4_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q2_K] = {
         .from_float               = quantize_row_q2_K,
         .vec_dot                  = ggml_vec_dot_q2_K_q8_K,
@@ -2021,6 +2027,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_solve_tri(params, tensor);
             } break;
+        case GGML_OP_GATED_DELTA_NET:
+            {
+                ggml_compute_forward_gated_delta_net(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2200,6 +2210,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_SOLVE_TRI:
+        case GGML_OP_GATED_DELTA_NET:
             {
                 n_tasks = n_threads;
             } break;
@@ -2904,6 +2915,11 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_CROSS_ENTROPY_LOSS:
                     {
                         cur = ggml_type_size(node->type)*(n_tasks + node->src[0]->ne[0]*n_tasks);
+                    } break;
+                case GGML_OP_GATED_DELTA_NET:
+                    {
+                        const int64_t S_v = node->src[2]->ne[0];
+                        cur = S_v * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_COUNT:
                     {

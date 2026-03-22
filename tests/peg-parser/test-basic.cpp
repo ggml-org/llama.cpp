@@ -120,7 +120,7 @@ void test_basic(testing & t) {
                 return p.literal("hello") + p.optional(p.literal(" world"));
             });
 
-            auto ctx    = common_peg_parse_context("hello", false);
+            auto ctx    = common_peg_parse_context("hello");
             auto result = parser.parse(ctx);
             t.assert_equal("optional_absent", true, result.success());
             t.assert_equal("optional_absent_end", 5u, result.end);
@@ -132,7 +132,7 @@ void test_basic(testing & t) {
                 return p.literal("hello") + p.optional(p.literal(" world"));
             });
 
-            auto ctx    = common_peg_parse_context("hello ", true);
+            auto ctx    = common_peg_parse_context("hello ", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("partial_match_need_more", true, result.need_more_input());
         });
@@ -215,7 +215,7 @@ void test_basic(testing & t) {
         t.test("sequence_partial_match_1", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_peg_parse_context("<thi", true);
+            auto ctx    = common_peg_parse_context("<thi", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("sequence_partial_match_1", true, result.need_more_input());
         });
@@ -224,7 +224,7 @@ void test_basic(testing & t) {
         t.test("sequence_partial_match_2", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("begin") + p.literal("end"); });
 
-            auto ctx    = common_peg_parse_context("begin", true);
+            auto ctx    = common_peg_parse_context("begin", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("sequence_partial_match_2", true, result.need_more_input());
         });
@@ -233,7 +233,7 @@ void test_basic(testing & t) {
         t.test("sequence_partial_match_3", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_peg_parse_context("<think></", true);
+            auto ctx    = common_peg_parse_context("<think></", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("sequence_partial_match_3", true, result.need_more_input());
         });
@@ -242,7 +242,7 @@ void test_basic(testing & t) {
         t.test("sequence_full_match", [&](testing & t) {
             auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("hello") + p.literal("world"); });
 
-            auto ctx    = common_peg_parse_context("helloworld", false);
+            auto ctx    = common_peg_parse_context("helloworld");
             auto result = common_chat_combinator_parser.parse(ctx);
             t.assert_equal("sequence_full_match", true, result.success());
         });
@@ -251,7 +251,7 @@ void test_basic(testing & t) {
         t.test("sequence_no_match", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_peg_parse_context("<think>I am common_chat_combinator_parser", true);
+            auto ctx    = common_peg_parse_context("<think>I am common_chat_combinator_parser", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("sequence_no_match", true, result.fail());
         });
@@ -260,7 +260,7 @@ void test_basic(testing & t) {
         t.test("choices_partial_match_1", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("option1") | p.literal("option2"); });
 
-            auto ctx    = common_peg_parse_context("opt", true);
+            auto ctx    = common_peg_parse_context("opt", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("choices_partial_match_1", true, result.need_more_input());
         });
@@ -270,7 +270,7 @@ void test_basic(testing & t) {
             auto parser =
                 build_peg_parser([](common_peg_parser_builder & p) { return p.literal("choice_a") | p.literal("choice_b"); });
 
-            auto ctx    = common_peg_parse_context("choice", true);
+            auto ctx    = common_peg_parse_context("choice", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("choices_partial_match_2", true, result.need_more_input());
         });
@@ -279,7 +279,7 @@ void test_basic(testing & t) {
         t.test("choices_full_match_1", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("first") | p.literal("second"); });
 
-            auto ctx    = common_peg_parse_context("first", false);
+            auto ctx    = common_peg_parse_context("first");
             auto result = parser.parse(ctx);
             t.assert_equal("choices_full_match_1", true, result.success());
         });
@@ -288,7 +288,7 @@ void test_basic(testing & t) {
         t.test("choices_full_match_2", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("alpha") | p.literal("beta"); });
 
-            auto ctx    = common_peg_parse_context("beta", false);
+            auto ctx    = common_peg_parse_context("beta");
             auto result = parser.parse(ctx);
             t.assert_equal("choices_full_match_2", true, result.success());
         });
@@ -297,7 +297,7 @@ void test_basic(testing & t) {
         t.test("choices_no_match", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.literal("good") | p.literal("better"); });
 
-            auto ctx    = common_peg_parse_context("best", false);
+            auto ctx    = common_peg_parse_context("best");
             auto result = parser.parse(ctx);
             t.assert_equal("choices_no_match", true, result.fail());
         });
@@ -306,7 +306,7 @@ void test_basic(testing & t) {
         t.test("zero_or_more_partial_match_1", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.zero_or_more(p.literal("ab")); });
 
-            auto ctx    = common_peg_parse_context("a", true);
+            auto ctx    = common_peg_parse_context("a", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("zero_or_more_partial_match_1", true, result.need_more_input());
         });
@@ -315,7 +315,7 @@ void test_basic(testing & t) {
         t.test("zero_or_more_partial_match_2", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.zero_or_more(p.literal("xy")); });
 
-            auto ctx    = common_peg_parse_context("xyx", true);
+            auto ctx    = common_peg_parse_context("xyx", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("zero_or_more_partial_match_2", true, result.need_more_input());
         });
@@ -324,7 +324,7 @@ void test_basic(testing & t) {
         t.test("zero_or_more_full_match", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.zero_or_more(p.literal("test")); });
 
-            auto ctx    = common_peg_parse_context("test", false);
+            auto ctx    = common_peg_parse_context("test");
             auto result = parser.parse(ctx);
             t.assert_equal("zero_or_more_full_match", true, result.success());
         });
@@ -333,7 +333,7 @@ void test_basic(testing & t) {
         t.test("one_or_more_partial_match_1", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one_or_more(p.literal("repeat")); });
 
-            auto ctx    = common_peg_parse_context("rep", true);
+            auto ctx    = common_peg_parse_context("rep", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("one_or_more_partial_match_1", true, result.need_more_input());
         });
@@ -342,7 +342,7 @@ void test_basic(testing & t) {
         t.test("one_or_more_partial_match_2", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one_or_more(p.literal("ab")); });
 
-            auto ctx    = common_peg_parse_context("aba", true);
+            auto ctx    = common_peg_parse_context("aba", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto result = parser.parse(ctx);
             t.assert_equal("one_or_more_partial_match_2", true, result.need_more_input());
         });
@@ -351,7 +351,7 @@ void test_basic(testing & t) {
         t.test("one_or_more_full_match", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one_or_more(p.literal("single")); });
 
-            auto ctx    = common_peg_parse_context("single", false);
+            auto ctx    = common_peg_parse_context("single");
             auto result = parser.parse(ctx);
             t.assert_equal("one_or_more_full_match", true, result.success());
         });
@@ -360,7 +360,7 @@ void test_basic(testing & t) {
         t.test("one_or_more_no_match", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one_or_more(p.literal("()")); });
 
-            auto ctx    = common_peg_parse_context("success", false);
+            auto ctx    = common_peg_parse_context("success");
             auto result = parser.parse(ctx);
             t.assert_equal("one_or_more_no_match", true, result.fail());
         });
@@ -376,7 +376,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("1", false);
+            common_peg_parse_context ctx("1");
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_success", true, result.success());
@@ -390,7 +390,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("[1]", false);
+            common_peg_parse_context ctx("[1]");
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_success", true, result.success());
@@ -404,7 +404,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("[[2]]", false);
+            common_peg_parse_context ctx("[[2]]");
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_success", true, result.success());
@@ -418,7 +418,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("[[[3]]]", false);
+            common_peg_parse_context ctx("[[[3]]]");
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_success", true, result.success());
@@ -432,7 +432,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("[[", true);
+            common_peg_parse_context ctx("[[", COMMON_PEG_PARSE_FLAG_LENIENT);
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_need_more_input", true, result.need_more_input());
@@ -446,7 +446,7 @@ void test_basic(testing & t) {
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
 
-            common_peg_parse_context ctx("[a]", false);
+            common_peg_parse_context ctx("[a]");
             auto           result = value_parser.parse(ctx);
 
             t.assert_equal("result_is_fail", true, result.fail());
@@ -458,8 +458,8 @@ void test_basic(testing & t) {
                 return p.marker();
             });
 
-            common_peg_parse_context ctx_square("[marker]", false);
-            common_peg_parse_context ctx_sharp("<marker>", false);
+            common_peg_parse_context ctx_square("[marker]");
+            common_peg_parse_context ctx_sharp("<marker>");
 
             auto result_square = bracket_parser.parse(ctx_square);
             auto result_sharp = bracket_parser.parse(ctx_sharp);

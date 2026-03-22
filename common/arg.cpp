@@ -732,23 +732,28 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-completion",
         "llama-convert-llama2c-to-ggml",
         "llama-cvector-generator",
+        "llama-debug",
+        "llama-diffusion-cli",
         "llama-embedding",
         "llama-eval-callback",
         "llama-export-lora",
+        "llama-finetune",
+        "llama-fit-params",
+        "llama-gemma3-cli",
         "llama-gen-docs",
         "llama-gguf",
         "llama-gguf-hash",
         "llama-gguf-split",
-        "llama-gritlm",
+        "llama-idle",
         "llama-imatrix",
-        "llama-infill",
-        "llama-mtmd-cli",
-        "llama-llava-clip-quantize-cli",
+        "llama-llava-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
+        "llama-minicpmv-cli",
+        "llama-mtmd-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
@@ -1825,23 +1830,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar"}, "GRAMMAR",
-        string_format("BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", params.sampling.grammar.c_str()),
+        "BNF-like grammar to constrain generations (see samples in grammars/ dir)",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = value;
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, value};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar-file"}, "FNAME",
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = read_file(value);
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(value)};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = json_schema_to_grammar(json::parse(value));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1858,7 +1863,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::istreambuf_iterator<char>(),
                 std::back_inserter(schema)
             );
-            params.sampling.grammar = json_schema_to_grammar(json::parse(schema));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(schema))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -2427,11 +2432,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 );
             }
             if (split_arg.size() == 1) {
-                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoul(split_arg[0]) * 1024*1024);
+                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoull(split_arg[0]) * 1024*1024);
                 return;
             }
             for (size_t i = 0; i < split_arg.size(); i++) {
-                params.fit_params_target[i] = std::stoul(split_arg[i]) * 1024*1024;
+                params.fit_params_target[i] = std::stoull(split_arg[i]) * 1024*1024;
             }
         }
     ).set_env("LLAMA_ARG_FIT_TARGET"));
@@ -2578,7 +2583,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
         "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
-        "example: unsloth/phi-4-GGUF:q4_k_m\n"
+        "example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {
             params.model.hf_repo = value;
@@ -2666,7 +2671,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -2913,6 +2919,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             auto parsed = json::parse(value);
             for (const auto & item : parsed.items()) {
+                if (item.key() == "enable_thinking") {
+                    LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
+                            "Use --reasoning on / --reasoning off instead.\n");
+                }
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
@@ -3049,13 +3059,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
+        {"-rea", "--reasoning"}, "[on|off|auto]",
+        "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))",
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.enable_reasoning = 1;
+                params.default_template_kwargs["enable_thinking"] = "true";
+            } else if (is_falsey(value)) {
+                params.enable_reasoning = 0;
+                params.default_template_kwargs["enable_thinking"] = "false";
+            } else if (is_autoy(value)) {
+                params.enable_reasoning = -1;
+            } else {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --reasoning: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING"));
+    add_opt(common_arg(
         {"--reasoning-budget"}, "N",
-        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
-            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            if (value < -1) { throw std::invalid_argument("invalid value"); }
             params.reasoning_budget = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
+    add_opt(common_arg(
+        {"--reasoning-budget-message"}, "MESSAGE",
+        "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.reasoning_budget_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
@@ -3080,6 +3115,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--skip-chat-parsing"},
+        {"--no-skip-chat-parsing"},
+        string_format(
+            "force a pure content parser, even if a Jinja template is specified; model will output everything "
+            "in the content section, including any reasoning and/or tool calls (default: disabled)"
+        ),
+        [](common_params & params, bool value) {
+            params.force_pure_content_parser = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SKIP_CHAT_PARSING"));
     add_opt(common_arg(
         {"--prefill-assistant"},
         {"--no-prefill-assistant"},
@@ -3448,7 +3494,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.ngram_size_n),
@@ -3607,6 +3653,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--check"},
+        string_format("check rather than generate results (default: %s)", params.check ? "true" : "false"),
+        [](common_params & params) {
+            params.check = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_RESULTS}));
     add_opt(common_arg(
         {"--save-logits"},
         string_format("save final logits to files for verification (default: %s)", params.save_logits ? "true" : "false"),

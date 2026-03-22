@@ -145,7 +145,7 @@ static void test_example_native(testing & t) {
         common_reasoning_format reasoning_format;
         json                    json_schema;
         bool                    parallel_tool_calls;
-        bool                    thinking_forced_open;
+        std::string             generation_prompt;
         std::string             input;
 
         // Expect
@@ -157,14 +157,8 @@ static void test_example_native(testing & t) {
     auto build_parser = [](const test_case & tc) {
         return build_chat_peg_parser([&](common_chat_peg_builder & p) {
             auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
-            auto reasoning            = p.eps();
-            if (tc.thinking_forced_open) {
-                // If thinking is forced open, expect a closing tag
-                reasoning = p.reasoning(p.until("</think>")) + "</think>" + p.space();
-            } else {
-                // Otherwise, optionally accept thinking wrapped in tags
-                reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
-            }
+            // Always use optional TAG_BASED pattern; generation_prompt is prepended to input
+            auto reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
 
             // tool calling parser
             if (tc.tools.is_array() && !tc.tools.empty()) {
@@ -190,78 +184,91 @@ static void test_example_native(testing & t) {
 
     std::vector<test_case> test_cases = std::vector<test_case>{
         {
-         /* .name =                 */ "content with thinking_forced_open = false",
+         /* .name =                 */ "content with reasoning (no generation_prompt)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ false,
+         /* .generation_prompt =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = false and no reasoning",
+         /* .name =                 */ "content without reasoning (no generation_prompt)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ false,
+         /* .generation_prompt =    */ "",
          /* .input =                */ ("Hello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = false and reasoning_format = none",
+         /* .name =                 */ "content with reasoning_format = none (tags appear in content)",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "",
          /* .input =                */ ("<think>The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "<think>The user said hello, I must say hello back</think>\nHello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = true",
+         /* .name =                 */ "content with reasoning generation_prompt",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "<think>",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "The user said hello, I must say hello back",
          /* .expect_content =       */ "Hello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "content with thinking_forced_open = true and reasoning_format = none",
+         /* .name =                 */ "content with reasoning generation_prompt and reasoning_format = none",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "",
          /* .input =                */ ("The user said hello, I must say hello back</think>\nHello"),
          /* .expect_reasoning =     */ "",
          /* .expect_content =       */ "The user said hello, I must say hello back</think>\nHello",
          /* .expect_tool_calls =    */ {},
          },
         {
-         /* .name =                 */ "tools with tool_choice = auto and no parallel_tool_calls",
+         /* .name =                 */ "content with closed reasoning generation_prompt (empty reasoning discarded)",
+         /* .tools =                */ {},
+         /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+         /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+         /* .json_schema =          */ {},
+         /* .parallel_tool_calls =  */ false,
+         /* .generation_prompt =    */ "<think></think>",
+         /* .input =                */ ("Hello"),
+         /* .expect_reasoning =     */ "",
+         /* .expect_content =       */ "Hello",
+         /* .expect_tool_calls =    */ {},
+         },
+        {
+         /* .name =                 */ "tools with reasoning generation_prompt",
          /* .tools =                */ create_tools(),
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York</think>\n"
              "<tool_call>["
@@ -277,13 +284,13 @@ static void test_example_native(testing & t) {
             } },
          },
         {
-         /* .name =                 */ "tools with tool_choice = auto and parallel_tool_calls",
+         /* .name =                 */ "parallel tools with reasoning generation_prompt",
          /* .tools =                */ create_tools(),
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
          /* .json_schema =          */ {},
          /* .parallel_tool_calls =  */ true,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "<think>",
          /* .input =                */
             ("I must get the weather in New York and San Francisco and a 3 day forecast of each.</think>\nLet me "
              "search that for you."
@@ -321,7 +328,7 @@ static void test_example_native(testing & t) {
               } },
          },
         {
-         /* .name =                 */ "response_format with thinking_forced_open = true",
+         /* .name =                 */ "response_format with reasoning generation_prompt",
          /* .tools =                */ {},
          /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
          /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
@@ -333,7 +340,7 @@ static void test_example_native(testing & t) {
                   { "due_date", { { "type", "string" } } } } },
               { "required", { "invoice_number", "amount", "due_date" } } },
          /* .parallel_tool_calls =  */ false,
-         /* .thinking_forced_open = */ true,
+         /* .generation_prompt =    */ "<think>",
          /* .input =                */
             ("I must produce the invoice in the requested format</think>\n"
              R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})"),
@@ -361,7 +368,8 @@ static void test_example_native(testing & t) {
                 t.log(line);
             }
 
-            common_peg_parse_context ctx(tc.input, false);
+            std::string              effective_input = tc.generation_prompt + tc.input;
+            common_peg_parse_context ctx(effective_input);
             auto                     result = parser.parse(ctx);
 
             t.assert_true("success", result.success());
@@ -458,7 +466,7 @@ static void test_example_qwen3_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -523,7 +531,7 @@ static void test_example_qwen3_non_coder(testing & t) {
             "\"fahrenheit\"}}"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -556,7 +564,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -597,9 +605,9 @@ void test_command7_parser_compare(testing & t) {
 
         auto response = "<|START_RESPONSE|>" << p.content(p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>";
 
-        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.tool_id(p.json_string_content()) + "\"")));
+        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.tool_id(p.string_content('"')) + "\"")));
         auto tool_call_name =
-            p.atomic("\"tool_name\"" << (":" << ("\"" + p.tool_name(p.json_string_content()) + "\"")));
+            p.atomic("\"tool_name\"" << (":" << ("\"" + p.tool_name(p.string_content('"')) + "\"")));
         auto tool_call_args = "\"parameters\"" << (":" << p.tool_args(p.json()));
 
         auto tool_call_fields = p.rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
@@ -617,7 +625,7 @@ void test_command7_parser_compare(testing & t) {
 
     auto test_current = [&](const common_peg_arena & p, const std::string & input, bool is_partial,
                             bool print_results) {
-        common_peg_parse_context ctx(input, is_partial);
+        common_peg_parse_context ctx(input, is_partial ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
         auto                     result = p.parse(ctx);
 
         common_chat_msg msg;
@@ -780,7 +788,7 @@ static void test_prefix_tool_names(testing & t) {
             "</function>"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -814,7 +822,7 @@ static void test_prefix_tool_names(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
             auto                     result = parser.parse(ctx);
 
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -864,7 +872,7 @@ static void test_prefix_tool_names(testing & t) {
             "</function>"
             "</tool_call>";
 
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input);
         auto                     result = parser.parse(ctx);
 
         t.assert_true("success", result.success());
@@ -931,7 +939,7 @@ static void test_tagged_peg_parser(testing & t) {
             return p.tag("prefix", p.until(":")) + ":" + p.tag("value", p.rest()) + p.end();
         });
 
-        auto result = parser.parse_and_extract("key:val", true);
+        auto result = parser.parse_and_extract("key:val", COMMON_PEG_PARSE_FLAG_LENIENT);
         t.assert_true("not fail", !result.result.fail());
         t.assert_equal("prefix tag", "key", result.tags.at("prefix"));
         t.assert_equal("value tag", "val", result.tags.at("value"));

@@ -241,10 +241,10 @@ class CodeEditor(QPlainTextEdit):
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             line_color = QColorConstants.Yellow.lighter(160)
-            selection.format.setBackground(line_color)  # pyright: ignore[reportAttributeAccessIssue]
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # pyright: ignore[reportAttributeAccessIssue]
-            selection.cursor = self.textCursor()  # pyright: ignore[reportAttributeAccessIssue]
-            selection.cursor.clearSelection()  # pyright: ignore[reportAttributeAccessIssue]
+            selection.format.setBackground(line_color)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            selection.cursor = self.textCursor()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            selection.cursor.clearSelection()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             extra_selections.append(selection)
         self.setExtraSelections(extra_selections)
 
@@ -262,8 +262,8 @@ class CodeEditor(QPlainTextEdit):
                 )
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue]
-            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue]
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -274,8 +274,8 @@ class CodeEditor(QPlainTextEdit):
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue]
-            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue]
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -395,8 +395,8 @@ class JinjaTester(QMainWindow):
                 ensure_ascii=ensure_ascii,
             )
         )
-        env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)
-        env.globals["raise_exception"] = raise_exception
+        env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)  # ty: ignore[invalid-assignment]
+        env.globals["raise_exception"] = raise_exception  # ty: ignore[invalid-assignment]
         try:
             template = env.from_string(template_str)
             output = template.render(context)

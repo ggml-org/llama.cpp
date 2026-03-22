@@ -25,6 +25,11 @@ ggml_add_backend_library(ggml-sycl
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
+file(GLOB   SRCS "template-instances/fattn-tile*.cpp")
+list(APPEND GGML_SOURCES_SYCL ${SRCS})
+file(GLOB   SRCS "template-instances/fattn-vec*.cpp")
+list(APPEND GGML_SOURCES_SYCL ${SRCS})
+
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 if (WIN32)
@@ -145,6 +150,7 @@ else()
 endif()
 
 if (GGML_SYCL_GRAPH)
+    message(STATUS "find GGML_SYCL_GRAPH")
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
 endif()
 

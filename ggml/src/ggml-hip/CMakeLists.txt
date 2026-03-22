@@ -11,6 +11,10 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH  ${ROCM_PATH})
 list(APPEND CMAKE_PREFIX_PATH "${ROCM_PATH}/lib64/cmake")
 
+if (NOT DEFINED CMAKE_HIP_FLAGS_DEBUG)
+    set(CMAKE_HIP_FLAGS_DEBUG "-g -O2")
+endif()
+
 # CMake on Windows doesn't support the HIP language yet
 if (WIN32)
     set(CXX_IS_HIPCC TRUE)
@@ -48,9 +52,6 @@ if (${hip_VERSION} VERSION_LESS 6.1)
 endif()
 
 message(STATUS "HIP and hipBLAS found")
-
-# Workaround old compilers
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --gpu-max-threads-per-block=1024")
 
 file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
@@ -128,6 +129,11 @@ endif()
 
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+    if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # CMake on Windows doesn't support the HIP language yet.
+        # Therefore we workaround debug build's failure on HIP backend this way.
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES COMPILE_FLAGS "-O2 -g")
+    endif()
     target_link_libraries(ggml-hip PRIVATE hip::device)
 else()
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
