@@ -1145,6 +1145,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
                         get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
+                        GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles && hparams.preproc_max_tiles < INT32_MAX);
                         set_internvl_dhr_res_candidates(model);
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
@@ -2194,6 +2195,9 @@ struct clip_model_loader {
         auto & hparams = model.hparams;
         int min_num = hparams.preproc_min_tiles;
         int max_num = hparams.preproc_max_tiles;
+        if (min_num < 1) {
+           return; // avoid  divide by 0
+        }
         for (int a = min_num; a <= max_num; ++a) {
             int b_lo = (min_num + a - 1) / a;
             int b_hi = max_num / a;
