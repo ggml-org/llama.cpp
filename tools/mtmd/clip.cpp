@@ -1161,7 +1161,6 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
-                case PROJECTOR_TYPE_LIGHTONOCR:
                     {
                         // ref: https://huggingface.co/mistral-community/pixtral-12b/blob/main/preprocessor_config.json
                         // TODO: verify the image_min_tokens
@@ -1169,6 +1168,15 @@ struct clip_model_loader {
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 1024);
+                        hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_LIGHTONOCR:
+                    {
+                        hparams.n_merge = 1;
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        hparams.image_longest_edge = hparams.image_size;
+                        get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIVL:
@@ -3180,7 +3188,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
-        case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized_image;
@@ -3192,6 +3199,19 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     params.image_min_pixels,
                     params.image_max_pixels);
                 img_tool::resize(*img, resized_image, target_size, img_tool::RESIZE_ALGO_BILINEAR);
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+        case PROJECTOR_TYPE_LIGHTONOCR:
+            {
+                GGML_ASSERT(params.image_longest_edge > 0);
+                clip_image_u8 resized_image;
+                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+                    original_size,
+                    params.patch_size * params.n_merge,
+                    params.image_longest_edge);
+                img_tool::resize(*img, resized_image, target_size, img_tool::RESIZE_ALGO_BICUBIC);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
