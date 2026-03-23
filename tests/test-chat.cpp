@@ -1547,6 +1547,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // IBM Granite 4.0 (production template shared by h-tiny, h-small, micro)
+        // Uses <tool_call> XML tags for tool calls, tools in system message
+        auto tst = peg_tester("models/templates/ibm-granite-granite-4.0.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(
+               "<tool_call>\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    {
         // ByteDance-Seed-OSS (reasoning and tool calling model)
         auto tst = peg_tester("models/templates/ByteDance-Seed-OSS.jinja", detailed_debug);
 
