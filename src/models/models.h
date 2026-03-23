@@ -597,7 +597,14 @@ private:
                 ggml_tensor * input,
                         int   il);
 
+    // Build the MTP (Multi-Token Prediction) head with standard transformer block
+    void build_mtp_head(llm_graph_input_mem_hybrid * inp, ggml_tensor * inp_pos, int * sections);
+
     const llama_model & model;
+
+    // Unfiltered hidden state from last main layer (before inp_out_ids filter).
+    // Used by MTP head for attention KV cache population across all batch tokens.
+    ggml_tensor * mtp_inp_hidden = nullptr;
 };
 
 // TODO: derive llm_build_delta_net_base instead

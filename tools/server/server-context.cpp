@@ -149,6 +149,15 @@ struct server_slot {
     llama_token  sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
 
+    // Inline MTP (Multi-Token Prediction) state.
+    // Instead of using the speculative framework (which has M-RoPE and SSM
+    // rollback issues), we propose one draft token from MTP logits and verify
+    // it in the next decode step. No seq_rm or rollback needed.
+    llama_token  mtp_draft_token = -1;  // proposed draft token (-1 = none)
+    int          mtp_i_batch     = -1;  // batch index of the draft token
+    bool         mtp_pending     = false; // true when draft is in the batch awaiting verification
+    bool         mtp_cooldown    = false; // skip MTP proposal for one iteration after draft processing
+
     // stats
     size_t n_sent_text = 0; // number of sent text character
 
@@ -179,6 +188,10 @@ struct server_slot {
 
         drafted.clear();
         i_batch_dft.clear();
+        mtp_draft_token = -1;
+        mtp_i_batch     = -1;
+        mtp_pending     = false;
+        mtp_cooldown    = false;
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -753,9 +766,22 @@ private:
 
         slots.clear();
 
-        const bool can_spec = common_speculative_is_compat(ctx);
+        bool can_spec = common_speculative_is_compat(ctx);
         if (!can_spec) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
+        // Auto-detect MTP: if model has MTP layers and no speculative type
+        // is explicitly set, auto-enable MTP speculative decoding.
+        if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_NONE) {
+            const int32_t n_mtp = llama_model_n_mtp_layers(llama_get_model(ctx));
+            if (n_mtp > 0 && can_spec) {
+                SRV_INF("model has %d MTP layer(s) — auto-enabling MTP speculative decoding\n", n_mtp);
+                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                params_base.speculative.n_max = 1;  // MTP-1: one draft token per step
+            } else if (n_mtp > 0) {
+                SRV_INF("model has %d MTP layer(s) but speculative context not compatible\n", n_mtp);
+            }
         }
 
         // initialize slots
@@ -2066,42 +2092,34 @@ private:
             }
 
             // generate draft tokens in speculative decoding mode
-            // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
-            //       perform the speculative drafting for all sequences at the same time in a single batch
             const int n_draft_max = slot.get_n_draft_max();
+            const bool is_hybrid = llama_model_is_hybrid(model);
+
             if (n_draft_max > 0) {
+                // Standard speculative decoding for non-hybrid models
                 if (mctx) {
-                    // we should never reach this, as speculative is automatically disabled if mmproj is loaded
                     GGML_ABORT("not supported by multimodal");
                 }
 
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
-
                 const auto & params_spec = slot.task->params.speculative;
 
                 llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
                 if (draft.size() > (size_t) n_draft_max) {
-                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
                     draft.resize(n_draft_max);
                 }
 
-                // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
                 common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
                 slot.prompt.tokens.push_back(slot.sampled);
 
                 if (slot.task->params.speculative.n_min > (int) draft.size()) {
-                    SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.task->params.speculative.n_min);
-                    // fallback to normal decoding
                     slot.i_batch = slot.i_batch_dft[0];
                     slot.drafted.clear();
                     slot.i_batch_dft.clear();
                 } else {
-                    // keep track of total number of drafted tokens tested
                     slot.n_draft_total += draft.size();
-
-                    // add all drafted tokens to the batch
                     for (size_t i = 0; i < draft.size(); i++) {
                         slot.i_batch_dft.push_back(batch.n_tokens);
                         common_batch_add(batch, draft[i], slot.prompt.tokens.pos_next(), { slot.id }, true);
@@ -2114,7 +2132,6 @@ private:
                 slot.i_batch = batch.n_tokens;
 
                 common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
-
                 slot.prompt.tokens.push_back(slot.sampled);
 
                 SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
@@ -2821,7 +2838,7 @@ private:
                     slot.state = SLOT_STATE_GENERATING;
 
                     if (slot.can_speculate()) {
-                        common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                            common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
@@ -2833,13 +2850,135 @@ private:
 
                 const int tok_idx = slot.i_batch - i;
 
+                // --- Two-phase MTP: verify draft after decoding sampled token ---
+                // The sampled token was decoded alone (1-token batch).
+                // Now verify the draft against main model logits.
+                // If accepted: decode draft in a second pass (correct checkpoint position).
+                // If rejected: skip draft decode (no seq_rm needed — state is clean).
+                if (slot.mtp_pending) {
+                    // Sample from main model at the sampled token's position
+                    llama_token verified = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
+                    common_sampler_accept(slot.smpl.get(), verified, true);
+
+                    slot.n_draft_total += 1;
+
+                    const int64_t t_current = ggml_time_us();
+                    if (slot.n_decoded == 0) {
+                        slot.t_start_generation = t_current;
+                        slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
+                        metrics.on_prompt_eval(slot);
+                    }
+
+                    if (verified == slot.mtp_draft_token) {
+                        // ACCEPTED — decode the draft token in a second pass.
+                        // At this point the recurrent state checkpoint is at the
+                        // correct position (after sampled, before draft).
+                        slot.n_draft_accepted += 1;
+                        slot.n_decoded += 1;
+
+                        // Output the verified/sampled token
+                        completion_token_output result_sampled;
+                        result_sampled.tok          = verified;
+                        result_sampled.text_to_send = common_token_to_piece(ctx, result_sampled.tok, accept_special_token(slot, result_sampled.tok));
+                        result_sampled.prob         = 1.0f;
+
+                        bool should_stop = !process_token(result_sampled, slot);
+                        if (should_stop) {
+                            slot.print_timings();
+                            send_final_response(slot);
+                            metrics.on_prediction(slot);
+                            slot.release();
+                            slot.mtp_pending = false;
+                            slot.mtp_draft_token = -1;
+                            continue;
+                        }
+
+                        // Build a 1-token batch for the draft token and decode it
+                        llama_batch draft_batch = llama_batch_init(1, 0, 1);
+                        common_batch_clear(draft_batch);
+                        common_batch_add(draft_batch, slot.mtp_draft_token, slot.prompt.tokens.pos_next(), { slot.id }, true);
+                        slot.prompt.tokens.push_back(slot.mtp_draft_token);
+
+                        fprintf(stderr, "[MTP-2PHASE] draft ACCEPTED (verified=%d), decoding draft at pos %d\n",
+                                (int)verified, (int)(slot.prompt.tokens.pos_next() - 1));
+                        fflush(stderr);
+
+                        int ret2 = llama_decode(ctx, draft_batch);
+                        llama_batch_free(draft_batch);
+
+                        if (ret2 != 0) {
+                            fprintf(stderr, "[MTP-2PHASE] ERROR: draft decode failed with ret=%d\n", ret2);
+                            fflush(stderr);
+                            // Fall through — state is still valid at pre-draft position
+                        } else {
+                            // Sample bonus token from draft's logits (the NEXT-NEXT token)
+                            llama_token bonus = common_sampler_sample(slot.smpl.get(), ctx, 0);
+                            common_sampler_accept(slot.smpl.get(), bonus, true);
+                            slot.n_decoded += 1;
+                            slot.sampled = bonus;
+
+                            // Output the bonus token (draft/verified was already output above)
+                            completion_token_output result_bonus;
+                            result_bonus.tok          = bonus;
+                            result_bonus.text_to_send = common_token_to_piece(ctx, result_bonus.tok, accept_special_token(slot, result_bonus.tok));
+                            result_bonus.prob         = 1.0f;
+
+                            if (!process_token(result_bonus, slot)) {
+                                slot.print_timings();
+                                send_final_response(slot);
+                                metrics.on_prediction(slot);
+                                slot.release();
+                                slot.mtp_pending = false;
+                                slot.mtp_draft_token = -1;
+                                continue;
+                            }
+
+                            // Inform speculative state about the acceptance
+                            common_speculative_accept(slot.spec, 1);
+                        }
+                    } else {
+                        // REJECTED — draft was never decoded, state is clean.
+                        // No seq_rm needed!
+                        fprintf(stderr, "[MTP-2PHASE] draft REJECTED (verified=%d, draft=%d)\n",
+                                (int)verified, (int)slot.mtp_draft_token);
+                        fflush(stderr);
+
+                        slot.sampled = verified;
+                        slot.n_decoded += 1;
+
+                        // Output the verified token
+                        completion_token_output result_verified;
+                        result_verified.tok          = verified;
+                        result_verified.text_to_send = common_token_to_piece(ctx, result_verified.tok, accept_special_token(slot, result_verified.tok));
+                        result_verified.prob         = 1.0f;
+
+                        if (!process_token(result_verified, slot)) {
+                            slot.print_timings();
+                            send_final_response(slot);
+                            metrics.on_prediction(slot);
+                            slot.release();
+                            slot.mtp_pending = false;
+                            slot.mtp_draft_token = -1;
+                            continue;
+                        }
+                    }
+
+                    slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+                    slot.mtp_pending = false;
+                    slot.mtp_draft_token = -1;
+                    slot.mtp_i_batch = -1;
+                    slot.i_batch = -1;
+
+                    continue; // done with this slot for this decode step
+                }
+
+                // --- Normal sampling (no pending MTP draft) ---
                 llama_token id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
 
                 slot.i_batch = -1;
 
                 common_sampler_accept(slot.smpl.get(), id, true);
 
-                // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
                 const int64_t t_current = ggml_time_us();
 
                 slot.n_decoded += 1;
@@ -2855,14 +2994,13 @@ private:
                 completion_token_output result;
                 result.tok          = id;
                 result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
-                result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
+                result.prob         = 1.0f;
 
                 if (slot.task->params.sampling.n_probs > 0) {
                     populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx);
                 }
 
                 if (!process_token(result, slot)) {
-                    // release slot because of stop condition
                     slot.print_timings();
                     send_final_response(slot);
                     metrics.on_prediction(slot);
@@ -2904,7 +3042,15 @@ private:
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
 
-                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1);
+                // Remove rejected draft tokens from KV cache.
+                // For hybrid SSM/DeltaNet, seq_rm may fail. In that case,
+                // just log and continue — the recurrent state has the draft
+                // token baked in, but the checkpoint mechanism in
+                // llama-memory-recurrent.cpp should handle rollback internally
+                // during the next find_slot call.
+                if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1)) {
+                    SLT_WRN(slot, "seq_rm failed at pos %d\n", (int)slot.prompt.n_tokens());
+                }
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;

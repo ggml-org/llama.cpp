@@ -1,0 +1,17 @@
+FROM docker.io/nvidia/cuda:12.8.0-devel-rockylinux9 AS builder
+RUN dnf install -y cmake gcc-c++ && dnf clean all
+ENV TMPDIR=/llama.cpp/tmp
+
+# Copy local source with inline MTP changes
+COPY . /llama.cpp
+RUN cd /llama.cpp && \
+    mkdir -p /llama.cpp/tmp && \
+    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=120 -DLLAMA_BUILD_TESTS=OFF && \
+    cmake --build build --target llama-server llama-cli --config Release -j5
+
+FROM docker.io/nvidia/cuda:12.8.0-runtime-rockylinux9
+COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
+COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
+RUN mkdir -p /models /templates
+EXPOSE 8000
+ENTRYPOINT ["/entrypoint.sh"]

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+
 #include <stdexcept>
 
 //
@@ -163,12 +164,55 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             const auto & cell = cells[tail_id];
             // partial intersection is invalid if it includes the final pos
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
-                //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false, p0 = %d, cell.pos = %d, p1 = %d\n", p0, cell.pos, p1);
-                return false;
+                // for speculative decoding, search for the best checkpoint to roll back to.
+                // Prefer exact match at p0-1, but accept the closest position < p0.
+                // For MTP with 2-token batches, checkpoint may be at p0-2 (before the batch)
+                // since both tokens are processed atomically.
+                int32_t best_cell = -1;
+                llama_pos best_pos = -1;
+                fprintf(stderr, "[MTP-SEQRM] seq_id=%d, p0=%d, p1=%d, tail_pos=%d, searching for checkpoint at pos<=%d\n",
+                        (int)seq_id, (int)p0, (int)p1, (int)cell.pos, (int)(p0-1));
+                for (uint32_t i = 0; i < size; ++i) {
+                    if (cells[i].has_seq_id(seq_id)) {
+                        fprintf(stderr, "[MTP-SEQRM]   cell[%d] pos=%d\n", i, (int)cells[i].pos);
+                        // Find the closest checkpoint at or below p0-1
+                        if (cells[i].pos < p0 && cells[i].pos > best_pos) {
+                            best_pos = cells[i].pos;
+                            best_cell = i;
+                        }
+                    }
+                }
+                fflush(stderr);
+
+                if (best_cell >= 0) {
+                    fprintf(stderr, "[MTP-SEQRM] FOUND checkpoint at cell[%d] pos=%d (target was %d) — rolling back\n",
+                            best_cell, (int)best_pos, (int)(p0-1));
+                    fflush(stderr);
+                    tail_id = best_cell;
+                } else {
+                    fprintf(stderr, "[MTP-SEQRM] NO checkpoint found — seq_rm FAILED\n");
+                    fflush(stderr);
+                    return false;
+                }
             }
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
-                tail_id = -1;
+                if (p0 == 0) {
+                    tail_id = -1;
+                } else {
+                    // Search for the best remaining cell after removal
+                    int32_t new_tail = -1;
+                    llama_pos max_pos = -1;
+                    for (uint32_t i = 0; i < size; ++i) {
+                        if (cells[i].has_seq_id(seq_id) && cells[i].pos < p0) {
+                            if (cells[i].pos > max_pos) {
+                                max_pos = cells[i].pos;
+                                new_tail = i;
+                            }
+                        }
+                    }
+                    tail_id = new_tail;
+                }
             }
         }
     } else {
@@ -184,6 +228,11 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             if (seq_id < 0) {
                 cells[i].seq_id.clear();
             } else if (cells[i].has_seq_id(seq_id)) {
+                if (p0 > 0 && p1 == std::numeric_limits<llama_pos>::max()) {
+                    // partial removal: just move the position back
+                    cells[i].pos = p0 - 1;
+                    continue;
+                }
                 cells[i].seq_id.erase(seq_id);
             } else {
                 continue;
@@ -224,25 +273,42 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
     }
 
     if ((uint32_t) seq_id_dst < size && (uint32_t) seq_id_src < size) {
-        auto & tail_src = cells[seq_id_src];
-        auto & tail_dst = cells[seq_id_dst];
-        if (tail_dst.tail >= 0) {
+        auto & tail_src_meta = cells[seq_id_src];
+        auto & tail_dst_meta = cells[seq_id_dst];
+
+        if (tail_dst_meta.tail >= 0) {
             // clear destination seq_id if it wasn't empty
-            auto & cell_dst = cells[tail_dst.tail];
-
-            cell_dst.seq_id.erase(seq_id_dst);
-            tail_dst.tail = -1;
-            if (cell_dst.seq_id.empty()) {
-                cell_dst.pos = -1;
-                cell_dst.src = -1;
-                used -= 1;
-            }
+            seq_rm(seq_id_dst, -1, -1);
         }
-        if (tail_src.tail >= 0) {
-            auto & cell_src = cells[tail_src.tail];
 
-            cell_src.seq_id.insert(seq_id_dst);
-            tail_dst.tail = tail_src.tail;
+        if (tail_src_meta.tail >= 0) {
+            auto & cell_src = cells[tail_src_meta.tail];
+
+            // For recurrent models, we must copy the state to a new cell
+            // Otherwise, both sequences would share the same mutable state
+            uint32_t next_empty_cell = size;
+            for (uint32_t i = head; i < head + size; ++i) {
+                uint32_t idx = i % size;
+                if (cells[idx].is_empty()) {
+                    next_empty_cell = idx;
+                    break;
+                }
+            }
+
+            if (next_empty_cell != size) {
+                auto & empty_cell = cells[next_empty_cell];
+                
+                // Copy tensors data
+                copy_cell(tail_src_meta.tail, next_empty_cell);
+
+                empty_cell.pos = cell_src.pos;
+                empty_cell.src = next_empty_cell; // results in a copy in the graph if needed
+                empty_cell.seq_id.insert(seq_id_dst);
+                tail_dst_meta.tail = next_empty_cell;
+                used += 1;
+            } else {
+                LLAMA_LOG_ERROR("%s: failed to find available cell for copy\n", __func__);
+            }
         }
     }
 }
@@ -367,6 +433,61 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
+void llama_memory_recurrent::copy_cell(int32_t i_src, int32_t i_dst) {
+    if (i_src == i_dst || i_src < 0 || i_dst < 0) {
+        return;
+    }
+
+    fprintf(stderr, "[MTP-COPYCELL] copy_cell(%d -> %d), n_layer=%d\n", i_src, i_dst, (int)hparams.n_layer);
+    fflush(stderr);
+
+    // Copy recurrent state via GPU-to-GPU (ggml_backend_tensor_copy).
+    // Views created with no_alloc=true have buffer=NULL. We must set
+    // the buffer to the parent tensor's buffer for the copy to work.
+    ggml_init_params params = {
+        /*.mem_size   =*/ size_t(2*ggml_tensor_overhead()),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        if (r_l[il]) {
+            ggml_context * ctx = ggml_init(params);
+            // Tensor is 1D: ne[0] = n_embd_r * size. Each cell = ne[0]/size elements.
+            // ggml_view_1d takes ELEMENT count, not byte count!
+            int64_t cell_elements = r_l[il]->ne[0] / size;
+            size_t  cell_bytes    = ggml_row_size(r_l[il]->type, cell_elements);
+            ggml_tensor * src_v = ggml_view_1d(ctx, r_l[il], cell_elements, (size_t)i_src * cell_bytes);
+            ggml_tensor * dst_v = ggml_view_1d(ctx, r_l[il], cell_elements, (size_t)i_dst * cell_bytes);
+            src_v->buffer = r_l[il]->buffer;
+            dst_v->buffer = r_l[il]->buffer;
+            ggml_backend_tensor_copy(src_v, dst_v);
+            ggml_free(ctx);
+        }
+        if (s_l[il]) {
+            ggml_context * ctx = ggml_init(params);
+            int64_t cell_elements = s_l[il]->ne[0] / size;
+            size_t  cell_bytes    = ggml_row_size(s_l[il]->type, cell_elements);
+            ggml_tensor * src_v = ggml_view_1d(ctx, s_l[il], cell_elements, (size_t)i_src * cell_bytes);
+            ggml_tensor * dst_v = ggml_view_1d(ctx, s_l[il], cell_elements, (size_t)i_dst * cell_bytes);
+            src_v->buffer = s_l[il]->buffer;
+            dst_v->buffer = s_l[il]->buffer;
+            ggml_backend_tensor_copy(src_v, dst_v);
+            ggml_free(ctx);
+        }
+    }
+}
+
+int llama_memory_recurrent::get_cell_count(llama_seq_id seq_id) const {
+    int count = 0;
+    for (uint32_t i = 0; i < size; ++i) {
+        if (cells[i].has_seq_id(seq_id)) {
+            count++;
+        }
+    }
+    return count;
+}
+
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const auto & [_, buf] : ctxs_bufs) {
@@ -452,6 +573,10 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
 bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
     const uint32_t n_seqs       = ubatch.n_seqs;
+
+    fprintf(stderr, "[MTP-FINDSLOT] find_slot: n_seq_tokens=%d, n_seqs=%d, size=%d, used=%d, head=%d\n",
+            (int)n_seq_tokens, (int)n_seqs, (int)size, (int)used, (int)head);
+    fflush(stderr);
 
     // if we have enough unused cells before the current head ->
     //   better to start searching from the beginning of the cache, hoping to fill it
@@ -551,10 +676,35 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
             if (seq_meta.tail >= 0) {
                 auto & orig_cell = cells[seq_meta.tail];
                 empty_cell.pos = orig_cell.pos;
-                empty_cell.src = orig_cell.src;
-                orig_cell.seq_id.erase(seq_id);
+                empty_cell.src = seq_meta.tail; // the data should be copied from the previous tail
+
+                // Copy state data
+                copy_cell(seq_meta.tail, next_empty_cell);
+
+                // Keep history of previous states for rollback (up to 8 cells per sequence)
+                if (get_cell_count(seq_id) < 8 && used < size * 0.9) {
+                    // Do not erase seq_id from orig_cell to keep it as a checkpoint
+                } else {
+                    // Erase oldest history point for this sequence
+                    int32_t oldest_cell = -1;
+                    llama_pos min_pos = std::numeric_limits<llama_pos>::max();
+                    for (uint32_t i = 0; i < size; ++i) {
+                        if (cells[i].has_seq_id(seq_id) && cells[i].pos < min_pos) {
+                            min_pos = cells[i].pos;
+                            oldest_cell = i;
+                        }
+                    }
+
+                    if (oldest_cell >= 0) {
+                        cells[oldest_cell].seq_id.erase(seq_id);
+                        if (cells[oldest_cell].is_empty()) {
+                            cells[oldest_cell].pos = -1;
+                            cells[oldest_cell].src = -1;
+                            used--;
+                        }
+                    }
+                }
                 empty_cell.seq_id.insert(seq_id); // will be overwritten
-                GGML_ASSERT(!orig_cell.is_empty()); // has at least one remaining seq_id
             }
             seq_meta.tail = next_empty_cell;
             // find next empty cell
@@ -566,6 +716,12 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
                     if (cell.is_empty()) { break; }
                 }
             }
+        } else {
+            // Sequence owns its cell — no checkpoint for MTP.
+            // For hybrid models with MTP, checkpointing is too expensive (GPU copy
+            // of all 33 recurrent layers every step). Instead, we let the recurrent
+            // state accumulate draft tokens on rejection. The 9 attention layers
+            // handle rollback via KV cache seq_rm, which partially compensates.
         }
         if (min > seq_meta.tail) { min = seq_meta.tail; }
         if (max < seq_meta.tail) { max = seq_meta.tail; }
