@@ -1,5 +1,6 @@
 #include "server-task.h"
 
+#include "server-chat.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"

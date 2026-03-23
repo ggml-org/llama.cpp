@@ -395,6 +395,26 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
     return render_message_to_json(msgs, c);
 }
 
+json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
+    if (tools.empty()) {
+        return json();
+    }
+
+    auto result = json::array();
+    for (const auto & tool : tools) {
+        result.push_back({
+            { "type",     "function" },
+            { "function",
+             {
+                  { "name", tool.name },
+                  { "description", tool.description },
+                  { "parameters", json::parse(tool.parameters) },
+              }                      },
+        });
+    }
+    return result;
+}
+
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
@@ -428,56 +448,6 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     }
 
     return result;
-}
-
-json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
-    if (tools.empty()) {
-        return json();
-    }
-
-    auto result = json::array();
-    for (const auto & tool : tools) {
-        result.push_back({
-            { "type",     "function" },
-            { "function",
-             {
-                  { "name", tool.name },
-                  { "description", tool.description },
-                  { "parameters", json::parse(tool.parameters) },
-              }                      },
-        });
-    }
-    return result;
-}
-
-json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
-    json delta = json::object();
-    if (!diff.reasoning_content_delta.empty()) {
-        delta["reasoning_content"] = diff.reasoning_content_delta;
-    }
-    if (!diff.content_delta.empty()) {
-        delta["content"] = diff.content_delta;
-    }
-    if (diff.tool_call_index != std::string::npos) {
-        json tool_call;
-        tool_call["index"] = diff.tool_call_index;
-        if (!diff.tool_call_delta.id.empty()) {
-            tool_call["id"]   = diff.tool_call_delta.id;
-            tool_call["type"] = "function";
-        }
-        if (!diff.tool_call_delta.name.empty() || !diff.tool_call_delta.arguments.empty()) {
-            json function = json::object();
-            if (!diff.tool_call_delta.name.empty()) {
-                function["name"] = diff.tool_call_delta.name;
-            }
-            if (!diff.tool_call_delta.arguments.empty()) {
-                function["arguments"] = diff.tool_call_delta.arguments;
-            }
-            tool_call["function"] = function;
-        }
-        delta["tool_calls"] = json::array({ tool_call });
-    }
-    return delta;
 }
 
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
