@@ -66,6 +66,7 @@ add_library(llama
             models/exaone-moe.cpp
             models/exaone.cpp
             models/exaone4.cpp
+            models/f2llmv2.cpp
             models/falcon-h1.cpp
             models/falcon.cpp
             models/gemma-embedding.cpp
