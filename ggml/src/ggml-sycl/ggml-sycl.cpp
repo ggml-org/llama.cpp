@@ -1162,6 +1162,7 @@ static void moe_prestage_popular_experts() {
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
                   "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
                   prestaged, skipped, down_deferred, n_layers, avail);
+    ggml_sycl_watchdog_heartbeat();
 
     // Phase 2: Fill secondary GPUs with the NEXT TIER of popular experts.
     // Uses the same global priority list from Phase 1 (sorted by popularity
@@ -1506,6 +1507,7 @@ static void moe_prestage_popular_experts() {
             }
         }
     }
+    ggml_sycl_watchdog_heartbeat();
 }
 
 // ---------------------------------------------------------------------------
@@ -9731,6 +9733,7 @@ static void ggml_sycl_preload_model_weights() {
             } catch (const sycl::exception & e) {
                 GGML_LOG_ERROR("[S1-PRELOAD] queue.wait() failed: %s\n", e.what());
             }
+            ggml_sycl_watchdog_heartbeat();
 
             // Mark all IN_PROGRESS entries as READY now that DMA is complete
             cache->finalize_pending_fills();
@@ -44784,6 +44787,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                             n_secondary_ops, elapsed_ms);
 
             record_completion(true);
+            ggml_sycl_watchdog_heartbeat();
             return GGML_STATUS_SUCCESS;
         }
 
@@ -44880,6 +44884,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         record_completion(true);
+        ggml_sycl_watchdog_heartbeat();
         return GGML_STATUS_SUCCESS;
     }
 normal_dispatch:
@@ -45592,6 +45597,7 @@ normal_dispatch:
     suffix_guard.dispatch_suffix();
 
     record_completion(graph_executed);
+    ggml_sycl_watchdog_heartbeat();
     return GGML_STATUS_SUCCESS;
 }
 
@@ -46433,6 +46439,7 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     }
 
     ggml_check_sycl();
+    ggml_sycl_watchdog_start();
     check_allow_gpu_index(device);
     ggml_backend_sycl_context * ctx = new ggml_backend_sycl_context(device);
     if (ctx == nullptr) {

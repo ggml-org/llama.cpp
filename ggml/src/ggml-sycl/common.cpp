@@ -473,10 +473,74 @@ static void ggml_sycl_cleanup_host_allocations() {
 
 static void ggml_sycl_signal_handler(int sig) {
     // Minimal work in signal handler — just call cleanup and re-raise
+    ggml_sycl_watchdog_stop();
     ggml_sycl_cleanup_host_allocations();
     // Re-raise the signal with default handler to get proper exit code
     signal(sig, SIG_DFL);
     raise(sig);
+}
+
+// ============================================================================
+// Watchdog thread: detects stuck L0 driver calls and forces cleanup + exit.
+// When inference hangs in the Level Zero driver (deadlock, stalled queue),
+// kill -9 is normally needed but leaves stale GPU state requiring reboot.
+// The watchdog detects no-progress conditions and calls _Exit() after
+// freeing host allocations, providing a graceful abort with cleanup.
+//
+// Usage: call ggml_sycl_watchdog_heartbeat() at inference progress points
+// (atomic increment, ~1ns overhead).  If no heartbeat for TIMEOUT seconds,
+// the watchdog fires cleanup + _Exit(1).
+//
+// Controlled by GGML_SYCL_WATCHDOG_TIMEOUT (seconds, default 60, 0 disables).
+// ============================================================================
+
+static std::atomic<uint64_t> g_watchdog_heartbeat{0};
+static std::atomic<bool>     g_watchdog_active{false};
+static std::thread           g_watchdog_thread;
+
+void ggml_sycl_watchdog_heartbeat() {
+    g_watchdog_heartbeat.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void watchdog_thread_fn(int timeout_sec) {
+    while (g_watchdog_active.load(std::memory_order_acquire)) {
+        uint64_t before = g_watchdog_heartbeat.load(std::memory_order_relaxed);
+        // Sleep in 1-second intervals to check shutdown flag
+        for (int i = 0; i < timeout_sec && g_watchdog_active.load(std::memory_order_acquire); i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (!g_watchdog_active.load(std::memory_order_acquire)) break;
+        uint64_t after = g_watchdog_heartbeat.load(std::memory_order_relaxed);
+        if (before == after) {
+            fprintf(stderr, "[SYCL-WATCHDOG] No progress for %d seconds — forcing cleanup and exit\n", timeout_sec);
+            fflush(stderr);
+            // Call cleanup to free host allocations and prevent GPU driver lockup
+            ggml_sycl_cleanup_host_allocations();
+            // _Exit bypasses atexit/destructors which might deadlock on stuck threads
+            std::_Exit(1);
+        }
+    }
+}
+
+void ggml_sycl_watchdog_start() {
+    static bool started = false;
+    if (started) return;
+    const char * env = std::getenv("GGML_SYCL_WATCHDOG_TIMEOUT");
+    int timeout = env ? std::atoi(env) : 60;
+    if (timeout <= 0) {
+        GGML_LOG_INFO("[SYCL] Watchdog disabled (GGML_SYCL_WATCHDOG_TIMEOUT=%d)\n", timeout);
+        started = true;
+        return;
+    }
+    GGML_LOG_INFO("[SYCL] Watchdog started (timeout=%ds, set GGML_SYCL_WATCHDOG_TIMEOUT=0 to disable)\n", timeout);
+    g_watchdog_active.store(true, std::memory_order_release);
+    g_watchdog_thread = std::thread(watchdog_thread_fn, timeout);
+    g_watchdog_thread.detach();  // Don't join — might deadlock if main thread is stuck
+    started = true;
+}
+
+void ggml_sycl_watchdog_stop() {
+    g_watchdog_active.store(false, std::memory_order_release);
 }
 
 void * ggml_sycl_host_malloc(size_t size) try {
