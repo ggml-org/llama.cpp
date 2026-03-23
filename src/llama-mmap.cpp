@@ -283,7 +283,9 @@ struct llama_mmap::impl {
             LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
                     strerror(errno));
         }
-        if (prefetch) { flags |= MAP_POPULATE; }
+        // Note: MAP_POPULATE removed — it synchronously faults all pages, blocking mmap()
+        // for 38+ seconds on large (60GB+) models. Async readahead via madvise() below
+        // achieves the same prefetching without blocking the caller.
 #endif
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
@@ -291,6 +293,21 @@ struct llama_mmap::impl {
         }
 
 #ifdef __linux__
+        // Async readahead: trigger kernel page cache population without blocking.
+        // MADV_SEQUENTIAL optimizes VM for sequential access (aggressive readahead,
+        // early page reclaim). MADV_WILLNEED initiates async read of pages into cache.
+        // Together they eliminate on-demand page faults during tensor data access.
+        if (prefetch && !numa) {
+            if (madvise(addr, file->size(), MADV_SEQUENTIAL)) {
+                LLAMA_LOG_WARN("warning: madvise(MADV_SEQUENTIAL) failed: %s\n",
+                        strerror(errno));
+            }
+            if (madvise(addr, file->size(), MADV_WILLNEED)) {
+                LLAMA_LOG_WARN("warning: madvise(MADV_WILLNEED) failed: %s\n",
+                        strerror(errno));
+            }
+        }
+
         // Request transparent huge pages to reduce TLB pressure for large model files.
         // With 2MB pages, a 3.9GB model needs ~2000 pages (fits in L2 TLB) vs ~1M 4KB pages.
         // Requires THP in "madvise" or "always" mode. Returns EINVAL when THP is "never".
