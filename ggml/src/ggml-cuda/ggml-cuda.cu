@@ -1296,6 +1296,8 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const bool supports_bf16 = GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
+    const ggml_tensor * nvfp4_t_s_tensor = src0->type == GGML_TYPE_NVFP4 ? ggml_mul_mat_get_scale(dst) : nullptr;
+    const float * nvfp4_t_s = nvfp4_t_s_tensor ? (const float *) nvfp4_t_s_tensor->data : nullptr;
 
     const bool use_fp16 = (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT;
 
@@ -1337,8 +1339,16 @@ static void ggml_cuda_op_mul_mat_cublas(
             src0_as_f16.alloc(ne);
             to_fp16_cuda(src0_dd_i, src0_as_f16.get(), ne, stream);
         }
-        const half * src0_ptr = src0->type == GGML_TYPE_F16 ? (const half *) src0_dd_i : src0_as_f16.get();
+        half * src0_ptr_mut = src0->type == GGML_TYPE_F16 ? nullptr : src0_as_f16.get();
+        const half * src0_ptr = src0->type == GGML_TYPE_F16 ? (const half *) src0_dd_i : src0_ptr_mut;
 
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        
+        if (nvfp4_t_s && src0_ptr_mut) {
+            CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(id), CUBLAS_POINTER_MODE_DEVICE));
+            CUBLAS_CHECK(cublasScalEx(ctx.cublas_handle(id), row_diff*ne00, nvfp4_t_s, CUDA_R_32F, src0_ptr_mut, CUDA_R_16F, 1, CUDA_R_32F));
+            CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(id), CUBLAS_POINTER_MODE_HOST));
+        }
         ggml_cuda_pool_alloc<half> src1_as_f16(ctx.pool(id));
         if (src1->type != GGML_TYPE_F16) {
             const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(src1->type);
@@ -1403,8 +1413,15 @@ static void ggml_cuda_op_mul_mat_cublas(
             to_fp32_cuda(src1_ddf_i, src1_ddq_as_f32.get(), src1_ncols*ne10, stream);
         }
 
+        float * src0_ddf_mut = src0->type == GGML_TYPE_F32 ? nullptr : src0_ddq_as_f32.get();
         const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd_i : src0_ddq_as_f32.get();
         const float * src1_ddf1_i = src1->type == GGML_TYPE_F32 ? (const float *) src1_ddf_i : src1_ddq_as_f32.get();
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        if (nvfp4_t_s) {
+            CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(id), CUBLAS_POINTER_MODE_DEVICE));
+            CUBLAS_CHECK(cublasSscal(ctx.cublas_handle(id), row_diff*ne00, nvfp4_t_s, src0_ddf_mut, 1));
+            CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(id), CUBLAS_POINTER_MODE_HOST));
+        }
 
         const float alpha = 1.0f;
         const float beta = 0.0f;
@@ -1768,7 +1785,18 @@ static void ggml_cuda_op_mul_mat(
                 }
 
                 // do the computation
-                op(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
+                ggml_tensor dst_op, nvfp4_t_s;
+                ggml_tensor * dst_cur = dst;
+                
+                if (src0->type == GGML_TYPE_NVFP4 && op == ggml_cuda_op_mul_mat_cublas)
+                    if (const ggml_tensor * scale = ggml_mul_mat_get_scale(dst); scale && scale->ne[0] > 1) {
+                        dst_op = *dst;
+                        nvfp4_t_s = *scale;
+                        nvfp4_t_s.data = (char *) nvfp4_t_s.data + (i02 / i02_divisor) * nvfp4_t_s.nb[0];
+                        dst_op.src[2] = &nvfp4_t_s;
+                        dst_cur = &dst_op;
+                    }
+                op(ctx, src0, src1, dst_cur, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
                     dev[id].row_low, dev[id].row_high, src1_ncols, src1_padded_col_size, stream);
                 CUDA_CHECK(cudaGetLastError());
 
@@ -2137,7 +2165,8 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
         return false;
     }
 
-    if (ffn_up->src[2] && (ffn_up->src[2] != ffn_gate->src[2])) {
+    const ggml_tensor * up_scale = ffn_up->op == GGML_OP_MUL_MAT_ID ? ggml_mul_mat_id_get_scale(ffn_up) : ggml_mul_mat_get_scale(ffn_up);
+    if (up_scale && (up_scale != (ffn_gate->op == GGML_OP_MUL_MAT_ID ? ggml_mul_mat_id_get_scale(ffn_gate) : ggml_mul_mat_get_scale(ffn_gate)))) {
         return false;
     }
 
@@ -2281,6 +2310,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
     }
 
+    // temporarily block MMQ for NVFP4
+    if (src0->type == GGML_TYPE_NVFP4) {
+        use_mul_mat_q = false;
+    }
+
     // debug helpers
     //printf("src0: %8d %8d %8d %8d\n", src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
     //printf("      %8d %8d %8d %8d\n", src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
@@ -2349,8 +2383,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 }
             }
         }
-
-        if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
+        // this is temporary to block the MMQ path
+        if (src0->type != GGML_TYPE_NVFP4 && ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
         }
@@ -2453,6 +2487,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         ggml_tensor dst_slice;
         memset(&dst_slice, 0, sizeof(dst_slice));
         dst_slice.buffer = dst->buffer;
+        dst_slice.op     = GGML_OP_MUL_MAT;
         dst_slice.type   = type_dst_sorted;
         dst_slice.ne[0]  = ne0;
         dst_slice.ne[1]  = tokens_per_expert[i02];
@@ -2463,6 +2498,24 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[2]  = dst_slice.ne[1] * dst_slice.nb[1];
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
         dst_slice.data   = dst_data_cur;
+
+        if (src0->type == GGML_TYPE_NVFP4) {
+            const ggml_tensor * nvfp4_t_s_tensor = ggml_mul_mat_id_get_scale(dst);
+            if (nvfp4_t_s_tensor) {
+                ggml_tensor nvfp4_t_s = *nvfp4_t_s_tensor;
+                const int64_t nvfp4_t_s_ne = nvfp4_t_s.ne[0];
+                for (int i = 0; i < 4; ++i) {
+                    nvfp4_t_s.ne[i] = 1;
+                }
+                nvfp4_t_s.nb[1] = nvfp4_t_s.ne[0] * nvfp4_t_s.nb[0];
+                nvfp4_t_s.nb[2] = nvfp4_t_s.ne[1] * nvfp4_t_s.nb[1];
+                nvfp4_t_s.nb[3] = nvfp4_t_s.ne[2] * nvfp4_t_s.nb[2];
+                if (nvfp4_t_s_ne > 1) {
+                    nvfp4_t_s.data = (char *) nvfp4_t_s.data + i02 * nvfp4_t_s.nb[0];
+                }
+                ggml_mul_mat_add_scale(&dst_slice, &nvfp4_t_s);
+            }
+        }
 
         ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
         CUDA_CHECK(cudaGetLastError());
@@ -3847,7 +3900,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                             const ggml_tensor * src0 = up_n->src[0];
                             const ggml_tensor * src1 = up_n->src[1];
-                            const ggml_tensor * ids  = up_n->src[2];
+                            const ggml_tensor * ids  = op == GGML_OP_MUL_MAT_ID ? up_n->src[2] : nullptr;
 
                             if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
                                 ggml_cuda_mm_fusion_args_host fusion_data{};
@@ -3867,6 +3920,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                                 fusion_data.gate      = gate_n->src[0];
                                 fusion_data.x_bias    = up_bias_tensor;
                                 fusion_data.gate_bias = gate_bias_tensor;
+                                fusion_data.nvfp4_t_s = src0->type == GGML_TYPE_NVFP4 ? (op == GGML_OP_MUL_MAT_ID ? ggml_mul_mat_id_get_scale(up_n) : ggml_mul_mat_get_scale(up_n)) : nullptr;
                                 fusion_data.glu_op    = ggml_get_glu_op(glu);
 
                                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
@@ -3886,7 +3940,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                             const ggml_tensor * src0 = up->src[0];
                             const ggml_tensor * src1 = up->src[1];
-                            const ggml_tensor * ids  = up->src[2];
+                            const ggml_tensor * ids  = op == GGML_OP_MUL_MAT_ID ? up->src[2] : nullptr;
 
                             if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
                                 ggml_cuda_mm_fusion_args_host fusion_data{};
@@ -3902,6 +3956,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                             if (ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
                                 ggml_cuda_mm_fusion_args_host fusion_data{};
                                 fusion_data.gate   = gate->src[0];
+                                fusion_data.nvfp4_t_s = src0->type == GGML_TYPE_NVFP4 ? (op == GGML_OP_MUL_MAT_ID ? ggml_mul_mat_id_get_scale(up) : ggml_mul_mat_get_scale(up)) : nullptr;
                                 fusion_data.glu_op = ggml_get_glu_op(glu);
 
                                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
@@ -3948,7 +4003,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                         const ggml_tensor * src0 = mm_node->src[0];
                         const ggml_tensor * src1 = mm_node->src[1];
-                        const ggml_tensor * ids  = mm_node->src[2];
+                        const ggml_tensor * ids  = mm_node->op == GGML_OP_MUL_MAT_ID ? mm_node->src[2] : nullptr;
 
                         if (bias_op == GGML_OP_ADD_ID && bias_node->src[2] != ids) {
                             continue;
@@ -3960,6 +4015,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                         ggml_cuda_mm_fusion_args_host fusion_data{};
                         fusion_data.x_bias = bias_tensor;
+                        fusion_data.nvfp4_t_s = src0->type == GGML_TYPE_NVFP4 ? (mm_node->op == GGML_OP_MUL_MAT_ID ? ggml_mul_mat_id_get_scale(mm_node) : ggml_mul_mat_get_scale(mm_node)) : nullptr;
 
                         if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
                             ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);

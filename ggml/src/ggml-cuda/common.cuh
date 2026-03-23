@@ -1417,11 +1417,14 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * x_bias = nullptr;
     const ggml_tensor * gate = nullptr;
     const ggml_tensor * gate_bias = nullptr;
+    const ggml_tensor * nvfp4_t_s = nullptr;
     ggml_glu_op glu_op;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
     const void * gate = nullptr;
     const void * gate_bias = nullptr;
+    const void * nvfp4_t_s = nullptr;
+    int32_t nvfp4_t_s_ne = 0;
     ggml_glu_op glu_op;
 };
