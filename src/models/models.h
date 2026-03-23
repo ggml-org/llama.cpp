@@ -142,6 +142,10 @@ struct llm_build_bailingmoe : public llm_graph_context {
     llm_build_bailingmoe(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_sarvam_moe : public llm_graph_context {
+    llm_build_sarvam_moe(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_bert : public llm_graph_context {
     llm_build_bert(const llama_model & model, const llm_graph_params & params);
 };
