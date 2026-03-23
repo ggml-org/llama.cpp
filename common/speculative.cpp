@@ -1351,6 +1351,13 @@ struct common_speculative_session::impl {
                     static const bool skip_seqrm = (getenv("LLAMA_SKIP_SEQRM_AFTER_CKPT") != nullptr);
                     if (skip_seqrm) {
                         LOG_WRN("%s: SKIPPING memory_seq_rm after checkpoint restore (debug toggle)\n", __func__);
+
+                        // write to file for retrieval when logs are not visible
+                        static FILE * skip_log = fopen("/tmp/seqrm-skips.log", "a");
+                        if (skip_log) {
+                            fprintf(skip_log, "SKIPPED seq_rm at pos_max=%d\n", ckpt_res.pos_max);
+                            fflush(skip_log);
+                        }
                     } else {
                         callback.memory_seq_rm(ckpt_res.pos_max + 1, -1);
                     }

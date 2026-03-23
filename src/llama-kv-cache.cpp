@@ -996,6 +996,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
                         if (cells.pos_get(j) == new_pos && cells.seq_has(j, new_seq_id)) {
                             LLAMA_LOG_WARN("%s: DUPLICATE KV cell: cell %u and cell %u both have (seq_id=%d, pos=%d)\n",
                                            __func__, j, new_idx, new_seq_id, new_pos);
+
+                            // also write to file for retrieval when logs are not visible
+                            static FILE * dup_log = fopen("/tmp/kv-duplicates.log", "a");
+                            if (dup_log) {
+                                fprintf(dup_log, "DUPLICATE: cell %u and cell %u both have (seq_id=%d, pos=%d)\n", j,
+                                        new_idx, new_seq_id, new_pos);
+                                fflush(dup_log);
+                            }
                         }
                     }
                 }
