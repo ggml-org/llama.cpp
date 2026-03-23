@@ -85,10 +85,10 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     const auto & stateful = r_ctx->stateful;
     static auto is_static = false;
 
-    bool model_is_splitted = is_model_splitted(cgraph);
-
-    if (is_naive(cgraph) && !model_is_splitted) {
-        return naive_compute(cgraph, core, device, config);
+    if (is_naive(cgraph)) {
+        if (!is_model_splitted(cgraph)) {
+            return naive_compute(cgraph, core, device, config);
+        }
     }
 
     auto start_time = ggml_time_us();
@@ -191,6 +191,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 r_ctx->infer_request_cache.erase(key);
             }
+            bool model_is_splitted = is_model_splitted(cgraph);
 
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
