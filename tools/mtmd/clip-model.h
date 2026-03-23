@@ -42,6 +42,9 @@ struct clip_hparams {
     int32_t image_max_pixels = -1;
     int32_t n_merge = 0; // number of patch merges **per-side**
 
+    int32_t preproc_min_tiles = 0;
+    int32_t preproc_max_tiles = 0;
+
     float image_mean[3];
     float image_std[3];
 
