@@ -1679,6 +1679,221 @@ static void moe_periodic_rerank() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Adaptive expert prestage: background thread that promotes hot CPU-resident
+// experts to VRAM based on runtime routing frequency.  Gated by env var
+// GGML_SYCL_ADAPTIVE_PRESTAGE=1 (off by default).
+//
+// Unlike periodic re-ranking (which updates popularity ranks and re-runs the
+// full moe_prestage_popular_experts on the inference thread), adaptive prestage
+// runs on a BACKGROUND thread and only promotes individual experts that cross a
+// hit-count threshold while the inference thread is free to continue.
+// ---------------------------------------------------------------------------
+struct adaptive_prestage_state {
+    std::atomic<bool>       enabled{false};
+    std::atomic<bool>       shutdown{false};
+    std::atomic<int>        token_count{0};
+    int                     check_interval  = 10;    // tokens between checks
+    uint32_t                hit_threshold   = 3;     // min hits to trigger promotion
+    std::thread             worker_thread;
+    std::mutex              wake_mutex;
+    std::condition_variable wake_cv;
+
+    // Snapshot of epoch counts -- the background thread reads these to decide
+    // which experts to promote.
+    struct promotion_candidate {
+        int      seq_layer;      // sequential layer index
+        int      hash_layer_id;  // hash-based layer_id for cache/placement table
+        int      expert_id;
+        uint32_t hit_count;
+    };
+    std::mutex                       candidates_mutex;
+    std::vector<promotion_candidate> pending_candidates;
+
+    void init() {
+        const char * env = getenv("GGML_SYCL_ADAPTIVE_PRESTAGE");
+        if (!env || std::atoi(env) != 1) return;
+
+        const char * interval_env = getenv("GGML_SYCL_ADAPTIVE_PRESTAGE_INTERVAL");
+        if (interval_env) check_interval = std::max(1, std::atoi(interval_env));
+
+        const char * threshold_env = getenv("GGML_SYCL_ADAPTIVE_PRESTAGE_THRESHOLD");
+        if (threshold_env) hit_threshold = static_cast<uint32_t>(std::max(1, std::atoi(threshold_env)));
+
+        enabled.store(true, std::memory_order_release);
+        shutdown.store(false, std::memory_order_release);
+
+        worker_thread = std::thread([this]() { worker_loop(); });
+
+        GGML_LOG_INFO("[ADAPTIVE-PRESTAGE] Enabled: check every %d tokens, "
+                      "promote threshold=%u hits\\n",
+                      check_interval, hit_threshold);
+    }
+
+    void stop() {
+        if (!enabled.load(std::memory_order_acquire)) return;
+        shutdown.store(true, std::memory_order_release);
+        wake_cv.notify_all();
+        if (worker_thread.joinable()) {
+            worker_thread.join();
+        }
+        enabled.store(false, std::memory_order_release);
+    }
+
+    // Called from inference thread after expert recording.
+    // Lightweight: just increments a counter and occasionally signals the worker.
+    void tick() {
+        if (!enabled.load(std::memory_order_acquire)) return;
+        int t = token_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (t % check_interval != 0) return;
+
+        // Build candidate list from current epoch counts
+        scan_candidates();
+
+        // Signal the background worker
+        wake_cv.notify_one();
+    }
+
+private:
+    void scan_candidates() {
+        auto & ptable = ggml_sycl::get_expert_placement_table();
+        if (!ptable.is_initialized()) return;
+
+        const int nl = g_moe_warmup.n_layers;
+        const int ne = g_moe_warmup.n_experts;
+        if (nl <= 0 || ne <= 0) return;
+
+        // Build reverse map: sequential layer index -> hash-based layer_id
+        std::unordered_map<int, int> seq_to_hash;
+        for (const auto & [hash_id, seq_id] : g_moe_layer_seq[0]) {
+            seq_to_hash[seq_id] = hash_id;
+        }
+
+        std::vector<promotion_candidate> candidates;
+
+        for (int l = 0; l < nl; l++) {
+            auto it = seq_to_hash.find(l);
+            if (it == seq_to_hash.end()) continue;
+            int hash_layer_id = it->second;
+
+            for (int e = 0; e < ne; e++) {
+                uint32_t count = g_moe_warmup.epoch_counts[l][e].load(
+                    std::memory_order_relaxed);
+                if (count < hit_threshold) continue;
+
+                // Check if expert is already in VRAM (device_ptr != nullptr)
+                auto placement = ptable.get(hash_layer_id, e);
+                if (placement.device_ptr != nullptr) continue;
+
+                // CPU-resident expert with high hit count -- candidate for promotion
+                candidates.push_back({ l, hash_layer_id, e, count });
+            }
+        }
+
+        if (!candidates.empty()) {
+            // Sort by hit count descending so hottest experts are promoted first
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const promotion_candidate & a, const promotion_candidate & b) {
+                          return a.hit_count > b.hit_count;
+                      });
+
+            std::lock_guard<std::mutex> lock(candidates_mutex);
+            pending_candidates = std::move(candidates);
+        }
+    }
+
+    void worker_loop() {
+        while (!shutdown.load(std::memory_order_acquire)) {
+            // Wait for signal from inference thread
+            {
+                std::unique_lock<std::mutex> lock(wake_mutex);
+                wake_cv.wait_for(lock, std::chrono::milliseconds(500), [this]() {
+                    return shutdown.load(std::memory_order_acquire) ||
+                           !pending_candidates_empty();
+                });
+            }
+
+            if (shutdown.load(std::memory_order_acquire)) break;
+
+            // Grab candidates
+            std::vector<promotion_candidate> work;
+            {
+                std::lock_guard<std::mutex> lock(candidates_mutex);
+                work.swap(pending_candidates);
+            }
+
+            if (work.empty()) continue;
+
+            // Check VRAM budget before promoting
+            size_t vram_avail = ggml_sycl::unified_cache_available_for_compute(0);
+            if (vram_avail == 0) continue;
+
+            // Estimate per-expert size from metadata
+            size_t expert_bytes = 0;
+            {
+                std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
+                if (!g_moe_expert_meta.empty()) {
+                    expert_bytes = g_moe_expert_meta[0].bytes;
+                }
+            }
+            if (expert_bytes == 0) continue;
+
+            int promoted = 0;
+            int skipped  = 0;
+
+            for (const auto & c : work) {
+                // Re-check VRAM budget -- stop if exhausted
+                vram_avail = ggml_sycl::unified_cache_available_for_compute(0);
+                if (vram_avail < expert_bytes) {
+                    skipped += static_cast<int>(work.size()) - promoted - skipped;
+                    break;
+                }
+
+                // Re-check placement -- another thread may have promoted it
+                auto & ptable_chk = ggml_sycl::get_expert_placement_table();
+                auto   placement = ptable_chk.get(c.hash_layer_id, c.expert_id);
+                if (placement.device_ptr != nullptr) {
+                    skipped++;
+                    continue;
+                }
+
+                // Use the existing SOA caching infrastructure for promotion.
+                // moe_expert_ensure_soa_cached handles: metadata lookup, cache key,
+                // SOA reorder, ensure_cached_layout, and placement table update.
+                void * result = ggml_sycl::moe_expert_ensure_soa_cached(
+                    c.hash_layer_id, c.expert_id, /*device_id=*/0);
+
+                if (result) {
+                    promoted++;
+                    GGML_SYCL_DEBUG("[ADAPTIVE-PRESTAGE] Promoted expert L%d/E%d "
+                                    "to VRAM (hits=%u)\\n",
+                                    c.seq_layer, c.expert_id, c.hit_count);
+                } else {
+                    skipped++;
+                }
+
+                if (shutdown.load(std::memory_order_acquire)) break;
+            }
+
+            if (promoted > 0) {
+                GGML_LOG_INFO("[ADAPTIVE-PRESTAGE] Background promotion: %d promoted, "
+                              "%d skipped (VRAM avail=%.1f MB)\\n",
+                              promoted, skipped,
+                              ggml_sycl::unified_cache_available_for_compute(0) /
+                                  (1024.0 * 1024.0));
+            }
+        }
+    }
+
+    bool pending_candidates_empty() {
+        std::lock_guard<std::mutex> lock(candidates_mutex);
+        return pending_candidates.empty();
+    }
+};
+
+static adaptive_prestage_state g_adaptive_prestage;
+
 // Per-secondary-GPU staging buffers (malloc_host, readable from primary GPU).
 // Allocated once during init, sized for max_dispatch_count * max_N floats.
 static float *       g_secondary_staging_buffer[GGML_SYCL_MAX_DEVICES]  = {};
@@ -2122,6 +2337,9 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // Initialize warmup profiling for popularity-aware placement
     g_moe_warmup.init(n_moe_layers, n_experts_per_layer);
 
+    // Initialize adaptive prestage background thread (if enabled via env var)
+    g_adaptive_prestage.init();
+
     // Populate placement table — initially all experts are CPU-only
     for (const auto & info : expert_list) {
         ggml_sycl::ExpertPlacement placement{};
@@ -2192,8 +2410,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     g_secondary_queues[gpu_d] = &dev_d.default_queue();
                     ggml_sycl::unified_cache_register_for_queue(gpu_d, *g_secondary_queues[gpu_d]);
                     n_early_ok++;
+                    GGML_LOG_INFO("[MOE-MULTI-GPU] Device %d registered: %s (dpct_id=%d)\n",
+                                  gpu_d,
+                                  dev_d.get_info<sycl::info::device::name>().c_str(),
+                                  ggml_sycl_info().gpu_dpct_ids[gpu_d]);
+                } catch (const std::exception & e) {
+                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable: %s\n", gpu_d, e.what());
                 } catch (...) {
-                    GGML_SYCL_DEBUG("[MOE-MULTI-GPU] Early init: device %d unavailable\n", gpu_d);
+                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable (unknown error)\n", gpu_d);
                 }
             }
             if (n_early_ok > 0) {
@@ -2201,7 +2425,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 GGML_LOG_INFO("[MOE-MULTI-GPU] Enabled (%s): %d secondary GPUs registered\n",
                               moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=1" : "auto-detected MoE + multi-GPU",
                               n_early_ok);
+            } else {
+                GGML_LOG_WARN("[MOE-MULTI-GPU] No secondary GPUs registered (tried %d devices)\n",
+                              total_gpus - 1);
             }
+        } else if (!multi_gpu_on) {
+            GGML_LOG_INFO("[MOE-MULTI-GPU] Disabled: %s\n",
+                          moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=0"
+                                     : "single GPU detected (use ONEAPI_DEVICE_SELECTOR=\"level_zero:0,1\" for dual GPU)");
         }
     }
 
@@ -30598,22 +30829,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
-                    // Record expert activations for warmup profiling (fusion GATE-first path)
-                    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
-                        int seq_layer_id_fuse = -1;
-                        auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
-                        auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
-                        if (it_fuse != seq_map_fuse.end()) {
-                            seq_layer_id_fuse = it_fuse->second;
-                        }
-                        if (seq_layer_id_fuse >= 0) {
-                            g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
-                            if (g_moe_warmup.tick_token()) {
-                                moe_apply_popularity_placement();
-                                moe_prestage_popular_experts();
-                                g_moe_warmup.enable_reranking();
-                            } else if (g_moe_warmup.tick_epoch()) {
-                                moe_periodic_rerank();
+                    // Record expert activations for warmup + adaptive prestage (fusion GATE-first)
+                    {
+                        const bool in_warmup_g = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
+                        const bool in_rerank_g = g_moe_warmup.reranking_enabled.load(std::memory_order_acquire);
+                        if (in_warmup_g || in_rerank_g) {
+                            int seq_layer_id_fuse = -1;
+                            auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
+                            auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
+                            if (it_fuse != seq_map_fuse.end()) {
+                                seq_layer_id_fuse = it_fuse->second;
+                            }
+                            if (seq_layer_id_fuse >= 0) {
+                                g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
+                                if (g_moe_warmup.tick_token()) {
+                                    moe_apply_popularity_placement();
+                                    moe_prestage_popular_experts();
+                                    g_moe_warmup.enable_reranking();
+                                } else if (g_moe_warmup.tick_epoch()) {
+                                    moe_periodic_rerank();
+                                }
+                                g_adaptive_prestage.tick();
                             }
                         }
                     }
@@ -30991,22 +31227,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_ids_done(); }
 
-                    // Record expert activations for warmup profiling (fusion UP-first path)
-                    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
-                        int seq_layer_id_fuse = -1;
-                        auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
-                        auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
-                        if (it_fuse != seq_map_fuse.end()) {
-                            seq_layer_id_fuse = it_fuse->second;
-                        }
-                        if (seq_layer_id_fuse >= 0) {
-                            g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
-                            if (g_moe_warmup.tick_token()) {
-                                moe_apply_popularity_placement();
-                                moe_prestage_popular_experts();
-                                g_moe_warmup.enable_reranking();
-                            } else if (g_moe_warmup.tick_epoch()) {
-                                moe_periodic_rerank();
+                    // Record expert activations for warmup + adaptive prestage (fusion UP-first)
+                    {
+                        const bool in_warmup_u = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
+                        const bool in_rerank_u = g_moe_warmup.reranking_enabled.load(std::memory_order_acquire);
+                        if (in_warmup_u || in_rerank_u) {
+                            int seq_layer_id_fuse = -1;
+                            auto & seq_map_fuse = g_moe_layer_seq[ctx.device];
+                            auto   it_fuse      = seq_map_fuse.find(cur_layer_hash);
+                            if (it_fuse != seq_map_fuse.end()) {
+                                seq_layer_id_fuse = it_fuse->second;
+                            }
+                            if (seq_layer_id_fuse >= 0) {
+                                g_moe_warmup.record(seq_layer_id_fuse, ids_data_f, static_cast<int>(ids_n_elem));
+                                if (g_moe_warmup.tick_token()) {
+                                    moe_apply_popularity_placement();
+                                    moe_prestage_popular_experts();
+                                    g_moe_warmup.enable_reranking();
+                                } else if (g_moe_warmup.tick_epoch()) {
+                                    moe_periodic_rerank();
+                                }
+                                g_adaptive_prestage.tick();
                             }
                         }
                     }
@@ -31726,7 +31967,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Disable graphs for this op (host sync is incompatible)
             ctx.moe_graphs_disabled_once = true;
 
-            // --- Warmup tracking for expert popularity / pre-staging ---
+            // --- Warmup + adaptive prestage tracking for expert popularity ---
             // Record expert activations so moe_prestage_popular_experts() can
             // promote hot experts to GPU0 VRAM after the warmup period.
             {
@@ -31747,6 +31988,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     } else if (g_moe_warmup.tick_epoch()) {
                         moe_periodic_rerank();
                     }
+                    g_adaptive_prestage.tick();
                 }
             }
 
@@ -32568,22 +32810,29 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     if ((!has_override || override_layout == GGML_LAYOUT_AOS) &&
         ggml_sycl_mul_mat_id_fused(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] Fused ESIMD dispatch successful for type %d\n", src0->type);
-        // Record expert activations for warmup profiling (fused PP path)
-        if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
-            const int cur_layer_hash = moe_cache_layer_id(src0->name);
-            auto &    seq_map        = g_moe_layer_seq[ctx.device];
-            auto      it             = seq_map.find(cur_layer_hash);
-            if (it != seq_map.end()) {
-                int seq_layer_id = it->second;
-                // Copy ids to host for recording
-                std::vector<int32_t> ids_host_fused;
-                if (ggml_sycl_copy_ids_to_host(ctx, ids, ids_host_fused)) {
-                    g_moe_warmup.record(seq_layer_id, ids_host_fused.data(),
-                                        static_cast<int>(ids_host_fused.size()));
-                    if (g_moe_warmup.tick_token()) {
-                        moe_apply_popularity_placement();
-                        moe_prestage_popular_experts();
-                        g_moe_warmup.enable_reranking();
+        // Record expert activations for warmup + adaptive prestage (fused PP path)
+        {
+            const bool in_warmup_e = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
+            const bool in_rerank_e = g_moe_warmup.reranking_enabled.load(std::memory_order_acquire);
+            if (in_warmup_e || in_rerank_e) {
+                const int cur_layer_hash = moe_cache_layer_id(src0->name);
+                auto &    seq_map        = g_moe_layer_seq[ctx.device];
+                auto      it             = seq_map.find(cur_layer_hash);
+                if (it != seq_map.end()) {
+                    int seq_layer_id = it->second;
+                    // Copy ids to host for recording
+                    std::vector<int32_t> ids_host_fused;
+                    if (ggml_sycl_copy_ids_to_host(ctx, ids, ids_host_fused)) {
+                        g_moe_warmup.record(seq_layer_id, ids_host_fused.data(),
+                                            static_cast<int>(ids_host_fused.size()));
+                        if (g_moe_warmup.tick_token()) {
+                            moe_apply_popularity_placement();
+                            moe_prestage_popular_experts();
+                            g_moe_warmup.enable_reranking();
+                        } else if (g_moe_warmup.tick_epoch()) {
+                            moe_periodic_rerank();
+                        }
+                        g_adaptive_prestage.tick();
                     }
                 }
             }
@@ -33445,30 +33694,34 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
-                // Record expert activations for warmup profiling (CPU-TG path)
-                if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)
-                    && seq_layer_id_cputg >= 0) {
-                    int scratch_ids[32];
-                    int n_ids_total = 0;
-                    for (const auto & e : gpu_entries) {
-                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
-                    }
-                    for (int d = 1; d < n_gpu_devs; d++) {
-                        for (const auto & e : per_gpu_entries[d]) {
+                // Record expert activations for warmup + adaptive prestage (CPU-TG path)
+                {
+                    const bool in_warmup_ct = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
+                    const bool in_rerank_ct = g_moe_warmup.reranking_enabled.load(std::memory_order_acquire);
+                    if ((in_warmup_ct || in_rerank_ct) && seq_layer_id_cputg >= 0) {
+                        int scratch_ids[32];
+                        int n_ids_total = 0;
+                        for (const auto & e : gpu_entries) {
                             if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
                         }
-                    }
-                    for (const auto & e : cpu_entries) {
-                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
-                    }
-                    g_moe_warmup.record(seq_layer_id_cputg, scratch_ids, n_ids_total);
+                        for (int d = 1; d < n_gpu_devs; d++) {
+                            for (const auto & e : per_gpu_entries[d]) {
+                                if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                            }
+                        }
+                        for (const auto & e : cpu_entries) {
+                            if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                        }
+                        g_moe_warmup.record(seq_layer_id_cputg, scratch_ids, n_ids_total);
 
-                    if (g_moe_warmup.tick_token()) {
-                        moe_apply_popularity_placement();
-                        moe_prestage_popular_experts();
-                        g_moe_warmup.enable_reranking();
-                    } else if (g_moe_warmup.tick_epoch()) {
-                        moe_periodic_rerank();
+                        if (g_moe_warmup.tick_token()) {
+                            moe_apply_popularity_placement();
+                            moe_prestage_popular_experts();
+                            g_moe_warmup.enable_reranking();
+                        } else if (g_moe_warmup.tick_epoch()) {
+                            moe_periodic_rerank();
+                        }
+                        g_adaptive_prestage.tick();
                     }
                 }
 
@@ -33728,31 +33981,36 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             moe_token_counter.fetch_add(1, std::memory_order_relaxed);
 
-            // Record expert activations for warmup profiling
-            if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) {
-                // Collect all dispatched expert IDs (GPU0 + secondary + CPU)
-                int scratch_ids[32];
-                int n_ids_total = 0;
-                for (const auto & e : gpu_entries) {
-                    if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
-                }
-                for (int d = 1; d < n_gpu_devs; d++) {
-                    for (const auto & e : per_gpu_entries[d]) {
+            // Record expert activations for warmup + adaptive prestage
+            {
+                const bool in_warmup_p = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
+                const bool in_rerank_p = g_moe_warmup.reranking_enabled.load(std::memory_order_acquire);
+                if (in_warmup_p || in_rerank_p) {
+                    // Collect all dispatched expert IDs (GPU0 + secondary + CPU)
+                    int scratch_ids[32];
+                    int n_ids_total = 0;
+                    for (const auto & e : gpu_entries) {
                         if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
                     }
-                }
-                for (const auto & e : cpu_entries) {
-                    if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
-                }
-                g_moe_warmup.record(seq_layer_id, scratch_ids, n_ids_total);
+                    for (int d = 1; d < n_gpu_devs; d++) {
+                        for (const auto & e : per_gpu_entries[d]) {
+                            if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                        }
+                    }
+                    for (const auto & e : cpu_entries) {
+                        if (n_ids_total < 32) scratch_ids[n_ids_total++] = e.expert_id;
+                    }
+                    g_moe_warmup.record(seq_layer_id, scratch_ids, n_ids_total);
 
-                // Tick token and trigger re-placement when warmup ends
-                if (g_moe_warmup.tick_token()) {
-                    moe_apply_popularity_placement();
-                    moe_prestage_popular_experts();
-                    g_moe_warmup.enable_reranking();
-                } else if (g_moe_warmup.tick_epoch()) {
-                    moe_periodic_rerank();
+                    // Tick token and trigger re-placement when warmup ends
+                    if (g_moe_warmup.tick_token()) {
+                        moe_apply_popularity_placement();
+                        moe_prestage_popular_experts();
+                        g_moe_warmup.enable_reranking();
+                    } else if (g_moe_warmup.tick_epoch()) {
+                        moe_periodic_rerank();
+                    }
+                    g_adaptive_prestage.tick();
                 }
             }
 
@@ -35309,8 +35567,18 @@ GGML_API void ggml_backend_sycl_get_device_description(int device, char * descri
 
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
-    ggml_sycl_set_device(device);
-    SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(device).get_memory_info(*free, *total)));
+    // For secondary GPU devices (device >= scheduler's visible count), the scheduler-
+    // filtered map falls back to identity mapping which is wrong when non-GPU devices
+    // are interleaved in dpct enumeration.  Use ggml_sycl_get_gpu_device() which
+    // accesses the pre-hiding gpu_dpct_ids[] map for correct device resolution.
+    const auto & info = ggml_sycl_info();
+    if (device >= 0 && device < info.total_gpu_count && device >= info.device_count) {
+        auto & dev = ggml_sycl_get_gpu_device(device);
+        SYCL_CHECK(CHECK_TRY_ERROR(dev.get_memory_info(*free, *total)));
+    } else {
+        ggml_sycl_set_device(device);
+        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(device).get_memory_info(*free, *total)));
+    }
     GGML_SYCL_DEBUG("[MEM-QUERY] dev=%d free=%.1f MB total=%.1f MB consumed=%.1f MB\n",
                     device, *free / (1024.0 * 1024.0), *total / (1024.0 * 1024.0),
                     (*total - *free) / (1024.0 * 1024.0));
@@ -35328,6 +35596,8 @@ static const char * ggml_backend_sycl_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_sycl_free(ggml_backend_t backend) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
+    // Stop adaptive prestage background thread before tearing down SYCL resources.
+    g_adaptive_prestage.stop();
     // Flush any deferred CPU scatter before tearing down SYCL resources.
     // Without this, the thread_local g_pending_scatter may hold a
     // sycl::context reference that outlives the SYCL runtime, causing
