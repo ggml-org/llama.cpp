@@ -36,6 +36,7 @@
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
+#include "ggml-cuda/repack_nvfp4.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
@@ -640,10 +641,86 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+struct ggml_cuda_nvfp4_row_span {
+    size_t row_size;
+    size_t aligned_offset;
+    size_t aligned_size;
+    size_t inner_offset;
+    int64_t row_begin;
+    int64_t nrows;
+};
+
+static ggml_cuda_nvfp4_row_span ggml_cuda_get_nvfp4_row_span(const ggml_tensor * tensor, size_t offset, size_t size) {
+    GGML_ASSERT(tensor != nullptr);
+    GGML_ASSERT(ggml_is_contiguous(tensor) && "NVFP4 partial repack needs contiguous tensors");
+    GGML_ASSERT(offset <= ggml_nbytes(tensor));
+    GGML_ASSERT(size <= ggml_nbytes(tensor) - offset);
+
+    const size_t row_size = ggml_row_size(GGML_TYPE_NVFP4, tensor->ne[0]);
+    if (size == 0) {
+        return {
+            row_size,
+            offset,
+            0,
+            0,
+            (int64_t) (offset / row_size),
+            0,
+        };
+    }
+
+    const size_t aligned_offset = offset / row_size * row_size;
+    const size_t aligned_end = (offset + size + row_size - 1) / row_size * row_size;
+
+    GGML_ASSERT(aligned_end <= ggml_nbytes(tensor));
+
+    return {
+        row_size,
+        aligned_offset,
+        aligned_end - aligned_offset,
+        offset - aligned_offset,
+        (int64_t) (aligned_offset / row_size),
+        (int64_t) ((aligned_end - aligned_offset) / row_size),
+    };
+}
+
 static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
+    if (size == 0) {
+        return;
+    }
+
     ggml_cuda_set_device(ctx->device);
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        const ggml_cuda_nvfp4_row_span span = ggml_cuda_get_nvfp4_row_span(tensor, offset, size);
+
+        std::vector<char> rows(span.aligned_size); // Pull full rows for partial updates
+        if (span.inner_offset != 0 || size != span.aligned_size) {
+            std::vector<char> packed(span.aligned_size);
+            CUDA_CHECK(cudaMemcpyAsync(
+                    packed.data(),
+                    (const char *) tensor->data + span.aligned_offset,
+                    span.aligned_size,
+                    cudaMemcpyDeviceToHost,
+                    cudaStreamPerThread));
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+            ggml_cuda_unpack_rows_nvfp4(tensor->ne[0], span.nrows, packed.data(), rows.data());
+        }
+
+        memcpy(rows.data() + span.inner_offset, data, size);
+
+        std::vector<char> packed(span.aligned_size);
+        ggml_cuda_repack_rows_nvfp4(tensor->ne[0], span.nrows, rows.data(), packed.data());
+        CUDA_CHECK(cudaMemcpyAsync(
+                (char *) tensor->data + span.aligned_offset,
+                packed.data(),
+                span.aligned_size,
+                cudaMemcpyHostToDevice,
+                cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        return;
+    }
+
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -651,7 +728,34 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
+    if (size == 0) {
+        return;
+    }
+
     ggml_cuda_set_device(ctx->device);
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        const ggml_cuda_nvfp4_row_span span = ggml_cuda_get_nvfp4_row_span(tensor, offset, size);
+
+        std::vector<char> packed(span.aligned_size);
+        CUDA_CHECK(cudaMemcpyAsync(
+                packed.data(),
+                (const char *) tensor->data + span.aligned_offset,
+                span.aligned_size,
+                cudaMemcpyDeviceToHost,
+                cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+
+        if (span.inner_offset == 0 && size == span.aligned_size) {
+            ggml_cuda_unpack_rows_nvfp4(tensor->ne[0], span.nrows, packed.data(), data);
+            return;
+        }
+
+        std::vector<char> rows(span.aligned_size);
+        ggml_cuda_unpack_rows_nvfp4(tensor->ne[0], span.nrows, packed.data(), rows.data());
+        memcpy(data, rows.data() + span.inner_offset, size);
+        return;
+    }
+
     CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -915,6 +1019,76 @@ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_
 }
 
 static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    if (size == 0) {
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
+
+        ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
+
+        const int64_t ne0 = tensor->ne[0];
+        ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+        const ggml_cuda_nvfp4_row_span span = ggml_cuda_get_nvfp4_row_span(tensor, offset, size);
+
+        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
+            int64_t row_low, row_high;
+            get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
+
+            const int64_t copy_row_low = std::max<int64_t>(row_low, span.row_begin);
+            const int64_t copy_row_high = std::min<int64_t>(row_high, span.row_begin + span.nrows);
+            const int64_t nrows_copy = copy_row_high - copy_row_low;
+            if (nrows_copy == 0) {
+                continue;
+            }
+
+            const size_t row_size = span.row_size;
+            const size_t offset_dst = (copy_row_low - row_low) * row_size;
+            const size_t size_copy = nrows_copy * row_size;
+            const size_t aligned_offset = (size_t) copy_row_low * row_size;
+
+            std::vector<char> rows(size_copy);
+            if (span.inner_offset != 0 || size != span.aligned_size) {
+                std::vector<char> packed(size_copy);
+                ggml_cuda_set_device(id);
+                CUDA_CHECK(cudaMemcpyAsync(
+                        packed.data(),
+                        (const char *) extra->data_device[id] + offset_dst,
+                        size_copy,
+                        cudaMemcpyDeviceToHost,
+                        cudaStreamPerThread));
+                CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+                ggml_cuda_unpack_rows_nvfp4(ne0, nrows_copy, packed.data(), rows.data());
+            }
+
+            const size_t overlap_begin = std::max(offset, aligned_offset);
+            const size_t overlap_end = std::min(offset + size, aligned_offset + size_copy);
+            if (overlap_begin < overlap_end) {
+                memcpy(
+                        rows.data() + (overlap_begin - aligned_offset),
+                        (const char *) data + (overlap_begin - offset),
+                        overlap_end - overlap_begin);
+            }
+
+            std::vector<char> packed(size_copy);
+            ggml_cuda_repack_rows_nvfp4(ne0, nrows_copy, rows.data(), packed.data());
+            ggml_cuda_set_device(id);
+            CUDA_CHECK(cudaMemcpyAsync(
+                    (char *) extra->data_device[id] + offset_dst,
+                    packed.data(),
+                    size_copy,
+                    cudaMemcpyHostToDevice,
+                    cudaStreamPerThread));
+        }
+
+        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
+            ggml_cuda_set_device(id);
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        }
+        return;
+    }
+
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
@@ -954,6 +1128,60 @@ static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buff
 }
 
 static void ggml_backend_cuda_split_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (size == 0) {
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
+
+        ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
+
+        const int64_t ne0 = tensor->ne[0];
+        ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+        const ggml_cuda_nvfp4_row_span span = ggml_cuda_get_nvfp4_row_span(tensor, offset, size);
+        char * host_dst = (char *) data;
+        std::vector<char> host_aligned;
+        if (span.inner_offset != 0 || size != span.aligned_size) {
+            host_aligned.resize(span.aligned_size);
+            host_dst = host_aligned.data();
+        }
+
+        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
+            int64_t row_low, row_high;
+            get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
+
+            const int64_t copy_row_low = std::max<int64_t>(row_low, span.row_begin);
+            const int64_t copy_row_high = std::min<int64_t>(row_high, span.row_begin + span.nrows);
+            const int64_t nrows_copy = copy_row_high - copy_row_low;
+            if (nrows_copy == 0) {
+                continue;
+            }
+
+            const size_t row_size = span.row_size;
+            const size_t offset_dst = (copy_row_low - span.row_begin) * row_size;
+            const size_t offset_src = (copy_row_low - row_low) * row_size;
+            const size_t size_copy = nrows_copy * row_size;
+
+            std::vector<char> packed(size_copy);
+            ggml_cuda_set_device(id);
+            CUDA_CHECK(cudaMemcpyAsync(
+                    packed.data(),
+                    (const char *) extra->data_device[id] + offset_src,
+                    size_copy,
+                    cudaMemcpyDeviceToHost,
+                    cudaStreamPerThread));
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+
+            ggml_cuda_unpack_rows_nvfp4(ne0, nrows_copy, packed.data(), host_dst + offset_dst);
+        }
+
+        if (host_dst != data) {
+            memcpy(data, host_dst + span.inner_offset, size);
+        }
+        return;
+    }
+
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
@@ -2843,6 +3071,16 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
+    if (size == 0) {
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+        buf->iface.set_tensor(buf, tensor, data, offset, size);
+        return;
+    }
+
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
@@ -2851,6 +3089,16 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+
+    if (size == 0) {
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_NVFP4) {
+        CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+        buf->iface.get_tensor(buf, tensor, data, offset, size);
+        return;
+    }
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
