@@ -539,6 +539,9 @@ private:
             statement_ptr step = slices.size() > 2 ? std::move(slices[2]) : nullptr;
             return mk_stmt<slice_expression>(start_pos, std::move(start), std::move(stop), std::move(step));
         }
+        if (slices.empty()) {
+            throw parser_exception("Empty member expression arguments", source, peek().pos);
+        }
         return std::move(slices[0]);
     }
 
