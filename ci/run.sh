@@ -145,14 +145,62 @@ fi
 if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     echo ">>===== Enabling KleidiAI support"
 
+    # Detect candidate arch options for the current CPU
+    I8MM=""
+    FP16=""
+    SME=""
+    SVE=""
+    if [ "$(uname -s)" == "Darwin" ]; then
+        # Detect i8mm
+        if [ $(sysctl -n hw.optional.arm.FEAT_I8MM) -eq 1 ]; then
+            I8MM="+i8mm"
+        fi
+        # Detect FP16
+        if [ $(sysctl -n hw.optional.arm.FEAT_FP16) -eq 1 ]; then
+            FP16="+fp16"
+        fi
+        # Detect SME version
+        if [ $(sysctl -n hw.optional.arm.FEAT_SME2) -eq 1 ]; then
+            SME="+sme2"
+        elif [ $(sysctl -n hw.optional.arm.FEAT_SME) -eq 1 ]; then
+            SME="+sme"
+        fi
+        # Disable SVE on Darwin
+        SVE="+nosve"
+    elif [ "$(uname -s)" == "Linux" ]; then
+        # Detect i8mm
+        if grep "i8mm" /proc/cpuinfo -q; then
+            I8MM="+i8mm"
+        fi
+        # Detect FP16
+        if grep "fphp" /proc/cpuinfo -q; then
+            FP16="+fp16"
+        fi
+        # Detect SME version
+        if grep "sme2" /proc/cpuinfo -q; then
+            SME="+sme2"
+        elif grep "sme" /proc/cpuinfo -q; then
+            SME="+sme"
+        fi
+        # Detect SVE version if allowed
+        if [ -z ${GG_BUILD_NO_SVE} ]; then
+            if grep "sve2" /proc/cpuinfo -q; then
+                SVE="+sve2"
+            elif grep "sve" /proc/cpuinfo -q; then
+                SVE="+sve"
+            fi
+
+        fi
+    fi
+
+    # Configure usable candidates based on CPU options
     CANDIDATES=(
-        "armv9-a+dotprod+i8mm+sve2"
-        "armv9-a+dotprod+i8mm"
-        "armv8.6-a+dotprod+i8mm"
+        "armv9-a+dotprod${FP16}${I8MM}${SME}${SVE}"
+        "armv8.6-a+dotprod${FP16}${I8MM}${SME}${SVE}"
+        "armv8.2-a+dotprod${FP16}${I8MM}${SME}${SVE}"
         "armv8.2-a+dotprod"
     )
     CPU=""
-
     for cpu in "${CANDIDATES[@]}"; do
         if echo 'int main(){}' | ${CXX:-c++} -march="$cpu" -x c++ - -c -o /dev/null >/dev/null 2>&1; then
             CPU="$cpu"
