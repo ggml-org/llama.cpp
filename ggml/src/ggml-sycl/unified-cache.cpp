@@ -3755,8 +3755,344 @@ void unified_cache::register_ready(const ggml_sycl_cache_id & key,
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] register_ready: layout=%d size=%zu ptr=%p\n", (int) layout, size, device_ptr);
 }
 
+// ---------------------------------------------------------------------------
+// Atomic expert group staging: all 3 tensors stage or none stage.
+// ---------------------------------------------------------------------------
+bool unified_cache::stage_expert_group(int                          block_id,
+                                       int                          expert_id_arg,
+                                       const expert_tensor_group &  keys,
+                                       const staging_tensor_data &  gate_data,
+                                       const staging_tensor_data &  up_data,
+                                       const staging_tensor_data &  down_data,
+                                       ggml_layout_mode             layout,
+                                       const cache_layout_request * gate_req,
+                                       const cache_layout_request * up_req,
+                                       const cache_layout_request * down_req) {
+    // Collect the tensors that need staging (skip unregistered roles)
+    struct slot_info {
+        const ggml_sycl_cache_id *   key;
+        const staging_tensor_data *  data;
+        const cache_layout_request * req;
+        void *                       ptr;
+        bool                         was_existing;
+    };
+    std::vector<slot_info> slots;
+    slots.reserve(3);
+
+    if (keys.has_gate && gate_data.src_ptr && gate_data.dst_size > 0) {
+        slots.push_back({ &keys.gate_key, &gate_data, gate_req, nullptr, false });
+    }
+    if (keys.has_up && up_data.src_ptr && up_data.dst_size > 0) {
+        slots.push_back({ &keys.up_key, &up_data, up_req, nullptr, false });
+    }
+    if (keys.has_down && down_data.src_ptr && down_data.dst_size > 0) {
+        slots.push_back({ &keys.down_key, &down_data, down_req, nullptr, false });
+    }
+
+    if (slots.empty()) {
+        return false;
+    }
+
+    // Calculate total VRAM needed (only for tensors not already cached)
+    size_t total_needed = 0;
+    for (auto & s : slots) {
+        void * existing = lookup(*s.key, layout);
+        if (existing) {
+            s.ptr          = existing;  // Already cached -- skip allocation
+            s.was_existing = true;
+        } else {
+            total_needed += s.data->dst_size;
+        }
+    }
+
+    // All already cached? Success.
+    if (total_needed == 0) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                        "all %zu tensors already cached\n",
+                        block_id, expert_id_arg, slots.size());
+        return true;
+    }
+
+    // Check VRAM availability and evict if needed
+    if (available() < total_needed) {
+        size_t freed = evict(total_needed - available());
+        (void) freed;
+    }
+
+    if (available() < total_needed) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                        "insufficient VRAM (need=%zu avail=%zu)\n",
+                        block_id, expert_id_arg, total_needed, available());
+        return false;
+    }
+
+    // If per-tensor requests are provided, use ensure_cached_layout for each.
+    // This reuses the existing fill infrastructure (GPU reorder, CPU reorder, etc.)
+    // with atomic rollback on failure.
+    bool use_layout_api = false;
+    for (auto & s : slots) {
+        if (s.req && !s.was_existing) {
+            use_layout_api = true;
+            break;
+        }
+    }
+
+    if (use_layout_api) {
+        // Use ensure_cached_layout per tensor, with rollback on failure.
+        std::vector<cache_layout_result> results;
+        results.reserve(slots.size());
+        bool all_ok = true;
+
+        for (auto & s : slots) {
+            if (s.was_existing) {
+                cache_layout_result r{};
+                r.device_ptr = s.ptr;
+                r.status     = cache_layout_status::READY;
+                results.push_back(r);
+                continue;
+            }
+            if (!s.req) {
+                // No request provided -- skip this tensor
+                cache_layout_result r{};
+                r.status = cache_layout_status::FAILED;
+                results.push_back(r);
+                all_ok = false;
+                break;
+            }
+            try {
+                auto result = ensure_cached_layout(*s.req, {});
+                results.push_back(result);
+                if (result.status != cache_layout_status::READY &&
+                    result.status != cache_layout_status::IN_PROGRESS) {
+                    all_ok = false;
+                    break;
+                }
+                s.ptr = result.device_ptr;
+            } catch (...) {
+                all_ok = false;
+                break;
+            }
+        }
+
+        if (!all_ok) {
+            // Rollback: remove any entries we just created
+            for (size_t i = 0; i < results.size(); i++) {
+                if (slots[i].was_existing) continue;
+                if (results[i].device_ptr) {
+                    remove(*slots[i].key, cache_entry_type::MOE_EXPERT,
+                           slots[i].data->layer_id, slots[i].data->expert_id, layout);
+                }
+            }
+            GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                          "ensure_cached_layout rollback\n",
+                          block_id, expert_id_arg);
+            return false;
+        }
+
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                        "staged %zu tensors via layout API (total=%zu bytes)\n",
+                        block_id, expert_id_arg, slots.size(), total_needed);
+        return true;
+    }
+
+    // Fallback: allocate + raw DMA fill + register_ready
+    bool alloc_ok = true;
+    for (auto & s : slots) {
+        if (s.was_existing) {
+            continue;  // Already cached
+        }
+        s.ptr = allocate_slot(*s.key, s.data->dst_size, layout,
+                              cache_entry_type::MOE_EXPERT,
+                              s.data->layer_id, s.data->expert_id);
+        if (!s.ptr) {
+            alloc_ok = false;
+            break;
+        }
+    }
+
+    // Rollback on partial allocation failure
+    if (!alloc_ok) {
+        for (auto & s : slots) {
+            if (s.ptr && !s.was_existing) {
+                std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+                unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key,
+                                        s.data->layer_id, s.data->expert_id };
+                auto it = entries_.find(ckey);
+                if (it != entries_.end() &&
+                    it->second.state == cache_entry_state::IN_PROGRESS) {
+                    lock.unlock();
+                    remove(*s.key, cache_entry_type::MOE_EXPERT,
+                           s.data->layer_id, s.data->expert_id, layout);
+                }
+            }
+        }
+        GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                      "allocation rollback\n", block_id, expert_id_arg);
+        return false;
+    }
+
+    // Fill all tensors using DMA queue (raw memcpy path)
+    sycl::queue & dq = get_dma_queue();
+    for (auto & s : slots) {
+        if (s.was_existing) continue;
+
+        try {
+            size_t copy_size = std::min(s.data->src_size, s.data->dst_size);
+            dq.memcpy(s.ptr, s.data->src_ptr, copy_size);
+        } catch (...) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: DMA memcpy "
+                          "failed blk=%d exp=%d\n", block_id, expert_id_arg);
+            // Rollback all new allocations
+            for (auto & s2 : slots) {
+                if (s2.ptr && !s2.was_existing) {
+                    remove(*s2.key, cache_entry_type::MOE_EXPERT,
+                           s2.data->layer_id, s2.data->expert_id, layout);
+                }
+            }
+            return false;
+        }
+    }
+
+    // Wait for DMA to complete before registering as READY
+    try {
+        dq.wait();
+    } catch (...) {
+    }
+
+    // Register all new entries as READY
+    for (auto & s : slots) {
+        if (s.was_existing) continue;
+        register_ready(*s.key, s.ptr, layout, s.data->dst_size,
+                       cache_entry_type::MOE_EXPERT,
+                       s.data->layer_id, s.data->expert_id,
+                       s.data->src_ptr);
+    }
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
+                    "staged %zu tensors (total=%zu bytes)\n",
+                    block_id, expert_id_arg, slots.size(), total_needed);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Atomic expert group eviction: all 3 tensors evict together.
+// ---------------------------------------------------------------------------
+void unified_cache::evict_expert_group(const expert_tensor_group & keys,
+                                       ggml_layout_mode            layout) {
+    auto evict_one_key = [&](const ggml_sycl_cache_id & key) {
+        if (!key.valid) return;
+        std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+        auto id_it = id_to_key_.find(key);
+        if (id_it == id_to_key_.end()) return;
+        auto entry_it = entries_.find(id_it->second);
+        if (entry_it == entries_.end()) return;
+        int lid = entry_it->second.layer_id;
+        int eid = entry_it->second.expert_id;
+        lock.unlock();
+        remove(key, cache_entry_type::MOE_EXPERT, lid, eid, layout);
+    };
+
+    if (keys.has_gate) evict_one_key(keys.gate_key);
+    if (keys.has_up)   evict_one_key(keys.up_key);
+    if (keys.has_down) evict_one_key(keys.down_key);
+}
+
+// ---------------------------------------------------------------------------
+// Expert-granularity LRU eviction: find coldest expert group, evict all 3.
+// ---------------------------------------------------------------------------
+size_t unified_cache::evict_coldest_expert_group(
+    const std::unordered_map<int64_t, expert_tensor_group> & expert_groups,
+    ggml_layout_mode                                         layout) {
+
+    // Scan all expert groups to find the coldest one (lowest combined frequency).
+    int64_t  coldest_gkey        = -1;
+    uint32_t coldest_freq        = UINT32_MAX;
+    int64_t  coldest_last_access = std::numeric_limits<int64_t>::max();
+    size_t   coldest_total_bytes = 0;
+
+    auto get_entry_info = [&](const ggml_sycl_cache_id & key)
+        -> std::tuple<bool, uint32_t, int64_t, size_t, bool> {
+        // Returns: (found, access_count, last_access, size, pinned)
+        if (!key.valid) {
+            return { false, 0, 0, 0, false };
+        }
+        std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+        auto id_it = id_to_key_.find(key);
+        if (id_it == id_to_key_.end()) {
+            return { false, 0, 0, 0, false };
+        }
+        auto entry_it = entries_.find(id_it->second);
+        if (entry_it == entries_.end()) {
+            return { false, 0, 0, 0, false };
+        }
+        const auto & e = entry_it->second;
+        return { true, e.access_count, e.last_access, e.size, e.pinned };
+    };
+
+    for (const auto & [gkey, grp] : expert_groups) {
+        uint32_t combined_freq = 0;
+        int64_t  oldest_access = std::numeric_limits<int64_t>::max();
+        size_t   total_bytes   = 0;
+        bool     any_found     = false;
+        bool     any_pinned    = false;
+
+        auto check_tensor = [&](const ggml_sycl_cache_id & key,
+                                bool has_key) {
+            if (!has_key || !key.valid) return;
+            auto [found, freq, last_access, sz, pinned] = get_entry_info(key);
+            if (!found) return;
+            any_found = true;
+            combined_freq += freq;
+            oldest_access = std::min(oldest_access, last_access);
+            total_bytes += sz;
+            if (pinned) any_pinned = true;
+        };
+
+        check_tensor(grp.gate_key, grp.has_gate);
+        check_tensor(grp.up_key,   grp.has_up);
+        check_tensor(grp.down_key, grp.has_down);
+
+        if (!any_found || any_pinned || total_bytes == 0) {
+            continue;
+        }
+
+        // Compare: lower frequency wins, then older last_access as tiebreaker
+        bool is_colder = (combined_freq < coldest_freq) ||
+                         (combined_freq == coldest_freq &&
+                          oldest_access < coldest_last_access);
+
+        if (is_colder) {
+            coldest_gkey        = gkey;
+            coldest_freq        = combined_freq;
+            coldest_last_access = oldest_access;
+            coldest_total_bytes = total_bytes;
+        }
+    }
+
+    if (coldest_gkey < 0) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict_coldest_expert_group: "
+                        "no evictable group found\n");
+        return 0;
+    }
+
+    // Evict the coldest group
+    auto it = expert_groups.find(coldest_gkey);
+    if (it == expert_groups.end()) {
+        return 0;
+    }
+
+    const int block = static_cast<int>(coldest_gkey >> 16);
+    const int exp   = static_cast<int>(coldest_gkey & 0xFFFF);
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict_coldest_expert_group: blk=%d exp=%d "
+                    "freq=%u bytes=%zu\n", block, exp,
+                    coldest_freq, coldest_total_bytes);
+
+    evict_expert_group(it->second, layout);
+    return coldest_total_bytes;
+}
+
 void * unified_cache::lookup(const ggml_sycl_cache_id & key, ggml_layout_mode layout) {
-    // Identical semantics to try_get_cached_fast — shared_lock read-only path
+    // Identical semantics to try_get_cached_fast -- shared_lock read-only path
     return try_get_cached_fast(key, layout);
 }
 

@@ -202,6 +202,33 @@ enum class cache_entry_type {
     MOE_EXPERT     // MoE expert weight
 };
 
+// Expert tensor group: cache keys for all 3 tensors (gate, up, down) of one expert.
+// Built during moe_hybrid_init_once() and used for atomic staging/eviction.
+struct expert_tensor_group {
+    ggml_sycl_cache_id gate_key;   // cache key for ffn_gate_exps expert slice
+    ggml_sycl_cache_id up_key;     // cache key for ffn_up_exps expert slice
+    ggml_sycl_cache_id down_key;   // cache key for ffn_down_exps expert slice
+    bool               has_gate = false;
+    bool               has_up   = false;
+    bool               has_down = false;
+};
+
+// Key helper: (block_id << 16) | expert_id -- supports up to 65536 experts/block
+inline int64_t expert_group_key(int block_id, int expert_id) {
+    return (static_cast<int64_t>(block_id) << 16) | static_cast<int64_t>(expert_id & 0xFFFF);
+}
+
+// Data needed to stage one tensor of an expert group.
+// fill_fn/fill_ctx allow per-tensor reorder (GPU or CPU).
+// When fill_fn is nullptr, a raw DMA memcpy is used.
+struct staging_tensor_data {
+    const void * src_ptr   = nullptr;  // host-accessible source data (AOS)
+    size_t       src_size  = 0;        // source bytes (AOS)
+    size_t       dst_size  = 0;        // destination bytes (SOA)
+    int          layer_id  = -1;
+    int          expert_id = -1;
+};
+
 // Cache entry readiness
 enum class cache_entry_state {
     READY,
@@ -740,6 +767,41 @@ class unified_cache {
                 ggml_layout_mode           layout);
 
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not in cache
+
+    // === Atomic Expert Group Staging/Eviction ===
+    // All 3 tensors (gate, up, down) stage or evict together -- never partial.
+
+    // Stage all 3 tensors for an expert atomically.
+    // If VRAM is insufficient, evicts cold expert groups first.
+    // If any allocation fails after eviction, rolls back partial allocations.
+    // Each staging_tensor_data provides source pointer and sizes.
+    // Each cache_layout_request provides fill_fn/fill_ctx for reorder.
+    // When request pointers are non-null, ensure_cached_layout is used per tensor.
+    // When null, raw DMA memcpy via get_dma_queue() is used.
+    // Returns true if all 3 tensors were staged successfully.
+    bool stage_expert_group(int                            block_id,
+                            int                            expert_id,
+                            const expert_tensor_group &    keys,
+                            const staging_tensor_data &    gate_data,
+                            const staging_tensor_data &    up_data,
+                            const staging_tensor_data &    down_data,
+                            ggml_layout_mode               layout,
+                            const cache_layout_request *   gate_req = nullptr,
+                            const cache_layout_request *   up_req   = nullptr,
+                            const cache_layout_request *   down_req = nullptr);
+
+    // Evict all 3 tensors for an expert atomically.
+    // Removes gate, up, and down from the cache together.
+    void evict_expert_group(const expert_tensor_group & keys,
+                            ggml_layout_mode            layout);
+
+    // Evict the coldest expert group to free VRAM.
+    // Uses combined access frequency across all 3 tensors as coldness metric.
+    // expert_groups: the global registry mapping (block,expert) -> keys.
+    // Returns bytes freed, or 0 if no evictable expert group was found.
+    size_t evict_coldest_expert_group(
+        const std::unordered_map<int64_t, expert_tensor_group> & expert_groups,
+        ggml_layout_mode                                         layout);
 
     // === Pinning for Graphs ===
 

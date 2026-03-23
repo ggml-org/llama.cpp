@@ -771,26 +771,11 @@ static std::shared_mutex             g_moe_expert_meta_mutex;
 // tensors (gate, up, down).  Built during moe_hybrid_init_once() and used by
 // is_expert_resident() to check whether an expert is fully cached in VRAM.
 //
-// The old dispatch routing used ExpertPlacementTable with FNV-1a name hashes
-// as layer_id.  Each tensor (gate/up/down) got a DIFFERENT hash, so prestage
-// set device_ptr under one hash while dispatch looked up a different hash,
-// resulting in gpu0=0 for all experts.  This registry fixes the mismatch by
-// using (block_number, expert_id) as the canonical key and checking the
-// unified cache directly.
+// The struct and key helper are defined in unified-cache.hpp so that both
+// ggml-sycl.cpp and unified-cache.cpp can use them for atomic staging/eviction.
 // ---------------------------------------------------------------------------
-struct expert_tensor_group {
-    ggml_sycl_cache_id gate_key;  // cache key for ffn_gate_exps expert slice
-    ggml_sycl_cache_id up_key;    // cache key for ffn_up_exps expert slice
-    ggml_sycl_cache_id down_key;  // cache key for ffn_down_exps expert slice
-    bool               has_gate = false;
-    bool               has_up   = false;
-    bool               has_down = false;
-};
-
-// Key: (block_id << 16) | expert_id — supports up to 65536 experts/block
-static inline int64_t expert_group_key(int block_id, int expert_id) {
-    return (static_cast<int64_t>(block_id) << 16) | static_cast<int64_t>(expert_id & 0xFFFF);
-}
+using ggml_sycl::expert_tensor_group;
+using ggml_sycl::expert_group_key;
 
 static std::unordered_map<int64_t, expert_tensor_group> g_expert_groups;
 static std::shared_mutex                                g_expert_groups_mutex;
@@ -1011,300 +996,240 @@ static void moe_prestage_popular_experts() {
     int down_deferred  = 0;
 
     if (avail > 0 && cache) {
-        const size_t total_slots = avail / expert_bytes;
-
-        // Determine if budget is tight: can we fit all 3 tensor types per expert?
-        // Each logical expert has 3 tensors (gate/up/down).  Count unique (block,expert) pairs.
-        // n_layers here counts hash-based layer_ids which includes gate+up+down separately,
-        // so n_blocks = n_layers / 3 (approximately).
-        const int n_blocks_approx = std::max(1, n_layers / 3);
-        const int n_experts_per_layer = ptable.n_experts();
-        const size_t full_expert_slots = static_cast<size_t>(n_blocks_approx) *
-                                         static_cast<size_t>(n_experts_per_layer) * 3;
-        const bool budget_tight = (total_slots < full_expert_slots);
-
-        // --- Phase 1a: Collect work items that need SOA conversion ---
-        struct prestage_work_item {
-            const moe_expert_meta *      meta;
-            ggml_sycl_cache_id           key;
-            size_t                       dst_bytes;
+        // --- Phase 1a: Group metadata by (block_num, expert_idx) for atomic staging ---
+        // Instead of per-tensor work items, we build per-expert groups.  Each group
+        // contains the gate/up/down metadata.  stage_expert_group stages all 3
+        // atomically (all succeed or none).
+        struct expert_meta_group {
+            const moe_expert_meta * gate = nullptr;
+            const moe_expert_meta * up   = nullptr;
+            const moe_expert_meta * down = nullptr;
+            int                     block_num  = -1;
+            int                     expert_idx = -1;
+            int                     pop_rank   = INT_MAX;
         };
-        std::vector<prestage_work_item> work_items;
-        work_items.reserve(std::min(total_slots, priority_list.size()));
 
-        for (const auto * meta : priority_list) {
-            if (work_items.size() >= total_slots) break;
+        // Build expert groups from the metadata, keyed by (block_num, expert_idx)
+        std::unordered_map<int64_t, expert_meta_group> meta_groups;
+        for (const auto & meta : g_moe_expert_meta) {
+            if (meta.block_num < 0) continue;
 
-            if (budget_tight && meta->tensor_role == MOE_TENSOR_DOWN) {
-                down_deferred++;
-                continue;
-            }
-
-            auto placement = ptable.get(meta->layer_id, meta->expert_idx);
+            auto placement = ptable.get(meta.layer_id, meta.expert_idx);
+            // Skip already-placed, CPU-assigned, and secondary-GPU experts
             if (placement.device_ptr != nullptr) {
                 skipped++;
                 continue;
             }
-            // Respect placement table: only prestage experts assigned to GPU0.
-            // CPU-assigned (device_id=-1) and secondary GPU (device_id>=1) experts
-            // must NOT be overwritten — they have intentional non-GPU0 placement.
             if (placement.device_id == -1 || placement.device_id >= 1) {
                 continue;
             }
 
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+            const int64_t gkey = expert_group_key(meta.block_num, meta.expert_idx);
+            auto & mg = meta_groups[gkey];
+            mg.block_num  = meta.block_num;
+            mg.expert_idx = meta.expert_idx;
+
+            int rank = (placement.popularity_rank >= 0) ? placement.popularity_rank : INT_MAX;
+            mg.pop_rank = std::min(mg.pop_rank, rank);
+
+            switch (meta.tensor_role) {
+                case MOE_TENSOR_GATE: mg.gate = &meta; break;
+                case MOE_TENSOR_UP:   mg.up   = &meta; break;
+                case MOE_TENSOR_DOWN: mg.down = &meta; break;
+                default: break;
+            }
+        }
+
+        // Sort expert groups by popularity rank
+        std::vector<const expert_meta_group *> sorted_groups;
+        sorted_groups.reserve(meta_groups.size());
+        for (const auto & [gkey, mg] : meta_groups) {
+            sorted_groups.push_back(&mg);
+        }
+        std::sort(sorted_groups.begin(), sorted_groups.end(),
+                  [](const expert_meta_group * a, const expert_meta_group * b) {
+                      return a->pop_rank < b->pop_rank;
+                  });
+
+        // Decide whether to use GPU-side or CPU-side reorder
+        const bool use_gpu_reorder = !ggml_sycl_gpu_reorder_disabled();
+
+        // Temp VRAM buffers for GPU reorder (shared across all experts)
+        std::vector<void *> temp_vram_bufs;
+        if (use_gpu_reorder) {
+            temp_vram_bufs.reserve(sorted_groups.size() * 3);
+        }
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+
+        // Helper: build staging data + cache_layout_request for one tensor
+        auto build_tensor_data = [&](const moe_expert_meta *           meta,
+                                     ggml_sycl::staging_tensor_data &  sd,
+                                     ggml_sycl::cache_layout_request & req,
+                                     ggml_sycl_gpu_reorder_fill_ctx &  gpu_fctx,
+                                     ggml_sycl_reorder_fill_ctx &      host_fctx) -> bool {
+            if (!meta || !meta->tensor || !meta->extra) return false;
+
+            ggml_sycl_cache_id ckey = ggml_sycl_get_moe_expert_cache_key(
                 meta->tensor, meta->extra, meta->expert_idx);
-            if (!key.valid) continue;
+            if (!ckey.valid) return false;
 
             const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
                 meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
             const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
-            prestage_work_item item{};
-            item.meta      = meta;
-            item.key       = key;
-            item.dst_bytes = dst_bytes;
+            sd.src_ptr   = meta->data_ptr;
+            sd.src_size  = meta->bytes;
+            sd.dst_size  = dst_bytes;
+            sd.layer_id  = meta->layer_id;
+            sd.expert_id = meta->expert_idx;
 
-            work_items.push_back(item);
+            req.key              = ckey;
+            req.src_ptr          = meta->data_ptr;
+            req.src_size         = meta->bytes;
+            req.dst_size         = dst_bytes;
+            req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
+            req.layer_id         = meta->layer_id;
+            req.expert_id        = meta->expert_idx;
+            req.layout           = GGML_LAYOUT_SOA;
+            req.validate_content = false;
+            req.skip_fill_wait   = true;
+
+            if (use_gpu_reorder) {
+                gpu_fctx.type        = meta->type;
+                gpu_fctx.ncols       = meta->ne0;
+                gpu_fctx.nrows       = meta->ne1;
+                gpu_fctx.src_bytes   = meta->bytes;
+                gpu_fctx.dst_bytes   = dst_bytes;
+                gpu_fctx.temp_bufs   = &temp_vram_bufs;
+                gpu_fctx.owner_queue = nullptr;
+
+                req.fill_fn  = ggml_sycl_fill_reordered_gpu;
+                req.fill_ctx = &gpu_fctx;
+            } else {
+                host_fctx.type          = meta->type;
+                host_fctx.ncols         = meta->ne0;
+                host_fctx.nrows         = meta->ne1;
+                host_fctx.nbytes        = meta->bytes;
+                host_fctx.dst_bytes     = dst_bytes;
+                host_fctx.layout        = GGML_LAYOUT_SOA;
+                host_fctx.src_is_device = false;
+                host_fctx.device_id     = device;
+
+                req.fill_fn  = ggml_sycl_fill_reordered_host;
+                req.fill_ctx = &host_fctx;
+            }
+
+            return true;
+        };
+
+        int expert_groups_staged = 0;
+
+        // Pre-allocate fill context storage (must outlive stage_expert_group calls)
+        // 3 fill contexts per expert group for GPU and host paths
+        std::vector<ggml_sycl_gpu_reorder_fill_ctx> all_gpu_fill_ctxs(sorted_groups.size() * 3);
+        std::vector<ggml_sycl_reorder_fill_ctx>     all_host_fill_ctxs(sorted_groups.size() * 3);
+
+        for (size_t gi = 0; gi < sorted_groups.size(); gi++) {
+            const auto & mg = *sorted_groups[gi];
+
+            // Look up the expert group registry to get canonical cache keys
+            std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
+            const int64_t gkey = expert_group_key(mg.block_num, mg.expert_idx);
+            auto grp_it = g_expert_groups.find(gkey);
+            if (grp_it == g_expert_groups.end()) continue;
+            const auto & grp = grp_it->second;
+            grp_lock.unlock();
+
+            // Build staging data for each tensor
+            ggml_sycl::staging_tensor_data gate_sd{}, up_sd{}, down_sd{};
+            ggml_sycl::cache_layout_request gate_req{}, up_req{}, down_req{};
+            auto & gate_gpu_fctx  = all_gpu_fill_ctxs[gi * 3 + 0];
+            auto & up_gpu_fctx    = all_gpu_fill_ctxs[gi * 3 + 1];
+            auto & down_gpu_fctx  = all_gpu_fill_ctxs[gi * 3 + 2];
+            auto & gate_host_fctx = all_host_fill_ctxs[gi * 3 + 0];
+            auto & up_host_fctx   = all_host_fill_ctxs[gi * 3 + 1];
+            auto & down_host_fctx = all_host_fill_ctxs[gi * 3 + 2];
+
+            bool gate_ok = build_tensor_data(mg.gate, gate_sd, gate_req,
+                                             gate_gpu_fctx, gate_host_fctx);
+            bool up_ok   = build_tensor_data(mg.up,   up_sd,   up_req,
+                                             up_gpu_fctx,   up_host_fctx);
+            bool down_ok = build_tensor_data(mg.down, down_sd, down_req,
+                                             down_gpu_fctx, down_host_fctx);
+
+            if (!gate_ok && !up_ok && !down_ok) continue;
+
+            // Stage all 3 tensors atomically
+            bool ok = cache->stage_expert_group(
+                mg.block_num, mg.expert_idx, grp,
+                gate_sd, up_sd, down_sd,
+                GGML_LAYOUT_SOA,
+                gate_ok ? &gate_req : nullptr,
+                up_ok   ? &up_req   : nullptr,
+                down_ok ? &down_req : nullptr);
+
+            if (ok) {
+                // Update placement table for all staged tensors
+                if (gate_ok && mg.gate) {
+                    void * ptr = cache->lookup(grp.gate_key, GGML_LAYOUT_SOA);
+                    if (ptr) ptable.set_device_ptr(mg.gate->layer_id, mg.gate->expert_idx,
+                                                   device, ptr);
+                }
+                if (up_ok && mg.up) {
+                    void * ptr = cache->lookup(grp.up_key, GGML_LAYOUT_SOA);
+                    if (ptr) ptable.set_device_ptr(mg.up->layer_id, mg.up->expert_idx,
+                                                   device, ptr);
+                }
+                if (down_ok && mg.down) {
+                    void * ptr = cache->lookup(grp.down_key, GGML_LAYOUT_SOA);
+                    if (ptr) ptable.set_device_ptr(mg.down->layer_id, mg.down->expert_idx,
+                                                   device, ptr);
+                }
+                expert_groups_staged++;
+                prestaged += (gate_ok ? 1 : 0) + (up_ok ? 1 : 0) + (down_ok ? 1 : 0);
+            } else {
+                // VRAM exhausted — stop pre-staging
+                break;
+            }
+
+            // Periodic flush every 100 expert groups to prevent >20s accumulated queue
+            // work that triggers L0 DirectSubmission timeout false-positive hang.
+            if (expert_groups_staged > 0 && expert_groups_staged % 100 == 0) {
+                try {
+                    cache->get_queue().wait();
+                } catch (...) {
+                }
+                ggml_sycl_watchdog_heartbeat();
+            }
         }
 
-        // Decide whether to use GPU-side or CPU-side reorder.
-        // GPU reorder: DMA AOS to temp VRAM, GPU kernel reorders to SOA in cache slot.
-        //   Eliminates 3.4s CPU reorder — GPU has 480+ GB/s vs CPU's 70 GB/s.
-        // CPU fallback: parallel CPU reorder + DMA (for opt-out via GGML_SYCL_NO_GPU_REORDER).
-        const bool use_gpu_reorder = !ggml_sycl_gpu_reorder_disabled();
-
-        if (use_gpu_reorder && !work_items.empty()) {
-            // --- Phase 1b (GPU path): ensure_cached_layout with GPU reorder fill_fn ---
-            // The fill_fn stages host AOS → pinned → temp VRAM, then launches
-            // a GPU kernel to scatter AOS fields into SOA layout in the cache slot.
-            // Temp VRAM buffers are tracked for deferred free after all kernels complete.
-            std::vector<void *> temp_vram_bufs;
-            temp_vram_bufs.reserve(work_items.size());
-
-            // Build per-item fill contexts.  Each context is read by the fill_fn
-            // callback inside ensure_cached_layout and must outlive the call.
-            std::vector<ggml_sycl_gpu_reorder_fill_ctx> fill_ctxs(work_items.size());
-
-            auto t0 = std::chrono::high_resolution_clock::now();
-
-            for (size_t i = 0; i < work_items.size(); i++) {
-                auto & item = work_items[i];
-                auto & fctx = fill_ctxs[i];
-
-                fctx.type        = item.meta->type;
-                fctx.ncols       = item.meta->ne0;
-                fctx.nrows       = item.meta->ne1;
-                fctx.src_bytes   = item.meta->bytes;
-                fctx.dst_bytes   = item.dst_bytes;
-                fctx.temp_bufs   = &temp_vram_bufs;
-                fctx.owner_queue = nullptr;  // filled below if needed
-
-                ggml_sycl::cache_layout_request req{};
-                req.key              = item.key;
-                req.src_ptr          = item.meta->data_ptr;  // original AOS host/mmap data
-                req.src_size         = item.meta->bytes;
-                req.dst_size         = item.dst_bytes;
-                req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                req.layer_id         = item.meta->layer_id;
-                req.expert_id        = item.meta->expert_idx;
-                req.layout           = GGML_LAYOUT_SOA;
-                req.validate_content = false;
-                req.skip_fill_wait   = true;
-                req.fill_fn          = ggml_sycl_fill_reordered_gpu;
-                req.fill_ctx         = &fctx;
-
-                try {
-                    auto result = cache->ensure_cached_layout(req, {});
-                    if (result.status == ggml_sycl::cache_layout_status::READY ||
-                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-                        if (result.device_ptr) {
-                            ptable.set_device_ptr(item.meta->layer_id, item.meta->expert_idx,
-                                                  device, result.device_ptr);
-                        }
-                        prestaged++;
-                    }
-                } catch (...) {
-                    // VRAM exhausted — stop pre-staging
-                    break;
-                }
-
-                // Periodic flush every 100 experts to prevent >20s accumulated queue
-                // work that triggers L0 DirectSubmission timeout false-positive hang.
-                if (prestaged > 0 && prestaged % 100 == 0) {
-                    try {
-                        cache->get_queue().wait();
-                    } catch (...) {
-                    }
-                    ggml_sycl_watchdog_heartbeat();
-                }
+        // Finalize pending fills
+        if (prestaged > 0) {
+            try {
+                cache->finalize_pending_fills();
+            } catch (...) {
             }
+        }
 
-            auto t1 = std::chrono::high_resolution_clock::now();
-            double submit_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-            // --- Phase 1c (GPU path): Wait for kernels + finalize ---
-            if (prestaged > 0) {
-                try {
-                    cache->finalize_pending_fills();
-                } catch (...) {
-                }
-            }
-
-            // Free temp VRAM buffers — safe after finalize (in-order queue serializes)
+        // Free temp VRAM buffers (GPU reorder path)
+        if (use_gpu_reorder && !temp_vram_bufs.empty()) {
             sycl::queue & cache_queue = cache->get_queue();
-            cache_queue.wait();  // ensure all GPU reorder kernels are done
+            cache_queue.wait();
             for (void * buf : temp_vram_bufs) {
                 if (buf) sycl::free(buf, cache_queue);
             }
-
-            auto t2 = std::chrono::high_resolution_clock::now();
-            double total_ms = std::chrono::duration<double, std::milli>(t2 - t0).count();
-            GGML_LOG_INFO("[MOE-PRESTAGE] GPU reorder: %d experts, %.1f ms submit, %.1f ms total "
-                          "(%zu temp VRAM bufs)\n",
-                          static_cast<int>(work_items.size()), submit_ms, total_ms,
-                          temp_vram_bufs.size());
-        } else if (!work_items.empty()) {
-            // --- Phase 1b (CPU fallback): Parallel CPU reorder + DMA ---
-            // Fallback when GGML_SYCL_NO_GPU_REORDER is set.
-            struct cpu_reorder_item {
-                const moe_expert_meta *      meta;
-                ggml_sycl_cache_id           key;
-                size_t                       dst_bytes;
-                ggml_sycl_reorder_fill_ctx   reorder_ctx;
-                void *                       reorder_buf;
-                bool                         ok;
-            };
-            std::vector<cpu_reorder_item> cpu_items;
-            cpu_items.reserve(work_items.size());
-
-            for (auto & item : work_items) {
-                cpu_reorder_item ci{};
-                ci.meta      = item.meta;
-                ci.key       = item.key;
-                ci.dst_bytes = item.dst_bytes;
-                ci.ok        = false;
-
-                ci.reorder_ctx.type          = item.meta->type;
-                ci.reorder_ctx.ncols         = item.meta->ne0;
-                ci.reorder_ctx.nrows         = item.meta->ne1;
-                ci.reorder_ctx.nbytes        = item.meta->bytes;
-                ci.reorder_ctx.dst_bytes     = item.dst_bytes;
-                ci.reorder_ctx.layout        = GGML_LAYOUT_SOA;
-                ci.reorder_ctx.src_is_device = false;
-                ci.reorder_ctx.device_id     = device;
-
-                ci.reorder_buf = std::malloc(item.dst_bytes);
-                if (!ci.reorder_buf) continue;
-
-                cpu_items.push_back(ci);
-            }
-
-            // Parallel CPU reorder
-            {
-                const int hw_threads = static_cast<int>(std::thread::hardware_concurrency());
-                const int n_threads  = std::max(1, std::min(hw_threads - 2, 16));
-                const int n_items    = static_cast<int>(cpu_items.size());
-
-                auto t0 = std::chrono::high_resolution_clock::now();
-
-                if (n_items <= n_threads || n_threads <= 1) {
-                    for (auto & ci : cpu_items) {
-                        ci.ok = ggml_sycl_reorder_weight_cpu(
-                            ci.reorder_buf, ci.meta->data_ptr, ci.reorder_ctx);
-                    }
-                } else {
-                    std::vector<std::thread> threads;
-                    threads.reserve(n_threads);
-                    const int items_per_thread = (n_items + n_threads - 1) / n_threads;
-
-                    for (int t = 0; t < n_threads; t++) {
-                        const int begin = t * items_per_thread;
-                        const int end   = std::min(begin + items_per_thread, n_items);
-                        if (begin >= end) break;
-
-                        threads.emplace_back([&cpu_items, begin, end]() {
-                            for (int i = begin; i < end; i++) {
-                                auto & ci = cpu_items[i];
-                                ci.ok = ggml_sycl_reorder_weight_cpu(
-                                    ci.reorder_buf, ci.meta->data_ptr, ci.reorder_ctx);
-                            }
-                        });
-                    }
-                    for (auto & t : threads) {
-                        t.join();
-                    }
-                }
-
-                auto t1 = std::chrono::high_resolution_clock::now();
-                double reorder_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-                GGML_LOG_INFO("[MOE-PRESTAGE] CPU reorder fallback: %d experts, %d threads, %.1f ms\n",
-                              n_items, n_threads, reorder_ms);
-            }
-
-            // DMA pre-reordered data to cache
-            size_t cpu_dma_count = 0;
-            for (auto & ci : cpu_items) {
-                if (!ci.ok) {
-                    std::free(ci.reorder_buf);
-                    ci.reorder_buf = nullptr;
-                    continue;
-                }
-
-                ggml_sycl::cache_layout_request req{};
-                req.key              = ci.key;
-                req.src_ptr          = ci.reorder_buf;
-                req.src_size         = ci.dst_bytes;
-                req.dst_size         = ci.dst_bytes;
-                req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                req.layer_id         = ci.meta->layer_id;
-                req.expert_id        = ci.meta->expert_idx;
-                req.layout           = GGML_LAYOUT_SOA;
-                req.validate_content = false;
-                req.skip_fill_wait   = true;
-                req.fill_fn          = nullptr;
-                req.fill_ctx         = nullptr;
-
-                try {
-                    auto result = cache->ensure_cached_layout(req, {});
-                    if (result.status == ggml_sycl::cache_layout_status::READY ||
-                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-                        if (result.device_ptr) {
-                            ptable.set_device_ptr(ci.meta->layer_id, ci.meta->expert_idx,
-                                                  device, result.device_ptr);
-                        }
-                        prestaged++;
-                    }
-                } catch (...) {
-                    break;
-                }
-
-                // Periodic flush every 100 experts to prevent L0 timeout
-                cpu_dma_count++;
-                if (cpu_dma_count % 100 == 0) {
-                    try {
-                        cache->get_queue().wait();
-                    } catch (...) {
-                    }
-                    ggml_sycl_watchdog_heartbeat();
-                }
-            }
-
-            if (prestaged > 0) {
-                try {
-                    cache->finalize_pending_fills();
-                } catch (...) {
-                }
-            }
-
-            for (auto & ci : cpu_items) {
-                std::free(ci.reorder_buf);
-                ci.reorder_buf = nullptr;
-            }
         }
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        GGML_LOG_INFO("[MOE-PRESTAGE] Staged %d expert groups (%d tensors, 3 tensors each), "
+                      "%.1f ms total (%s reorder)\n",
+                      expert_groups_staged, prestaged, total_ms,
+                      use_gpu_reorder ? "GPU" : "CPU");
     }
 
-    GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular experts to GPU0 VRAM "
+    GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular expert tensors to GPU0 VRAM "
                   "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
                   prestaged, skipped, down_deferred, n_layers, avail);
     ggml_sycl_watchdog_heartbeat();
