@@ -1079,12 +1079,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential ninja-build
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
     runs-on: ubuntu-22.04-arm
@@ -1105,12 +1105,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential ninja-build
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
     runs-on: ubuntu-22.04
@@ -1131,12 +1131,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential ninja-build
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
     runs-on: ubuntu-22.04-arm
@@ -1157,12 +1157,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential ninja-build
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf-sve:
     runs-on: ubuntu-22.04-arm
@@ -1183,12 +1183,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential ninja-build
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai:
      runs-on: ubuntu-22.04-arm
@@ -1209,12 +1209,12 @@ jobs:
          id: depends
          run: |
            sudo apt-get update
-           sudo apt-get install -y build-essential
+           sudo apt-get install -y build-essential ninja-build
 
        - name: Test
          id: ggml-ci
          run: |
-           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai-graviton4:
      runs-on: ah-ubuntu_22_04-c8g_8x
@@ -1232,6 +1232,7 @@ jobs:
            sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
            apt-get install -y \
             build-essential \
+            ninja-build \
             python3-venv \
             gpg \
             wget \
@@ -1262,4 +1263,5 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 \
            GG_BUILD_EXTRA_TESTS_0=1 \
+           GG_BUILD_NINJA=1 \
            bash ./ci/run.sh ./tmp/results ./tmp/mnt
