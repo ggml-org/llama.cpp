@@ -196,6 +196,13 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
     };
 
+    enum llama_load_mode {
+        LLAMA_LOAD_MODE_NONE      = 0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP      = 1, // memory map the model
+        LLAMA_LOAD_MODE_MLOCK     = 2, // force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO = 3, // use direct I/O if available
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -290,6 +297,7 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
+        enum llama_load_mode  load_mode; // how to load the model into memory
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
@@ -310,9 +318,9 @@ extern "C" {
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
-        bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
-        bool use_mlock;       // force system to keep model in RAM
+        // bool use_mmap;        // DEPRECATED: use mmap if possible
+        // bool use_direct_io;   // DEPRECATED: use direct io, takes precedence over use_mmap when supported
+        // bool use_mlock;       // DEPRECATED: force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used

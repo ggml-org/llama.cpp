@@ -14,6 +14,7 @@
 
 #include "ggml-cpp.h"
 
+#include "llama.h"
 #include "models/models.h"
 
 #include <algorithm>
@@ -2581,7 +2582,7 @@ void llama_model::load_vocab(llama_model_loader & ml) {
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
     const auto & split_mode   = params.split_mode;
-    const auto & use_mlock    = params.use_mlock;
+    const auto & use_mlock    = params.load_mode == LLAMA_LOAD_MODE_MLOCK;
     const auto & tensor_split = params.tensor_split;
 
     const int n_layer      = hparams.n_layer;
@@ -8698,15 +8699,13 @@ llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.n_gpu_layers                =*/ -1,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
+        /*.load_mode                   =*/ LLAMA_LOAD_MODE_MMAP,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.vocab_only                  =*/ false,
-        /*.use_mmap                    =*/ true,
-        /*.use_direct_io               =*/ false,
-        /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,

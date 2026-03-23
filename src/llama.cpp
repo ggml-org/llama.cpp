@@ -74,8 +74,7 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
 
     llama_model_params mparams_copy = *mparams;
     mparams_copy.no_alloc  = true;
-    mparams_copy.use_mmap  = false;
-    mparams_copy.use_mlock = false;
+    mparams_copy.load_mode = LLAMA_LOAD_MODE_NONE;
 
     llama_model * model = llama_model_load_from_file(path_model, mparams_copy);
     if (model == nullptr) {
@@ -837,7 +836,7 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, params.use_mmap, params.use_direct_io,
+        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, params.load_mode,
             params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
@@ -1035,7 +1034,7 @@ struct llama_model * llama_model_init_from_user(
     GGML_ASSERT(metadata != nullptr);
     std::string path_model;
     std::vector<std::string> splits = {};
-    params.use_mmap = false;
+    params.load_mode = LLAMA_LOAD_MODE_NONE;
     params.use_extra_bufts = false;
     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, params);
 }
