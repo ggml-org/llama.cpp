@@ -1347,7 +1347,14 @@ struct common_speculative_session::impl {
 
                 // clean orphaned attention KV entries beyond the checkpoint boundary;
                 // restore_checkpoint only restores recurrent/partial state (PARTIAL_ONLY flag)
-                callback.memory_seq_rm(ckpt_res.pos_max + 1, -1);
+                {
+                    static const bool skip_seqrm = (getenv("LLAMA_SKIP_SEQRM_AFTER_CKPT") != nullptr);
+                    if (skip_seqrm) {
+                        LOG_WRN("%s: SKIPPING memory_seq_rm after checkpoint restore (debug toggle)\n", __func__);
+                    } else {
+                        callback.memory_seq_rm(ckpt_res.pos_max + 1, -1);
+                    }
+                }
 
                 // delete Checkpoint
                 callback.delete_checkpoint();

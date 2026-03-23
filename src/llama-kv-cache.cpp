@@ -971,6 +971,37 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
         head = sinfo.idxs[s].back() + 1;
     }
+
+    // debug: scan for duplicate (seq_id, pos) pairs across cells
+    {
+        static const bool do_check = (getenv("LLAMA_DEBUG_KV_DUPLICATES") != nullptr);
+        if (do_check) {
+            for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+                const auto & cells = v_cells[sinfo.strm[s]];
+
+                // for each newly written cell, check if another cell has the same (seq_id, pos)
+                for (uint32_t ii = 0; ii < sinfo.size(); ++ii) {
+                    const auto new_idx = sinfo.idxs[s][ii];
+                    if (cells.is_empty(new_idx)) {
+                        continue;
+                    }
+
+                    const auto new_pos    = cells.pos_get(new_idx);
+                    const auto new_seq_id = cells.seq_get(new_idx);
+
+                    for (uint32_t j = 0; j < cells.size(); ++j) {
+                        if (j == new_idx || cells.is_empty(j)) {
+                            continue;
+                        }
+                        if (cells.pos_get(j) == new_pos && cells.seq_has(j, new_seq_id)) {
+                            LLAMA_LOG_WARN("%s: DUPLICATE KV cell: cell %u and cell %u both have (seq_id=%d, pos=%d)\n",
+                                           __func__, j, new_idx, new_seq_id, new_pos);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 bool llama_kv_cache::get_can_shift() const {
