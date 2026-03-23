@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -629,14 +630,17 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
         infer_request->set_input_tensor(i, input_tensor);
     }
 
-    auto ov_results = model->get_results();
-    for (size_t i = 0; i < ov_results.size(); i++) {
-        auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
-        auto output_tensor = create_ov_output_tensor(decoder, infer_request, i, ggml_tensor);
-        infer_request->set_output_tensor(i, output_tensor);
-    }
+    // Use get_output_tensor + memcpy instead of set_output_tensor to avoid memory overwritten
+    // when i/o buffer overlaps, e.g. the cgraph is a single PERMUTE
 
     infer_request->infer();
+
+    auto ov_results = model->get_results();
+    for (size_t i = 0; i < ov_results.size(); i++) {
+        auto output_tensor = infer_request->get_output_tensor(i);
+        auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        std::memcpy(ggml_tensor->data, output_tensor.data(), output_tensor.get_byte_size());
+    }
     return GGML_STATUS_SUCCESS;
 }
 
@@ -833,6 +837,68 @@ size_t checksum(const void * data, size_t size) {
         sum += bytes[i];
     }
     return sum;
+}
+
+bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path) {
+    if (tensor == nullptr || tensor->data == nullptr) {
+        return false;
+    }
+
+    std::ofstream out(file_path);
+    if (!out.is_open()) {
+        return false;
+    }
+
+    const size_t n = ggml_nelements(tensor);
+    out << "name: " << tensor->name
+        << ", type: " << ggml_type_name(tensor->type)
+        << ", shape: [" << tensor->ne[0] << ", " << tensor->ne[1] << ", " << tensor->ne[2] << ", " << tensor->ne[3]
+        << "]"
+        << ", elements: " << n
+        << ", data:" << '\n';
+
+    switch (tensor->type) {
+    case GGML_TYPE_F32: {
+        const auto * data = static_cast<const float *>(tensor->data);
+        for (size_t i = 0; i < n; ++i) {
+            out << data[i] << '\n';
+        }
+        break;
+    }
+    case GGML_TYPE_F16: {
+        const auto * data = static_cast<const ggml_fp16_t *>(tensor->data);
+        for (size_t i = 0; i < n; ++i) {
+            out << ggml_fp16_to_fp32(data[i]) << '\n';
+        }
+        break;
+    }
+    case GGML_TYPE_BF16: {
+        const auto * data = static_cast<const ggml_bf16_t *>(tensor->data);
+        for (size_t i = 0; i < n; ++i) {
+            out << ggml_bf16_to_fp32(data[i]) << '\n';
+        }
+        break;
+    }
+    case GGML_TYPE_I32: {
+        const auto * data = static_cast<const int32_t *>(tensor->data);
+        for (size_t i = 0; i < n; ++i) {
+            out << data[i] << '\n';
+        }
+        break;
+    }
+    case GGML_TYPE_I64: {
+        const auto * data = static_cast<const int64_t *>(tensor->data);
+        for (size_t i = 0; i < n; ++i) {
+            out << data[i] << '\n';
+        }
+        break;
+    }
+    default:
+        out << "unsupported tensor type for text dump" << '\n';
+        return false;
+    }
+
+    return true;
 }
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor) {
