@@ -117,7 +117,8 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
                  sentence_transformers_dense_modules: bool = False,
-                 fuse_gate_up_exps: bool = False):
+                 fuse_gate_up_exps: bool = False,
+                 fuse_qkv: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -139,6 +140,10 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self.fuse_qkv = fuse_qkv
+        self._q_buffer: dict[int, Tensor] = {}
+        self._k_buffer: dict[int, Tensor] = {}
+        self._v_buffer: dict[int, Tensor] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -565,6 +570,33 @@ class ModelBase:
             # If we buffered a gate/up tensor, wait for the other
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
+
+        # Handle Q/K/V tensor fusion if enabled
+        if self.fuse_qkv and bid is not None:
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid):
+                self._q_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid):
+                self._k_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
+                self._v_buffer[bid] = data_torch
+
+            # Check if all three Q, K, V are buffered for this layer
+            if bid in self._q_buffer and bid in self._k_buffer and bid in self._v_buffer:
+                q_data = self._q_buffer.pop(bid)
+                k_data = self._k_buffer.pop(bid)
+                v_data = self._v_buffer.pop(bid)
+                # Q shape: (n_embd_q, n_embd), K shape: (n_embd_k, n_embd), V shape: (n_embd_v, n_embd)
+                # concatenate to (n_embd_q + n_embd_k + n_embd_v, n_embd)
+                fused_data = torch.cat([q_data, k_data, v_data], dim=0)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid)
+                logger.info(f"Fused Q, K, V into QKV for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            # If we buffered a Q/K/V tensor, wait for the others
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
                 return []
 
         return [(new_name, data_torch)]
@@ -12404,6 +12436,11 @@ def parse_args() -> argparse.Namespace:
         help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
     )
 
+    parser.add_argument(
+        "--fuse-qkv", action="store_true",
+        help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -12542,7 +12579,8 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
-                                     fuse_gate_up_exps=args.fuse_gate_up_exps
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps,
+                                     fuse_qkv=args.fuse_qkv
                                      )
 
         if args.vocab_only:

@@ -30,18 +30,42 @@ llm_build_qwen3::llm_build_qwen3(const llama_model & model, const llm_graph_para
         // self-attention
         {
             // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
-            cb(Qcur, "Qcur", il);
+            ggml_tensor * Qcur = nullptr;
+            ggml_tensor * Kcur = nullptr;
+            ggml_tensor * Vcur = nullptr;
 
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-            cb(Kcur, "Kcur", il);
+            if (model.layers[il].wqkv) {
+                // fused QKV path: one matmul, then split via views
+                cur = build_lora_mm(model.layers[il].wqkv, cur);
+                cb(cur, "wqkv", il);
 
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
-            cb(Vcur, "Vcur", il);
+                const int64_t n_embd_q   = n_embd_head * n_head;
+                const int64_t n_embd_kgq = n_embd_head * n_head_kv;
+                const size_t es = ggml_element_size(cur);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                // No bias in Qwen3: view_3d directly (zero-copy)
+                Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, es * n_embd_head, cur->nb[1], 0);
+                Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, es * n_embd_head, cur->nb[1], es * n_embd_q);
+                Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, es * n_embd_head, cur->nb[1], es * (n_embd_q + n_embd_kgq));
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+            } else {
+                // separate Q/K/V path
+                Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+                cb(Qcur, "Qcur", il);
+
+                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                cb(Kcur, "Kcur", il);
+
+                Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            }
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
