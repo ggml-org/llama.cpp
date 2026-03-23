@@ -10690,8 +10690,9 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
 
     // Non-blocking fast path: lock-free lookup for exact layout match.
     // Dense weights pinned after S1-PRELOAD hit here on every inference token.
-    // After warmup, all weights are cached in the final layout — this path
-    // handles >99% of weight accesses during steady-state inference.
+    // IMPORTANT: Only return the EXACT requested layout — returning a different
+    // layout (e.g., SOA when AOS requested) causes the kernel to misinterpret
+    // the data format and produce garbage output.
     {
         void * cached_ptr = cache->lookup(cache_key, resolved);
         if (cached_ptr) {
@@ -10705,20 +10706,12 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         }
     }
 
-    // Blocking fallback via ensure_cached_layout on the DMA queue.
-    // During warmup: handles layout conversion (SOA→final) for first-time access.
-    // After warmup: all entries are cached and lookup() above handles them.
-    // For 120B MoE post-warmup: return nullptr so caller uses host-pinned zero-copy,
-    // avoiding the blocking ensure_cached_layout that causes L0 DirectSubmission hangs.
-    {
-        const bool post_warmup_host =
-            ggml_backend_sycl_all_weights_host() && ggml_sycl_layout_choices_finalized_for_device(device);
-        if (post_warmup_host) {
-            GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d post-warmup MISS — using host-pinned\n",
-                            tensor->name ? tensor->name : "(null)", (int) resolved);
-            return nullptr;
-        }
-    }
+    // Fallback: ensure_cached_layout on the DMA queue (separate from compute).
+    // This handles:
+    // - Warmup: first-time SOA conversion for each weight
+    // - PP: AOS layout request when S1-PRELOAD stored SOA (needs AOS copy)
+    // - Any cache miss (weight not yet in VRAM)
+    // The DMA queue prevents DirectSubmission controller timeout issues.
 
     // Warmup/first-access: use ensure_cached_layout.
     // For 120B models post-warmup, this path is never reached (post_warmup_host returns nullptr above).
