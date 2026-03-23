@@ -39,7 +39,8 @@ extern char **environ;
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
+#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
+#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -380,7 +381,7 @@ void server_models::update_meta(const std::string & name, const server_model_met
     if (it != mapping.end()) {
         it->second.meta = meta;
     }
-    cv.notify_all(); // notify wait_until_loaded
+    cv.notify_all(); // notify wait_until_loading_finished
 }
 
 bool server_models::has_model(const std::string & name) {
@@ -503,7 +504,7 @@ void server_models::unload_lru() {
     {
         std::unique_lock<std::mutex> lk(mutex);
         for (const auto & m : mapping) {
-            if (m.second.meta.is_active()) {
+            if (m.second.meta.is_running()) {
                 count_active++;
                 if (m.second.meta.last_used < lru_last_used) {
                     lru_model_name = m.first;
@@ -546,7 +547,7 @@ void server_models::load(const std::string & name) {
     if (base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
-            if (m.second.meta.is_active()) {
+            if (m.second.meta.is_running()) {
                 count_active++;
             }
         }
@@ -605,15 +606,15 @@ void server_models::load(const std::string & name) {
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
-            bool state_received = false; // true if child state received
             if (stdout_file) {
                 char buffer[4096];
                 while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
-                    if (!state_received && std::strstr(buffer, CMD_CHILD_TO_ROUTER_READY) != nullptr) {
-                        // child process is ready
+                    std::string str(buffer);
+                    if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
-                        state_received = true;
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
+                        this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
                 }
             } else {
@@ -706,13 +707,13 @@ void server_models::unload(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
-        if (it->second.meta.is_active()) {
-            SRV_INF("unloading model instance name=%s\n", name.c_str());
+        if (it->second.meta.is_running()) {
+            SRV_INF("stopping model instance name=%s\n", name.c_str());
             stopping_models.insert(name);
             cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
-            SRV_WRN("model instance name=%s is not loaded\n", name.c_str());
+            SRV_WRN("model instance name=%s is not running\n", name.c_str());
         }
     }
 }
@@ -722,8 +723,8 @@ void server_models::unload_all() {
     {
         std::lock_guard<std::mutex> lk(mutex);
         for (auto & [name, inst] : mapping) {
-            if (inst.meta.is_active()) {
-                SRV_INF("unloading model instance name=%s\n", name.c_str());
+            if (inst.meta.is_running()) {
+                SRV_INF("stopping model instance name=%s\n", name.c_str());
                 stopping_models.insert(name);
                 cv_stop.notify_all();
                 // status change will be handled by the managing thread
@@ -750,7 +751,7 @@ void server_models::update_status(const std::string & name, server_model_status 
     cv.notify_all();
 }
 
-void server_models::wait_until_loaded(const std::string & name) {
+void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
         auto it = mapping.find(name);
@@ -761,22 +762,25 @@ void server_models::wait_until_loaded(const std::string & name) {
     });
 }
 
-bool server_models::ensure_model_loaded(const std::string & name) {
+bool server_models::ensure_model_ready(const std::string & name) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->status == SERVER_MODEL_STATUS_LOADED) {
-        return false; // already loaded
+    if (meta->is_ready()) {
+        return false; // ready for taking requests
+    }
+    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
+        return false; // child is sleeping but still running; new request will wake it up
     }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
         load(name);
     }
 
-    // for loading state
+    // wait for loading to complete
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
-    wait_until_loaded(name);
+    wait_until_loading_finished(name);
 
     // check final status
     meta = get_meta(name);
@@ -792,8 +796,8 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->status != SERVER_MODEL_STATUS_LOADED) {
-        throw std::invalid_argument("model name=" + name + " is not loaded");
+    if (!meta->is_running()) {
+        throw std::invalid_argument("model name=" + name + " is not running");
     }
     if (update_last_used) {
         std::unique_lock<std::mutex> lk(mutex);
@@ -817,6 +821,11 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             base_params.timeout_write
             );
     return proxy;
+}
+
+bool server_models::is_child_server() {
+    const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
+    return router_port != nullptr;
 }
 
 std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler) {
@@ -852,6 +861,13 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
     });
 }
 
+void server_models::notify_router_sleeping_state(bool is_sleeping) {
+    common_log_pause(common_log_main());
+    fflush(stdout);
+    fprintf(stdout, "%s\n", is_sleeping ? CMD_CHILD_TO_ROUTER_SLEEP : CMD_CHILD_TO_ROUTER_READY);
+    fflush(stdout);
+    common_log_resume(common_log_main());
+}
 
 
 //
@@ -881,9 +897,9 @@ static bool router_validate_model(std::string & name, server_models & models, bo
     // resolve alias to canonical model name
     name = meta->name;
     if (models_autoload) {
-        models.ensure_model_loaded(name);
+        models.ensure_model_ready(name);
     } else {
-        if (meta->status != SERVER_MODEL_STATUS_LOADED) {
+        if (!meta->is_running()) {
             res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return false;
         }
@@ -956,8 +972,8 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
-        if (meta->status == SERVER_MODEL_STATUS_LOADED) {
-            res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
+        if (meta->is_running()) {
+            res_err(res, format_error_response("model is already running", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.load(meta->name);
@@ -1015,8 +1031,8 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (!model->is_active()) {
-            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+        if (!model->is_running()) {
+            res_err(res, format_error_response("model is not running", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.unload(model->name);
@@ -1181,7 +1197,8 @@ server_http_proxy::server_http_proxy(
                 continue;
             }
             if (key == "Host" || key == "host") {
-                req.set_header(key, host);
+                bool is_default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
+                req.set_header(key, is_default_port ? host : host + ":" + std::to_string(port));
             } else {
                 req.set_header(key, value);
             }

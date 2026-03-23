@@ -1634,6 +1634,13 @@ The `status` object can be:
 }
 ```
 
+```json
+"status": {
+  "value": "sleeping",
+  "args": ["llama-server", "-ctx", "4096"]
+}
+```
+
 ### POST `/models/load`: Load a model
 
 Load a model
