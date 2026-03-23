@@ -4607,15 +4607,20 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 
     // Check if UMA is explicitly enabled via environment variable
     bool uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr;
+
     bool is_uma = prop.integrated > 0 || uma_env;
 
     if (is_uma) {
-        // For UMA systems (like DGX Spark), use system memory info
         long available_memory_kb = 0;
         long free_swap_kb = 0;
 
         if (ggml_backend_cuda_get_available_uma_memory(&available_memory_kb, &free_swap_kb) && available_memory_kb > 0) {
-            *free = (size_t)available_memory_kb * 1024;
+            // use whichever value is higher — on some AMD APUs hipMemGetInfo already
+            // accounts for TTM-backed memory and returns more than /proc/meminfo
+            size_t proc_free = (size_t)available_memory_kb * 1024;
+            if (proc_free > *free) {
+                *free = proc_free;
+            }
         } else {
             GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
         }
