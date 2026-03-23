@@ -62,6 +62,9 @@ static void test_nemotron_tool_format(testing & t);
 static void test_cohere_reasoning_detection(testing & t);
 static void test_cohere_analysis(testing & t);
 
+// SmolLM3 template analysis tests
+static void test_smollm3_analysis(testing & t);
+
 // Marker separation
 static void test_marker_separation(testing & t);
 
@@ -96,6 +99,7 @@ int main(int argc, char * argv[]) {
     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
     t.test("cohere", test_cohere_analysis);
     t.test("nemotron", test_nemotron_analysis);
+    t.test("smollm3", test_smollm3_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
@@ -1446,6 +1450,47 @@ static void test_tool_format_cohere(testing & t) {
     t.assert_true("should support parallel calls", analysis.jinja_caps.supports_parallel_tool_calls);
     t.assert_true("should not require nonnull content", !analysis.content.requires_nonnull_content);
     t.assert_true("tools_array_wrapped should be true", analysis.tools.format.tools_array_wrapped);
+}
+
+// ============================================================================
+// SmolLM3 Template Analysis Tests
+// Tests for templates that change system message when enable_thinking flips
+// and prefill an empty <think></think> block in no-think mode.
+// ============================================================================
+static common_chat_template load_smollm3_template(testing & t) {
+    return load_template(t, "models/templates/HuggingFaceTB-SmolLM3-3B.jinja");
+}
+
+static void test_smollm3_reasoning_detection(testing & t);
+
+static void test_smollm3_analysis(testing & t) {
+    t.test("SmolLM3 reasoning detection", test_smollm3_reasoning_detection);
+}
+
+static void test_smollm3_reasoning_detection(testing & t) {
+    common_chat_template tmpl = load_smollm3_template(t);
+
+    // Run differential analysis
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    // SmolLM3 uses <think>/<think> reasoning tags.
+    // The template changes the entire system message when enable_thinking flips,
+    // so the analyzer must compare isolated generation prompts (not full outputs).
+    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
+
+    // Content should remain plain (no wrappers)
+    t.assert_equal("content start should be empty", "", analysis.content.start);
+    t.assert_equal("content end should be empty", "", analysis.content.end);
+    t.assert_equal("content should be PLAIN", content_mode::PLAIN, analysis.content.mode);
+
+    // Preserved tokens should include the reasoning markers
+    bool has_think_start = std::find(analysis.preserved_tokens.begin(), analysis.preserved_tokens.end(), "<think>") != analysis.preserved_tokens.end();
+    bool has_think_end = std::find(analysis.preserved_tokens.begin(), analysis.preserved_tokens.end(), "</think>") != analysis.preserved_tokens.end();
+    t.assert_true("preserved_tokens should contain '<think>'", has_think_start);
+    t.assert_true("preserved_tokens should contain '</think>'", has_think_end);
 }
 
 // ============================================================================
