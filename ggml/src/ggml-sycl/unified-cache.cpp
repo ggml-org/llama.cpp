@@ -5126,11 +5126,23 @@ static unified_cache_mode get_effective_mode() {
     return mode;
 }
 
-// Helper: Get device ID from queue
+// Helper: Get device ID from queue.
+// Uses gpu_dpct_ids[] (pre-scheduler-hiding GPU map) for secondary devices that
+// are hidden from the scheduler.  The scheduler-filtered map's identity fallback
+// is wrong when non-GPU devices are interleaved in dpct enumeration.
 static int get_device_id_from_queue(sycl::queue & queue) {
     try {
-        sycl::device dev          = queue.get_device();
-        int          device_count = dpct::dev_mgr::instance().device_count();
+        sycl::device   dev  = queue.get_device();
+        const auto &   info = ggml_sycl_info();
+        // First: check all physical GPUs via gpu_dpct_ids[] (pre-hiding map).
+        // This correctly finds secondary GPUs that were hidden from the scheduler.
+        for (int i = 0; i < info.total_gpu_count && i < GGML_SYCL_MAX_DEVICES; i++) {
+            if (ggml_sycl_get_gpu_device(i) == dev) {
+                return i;
+            }
+        }
+        // Fallback: check all dpct devices via scheduler-filtered map.
+        int device_count = dpct::dev_mgr::instance().device_count();
         for (int i = 0; i < device_count; i++) {
             if (ggml_sycl_get_device(i) == dev) {
                 return i;
