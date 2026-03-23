@@ -26,6 +26,7 @@
 
 	onMount(() => {
 		if (textareaElement) {
+			autoResizeTextarea(textareaElement);
 			textareaElement.focus();
 		}
 	});
@@ -50,8 +51,9 @@
 	<textarea
 		bind:this={textareaElement}
 		bind:value
-		class="text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+		class="text-md min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
 		class:cursor-not-allowed={disabled}
+		style="max-height: var(--max-message-height)"
 		{disabled}
 		onkeydown={onKeydown}
 		oninput={(event) => {
