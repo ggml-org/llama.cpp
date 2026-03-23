@@ -2557,6 +2557,34 @@ struct ggml_backend_sycl_context {
     bool moe_graphs_disabled_once = false;  // Set when we skip graphs for a single run
     bool moe_graph_rerecord       = false;  // Once set, never cleared — MoE models always re-record per token
 
+    // === Segmented graph replay for MoE models ===
+    // Instead of re-recording the entire graph every token (expensive), we split
+    // the compute graph into segments of consecutive non-MoE ops and record each
+    // segment as a separate executable graph.  On subsequent tokens:
+    //   1. Replay segment 0 (attention/norms before first MoE)
+    //   2. Dispatch MoE op 0 individually
+    //   3. Replay segment 1 (ops between MoE 0 and MoE 1)
+    //   ... and so on
+    // This eliminates the per-token re-record overhead (~2024 nodes) while keeping
+    // MoE dispatch dynamic (routing changes every token).
+    struct moe_graph_segment {
+        int start_node;  // Inclusive start index in cgraph->nodes[]
+        int end_node;    // Exclusive end index in cgraph->nodes[]
+        std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph;
+    };
+    std::vector<moe_graph_segment> moe_segments;
+    std::vector<int>               moe_node_indices;     // Indices of MUL_MAT_ID nodes
+    int                            moe_segments_n_nodes = 0;  // n_nodes when segments were recorded
+    bool                           moe_segments_is_decode = false;
+    bool                           moe_segments_valid   = false;
+
+    void invalidate_moe_segments() {
+        moe_segments.clear();
+        moe_node_indices.clear();
+        moe_segments_n_nodes = 0;
+        moe_segments_valid   = false;
+    }
+
     // === Cached per-graph computations (reset when n_nodes changes) ===
     int  cached_persistent_n_nodes = -1;   // n_nodes when persistent check was cached
     bool cached_persistent_result  = false; // cached should_use_persistent_tg result
