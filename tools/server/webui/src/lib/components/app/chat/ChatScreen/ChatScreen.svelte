@@ -369,7 +369,7 @@
 		/>
 
 		<div
-			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
+			class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto"
 			in:slide={{ duration: 150, axis: 'y' }}
 		>
 			<ChatScreenProcessingInfo />
@@ -397,7 +397,7 @@
 				</div>
 			{/if}
 
-			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
+			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
 				<ChatScreenForm
 					disabled={hasPropsError || isEditing()}
 					{initialMessage}
