@@ -23963,8 +23963,18 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // Non-blocking path for ALL layouts when source is USM-accessible.
         // On cache hit: use cached pointer. On miss: use host-pinned AOS zero-copy.
         // NEVER call ensure_cached_layout during inference (blocks on fill/DMA).
+        // Try the requested layout first, then SOA (prestage may have stored SOA
+        // even when dispatch requests AOS for MXFP4).
         if (src0_is_usm_accessible) {
             void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
+            // If requested layout not found, try SOA (prestage uploads SOA for all quant types)
+            if (!cached_ptr && layout != GGML_LAYOUT_SOA) {
+                cached_ptr = cache->try_get_cached_fast(expert_cache_key, GGML_LAYOUT_SOA);
+            }
+            // Also try COALESCED
+            if (!cached_ptr && layout != GGML_LAYOUT_COALESCED) {
+                cached_ptr = cache->try_get_cached_fast(expert_cache_key, GGML_LAYOUT_COALESCED);
+            }
             if (cached_ptr) {
                 // Cache hit: use the already-cached SOA/COALESCED pointer directly.
                 extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
