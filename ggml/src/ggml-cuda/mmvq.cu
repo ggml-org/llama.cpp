@@ -507,14 +507,12 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
         if (is_nvidia_turing_plus) {
             if (ncols_dst == 1 &&
-                std::find(iq_slow_turing.begin(), iq_slow_turing.end(), type) != iq_slow_turing.end()) {
+                    std::find(iq_slow_turing.begin(), iq_slow_turing.end(), type) != iq_slow_turing.end()) {
                 use = false;
             }
-        }
-
-        if (ncols_dst == 1 && std::find(iq_slow_other.begin(), iq_slow_other.end(), type) != iq_slow_other.end() ||
-            (is_nvidia_pascal_older && std::find(slow_pascal.begin(), slow_pascal.end(), type) != slow_pascal.end()) ||
-            GGML_CUDA_CC_IS_RDNA(cc)) {
+        } else if ((ncols_dst == 1 && std::find(iq_slow_other.begin(), iq_slow_other.end(), type) != iq_slow_other.end()) ||
+                (is_nvidia_pascal_older && std::find(slow_pascal.begin(), slow_pascal.end(), type) != slow_pascal.end()) ||
+                GGML_CUDA_CC_IS_RDNA(cc)) {
             use = false;
         }
 
