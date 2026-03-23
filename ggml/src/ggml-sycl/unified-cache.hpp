@@ -807,6 +807,11 @@ class unified_cache {
     size_t used_bytes(cache_entry_type type) const;
 
     void print_stats() const;
+
+    // Access the internal SYCL queue (for deferred free of temp allocations
+    // made on this queue's context, e.g. GPU-side reorder temp buffers).
+    sycl::queue & get_queue() { return queue_; }
+
     void reset_stats();
     // Debug/testing helper: verify internal maps are consistent.
     bool validate() const;
