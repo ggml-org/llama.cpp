@@ -28,9 +28,6 @@ def _build_repetition(item_rule, min_items, max_items, separator_rule=None):
     return f'({result})?' if min_items == 0 else result
 
 def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], out: list, decimals_left: int = 16, top_level: bool = True):
-    has_min = min_value != None
-    has_max = max_value != None
-
     def digit_range(from_char: str, to_char: str):
         out.append("[")
         if from_char == to_char:
@@ -106,7 +103,7 @@ def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], ou
                 out.append(to_str[i])
                 out.append("]")
 
-    if has_min and has_max:
+    if min_value is not None and max_value is not None:
         if min_value < 0 and max_value < 0:
             out.append("\"-\" (")
             _generate_min_max_int(-max_value, -min_value, out, decimals_left, top_level=True)
@@ -133,7 +130,7 @@ def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], ou
 
     less_decimals = max(decimals_left - 1, 1)
 
-    if has_min:
+    if min_value is not None:
         if min_value < 0:
             out.append("\"-\" (")
             _generate_min_max_int(None, -min_value, out, decimals_left, top_level=False)
@@ -177,7 +174,7 @@ def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], ou
                 more_digits(length - 1, less_decimals)
         return
 
-    if has_max:
+    if max_value is not None:
         if max_value >= 0:
             if top_level:
                 out.append("\"-\" [1-9] ")
@@ -633,7 +630,7 @@ class SchemaConverter:
             return self._add_rule(rule_name, self._build_object_rule(properties, required, hybrid_name, additional_properties=None))
 
         elif schema_type in (None, 'array') and ('items' in schema or 'prefixItems' in schema):
-            items = schema.get('items') or schema['prefixItems']
+            items = schema.get('items', schema.get('prefixItems'))
             if isinstance(items, list):
                 return self._add_rule(
                     rule_name,

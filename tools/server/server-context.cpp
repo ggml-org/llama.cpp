@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <exception>
 #include <memory>
 #include <filesystem>
 
@@ -893,9 +894,10 @@ private:
             }
 
             // thinking is enabled if:
-            // 1. It's not explicitly disabled (reasoning_budget == 0)
+            // 1. It's not explicitly disabled via --reasoning off
             // 2. The chat template supports it
-            const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+            const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
+            const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
             SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
 
             chat_params = {
@@ -907,7 +909,10 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
+                /* reasoning_budget      */ params_base.reasoning_budget,
+                /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
+                /* force_pure_content    */ params_base.force_pure_content_parser
             };
         }
 
@@ -1148,11 +1153,11 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
-            slot.smpl.reset(common_sampler_init(model, task.params.sampling));
-
-            if (slot.smpl == nullptr) {
-                // for now, the only error that may happen here is invalid grammar
-                send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
+            try {
+                slot.smpl.reset(common_sampler_init(model, task.params.sampling));
+            } catch (std::exception & e) {
+                std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
+                send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
 
@@ -1185,6 +1190,9 @@ private:
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
             : SLOT_STATE_STARTED;
+
+        // reset server kill-switch counter
+        n_empty_consecutive = 0;
 
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
         return true;
@@ -1424,9 +1432,10 @@ private:
             res->tokens  = { tkn.tok };
         }
 
-        res->n_decoded           = slot.n_decoded;
-        res->n_prompt_tokens     = slot.task->n_tokens();
-        res->post_sampling_probs = slot.task->params.post_sampling_probs;
+        res->n_decoded             = slot.n_decoded;
+        res->n_prompt_tokens       = slot.task->n_tokens();
+        res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
+        res->post_sampling_probs   = slot.task->params.post_sampling_probs;
 
         res->verbose           = slot.task->params.verbose;
         res->res_type          = slot.task->params.res_type;
@@ -1471,14 +1480,15 @@ private:
         res->prompt          = slot.task->tokens.detokenize(ctx, true);
         res->response_fields = std::move(slot.task->params.response_fields);
 
-        res->truncated           = slot.truncated;
-        res->n_decoded           = slot.n_decoded;
-        res->n_prompt_tokens     = slot.task->n_tokens();
-        res->n_tokens_cached     = slot.prompt.n_tokens();
-        res->has_new_line        = slot.has_new_line;
-        res->stopping_word       = slot.stopping_word;
-        res->stop                = slot.stop;
-        res->post_sampling_probs = slot.task->params.post_sampling_probs;
+        res->truncated             = slot.truncated;
+        res->n_decoded             = slot.n_decoded;
+        res->n_prompt_tokens       = slot.task->n_tokens();
+        res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
+        res->n_tokens_cached       = slot.prompt.n_tokens();
+        res->has_new_line          = slot.has_new_line;
+        res->stopping_word         = slot.stopping_word;
+        res->stop                  = slot.stop;
+        res->post_sampling_probs   = slot.task->params.post_sampling_probs;
 
         res->verbose           = slot.task->params.verbose;
         res->stream            = slot.task->params.stream;
@@ -2297,8 +2307,8 @@ private:
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
 
-                            // note: when n_swa == 0, the model does not use SWA, which is equivalent to a window of 1
-                            const auto n_swa = std::max(1, llama_model_n_swa(model));
+                            // note: when n_swa == 0, the model does not use SWA
+                            const auto n_swa = std::max(0, llama_model_n_swa(model));
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa);
@@ -2353,7 +2363,7 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                if (pos_min > pos_min_thold) {
+                                if (pos_min >= pos_min_thold) {
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
@@ -2396,11 +2406,11 @@ private:
                             }
 
                             {
-                                // erase any checkpoints with pos_min > pos_min_thold
+                                // erase any checkpoints with pos_max > pos_next
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
-                                    if (cur.pos_min > pos_min_thold) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, (float) cur.data.size() / 1024 / 1024);
+                                    if (cur.pos_max > pos_next) {
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.data.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
                                         ++it;
@@ -2449,7 +2459,38 @@ private:
                         slot.n_prompt_tokens_cache = 0;
                     }
 
+                    // If using an alora, there may be uncached tokens that come
+                    // before the invocation sequence. When this happens, the
+                    // tokens before the invocation sequence need to be
+                    // processed without the adapter in a separate batch, then
+                    // the adapter needs to be enabled for the remaining tokens.
+                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.prompt.n_tokens()) {
+                        SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
+                        const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
+                        GGML_ASSERT(enabled_loras.size() == 1);
+                        alora_scale = slot.lora[enabled_loras[0]].scale;
+                        slot.lora[enabled_loras[0]].scale = 0.0f;
+                        alora_disabled_id = enabled_loras[0];
+                    }
+
                     bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+
+                    // make checkpoints only for completion tasks
+                    do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
+
+                    // make a checkpoint of the parts of the memory that cannot be rolled back.
+                    // checkpoints are created only if:
+                    // - the model uses SWA and we are not using `swa_full`
+                    // - the model architecture is marked as recurrent or hybrid
+                    //
+                    // TODO: try to make this conditional on the context or the memory module, instead of the model type
+                    do_checkpoint = do_checkpoint && (
+                            llama_model_is_recurrent(model) ||
+                            llama_model_is_hybrid(model) ||
+                            (llama_model_n_swa(model) > 0 && !params_base.swa_full)
+                            );
+
+                    bool has_mtmd = false;
 
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
@@ -2471,37 +2512,8 @@ private:
                             slot.prompt.tokens.push_back(chunk.get()); // copy
                         }
 
-                        do_checkpoint = false; // do not checkpoint right after an image chunk
+                        has_mtmd = true;
                     }
-
-                    // If using an alora, there may be uncached tokens that come
-                    // before the invocation sequence. When this happens, the
-                    // tokens before the invocation sequence need to be
-                    // processed without the adapter in a separate batch, then
-                    // the adapter needs to be enabled for the remaining tokens.
-                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.prompt.n_tokens()) {
-                        SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
-                        const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
-                        GGML_ASSERT(enabled_loras.size() == 1);
-                        alora_scale = slot.lora[enabled_loras[0]].scale;
-                        slot.lora[enabled_loras[0]].scale = 0.0f;
-                        alora_disabled_id = enabled_loras[0];
-                    }
-
-                    // make checkpoints only for completion tasks
-                    do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
-
-                    // make a checkpoint of the parts of the memory that cannot be rolled back.
-                    // checkpoints are created only if:
-                    // - the model uses SWA and we are not using `swa_full`
-                    // - the model architecture is marked as recurrent or hybrid
-                    //
-                    // TODO: try to make this conditional on the context or the memory module, instead of the model type
-                    do_checkpoint = do_checkpoint && (
-                            llama_model_is_recurrent(model) ||
-                            llama_model_is_hybrid(model) ||
-                            (llama_model_n_swa(model) > 0 && !params_base.swa_full)
-                            );
 
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.n_tokens < n_batch) {
@@ -2530,9 +2542,24 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        const int n_last = std::min(n_batch, 512);
-                        if (do_checkpoint && slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
-                            break;
+                        // create checkpoints that many tokens before the end of the prompt:
+                        //  - 4 + n_ubatch
+                        //  - 4
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/20288
+                        if (do_checkpoint) {
+                            static const int checkpoint_offsets[] = {4 + n_ubatch, 4};
+
+                            bool should_break = false;
+                            for (int offset : checkpoint_offsets) {
+                                const int n_last = std::min(n_batch, offset);
+                                if (slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
+                                    should_break = true;
+                                    break;
+                                }
+                            }
+                            if (should_break) {
+                                break;
+                            }
                         }
                     }
 
@@ -2554,18 +2581,27 @@ private:
                         slot.init_sampler();
                         SLT_INF(slot, "prompt processing done, n_tokens = %d, batch.n_tokens = %d\n", slot.prompt.n_tokens(), batch.n_tokens);
                     } else {
-                        // only do non-end checkpoints if the "checkpoint every n tokens" option is set
-                        do_checkpoint = do_checkpoint && params_base.checkpoint_every_nt > 0;
-                        if (do_checkpoint) {
-                            llama_pos last_checkpoint = 0;
-                            if (!slot.prompt.checkpoints.empty()) {
-                                last_checkpoint = slot.prompt.checkpoints.back().n_tokens;
-                            }
-                            do_checkpoint = do_checkpoint && slot.prompt.n_tokens() - batch.n_tokens - last_checkpoint >= params_base.checkpoint_every_nt;
+                        if (slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch) {
+                            // near the end of the prompt
+                            do_checkpoint = do_checkpoint && true;
+                        } else {
+                            // only do non-end checkpoints if the "checkpoint every n tokens" option is set
+                            do_checkpoint = do_checkpoint && params_base.checkpoint_every_nt > 0;
+
                             if (do_checkpoint) {
-                                SLT_INF(slot, "%d tokens since last checkpoint at %d, creating new checkpoint during processing at position %d\n", params_base.checkpoint_every_nt, last_checkpoint, slot.prompt.n_tokens());
+                                llama_pos last_checkpoint = 0;
+                                if (!slot.prompt.checkpoints.empty()) {
+                                    last_checkpoint = slot.prompt.checkpoints.back().n_tokens;
+                                }
+
+                                do_checkpoint = do_checkpoint && slot.prompt.n_tokens() - batch.n_tokens - last_checkpoint >= params_base.checkpoint_every_nt;
+
+                                if (do_checkpoint) {
+                                    SLT_INF(slot, "%d tokens since last checkpoint at %d, creating new checkpoint during processing at position %d\n", params_base.checkpoint_every_nt, last_checkpoint, slot.prompt.n_tokens());
+                                }
                             }
                         }
+
                         SLT_INF(slot, "prompt processing progress, n_tokens = %d, batch.n_tokens = %d, progress = %f\n", slot.prompt.n_tokens(), batch.n_tokens, (float) slot.prompt.n_tokens() / slot.task->n_tokens());
                     }
 
@@ -2573,10 +2609,13 @@ private:
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id);
 
                     // no need for empty or small checkpoints
-                    do_checkpoint = do_checkpoint && (pos_min >= 0 && pos_max >= 64);
+                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= 64);
+
+                    // do not checkpoint after mtmd chunks
+                    do_checkpoint = do_checkpoint && !has_mtmd;
 
                     // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || pos_max > slot.prompt.checkpoints.back().pos_max + 64);
+                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || slot.prompt.n_tokens() - n_tokens_cur > slot.prompt.checkpoints.back().n_tokens + 64);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
@@ -2994,6 +3033,9 @@ struct server_res_generator : server_http_res {
     }
 };
 
+void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
+    impl->queue_tasks.on_sleeping_state(std::move(callback));
+}
 
 
 //

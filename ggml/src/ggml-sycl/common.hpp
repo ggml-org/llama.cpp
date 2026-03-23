@@ -211,7 +211,7 @@ struct sycl_device_info {
              // number of compute units on a SYCL device.
     // size_t  smpb;               // max. shared memory per block
     size_t  smpbo;              // max. shared memory per block (with opt-in)
-    int warp_size;     // max sub_group_size of SYCL
+    int warp_size;     // WARP_SIZE(16)|WARP_32_SIZE(32)|WARP_16_SIZE(16). For Intel GPU, 16 is better in most cases. Some OP support 32 only.
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
@@ -872,6 +872,97 @@ static __dpct_inline__ uint32_t fastmodulo(uint32_t n, const sycl::uint3 fastdiv
 static bool fast_fp16_available(const int cc) {
     GGML_UNUSED(cc);
     return true;   //Intel GPUs always support FP16.
+}
+
+enum class block_reduce_method {
+    MAX,
+    SUM,
+};
+
+template<block_reduce_method method_t, typename T, int warp_size>
+struct block_reduce_policy;
+
+template <typename T, typename... Ts>
+inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+
+template<typename...>
+inline constexpr bool ggml_sycl_dependent_false_v = false;
+
+#define WARP_32_SIZE 32
+
+template <typename T, int warp_size> struct block_reduce_policy<block_reduce_method::SUM, T, warp_size> {
+    static T reduce(T val) {
+        if constexpr (is_any<T, float, sycl::float2, sycl::half2, int>) {
+            return warp_reduce_sum<warp_size>(val);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce sum");
+        }
+    }
+
+    static T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return 0.0f;
+        } else if constexpr (std::is_same_v<T, sycl::float2>) {
+            return sycl::float2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, sycl::half2>) {
+            return sycl::half2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, int>) {
+            return 0;
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce sum");
+        }
+    }
+};
+
+template <typename T, int warp_size> struct block_reduce_policy<block_reduce_method::MAX, T, warp_size> {
+    static T reduce(T val) {
+        if constexpr (is_any<T, float, sycl::half2>) {
+            return warp_reduce_max<warp_size>(val);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce max");
+        }
+    }
+
+    static T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return -INFINITY;
+        } else if constexpr (std::is_same_v<T, sycl::half2>) {
+            return sycl::half2(-INFINITY, -INFINITY);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce max");
+        }
+    }
+};
+
+
+template <block_reduce_method reduce_method_t, int warp_size, typename T>
+static T block_reduce(T val, T * shared_vals, int block_size_template) {
+    auto item_ct1                 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    val                           = block_reduce_policy<reduce_method_t, T,warp_size>::reduce(val);
+    const int block_size = block_size_template == 0 ? item_ct1.get_local_range(2) : block_size_template;
+    const int nthreads = item_ct1.get_local_range(2);
+    const int nwarps = nthreads / WARP_SIZE;
+
+    if (block_size > warp_size) {
+        assert((block_size <= 1024) && (block_size % warp_size) == 0);
+        const int warp_id = item_ct1.get_local_id(2) / warp_size;
+        const int lane_id = item_ct1.get_local_id(2) % warp_size;
+        if (lane_id == 0) {
+            shared_vals[warp_id] = val;
+        }
+        item_ct1.barrier(sycl::access::fence_space::local_space);
+
+        size_t nreduce = nwarps / WARP_SIZE;
+        float tmp = 0.f;
+        if (lane_id < (static_cast<int>(block_size) / warp_size)) {
+            for (size_t i = 0; i < nreduce; i += 1)
+            {
+                tmp += shared_vals[lane_id + i * WARP_SIZE];
+            }
+        }
+        return block_reduce_policy<reduce_method_t, T, warp_size>::reduce(tmp);
+    }
+    return val;
 }
 
 #endif // GGML_SYCL_COMMON_HPP
