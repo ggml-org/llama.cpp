@@ -3467,9 +3467,17 @@ void unified_cache::finalize_pending_fills() {
             finalized++;
         }
     }
+    size_t in_progress = 0, ready = 0, no_event = 0;
+    for (auto & [k, e] : entries_) {
+        if (e.state == cache_entry_state::IN_PROGRESS) {
+            if (e.has_ready_event) in_progress++;
+            else no_event++;
+        } else if (e.state == cache_entry_state::READY) ready++;
+    }
+    GGML_LOG_INFO("[UNIFIED-CACHE] finalize: finalized=%zu, remaining: ready=%zu in_progress_with_event=%zu in_progress_no_event=%zu total_entries=%zu id_to_key=%zu\n",
+                  finalized, ready, in_progress, no_event, entries_.size(), id_to_key_.size());
     if (finalized > 0) {
         entry_cv_.notify_all();
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] finalized %zu pending fills\n", finalized);
     }
 }
 
@@ -3543,6 +3551,12 @@ void * unified_cache::try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggm
     std::shared_lock<std::shared_mutex> lock(rw_mutex_);
     auto                                id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
+        static std::atomic<int> miss_log{0};
+        if (miss_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+            GGML_LOG_WARN("[CACHE-LOOKUP] MISS: model=%llu hash=0x%llx aux=0x%llx layout=%d id_to_key_size=%zu entries_size=%zu\n",
+                          (unsigned long long)key_id.model_id, (unsigned long long)key_id.name_hash,
+                          (unsigned long long)key_id.aux_id, (int)layout, id_to_key_.size(), entries_.size());
+        }
         return nullptr;
     }
     auto entry_it = entries_.find(id_it->second);
@@ -3825,72 +3839,60 @@ bool unified_cache::stage_expert_group(int                          block_id,
         return false;
     }
 
-    // If per-tensor requests are provided, use ensure_cached_layout for each.
-    // This reuses the existing fill infrastructure (GPU reorder, CPU reorder, etc.)
-    // with atomic rollback on failure.
-    bool use_layout_api = false;
-    for (auto & s : slots) {
-        if (s.req && !s.was_existing) {
-            use_layout_api = true;
-            break;
-        }
-    }
-
-    if (use_layout_api) {
-        // Use ensure_cached_layout per tensor, with rollback on failure.
-        std::vector<cache_layout_result> results;
-        results.reserve(slots.size());
+    // Explicit allocate + fill + register path — NO ensure_cached_layout.
+    // This avoids the black-box behavior of ensure_cached_layout which can
+    // silently fall back to host cache, fail to register entries, or use
+    // the wrong queue.
+    {
         bool all_ok = true;
-
         for (auto & s : slots) {
-            if (s.was_existing) {
-                cache_layout_result r{};
-                r.device_ptr = s.ptr;
-                r.status     = cache_layout_status::READY;
-                results.push_back(r);
-                continue;
-            }
-            if (!s.req) {
-                // No request provided -- skip this tensor
-                cache_layout_result r{};
-                r.status = cache_layout_status::FAILED;
-                results.push_back(r);
-                all_ok = false;
-                break;
-            }
-            try {
-                auto result = ensure_cached_layout(*s.req, {});
-                results.push_back(result);
-                if (result.status != cache_layout_status::READY &&
-                    result.status != cache_layout_status::IN_PROGRESS) {
-                    all_ok = false;
-                    break;
-                }
-                s.ptr = result.device_ptr;
-            } catch (...) {
+            if (s.was_existing) continue;
+
+            // 1. Allocate VRAM slot (device only, no host fallback)
+            s.ptr = allocate_slot(*s.key, s.data->dst_size, layout,
+                                  cache_entry_type::MOE_EXPERT,
+                                  s.data->layer_id, s.data->expert_id);
+            if (!s.ptr) {
                 all_ok = false;
                 break;
             }
         }
 
         if (!all_ok) {
-            // Rollback: remove any entries we just created
-            for (size_t i = 0; i < results.size(); i++) {
-                if (slots[i].was_existing) continue;
-                if (results[i].device_ptr) {
-                    remove(*slots[i].key, cache_entry_type::MOE_EXPERT,
-                           slots[i].data->layer_id, slots[i].data->expert_id, layout);
-                }
+            // Rollback partial allocations
+            for (auto & s : slots) {
+                if (s.was_existing || !s.ptr) continue;
+                remove(*s.key, cache_entry_type::MOE_EXPERT,
+                       s.data->layer_id, s.data->expert_id, layout);
+                s.ptr = nullptr;
             }
-            GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
-                          "ensure_cached_layout rollback\n",
-                          block_id, expert_id_arg);
             return false;
         }
 
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
-                        "staged %zu tensors via layout API (total=%zu bytes)\n",
-                        block_id, expert_id_arg, slots.size(), total_needed);
+        // 2. Fill all slots (DMA + optional reorder via fill_fn from request)
+        sycl::queue & dq = get_dma_queue();
+        for (auto & s : slots) {
+            if (s.was_existing) continue;
+            if (s.req && s.req->fill_fn) {
+                // Use the caller-provided fill function (GPU reorder, CPU reorder, etc.)
+                s.req->fill_fn(dq, s.ptr, s.data->dst_size,
+                               s.data->src_ptr, s.data->src_size,
+                               s.req->fill_ctx, {});
+            } else if (s.data->src_ptr && s.data->src_size > 0) {
+                // Raw DMA copy
+                dq.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
+            }
+        }
+        dq.wait();  // Ensure all fills complete before registering
+
+        // 3. Register all as READY
+        for (auto & s : slots) {
+            if (s.was_existing) continue;
+            register_ready(*s.key, s.ptr, layout, s.data->dst_size,
+                           cache_entry_type::MOE_EXPERT,
+                           s.data->layer_id, s.data->expert_id);
+        }
+
         return true;
     }
 
