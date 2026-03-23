@@ -29,8 +29,8 @@ static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
 
 struct run_proc_result {
     std::string output;
-    int         exit_code = -1;
-    bool        timed_out = false;
+    int  exit_code = -1;
+    bool timed_out = false;
 };
 
 static run_proc_result run_process(
@@ -133,31 +133,17 @@ static bool glob_match(const std::string & pattern, const std::string & str) {
     return glob_match(pattern.c_str(), str.c_str());
 }
 
-//
-// base struct
-//
-
-struct server_tool {
-    std::string name;
-    std::string display_name;
-    bool permission_write = false;
-
-    virtual ~server_tool() = default;
-    virtual json get_definition() = 0;
-    virtual json invoke(json params) = 0;
-
-    json to_json() {
-        return {
-            {"display_name", display_name},
-            {"tool", name},
-            {"type", "builtin"},
-            {"permissions", json{
-                {"write", permission_write}
-            }},
-            {"definition", get_definition()},
-        };
-    }
-};
+json server_tool::to_json() {
+    return {
+        {"display_name", display_name},
+        {"tool", name},
+        {"type", "builtin"},
+        {"permissions", json{
+            {"write", permission_write}
+        }},
+        {"definition", get_definition()},
+    };
+}
 
 //
 // read_file: read a file with optional line range and line-number prefix
@@ -533,7 +519,7 @@ struct server_tool_edit_file : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", 
+                {"description",
                     "Edit a file by applying a list of line-based changes. "
                     "Each change targets a 1-based inclusive line range and has a mode: "
                     "\"replace\" (replace lines with content), "
@@ -755,17 +741,56 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-static json server_tools_list() {
-    auto tools  = build_tools();
-    json result = json::array();
-    for (const auto & t : tools) {
-        result.push_back(t->to_json());
+void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+    if (!enabled_tools.empty()) {
+        std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
+        auto all_tools = build_tools();
+
+        tools.clear();
+        for (auto & t : all_tools) {
+            if (enabled_set.count(t->name) > 0 || enabled_set.count("all") > 0) {
+                tools.push_back(std::move(t));
+            }
+        }
     }
-    return result;
+
+    handle_get = [this](const server_http_req &) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            json result = json::array();
+            for (const auto & t : tools) {
+                result.push_back(t->to_json());
+            }
+            res->data = safe_json_to_str(result);
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
+
+    handle_post = [this](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            json body = json::parse(req.body);
+            std::string tool_name = body.at("tool").get<std::string>();
+            json params = body.value("params", json::object());
+            json result = invoke(tool_name, params);
+            res->data   = safe_json_to_str(result);
+        } catch (const json::exception & e) {
+            res->status = 400;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
 }
 
-static json server_tool_call(const std::string & name, const json & params) {
-    auto tools = build_tools();
+json server_tools::invoke(const std::string & name, const json & params) {
     for (auto & t : tools) {
         if (t->name == name) {
             return t->invoke(params);
@@ -773,35 +798,3 @@ static json server_tool_call(const std::string & name, const json & params) {
     }
     return {{"error", "unknown tool: " + name}};
 }
-
-server_http_context::handler_t server_tools_get = [](const server_http_req &) -> server_http_res_ptr {
-    auto res = std::make_unique<server_http_res>();
-    try {
-        json tools = server_tools_list();
-        res->data = safe_json_to_str(tools);
-    } catch (const std::exception & e) {
-        SRV_ERR("got exception: %s\n", e.what());
-        res->status = 500;
-        res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
-    }
-    return res;
-};
-
-server_http_context::handler_t server_tools_post = [](const server_http_req & req) -> server_http_res_ptr {
-    auto res = std::make_unique<server_http_res>();
-    try {
-        json body = json::parse(req.body);
-        std::string tool_name = body.at("tool").get<std::string>();
-        json params = body.value("params", json::object());
-        json result = server_tool_call(tool_name, params);
-        res->data   = safe_json_to_str(result);
-    } catch (const json::exception & e) {
-        res->status = 400;
-        res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-    } catch (const std::exception & e) {
-        SRV_ERR("got exception: %s\n", e.what());
-        res->status = 500;
-        res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
-    }
-    return res;
-};

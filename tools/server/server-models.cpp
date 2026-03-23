@@ -539,6 +539,22 @@ void server_models::load(const std::string & name) {
         return;
     }
 
+    // Re-check capacity under the lock to prevent concurrent loads from
+    // exceeding models_max. Without this, the window between unload_lru()
+    // releasing its lock and this lock_guard acquiring allows multiple
+    // threads to each observe capacity and all proceed to load.
+    if (base_params.models_max > 0) {
+        size_t count_active = 0;
+        for (const auto & m : mapping) {
+            if (m.second.meta.is_active()) {
+                count_active++;
+            }
+        }
+        if (count_active >= (size_t)base_params.models_max) {
+            throw std::runtime_error("model limit reached, try again later");
+        }
+    }
+
     // prepare new instance info
     instance_t inst;
     inst.meta           = meta;
@@ -606,13 +622,20 @@ void server_models::load(const std::string & name) {
         });
 
         std::thread stopping_thread([&]() {
-            // thread to monitor stopping signal
+            // thread to monitor stopping signal OR child crash
             auto is_stopping = [this, &name]() {
                 return this->stopping_models.find(name) != this->stopping_models.end();
             };
+            auto should_wake = [&]() {
+                return is_stopping() || !subprocess_alive(child_proc.get());
+            };
             {
                 std::unique_lock<std::mutex> lk(this->mutex);
-                this->cv_stop.wait(lk, is_stopping);
+                this->cv_stop.wait(lk, should_wake);
+            }
+            // child may have already exited (e.g. crashed) — skip shutdown sequence
+            if (!subprocess_alive(child_proc.get())) {
+                return;
             }
             SRV_INF("stopping model instance name=%s\n", name.c_str());
             // send interrupt to child process

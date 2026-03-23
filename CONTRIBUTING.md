@@ -178,6 +178,8 @@ Maintainers reserve the right to decline review or close pull requests for any r
 - New code should follow the guidelines (coding, naming, etc.) outlined in this document. Exceptions are allowed in isolated, backend-specific parts of the code that do not interface directly with the `ggml` interfaces.
   _(NOTE: for legacy reasons, existing code is not required to follow this guideline)_
 
+- For changes in server, please make sure to refer to the [server development documentation](./tools/server/README-dev.md)
+
 # Documentation
 
 - Documentation is a community effort
