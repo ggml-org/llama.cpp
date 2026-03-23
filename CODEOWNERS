@@ -65,6 +65,7 @@
 /scripts/gen*                           @ggerganov
 /scripts/get*                           @ggerganov
 /scripts/sync*                          @ggerganov
+/scripts/snapdragon/                    @ggml-org/ggml-hexagon
 /src/                                   @ggerganov
 /src/llama-adapter.*                    @CISC
 /src/llama-arch.*                       @CISC
