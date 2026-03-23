@@ -15,6 +15,12 @@ layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16
 #if defined(A_TYPE_PACKED32)
 layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
 #endif
+#if defined(A_TYPE_REPACKED)
+layout (binding = 0) readonly buffer A_QUANTS   {uint8_t data_a_quants[];};
+layout (binding = 0) readonly buffer A_QUANTS16 {uint16_t data_a_quants16[];};
+layout (binding = 0) readonly buffer A_QUANTS32 {uint32_t data_a_quants32[];};
+layout (binding = 0) readonly buffer A_DELTAS   {float16_t data_a_deltas[];};
+#endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 #ifdef B_TYPEV2

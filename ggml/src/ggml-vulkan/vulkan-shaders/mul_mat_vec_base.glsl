@@ -38,6 +38,8 @@ layout (push_constant) uniform parameter
     uint broadcast2;
     uint broadcast3;
 #endif
+
+    uint deltas_offset;
 } p;
 
 #ifdef MUL_MAT_ID

@@ -11,11 +11,19 @@
 // 4-byte loads for Q4_1 blocks (20 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 #ifdef DATA_A_Q4_0
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = data_a_quants32[ib * 4 + iqs];
+#else
     buf_a[buf_ib].qs[iqs] = pack32(u16vec2(data_a_packed16[ib].qs[iqs * 2],
                                            data_a_packed16[ib].qs[iqs * 2 + 1]));
+#endif
 
     if (iqs == 0) {
+#if defined(A_TYPE_REPACKED)
+        buf_a[buf_ib].dm = FLOAT_TYPE(data_a_deltas[p.deltas_offset + ib]);
+#else
         buf_a[buf_ib].dm = FLOAT_TYPE(data_a_packed16[ib].d);
+#endif
     }
 #else // DATA_A_Q4_1
     buf_a[buf_ib].qs[iqs] = data_a_packed32[ib].qs[iqs];

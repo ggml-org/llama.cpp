@@ -52,8 +52,13 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint ib = idx / 4;
             const uint iqs = idx & 0x03;
 
+#if defined(A_TYPE_REPACKED)
+            const float d = float(data_a_deltas[p.deltas_offset + ib]);
+            const uint vui = data_a_quants32[ib * 4 + iqs];
+#else
             const float d = float(data_a_packed16[ib].d);
             const uint vui = uint(data_a_packed16[ib].qs[2*iqs]) | (uint(data_a_packed16[ib].qs[2*iqs + 1]) << 16);
+#endif
             const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - 8.0f) * d;
             const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;
 

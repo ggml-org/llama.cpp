@@ -6,7 +6,11 @@
 
 #if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 FLOAT_TYPE get_dm(uint ib) {
+#if defined(DATA_A_Q4_0) && defined(A_TYPE_REPACKED)
+    return FLOAT_TYPE(data_a_deltas[p.deltas_offset + ib]);
+#else
     return FLOAT_TYPE(data_a[ib].d);
+#endif
 }
 #endif
 
@@ -33,9 +37,13 @@ FLOAT_TYPEV2 get_dm(uint ib) {
 #if defined(DATA_A_Q4_0)
 // 2-byte loads for Q4_0 blocks (18 bytes)
 i32vec2 repack(uint ib, uint iqs) {
+#if defined(DATA_A_Q4_0) && defined(A_TYPE_REPACKED)
+    const uint32_t vui = data_a_quants32[ib * 4 + iqs];
+#else
     const u16vec2 quants = u16vec2(data_a_packed16[ib].qs[iqs * 2    ],
                                    data_a_packed16[ib].qs[iqs * 2 + 1]);
     const uint32_t vui = pack32(quants);
+#endif
     return i32vec2( vui       & 0x0F0F0F0F,
                    (vui >> 4) & 0x0F0F0F0F);
 }
