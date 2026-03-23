@@ -263,6 +263,7 @@ struct filter_params {
     float   preemph = 0.f;
     bool    use_natural_log = false;
     bool    norm_per_feature = false;
+    float   fixed_max = 0.0f;  // if > 0, use this as the max for normalization instead of data-dependent max
 };
 
 static void log_mel_spectrogram_worker_thread(int                        ith,
@@ -465,10 +466,17 @@ static bool log_mel_spectrogram(
         }
     } else {
         // clamping and normalization
-        double mmax = -1e20;
-        for (int i = 0; i < out.n_mel*out.n_len; i++) {
-            if (out.data[i] > mmax) {
-                mmax = out.data[i];
+        double mmax;
+        if (params.fixed_max > 0.0f) {
+            // Use fixed max (e.g., Voxtral Realtime uses GLOBAL_LOG_MEL_MAX = 1.5)
+            mmax = params.fixed_max;
+        } else {
+            // Data-dependent max (Whisper default)
+            mmax = -1e20;
+            for (int i = 0; i < out.n_mel*out.n_len; i++) {
+                if (out.data[i] > mmax) {
+                    mmax = out.data[i];
+                }
             }
         }
 
@@ -620,6 +628,94 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
                                             params, cache, out_full);
     if (!ok) {
         return false;
+    }
+
+    output.push_back(std::move(out_full));
+    return true;
+}
+
+//
+// mtmd_audio_preprocessor_voxtral_rt
+//
+
+void mtmd_audio_preprocessor_voxtral_rt::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+}
+
+bool mtmd_audio_preprocessor_voxtral_rt::preprocess(const float *                 samples,
+                                                    size_t                        n_samples,
+                                                    std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    // Voxtral Realtime streaming constants
+    // These match the Python reference (reference_inference.py)
+    const int sample_rate       = hparams.audio_sample_rate;   // 16000
+    const int hop_length        = hparams.audio_hop_len;       // 160
+    const int raw_audio_per_tok = sample_rate / 12;            // 1280 (frame_rate=12.5 -> 16000/12.5=1280, but int division gives 1333... let's use exact)
+
+    // Actually: RAW_AUDIO_LENGTH_PER_TOK = int(SAMPLE_RATE // FRAME_RATE) = int(16000 // 12.5) = 1280
+    const int audio_per_tok     = 1280;
+    const int n_left_pad_tokens = 32;
+    const int n_delay_tokens    = 6;   // 480ms / 80ms per token
+    const int n_right_pad_extra = (n_delay_tokens + 1) + 10;  // 17
+
+    // Apply streaming padding (matching pad_audio_streaming in Python reference)
+    // Left pad: n_left_pad_tokens * audio_per_tok zeros
+    // Right pad: alignment + n_right_pad_extra * audio_per_tok zeros
+    const size_t align_pad = (audio_per_tok - (n_samples % audio_per_tok)) % audio_per_tok;
+    const size_t right_pad = align_pad + n_right_pad_extra * audio_per_tok;
+    const size_t left_pad  = n_left_pad_tokens * audio_per_tok;
+    const size_t padded_len = left_pad + n_samples + right_pad;
+
+    std::vector<float> padded(padded_len, 0.0f);
+    std::memcpy(padded.data() + left_pad, samples, n_samples * sizeof(float));
+
+    // Compute mel spectrogram with center_padding (matching torch.stft center=True)
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.center_padding   = true;
+    params.preemph          = 0.0f;
+    params.use_natural_log  = false;
+    params.norm_per_feature = false;
+    params.fixed_max        = 1.5f;  // Voxtral GLOBAL_LOG_MEL_MAX
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    mtmd_audio_mel out_full;
+    bool ok = log_mel_spectrogram(padded.data(), padded_len,
+                                  4,  // n_threads
+                                  params, cache, out_full);
+    if (!ok) {
+        return false;
+    }
+
+    // If mel frames are odd, drop the first frame (matching Python reference)
+    if (out_full.n_len % 2 != 0) {
+        // Remove first frame from each mel bin
+        int new_len = out_full.n_len - 1;
+        std::vector<float> new_data(out_full.n_mel * new_len);
+        for (int m = 0; m < out_full.n_mel; m++) {
+            std::memcpy(new_data.data() + m * new_len,
+                       out_full.data.data() + m * out_full.n_len + 1,
+                       new_len * sizeof(float));
+        }
+        out_full.data = std::move(new_data);
+        out_full.n_len = new_len;
+    }
+
+    if (DEBUG) {
+        printf("voxtral_rt preprocess: n_samples=%zu, padded=%zu, mel n_len=%d, n_mel=%d\n",
+               n_samples, padded_len, out_full.n_len, out_full.n_mel);
     }
 
     output.push_back(std::move(out_full));

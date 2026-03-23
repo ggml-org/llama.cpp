@@ -337,7 +337,47 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (is_single_turn) {
+    // Voxtral Realtime: use dual-stream path for audio transcription
+    if (is_single_turn && mtmd_support_voxtral_realtime(ctx.ctx_vision.get()) && !params.image.empty()) {
+        g_is_generating = true;
+        LOG_INF("Voxtral Realtime mode: dual-stream transcription\n");
+
+        // Load audio file
+        const std::string & audio_path = params.image[0]; // --image/--audio use same param
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), audio_path.c_str()));
+        if (!bmp.ptr) {
+            LOG_ERR("Failed to load audio file: %s\n", audio_path.c_str());
+            return 1;
+        }
+
+        // Get PCM samples from bitmap
+        const float * pcm_data = (const float *)mtmd_bitmap_get_data(bmp.ptr.get());
+        size_t n_samples = mtmd_bitmap_get_n_bytes(bmp.ptr.get()) / sizeof(float);
+
+        // Run dual-stream transcription (prefill + autoregressive decode)
+        llama_pos n_past = 0;
+        std::vector<llama_token> output_tokens;
+        int32_t ret = mtmd_helper_eval_voxtral_realtime(
+            ctx.ctx_vision.get(), ctx.lctx,
+            params.model.path.c_str(),
+            pcm_data, n_samples,
+            ctx.n_batch, n_predict, &n_past, &output_tokens);
+
+        if (ret != 0) {
+            LOG_ERR("Voxtral RT transcription failed\n");
+            return 1;
+        }
+
+        ctx.n_past = n_past;
+
+        // Print transcription
+        LOG("\n");
+        for (const auto & tok : output_tokens) {
+            LOG("%s", common_token_to_piece(ctx.lctx, tok).c_str());
+        }
+        LOG("\n");
+
+    } else if (is_single_turn) {
         g_is_generating = true;
         if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {

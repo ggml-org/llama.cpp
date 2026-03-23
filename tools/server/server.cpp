@@ -193,6 +193,7 @@ int main(int argc, char ** argv) {
     ctx_http.post("/reranking",           ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/rerank",           ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/reranking",        ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/audio/transcriptions", ex_wrapper(routes.post_audio_transcriptions));
     ctx_http.post("/tokenize",            ex_wrapper(routes.post_tokenize));
     ctx_http.post("/detokenize",          ex_wrapper(routes.post_detokenize));
     ctx_http.post("/apply-template",      ex_wrapper(routes.post_apply_template));

@@ -405,6 +405,290 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
     return 0;
 }
 
+
+// ============================================================================
+// Voxtral Realtime dual-stream evaluation
+// ============================================================================
+
+struct voxtral_rt_tok_embd_table {
+    std::vector<float> data;
+    int n_embd = 0;
+    int vocab_size = 0;
+
+    bool load_from_gguf(const char * model_path) {
+        struct gguf_init_params gguf_params = {
+            /*.no_alloc =*/ false,
+            /*.ctx      =*/ nullptr,
+        };
+        struct ggml_init_params ggml_params = {
+            /*.mem_size   =*/ 1024ull * 1024 * 1024,
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ false,
+        };
+        struct ggml_context * ggml_ctx = ggml_init(ggml_params);
+        gguf_params.ctx = &ggml_ctx;
+
+        struct gguf_context * gguf_ctx = gguf_init_from_file(model_path, gguf_params);
+        if (!gguf_ctx) {
+            LOG_ERR("voxtral_rt: failed to load GGUF for token embeddings: %s\n", model_path);
+            ggml_free(ggml_ctx);
+            return false;
+        }
+
+        struct ggml_tensor * tensor = ggml_get_tensor(ggml_ctx, "token_embd.weight");
+        if (!tensor) {
+            LOG_ERR("voxtral_rt: token_embd.weight not found\n");
+            gguf_free(gguf_ctx);
+            ggml_free(ggml_ctx);
+            return false;
+        }
+
+        n_embd = (int)tensor->ne[0];
+        vocab_size = (int)tensor->ne[1];
+        data.resize((size_t)n_embd * vocab_size);
+
+        // dequantize to f32
+        const auto * type_traits = ggml_get_type_traits(tensor->type);
+        if (tensor->type == GGML_TYPE_F32) {
+            memcpy(data.data(), tensor->data, data.size() * sizeof(float));
+        } else if (tensor->type == GGML_TYPE_F16) {
+            const ggml_fp16_t * src = (const ggml_fp16_t *)tensor->data;
+            for (size_t i = 0; i < data.size(); i++) {
+                data[i] = ggml_fp16_to_fp32(src[i]);
+            }
+        } else if (type_traits && type_traits->to_float) {
+            for (int row = 0; row < vocab_size; row++) {
+                const void * src = (const char *)tensor->data + row * tensor->nb[1];
+                type_traits->to_float(src, data.data() + row * n_embd, n_embd);
+            }
+        } else {
+            LOG_ERR("voxtral_rt: unsupported tensor type for token_embd.weight\n");
+            gguf_free(gguf_ctx);
+            ggml_free(ggml_ctx);
+            return false;
+        }
+
+        gguf_free(gguf_ctx);
+        ggml_free(ggml_ctx);
+        LOG_INF("voxtral_rt: loaded token embeddings [%d x %d]\n", vocab_size, n_embd);
+        return true;
+    }
+
+    const float * get(int token_id) const {
+        if (token_id < 0 || token_id >= vocab_size) return nullptr;
+        return data.data() + (size_t)token_id * n_embd;
+    }
+};
+
+int32_t mtmd_helper_eval_voxtral_realtime(
+        mtmd_context * ctx,
+        struct llama_context * lctx,
+        const char * model_path,
+        const float * pcm_samples,
+        size_t n_samples,
+        int32_t n_batch,
+        int32_t max_tokens,
+        llama_pos * new_n_past,
+        std::vector<llama_token> * output_tokens) {
+
+    const llama_model * model = llama_get_model(lctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int n_embd = llama_model_n_embd(model);
+
+    // Voxtral Realtime constants
+    const llama_token TOKEN_BOS = 1;
+    const llama_token TOKEN_STREAMING_PAD = 32;
+    const int N_LEFT_PAD_TOKENS = 32;
+    const int N_DELAY_TOKENS = 6;
+
+    // 1. Load token embedding table
+    voxtral_rt_tok_embd_table tok_embd;
+    if (!tok_embd.load_from_gguf(model_path)) {
+        return -1;
+    }
+
+    // 2. Build prefix tokens: [BOS] + PAD*32 + DELAY*6
+    std::vector<llama_token> prompt_ids;
+    prompt_ids.push_back(TOKEN_BOS);
+    for (int i = 0; i < N_LEFT_PAD_TOKENS + N_DELAY_TOKENS; i++) {
+        prompt_ids.push_back(TOKEN_STREAMING_PAD);
+    }
+    int n_prefix = (int)prompt_ids.size();
+
+    // 3. Create audio bitmap and tokenize
+    mtmd_bitmap * bmp = mtmd_bitmap_init_from_audio(n_samples, pcm_samples);
+    if (!bmp) {
+        LOG_ERR("voxtral_rt: failed to create audio bitmap\n");
+        return -1;
+    }
+
+    std::string prompt = std::string(mtmd_default_marker());
+    mtmd_input_text text;
+    text.text          = prompt.c_str();
+    text.add_special   = true;
+    text.parse_special = true;
+
+    mtmd_input_chunks * chunks = mtmd_input_chunks_init();
+    const mtmd_bitmap * bitmaps[] = { bmp };
+    int32_t res = mtmd_tokenize(ctx, chunks, &text, bitmaps, 1);
+    if (res != 0) {
+        LOG_ERR("voxtral_rt: tokenize failed, res = %d\n", res);
+        mtmd_input_chunks_free(chunks);
+        mtmd_bitmap_free(bmp);
+        return -1;
+    }
+
+    // 4. Find and encode the audio chunk
+    const mtmd_input_chunk * audio_chunk = nullptr;
+    for (size_t i = 0; i < mtmd_input_chunks_size(chunks); i++) {
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            audio_chunk = chunk;
+            break;
+        }
+    }
+    if (!audio_chunk) {
+        LOG_ERR("voxtral_rt: no audio chunk found\n");
+        mtmd_input_chunks_free(chunks);
+        mtmd_bitmap_free(bmp);
+        return -1;
+    }
+
+    int64_t t0 = ggml_time_ms();
+    res = mtmd_encode_chunk(ctx, audio_chunk);
+    if (res != 0) {
+        LOG_ERR("voxtral_rt: encode failed\n");
+        mtmd_input_chunks_free(chunks);
+        mtmd_bitmap_free(bmp);
+        return -1;
+    }
+    LOG_INF("voxtral_rt: audio encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
+
+    float * audio_embd = mtmd_get_output_embd(ctx);
+    int n_audio_tokens = mtmd_input_chunk_get_n_tokens(audio_chunk);
+
+    // Copy audio embeddings (buffer may be reused)
+    std::vector<float> audio_embds((size_t)n_audio_tokens * n_embd);
+    memcpy(audio_embds.data(), audio_embd, audio_embds.size() * sizeof(float));
+
+    if (n_prefix > n_audio_tokens) {
+        LOG_ERR("voxtral_rt: prefix (%d) > audio tokens (%d)\n", n_prefix, n_audio_tokens);
+        mtmd_input_chunks_free(chunks);
+        mtmd_bitmap_free(bmp);
+        return -1;
+    }
+
+    // 5. Dual-stream: combined[i] = audio_embd[i] + tok_embd[prompt_ids[i]]
+    std::vector<float> combined((size_t)n_prefix * n_embd);
+    for (int i = 0; i < n_prefix; i++) {
+        const float * a = audio_embds.data() + (size_t)i * n_embd;
+        const float * t = tok_embd.get(prompt_ids[i]);
+        float * dst = combined.data() + (size_t)i * n_embd;
+        for (int j = 0; j < n_embd; j++) {
+            dst[j] = a[j] + t[j];
+        }
+    }
+
+    // 6. Prefill: send combined embeddings to decoder
+    llama_pos n_past = 0;
+    for (int offset = 0; offset < n_prefix; offset += n_batch) {
+        int this_batch = std::min(n_batch, n_prefix - offset);
+        llama_batch batch = llama_batch_init(this_batch, n_embd, 1);
+        batch.n_tokens = this_batch;
+        for (int i = 0; i < this_batch; i++) {
+            memcpy(batch.embd + (size_t)i * n_embd,
+                   combined.data() + (size_t)(offset + i) * n_embd,
+                   n_embd * sizeof(float));
+            batch.pos[i]      = n_past + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]   = (offset + i == n_prefix - 1) ? 1 : 0;
+        }
+        res = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (res != 0) {
+            LOG_ERR("voxtral_rt: prefill decode failed\n");
+            mtmd_input_chunks_free(chunks);
+            mtmd_bitmap_free(bmp);
+            return res;
+        }
+    }
+    n_past += n_prefix;
+
+    LOG_INF("voxtral_rt: prefill done, n_past = %d, n_audio_tokens = %d\n", (int)n_past, n_audio_tokens);
+
+    // 7. Autoregressive decoding with dual-stream continuation
+    int n_decoded = 0;
+
+    for (int i = 0; i < max_tokens && n_decoded < max_tokens; i++) {
+        // sample from logits
+        const float * logits = llama_get_logits_ith(lctx, -1);
+        if (!logits) {
+            LOG_ERR("voxtral_rt: failed to get logits\n");
+            break;
+        }
+
+        // greedy sampling (take argmax)
+        int n_vocab_size = llama_vocab_n_tokens(vocab);
+        llama_token best_token = 0;
+        float best_logit = logits[0];
+        for (int v = 1; v < n_vocab_size; v++) {
+            if (logits[v] > best_logit) {
+                best_logit = logits[v];
+                best_token = v;
+            }
+        }
+
+        // stop on any end-of-generation token
+        if (llama_vocab_is_eog(vocab, best_token)) break;
+
+        if (output_tokens) {
+            output_tokens->push_back(best_token);
+        }
+        n_decoded++;
+
+        // next step: dual-stream if still within audio range, text-only otherwise
+        std::vector<float> next_embd(n_embd);
+        const float * t = tok_embd.get(best_token);
+        if (!t) {
+            LOG_ERR("voxtral_rt: invalid token %d\n", best_token);
+            break;
+        }
+
+        if (n_past < n_audio_tokens) {
+            const float * a = audio_embds.data() + (size_t)n_past * n_embd;
+            for (int j = 0; j < n_embd; j++) {
+                next_embd[j] = a[j] + t[j];
+            }
+        } else {
+            memcpy(next_embd.data(), t, n_embd * sizeof(float));
+        }
+
+        llama_batch batch = llama_batch_init(1, n_embd, 1);
+        batch.n_tokens     = 1;
+        memcpy(batch.embd, next_embd.data(), n_embd * sizeof(float));
+        batch.pos[0]       = n_past;
+        batch.n_seq_id[0]  = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0]    = 1;
+
+        res = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (res != 0) {
+            LOG_ERR("voxtral_rt: decode step %d failed\n", n_decoded);
+            break;
+        }
+        n_past++;
+    }
+
+    *new_n_past = n_past;
+    LOG_INF("voxtral_rt: decoded %d tokens\n", n_decoded);
+
+    mtmd_input_chunks_free(chunks);
+    mtmd_bitmap_free(bmp);
+    return 0;
+}
+
 namespace audio_helpers {
 
 static bool is_audio_file(const char * buf, size_t len) {

@@ -1824,6 +1824,18 @@ json server_task_result_rerank::to_json() {
 }
 
 //
+// server_task_result_audio_transcription
+//
+json server_task_result_audio_transcription::to_json() {
+    return json {
+        {"task",     "transcribe"},
+        {"language", language},
+        {"duration", duration_seconds},
+        {"text",     text},
+    };
+}
+
+//
 // server_task_result_error
 //
 json server_task_result_error::to_json() {

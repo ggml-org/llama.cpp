@@ -41,6 +41,16 @@ struct server_http_req {
     std::string body;
     const std::function<bool()> & should_stop;
 
+    // multipart form data (populated for multipart/form-data requests)
+    bool has_multipart_file(const std::string & key) const { return multipart_files.count(key) > 0; }
+    struct multipart_file {
+        std::string content;
+        std::string filename;
+        std::string content_type;
+    };
+    std::map<std::string, multipart_file>  multipart_files;
+    std::map<std::string, std::string>     multipart_fields;
+
     std::string get_param(const std::string & key, const std::string & def = "") const {
         auto it = params.find(key);
         if (it != params.end()) {

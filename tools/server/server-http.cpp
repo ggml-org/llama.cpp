@@ -410,8 +410,21 @@ void server_http_context::post(const std::string & path, const server_http_conte
             req.path,
             build_query_string(req),
             req.body,
-            req.is_connection_closed
+            req.is_connection_closed,
+            {}, // multipart_files
+            {}, // multipart_fields
         });
+        // populate multipart data if present
+        if (req.form.has_file("file")) {
+            auto fd = req.form.get_file("file");
+            request->multipart_files["file"] = {fd.content, fd.filename, fd.content_type};
+        }
+        // extract common form fields
+        for (const auto & name : {"model", "language", "response_format", "temperature", "prompt"}) {
+            if (req.form.has_field(name)) {
+                request->multipart_fields[name] = req.form.get_field(name);
+            }
+        }
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
     });

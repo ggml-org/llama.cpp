@@ -26,6 +26,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_AUDIO_TRANSCRIPTION,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -478,6 +479,14 @@ struct server_task_result_rerank : server_task_result {
     float score = -1e6;
 
     int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_audio_transcription : server_task_result {
+    std::string text;
+    std::string language;
+    float duration_seconds = 0.0f;
 
     virtual json to_json() override;
 };

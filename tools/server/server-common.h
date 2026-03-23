@@ -253,6 +253,9 @@ size_t validate_utf8(const std::string& text);
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
 
+// decode base64-encoded data to raw bytes (exposed for use in server-context.cpp)
+raw_buffer server_base64_decode(const std::string & encoded_string);
+
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
  * this supports these cases:
