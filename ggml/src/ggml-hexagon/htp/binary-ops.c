@@ -2,6 +2,8 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
+#define FARF_HIGH 1
+
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 
@@ -747,40 +749,34 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const size_t elem_size = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const size_t src0_row_size = src0->ne[0] * elem_size;
     const size_t src1_row_size = src1->ne[0] * elem_size;
-    const size_t dst_row_size  = dst->ne[0] * elem_size;
+    const size_t dst_row_size  = dst->ne[0]  * elem_size;
 
-    // Align to VLEN
-    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+    size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
+    size_t dst_row_size_aligned  = hex_round_up(dst_row_size,  VLEN);
 
     bool is_add_id = (octx->op == HTP_OP_ADD_ID);
     bool is_scalar = !is_add_id && (src1->ne[0] == 1);
 
-    // Determine which kernel we will use to alloc memory and dispatch
-    bool use_vector_same = !is_add_id && !is_scalar && ((src0->nb[1] % VLEN) == 0) && (src1->ne[0] == src0->ne[0]) &&
+    bool is_same_shape = !is_add_id && !is_scalar && ((src0->nb[1] % VLEN) == 0) &&
+               (src1->ne[0] == src0->ne[0]) &&
                (src1->ne[1] == src0->ne[1] || src1->ne[1] == 1) &&
                (src1->ne[2] == src0->ne[2] || src1->ne[2] == 1) &&
                (src1->ne[3] == src0->ne[3] || src1->ne[3] == 1);
 
-    bool is_row_bcast = use_vector_same && (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
-    bool use_complex = !is_add_id && !is_scalar && !use_vector_same && (src1->ne[0] == src0->ne[0]);
-    bool use_repeat  = !is_add_id && !is_scalar && !use_vector_same && (src1->ne[0] != src0->ne[0]);
+    bool is_row_bcast = is_same_shape && (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+    bool is_complex   = !is_add_id && !is_scalar && !is_same_shape && (src1->ne[0] == src0->ne[0]);
+    bool is_repeat    = !is_add_id && !is_scalar && !is_same_shape && (src1->ne[0] != src0->ne[0]);
 
     size_t spad_row_total;
-    if (is_scalar) {
-        spad_row_total = 2 * (src0_row_size_aligned + dst_row_size_aligned);
-    } else if (is_row_bcast) {
-        spad_row_total = 2 * (src0_row_size_aligned + dst_row_size_aligned);
-    } else if (use_vector_same) {
+    if (is_same_shape) {
         spad_row_total = 2 * (src0_row_size_aligned + src1_row_size_aligned + dst_row_size_aligned);
-    } else if (is_add_id) {
-        spad_row_total = 2 * (src0_row_size_aligned + dst_row_size_aligned); // src1 read directly
     } else {
         spad_row_total = 2 * (src0_row_size_aligned + dst_row_size_aligned);
     }
 
     size_t rows_per_buffer = octx->ctx->vtcm_size / (n_threads * spad_row_total);
+
     // Adjust for static src1 in row_bcast case
     if (is_row_bcast) {
         size_t needed_static = src1_row_size_aligned;
@@ -797,21 +793,19 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     octx->src0_spad.size_per_thread = rows_per_buffer * 2 * src0_row_size_aligned;
     octx->dst_spad.size_per_thread  = rows_per_buffer * 2 * dst_row_size_aligned;
 
-    if (is_scalar || use_complex || use_repeat || is_add_id) {
-        octx->src1_spad.size_per_thread = 0;
-    } else if (is_row_bcast) {
+    if (is_add_id || is_scalar || is_complex || is_repeat || is_row_bcast) {
         octx->src1_spad.size_per_thread = 0;
     } else {
         octx->src1_spad.size_per_thread = rows_per_buffer * 2 * src1_row_size_aligned;
     }
 
+    octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
     octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
     if (is_row_bcast) {
         octx->src1_spad.size = src1_row_size_aligned;
     } else {
         octx->src1_spad.size = n_threads * octx->src1_spad.size_per_thread;
     }
-    octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
 
     if (octx->ctx->vtcm_size < (octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size)) {
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -838,8 +832,8 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     bctx.src1_row_size_aligned = src1_row_size_aligned;
     bctx.dst_row_size_aligned  = dst_row_size_aligned;
 
-    bctx.dim1_div = init_fastdiv_values(src0->ne[1]);
-    bctx.dim2_div = init_fastdiv_values(src0->ne[2]);
+    bctx.dim1_div  = init_fastdiv_values(src0->ne[1]);
+    bctx.dim2_div  = init_fastdiv_values(src0->ne[2]);
     bctx.dim12_div = init_fastdiv_values(src0->ne[1] * src0->ne[2]);
 
     bctx.src1_dim1_div = init_fastdiv_values(src1->ne[1]);
@@ -847,24 +841,21 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     bctx.src1_dim3_div = init_fastdiv_values(src1->ne[3]);
 
     bool src0_contig_dim1 = (src0->nb[2] == src0->ne[1] * src0->nb[1]);
-    bool dst_contig_dim1  = (dst->nb[2] == src0->ne[1] * dst->nb[1]);
+    bool dst_contig_dim1  = (dst->nb[2]  == src0->ne[1] * dst->nb[1]);
 
     bool src0_contig_dim2 = (src0->nb[3] == src0->ne[2] * src0->nb[2]);
-    bool dst_contig_dim2  = (dst->nb[3] == src0->ne[2] * dst->nb[2]);
+    bool dst_contig_dim2  = (dst->nb[3]  == src0->ne[2] * dst->nb[2]);
 
-    bctx.split_at_ne01 = (src0->ne[2] > 1) &&
-                         ((src1->ne[1] > 1) || (src1->ne[2] > 1) || !src0_contig_dim1 || !dst_contig_dim1);
-
-    bctx.split_at_ne02 = (src0->ne[3] > 1) &&
-                         ((src1->ne[2] > 1) || (src1->ne[3] > 1) || !src0_contig_dim2 || !dst_contig_dim2);
+    bctx.split_at_ne01 = (src0->ne[2] > 1) && ((src1->ne[1] > 1) || (src1->ne[2] > 1) || !src0_contig_dim1 || !dst_contig_dim1);
+    bctx.split_at_ne02 = (src0->ne[3] > 1) && ((src1->ne[2] > 1) || (src1->ne[3] > 1) || !src0_contig_dim2 || !dst_contig_dim2);
 
     worker_callback_t worker_func;
-    if (is_add_id) worker_func = binary_job_add_id;
-    else if (is_scalar) worker_func = binary_job_scalar;
-    else if (is_row_bcast) worker_func = binary_job_vector_row_broadcast;
-    else if (use_vector_same) worker_func = binary_job_vector_same_shape;
-    else if (use_complex) worker_func = binary_job_vector_complex;
-    else worker_func = binary_job_element_repeat;
+    if (is_add_id)          worker_func = binary_job_add_id;
+    else if (is_scalar)     worker_func = binary_job_scalar;
+    else if (is_row_bcast)  worker_func = binary_job_vector_row_broadcast;
+    else if (is_same_shape) worker_func = binary_job_vector_same_shape;
+    else if (is_complex)    worker_func = binary_job_vector_complex;
+    else                    worker_func = binary_job_element_repeat;
 
     if (is_row_bcast) {
         dma_queue_pop(q);
