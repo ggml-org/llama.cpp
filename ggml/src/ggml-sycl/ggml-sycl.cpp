@@ -1006,6 +1006,16 @@ static void moe_prestage_popular_experts() {
                     // VRAM exhausted — stop pre-staging
                     break;
                 }
+
+                // Periodic flush every 100 experts to prevent >20s accumulated queue
+                // work that triggers L0 DirectSubmission timeout false-positive hang.
+                if (prestaged > 0 && prestaged % 100 == 0) {
+                    try {
+                        cache->get_queue().wait();
+                    } catch (...) {
+                    }
+                    ggml_sycl_watchdog_heartbeat();
+                }
             }
 
             auto t1 = std::chrono::high_resolution_clock::now();
@@ -1111,6 +1121,7 @@ static void moe_prestage_popular_experts() {
             }
 
             // DMA pre-reordered data to cache
+            size_t cpu_dma_count = 0;
             for (auto & ci : cpu_items) {
                 if (!ci.ok) {
                     std::free(ci.reorder_buf);
@@ -1144,6 +1155,16 @@ static void moe_prestage_popular_experts() {
                     }
                 } catch (...) {
                     break;
+                }
+
+                // Periodic flush every 100 experts to prevent L0 timeout
+                cpu_dma_count++;
+                if (cpu_dma_count % 100 == 0) {
+                    try {
+                        cache->get_queue().wait();
+                    } catch (...) {
+                    }
+                    ggml_sycl_watchdog_heartbeat();
                 }
             }
 
@@ -9928,6 +9949,9 @@ static void ggml_sycl_preload_model_weights() {
             std::vector<dense_pin_info> dense_pin_keys;
             dense_pin_keys.reserve(indices.size());
 
+            // (pending_dense tracking removed — S1-PRELOAD uses ensure_cached_layout which
+            // handles allocation + fill + registration atomically)
+
             // Submit all H2D copies for this device without waiting
             for (size_t idx : indices) {
                 const auto & item   = items[idx];
@@ -10584,33 +10608,41 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
 
     // Non-blocking fast path: lock-free lookup for exact layout match.
     // Dense weights pinned after S1-PRELOAD hit here on every inference token.
-    // For models that fit in VRAM, the blocking fallback below handles layout
-    // conversion safely (queue is idle, no deadlock risk).
-    // For models exceeding VRAM, ensure_cached_layout(non_blocking=true) avoids
-    // blocking on malloc_device/fill_fn when the entry is not cached.
+    // After warmup, all weights are cached in the final layout — this path
+    // handles >99% of weight accesses during steady-state inference.
     {
-        void * cached_ptr = cache->try_get_cached_fast(cache_key, resolved);
+        void * cached_ptr = cache->lookup(cache_key, resolved);
         if (cached_ptr) {
             if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
                 ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
                                                    onednn_pack_m);
             }
-            GGML_SYCL_DEBUG("[NONBLOCK] weight %s layout=%d HIT ptr=%p\n",
-                            tensor->name ? tensor->name : "(null)", (int) resolved, cached_ptr);
+            GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d HIT ptr=%p\n", tensor->name ? tensor->name : "(null)",
+                            (int) resolved, cached_ptr);
             return cached_ptr;
         }
     }
 
-    // Blocking ensure_cached_layout: safe for both pre-inference and inference paths.
-    // For models fitting in VRAM (Mistral 7B), all weights are cached after warmup
-    // and the try_get_cached_fast above handles them. This path handles first-time
-    // layout conversion during warmup and edge cases.
-    // For models exceeding VRAM (120B), the try_get_cached_fast above handles
-    // pinned dense weights. Uncached entries (evicted or never loaded) reach here,
-    // where ensure_cached_layout handles allocation + fill with LRU eviction.
-    // The non_blocking parameter is available for future use when inference-time
-    // blocking on uncached entries causes hangs (e.g., queue contention with MoE).
-    ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
+    // Blocking fallback via ensure_cached_layout on the DMA queue.
+    // During warmup: handles layout conversion (SOA→final) for first-time access.
+    // After warmup: all entries are cached and lookup() above handles them.
+    // For 120B MoE post-warmup: return nullptr so caller uses host-pinned zero-copy,
+    // avoiding the blocking ensure_cached_layout that causes L0 DirectSubmission hangs.
+    {
+        const bool post_warmup_host =
+            ggml_backend_sycl_all_weights_host() && ggml_sycl_layout_choices_finalized_for_device(device);
+        if (post_warmup_host) {
+            GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d post-warmup MISS — using host-pinned\n",
+                            tensor->name ? tensor->name : "(null)", (int) resolved);
+            return nullptr;
+        }
+    }
+
+    // Warmup/first-access: use ensure_cached_layout.
+    // For 120B models post-warmup, this path is never reached (post_warmup_host returns nullptr above).
+    // Use DMA queue for 120B; for models that fit in VRAM, use compute queue for compatibility.
+    sycl::queue * override_q              = ggml_backend_sycl_all_weights_host() ? &cache->get_dma_queue() : nullptr;
+    ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {}, override_q);
     bool                           had_exception = false;
     for (int attempt = 0; attempt < 3 && result.status == ggml_sycl::cache_layout_status::IN_PROGRESS; ++attempt) {
         try {
@@ -10625,7 +10657,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
             had_exception = true;
             break;
         }
-        result = cache->ensure_cached_layout(req, {});
+        result = cache->ensure_cached_layout(req, {}, override_q);
         if (result.status == ggml_sycl::cache_layout_status::FAILED) {
             break;
         }
@@ -24381,55 +24413,46 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             continue;
         }
 
-        ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
-        GGML_SYCL_DEBUG("[MOE] Expert %ld cache result: status=%d device_ptr=%p host_resident=%d\n", (long) e,
-                        (int) result.status, result.device_ptr, result.host_resident ? 1 : 0);
-        if (result.status != ggml_sycl::cache_layout_status::READY &&
-            result.status != ggml_sycl::cache_layout_status::IN_PROGRESS) {
-            // Cache miss: leave pointer as nullptr so hybrid dispatch can route to CPU.
-            // Log at debug level (not error) since this is expected for large MoE models.
-            GGML_SYCL_DEBUG("[MOE] Cache miss for expert %ld layout=%d status=%d (host fallback)\n", (long) e,
-                            (int) layout, (int) result.status);
-            stats_miss++;
-            continue;
-        }
-
-        if (result.device_ptr == nullptr) {
-            GGML_SYCL_DEBUG("[MOE] Null ptr for expert %ld layout=%d (host fallback)\n", (long) e, (int) layout);
-            stats_miss++;
-            continue;
-        }
-        if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-            table_deps.push_back(result.event);
-            stats_progress++;
-        } else {
-            // READY: distinguish VRAM-resident vs host-resident
-            if (result.host_resident) {
-                stats_host_ready++;
-            } else {
-                stats_vram_ready++;
-            }
-        }
-
-        extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = result.device_ptr;
-
-        // Bridge device pointer into placement table so partition loop uses device dispatch.
-        // Placement table keyed by FNV hash (moe_cache_layer_id), not block number.
-        // IMPORTANT: Do NOT overwrite experts placed on secondary GPUs (device_id>=1)
-        // or assigned to CPU (device_id=-1) by the placement table. Only update
-        // experts that are assigned to GPU0 (device_id==0) but don't have a pointer yet.
+        // Non-blocking lookup fallback for non-USM sources.
+        // NEVER call ensure_cached_layout during inference — blocks on malloc/fill/DMA.
+        // Try cache lookup cascade; on miss, use zero-copy from expert_aos if accessible,
+        // otherwise leave nullptr for CPU fallback.
         {
-            auto &    ptable       = ggml_sycl::get_expert_placement_table();
-            const int pt_layer_id  = moe_cache_layer_id(src0->name);
-            auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
-            if (existing.device_id == 0) {
-                ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, result.device_ptr);
+            void * cached_ptr = cache->lookup(expert_cache_key, layout);
+            if (!cached_ptr && layout != GGML_LAYOUT_SOA) {
+                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_SOA);
             }
-        }
+            if (!cached_ptr && layout != GGML_LAYOUT_COALESCED) {
+                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_COALESCED);
+            }
+            if (!cached_ptr && layout != GGML_LAYOUT_AOS) {
+                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_AOS);
+            }
 
-        const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
-        if (cache && need_drop) {
-            ggml_sycl_drop_non_target_expert_entries(cache, expert_cache_key, layer_id, static_cast<int>(e), layout);
+            if (cached_ptr) {
+                extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
+                stats_vram_ready++;
+                GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
+
+                {
+                    auto &    ptable      = ggml_sycl::get_expert_placement_table();
+                    const int pt_layer_id = moe_cache_layer_id(src0->name);
+                    auto      existing    = ptable.get(pt_layer_id, static_cast<int>(e));
+                    if (existing.device_id == 0) {
+                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
+                    }
+                }
+
+                const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
+                if (cache && need_drop) {
+                    ggml_sycl_drop_non_target_expert_entries(cache, expert_cache_key, layer_id, static_cast<int>(e),
+                                                             layout);
+                }
+                continue;
+            }
+            // Cache miss: leave pointer as nullptr so hybrid dispatch routes to CPU.
+            GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld cache MISS layout=%d (host fallback)\n", (long) e, (int) layout);
+            stats_miss++;
         }
     }
 

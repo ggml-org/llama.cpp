@@ -597,6 +597,40 @@ class unified_cache {
 
     // === Primary API ===
 
+    // --- Decomposed cache operations (no queue ops during inference) ---
+
+    // Allocate a VRAM slot for a cache entry. May evict LRU entries.
+    // Returns device pointer or nullptr if VRAM is full.
+    // NO queue operations. NO DMA. NO fill. Just memory management.
+    // If entry already exists with matching layout, returns existing pointer.
+    void * allocate_slot(const ggml_sycl_cache_id & key,
+                         size_t                     size,
+                         ggml_layout_mode           layout,
+                         cache_entry_type           type      = cache_entry_type::DENSE_WEIGHT,
+                         int                        layer_id  = -1,
+                         int                        expert_id = -1);
+
+    // Mark a previously allocated slot as READY.
+    // After this call, lookup() will find the entry.
+    // Pure metadata update — NO queue operations.
+    void register_ready(const ggml_sycl_cache_id & key,
+                        void *                     device_ptr,
+                        ggml_layout_mode           layout,
+                        size_t                     size,
+                        cache_entry_type           type          = cache_entry_type::DENSE_WEIGHT,
+                        int                        layer_id      = -1,
+                        int                        expert_id     = -1,
+                        const void *               src_ptr       = nullptr,
+                        int64_t                    onednn_pack_m = 0);
+
+    // Lock-free read lookup. Returns device pointer if entry is READY with
+    // matching layout. Returns nullptr on miss.
+    // NO allocation, NO fill, NO blocking. Same semantics as try_get_cached_fast.
+    void * lookup(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
+
+    // --- DMA queue for cache operations (separate from compute) ---
+    sycl::queue & get_dma_queue();
+
     // Ensure a weight is cached, loading from src_ptr if needed
     // Returns device pointer, or nullptr if cache is full and eviction failed
     //
@@ -990,7 +1024,8 @@ class unified_cache {
         }
     }
 
-    sycl::queue &        queue_;
+    sycl::queue &                queue_;
+    std::unique_ptr<sycl::queue> dma_queue_;                // Separate in-order queue for cache DMA ops
     size_t               budget_;                   // Total GPU memory budget (after reservations)
     size_t               base_budget_;              // Raw cache budget before reservations
     size_t               reserved_;                 // Runtime reservation applied to budget_

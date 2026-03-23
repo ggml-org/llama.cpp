@@ -922,6 +922,18 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
     // contiguous chunks (reduces GPU TLB misses from scattered USM mappings).
     layout_pool_ = std::make_unique<sycl_device_pool>(queue_);
 
+    // Create a separate in-order DMA queue for cache operations.
+    // This keeps cache DMA/fill work off the compute queue, preventing
+    // >20s accumulated queue work that triggers L0 DirectSubmission timeouts.
+    try {
+        dma_queue_ =
+            std::make_unique<sycl::queue>(queue_.get_context(), queue_.get_device(), sycl::property::queue::in_order{});
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Created separate DMA queue for cache operations\n");
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] Failed to create DMA queue, falling back to compute queue: %s\n", e.what());
+        dma_queue_.reset();
+    }
+
     // Ensure unordered_map has buckets before any find() calls.
     entries_.rehash(1);
     id_to_key_.rehash(1);
@@ -3546,6 +3558,214 @@ void * unified_cache::try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggm
         return nullptr;
     }
     return entry.device_ptr;
+}
+
+// --- Decomposed cache operations ---
+
+void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
+                                    size_t                     size,
+                                    ggml_layout_mode           layout,
+                                    cache_entry_type           type,
+                                    int                        layer_id,
+                                    int                        expert_id) {
+    if (!key.valid || size == 0) {
+        return nullptr;
+    }
+
+    const unified_cache_key cache_key{ type, key, layer_id, expert_id };
+
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    process_deferred_frees();
+
+    // Check if entry already exists with matching layout and size
+    auto it = entries_.find(cache_key);
+    if (it != entries_.end()) {
+        auto & entry = it->second;
+        if (entry.layout == layout && entry.size == size && entry.device_ptr) {
+            // Already allocated (may be READY or IN_PROGRESS) — return existing ptr
+            return entry.device_ptr;
+        }
+        // Layout/size mismatch — evict old entry
+        if (entry.device_ptr && !entry.host_resident) {
+            if (!entry.pool_allocated) {
+                enqueue_deferred_free(entry.device_ptr, entry.size);
+            }
+        }
+        entries_.erase(it);
+    }
+
+    // Check VRAM budget and evict if needed
+    const bool skip_pool     = ggml_backend_sycl_all_weights_host();
+    bool       is_pool_alloc = false;
+    void *     device_ptr    = nullptr;
+
+    if (layout_pool_ && !skip_pool) {
+        auto pool_result = layout_pool_->allocate(size);
+        device_ptr       = pool_result.ptr;
+        if (device_ptr) {
+            is_pool_alloc = true;
+            if (pool_result.new_physical_bytes > 0) {
+                used_.fetch_add(pool_result.new_physical_bytes, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    if (!device_ptr) {
+        // Check live VRAM and evict if needed
+        size_t free_mem = 0, total_mem = 0;
+        try {
+            const int device_id = get_device_id_from_queue(queue_);
+            ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
+        } catch (...) {
+        }
+
+        if (total_mem > 0) {
+            const size_t min_headroom = 256ull * 1024ull * 1024ull;
+            const size_t headroom     = std::max(min_headroom, total_mem / 10);
+            const size_t usable_free  = free_mem > headroom ? free_mem - headroom : 0;
+            if (size > usable_free) {
+                size_t evicted_total = 0;
+                while (evicted_total < size) {
+                    size_t evicted = evict_one(size);
+                    if (evicted == 0) {
+                        break;
+                    }
+                    evicted_total += evicted;
+                }
+                if (evicted_total < size) {
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate_slot: VRAM insufficient after eviction\n");
+                    return nullptr;
+                }
+            }
+        }
+
+        try {
+            device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:slot");
+        } catch (const sycl::exception & e) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate_slot: malloc_device failed: %s\n", e.what());
+            return nullptr;
+        }
+    }
+
+    if (!device_ptr) {
+        return nullptr;
+    }
+
+    // Create entry in IN_PROGRESS state (not yet READY — caller must register_ready)
+    unified_cache_entry entry{};
+    entry.device_ptr      = device_ptr;
+    entry.src_ptr         = nullptr;
+    entry.content_hash    = 0;
+    entry.size            = size;
+    entry.type            = type;
+    entry.layer_id        = layer_id;
+    entry.expert_id       = expert_id;
+    entry.layout          = layout;
+    entry.onednn_pack_m   = 0;
+    entry.xmx_info        = {};
+    entry.access_count    = 1;
+    entry.last_access     = time_++;
+    entry.pinned          = is_pool_alloc;
+    entry.hot             = false;
+    entry.state           = cache_entry_state::IN_PROGRESS;
+    entry.has_ready_event = false;
+    entry.host_resident   = false;
+    entry.location        = cache_location::DEVICE;
+    entry.pool_allocated  = is_pool_alloc;
+
+    entries_[cache_key] = entry;
+    auto id_it          = id_to_key_.find(key);
+    if (id_it == id_to_key_.end()) {
+        if (id_to_key_.bucket_count() == 0) {
+            id_to_key_.rehash(1);
+        }
+        id_to_key_.emplace(key, cache_key);
+    }
+
+    if (!is_pool_alloc) {
+        used_.fetch_add(size, std::memory_order_relaxed);
+    }
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate_slot: layout=%d size=%zu ptr=%p\n", (int) layout, size, device_ptr);
+    return device_ptr;
+}
+
+void unified_cache::register_ready(const ggml_sycl_cache_id & key,
+                                   void *                     device_ptr,
+                                   ggml_layout_mode           layout,
+                                   size_t                     size,
+                                   cache_entry_type           type,
+                                   int                        layer_id,
+                                   int                        expert_id,
+                                   const void *               src_ptr,
+                                   int64_t                    onednn_pack_m) {
+    if (!key.valid || !device_ptr) {
+        return;
+    }
+
+    const unified_cache_key cache_key{ type, key, layer_id, expert_id };
+
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    auto                                it = entries_.find(cache_key);
+    if (it != entries_.end()) {
+        auto & entry          = it->second;
+        entry.device_ptr      = device_ptr;
+        entry.state           = cache_entry_state::READY;
+        entry.has_ready_event = false;
+        entry.layout          = layout;
+        entry.size            = size;
+        entry.src_ptr         = src_ptr;
+        entry.onednn_pack_m   = onednn_pack_m;
+        entry.access_count++;
+        entry.last_access = time_++;
+    } else {
+        // Entry was not pre-allocated via allocate_slot — create it directly as READY
+        unified_cache_entry entry{};
+        entry.device_ptr      = device_ptr;
+        entry.src_ptr         = src_ptr;
+        entry.content_hash    = 0;
+        entry.size            = size;
+        entry.type            = type;
+        entry.layer_id        = layer_id;
+        entry.expert_id       = expert_id;
+        entry.layout          = layout;
+        entry.onednn_pack_m   = onednn_pack_m;
+        entry.xmx_info        = {};
+        entry.access_count    = 1;
+        entry.last_access     = time_++;
+        entry.pinned          = false;
+        entry.hot             = false;
+        entry.state           = cache_entry_state::READY;
+        entry.has_ready_event = false;
+        entry.host_resident   = false;
+        entry.location        = cache_location::DEVICE;
+        entry.pool_allocated  = false;
+
+        entries_[cache_key] = entry;
+        auto id_it          = id_to_key_.find(key);
+        if (id_it == id_to_key_.end()) {
+            if (id_to_key_.bucket_count() == 0) {
+                id_to_key_.rehash(1);
+            }
+            id_to_key_.emplace(key, cache_key);
+        }
+    }
+    entry_cv_.notify_all();
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] register_ready: layout=%d size=%zu ptr=%p\n", (int) layout, size, device_ptr);
+}
+
+void * unified_cache::lookup(const ggml_sycl_cache_id & key, ggml_layout_mode layout) {
+    // Identical semantics to try_get_cached_fast — shared_lock read-only path
+    return try_get_cached_fast(key, layout);
+}
+
+sycl::queue & unified_cache::get_dma_queue() {
+    // Return dedicated DMA queue if available, otherwise fall back to compute queue
+    if (dma_queue_) {
+        return *dma_queue_;
+    }
+    return queue_;
 }
 
 void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
