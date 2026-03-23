@@ -105,6 +105,11 @@
 		return null;
 	}
 
+	function getEnabledToolCount(group: ToolGroup): number {
+		if (isGroupDisabled(group)) return 0;
+		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.function.name)).length;
+	}
+
 	function handleToolsSubMenuOpen(open: boolean) {
 		if (open) {
 			if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -337,26 +342,44 @@
 											</span>
 
 											<span class="ml-auto shrink-0 text-xs text-muted-foreground">
-												{group.tools.length}
+												{getEnabledToolCount(group)}/{group.tools.length}
 											</span>
 										</Collapsible.Trigger>
 
 										{#if groupDisabled && hoveredGroup === group.label && group.serverId}
-											<Switch
-												checked={false}
-												onclick={(e: MouseEvent) => e.stopPropagation()}
-												onCheckedChange={() =>
-													group.serverId && toggleServerForChat(group.serverId)}
-												class="mr-2 shrink-0"
-											/>
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													<Switch
+														checked={false}
+														onclick={(e: MouseEvent) => e.stopPropagation()}
+														onCheckedChange={() =>
+															group.serverId && toggleServerForChat(group.serverId)}
+														class="mr-2 shrink-0"
+													/>
+												</Tooltip.Trigger>
+												<Tooltip.Content side="left">
+													<p>Enable {group.label}</p>
+												</Tooltip.Content>
+											</Tooltip.Root>
 										{:else}
-											<Checkbox
-												{checked}
-												{indeterminate}
-												disabled={groupDisabled}
-												onCheckedChange={() => toolsStore.toggleGroup(group)}
-												class="mr-2 h-4 w-4 shrink-0 {groupDisabled ? 'opacity-40' : ''}"
-											/>
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													<Checkbox
+														{checked}
+														{indeterminate}
+														disabled={groupDisabled}
+														onCheckedChange={() => toolsStore.toggleGroup(group)}
+														class="mr-2 h-4 w-4 shrink-0 {groupDisabled ? 'opacity-40' : ''}"
+													/>
+												</Tooltip.Trigger>
+
+												<Tooltip.Content side="right">
+													<p>
+														{checked ? 'Disable' : 'Enable'}
+														{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
+													</p>
+												</Tooltip.Content>
+											</Tooltip.Root>
 										{/if}
 									</div>
 
@@ -365,7 +388,7 @@
 											{#each group.tools as tool (tool.function.name)}
 												<button
 													type="button"
-													class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors {groupDisabled
+													class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {groupDisabled
 														? 'pointer-events-none opacity-40'
 														: 'hover:bg-muted/50'}"
 													onclick={() =>
@@ -381,7 +404,7 @@
 														class="h-4 w-4 shrink-0"
 													/>
 
-													<span class="min-w-0 flex-1 truncate">
+													<span class="min-w-0 flex-1 truncate font-mono text-[12px]">
 														{tool.function.name}
 													</span>
 												</button>

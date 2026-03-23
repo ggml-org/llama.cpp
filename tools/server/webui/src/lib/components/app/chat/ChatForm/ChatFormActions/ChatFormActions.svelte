@@ -6,8 +6,6 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		McpServersSelector,
-		McpServersSheet,
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
@@ -22,6 +20,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import McpActiveServersAvatars from '$lib/components/app/mcp/McpActiveServersAvatars.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -215,17 +214,7 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-2">
-		{#if isMobile.current}
-			<McpServersSheet
-				{disabled}
-				onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
-			/>
-		{:else}
-			<McpServersSelector
-				{disabled}
-				onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
-			/>
-		{/if}
+		<McpActiveServersAvatars onClick={() => (showChatSettingsDialogWithMcpSection = true)} />
 
 		{#if isMobile.current}
 			<ModelsSelectorSheet

@@ -2,6 +2,7 @@
 	import { Settings } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Switch } from '$lib/components/ui/switch';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { DropdownMenuSearchable, McpActiveServersAvatars } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -136,12 +137,19 @@
 								{/if}
 							</div>
 
-							<Switch
-								checked={isEnabledForChat}
-								disabled={hasError}
-								onclick={(e: MouseEvent) => e.stopPropagation()}
-								onCheckedChange={() => toggleServerForChat(server.id)}
-							/>
+							<Tooltip.Root>
+								<Tooltip.Trigger>
+									<Switch
+										checked={isEnabledForChat}
+										disabled={hasError}
+										onclick={(e: MouseEvent) => e.stopPropagation()}
+										onCheckedChange={() => toggleServerForChat(server.id)}
+									/>
+								</Tooltip.Trigger>
+								<Tooltip.Content>
+									<p>{isEnabledForChat ? 'Disable' : 'Enable'} {getServerLabel(server)}</p>
+								</Tooltip.Content>
+							</Tooltip.Root>
 						</button>
 					{/each}
 				</div>

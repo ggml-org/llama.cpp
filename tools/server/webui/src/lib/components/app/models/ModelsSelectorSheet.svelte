@@ -228,7 +228,7 @@
 								: 'text-muted-foreground',
 					sheetOpen ? 'text-foreground' : ''
 				)}
-				style="max-width: min(calc(100cqw - 10.5rem), 20rem)"
+				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 				disabled={disabled || updating}
 				onclick={() => handleOpenChange(true)}
 			>
