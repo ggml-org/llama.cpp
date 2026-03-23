@@ -845,17 +845,19 @@ static void moe_prestage_popular_experts() {
     size_t avail;
     if (s1_active && cache) {
         // S1 mode: AOS entries are evictable — use total managed capacity minus
-        // compute reserve.  The reserve ensures space for compute buffers, KV cache,
-        // and runtime allocations that will be added after prestage.
+        // compute reserve and runtime reservations (KV cache, compute buffers).
+        // Runtime bytes include device-side KV cache which must not be evicted.
         cache->unpin_experts();
         const size_t total_managed = ggml_sycl::unified_cache_total_managed(device);
+        const size_t runtime_bytes = ggml_sycl::unified_cache_get_runtime_bytes(device);
         size_t free_vram = 0, total_vram = 0;
         ggml_backend_sycl_get_device_memory(device, &free_vram, &total_vram);
         const size_t compute_reserve = std::max(size_t(256) << 20, total_vram / 10);
-        avail = (total_managed > compute_reserve) ? total_managed - compute_reserve : 0;
+        const size_t total_reserve   = compute_reserve + runtime_bytes;
+        avail = (total_managed > total_reserve) ? total_managed - total_reserve : 0;
         GGML_LOG_INFO("[MOE-PRESTAGE] S1 mode: total_managed=%zu MB, compute_reserve=%zu MB, "
-                      "prestage budget=%zu MB (evictable AOS entries)\n",
-                      total_managed >> 20, compute_reserve >> 20, avail >> 20);
+                      "runtime_reserved=%zu MB, prestage budget=%zu MB (evictable AOS entries)\n",
+                      total_managed >> 20, compute_reserve >> 20, runtime_bytes >> 20, avail >> 20);
     } else {
         avail = ggml_sycl::unified_cache_available_for_compute(device);
     }
@@ -12056,9 +12058,12 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     size = std::max(size, size_t(1));
 
-    // Check env var override: GGML_SYCL_KV_HOST=1 forces all-host KV cache
-    // Auto-enable host KV when expert tensors are on host-pinned (MoE models).
-    // For large MoE models, VRAM is better used for expert SOA caching than KV.
+    // Check env var override: GGML_SYCL_KV_HOST=1 forces all-host KV cache.
+    // Default: KV on device (VRAM) to co-locate with attention weights.
+    // KV placement is based on VRAM budget, NOT model type — even MoE models
+    // benefit from device-side KV when attention weights are already in VRAM.
+    // Expert SOA cache uses LRU eviction and respects runtime budget that
+    // includes KV, so there is no need to force KV to host for MoE.
     static std::atomic<int> cached_kv_host{ -1 };
     int                     kv_host_val = cached_kv_host.load(std::memory_order_acquire);
     if (kv_host_val == -1) {
@@ -12066,18 +12071,9 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         if (env_kv) {
             kv_host_val = std::atoi(env_kv);
         } else {
-            // Auto-detect: MoE models should use host KV to leave VRAM free for
-            // expert SOA cache.  Use g_moe_n_experts_total (set from inventory hparams)
-            // rather than query_moe_expert_split() which is not set in S1 mode.
-            kv_host_val = (g_moe_n_experts_total > 0) ? 1 : 0;
-            if (kv_host_val) {
-                static bool logged_once = false;
-                if (!logged_once) {
-                    GGML_LOG_INFO("[KV-TIER] MoE model detected (%d experts) — auto-enabling KV host "
-                                 "(VRAM reserved for expert SOA cache)\n", g_moe_n_experts_total);
-                    logged_once = true;
-                }
-            }
+            // Default: attempt device-side KV.  The VRAM cap logic below will
+            // fall back to host if there isn't enough free VRAM after weights.
+            kv_host_val = 0;
         }
         cached_kv_host.store(kv_host_val, std::memory_order_release);
     }
@@ -12092,11 +12088,16 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     // Reserve headroom for compute scratch, graph replay, etc.
     size_t compute_reserve = std::max(size_t(256) << 20, total_mem / 10);
     // When weights are on host-pinned (S1), the unified cache needs VRAM for
-    // SOA layout copies.  Reserve space for the weight cache so KV doesn't
-    // exhaust VRAM before the cache can upload weights.
+    // SOA layout copies.  Reserve space for DENSE weights only — expert weights
+    // use LRU eviction in the remaining VRAM and should not block KV placement.
     size_t weight_cache_reserve = 0;
     if (ggml_backend_sycl_weights_evictable()) {
-        weight_cache_reserve = ggml_sycl_get_model_size();
+        const size_t total_model = ggml_sycl_get_model_size();
+        size_t       expert_bytes = 0;
+        ggml_sycl_get_moe_info(&expert_bytes, nullptr, nullptr);
+        // Dense weight size = total model - expert weights.
+        // For MoE 120B: ~60GB total, ~58GB experts, ~2.2GB dense.
+        weight_cache_reserve = (total_model > expert_bytes) ? total_model - expert_bytes : total_model;
     }
     // Use conservative free estimate: the driver's free_mem can be overly
     // optimistic early in loading (before page table / OS overhead is
