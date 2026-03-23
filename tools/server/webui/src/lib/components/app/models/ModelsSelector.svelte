@@ -277,44 +277,50 @@
 						e.stopPropagation();
 					}}
 				>
-					<button
-						type="button"
-						class={cn(
-							`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-							!isCurrentModelInCache
-								? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-								: forceForegroundText
-									? 'text-foreground'
-									: isHighlightedCurrentModelActive
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class={cn(
+								`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+								!isCurrentModelInCache
+									? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+									: forceForegroundText
 										? 'text-foreground'
-										: 'text-muted-foreground',
-							isOpen ? 'text-foreground' : ''
-						)}
-						style="max-width: min(calc(100cqw - 9rem), 20rem)"
-						disabled={disabled || updating}
-					>
-						<Package class="h-3.5 w-3.5" />
+										: isHighlightedCurrentModelActive
+											? 'text-foreground'
+											: 'text-muted-foreground',
+								isOpen ? 'text-foreground' : ''
+							)}
+							style="max-width: min(calc(100cqw - 9rem), 20rem)"
+						>
+							<Package class="h-3.5 w-3.5" />
 
-						{#if selectedOption}
-							<Tooltip.Root>
-								<Tooltip.Trigger class="min-w-0 overflow-hidden">
-									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
-								</Tooltip.Trigger>
+							{#if selectedOption}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props: tooltipProps })}
+											<span {...tooltipProps} class="min-w-0 overflow-hidden">
+												<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+											</span>
+										{/snippet}
+									</Tooltip.Trigger>
 
-								<Tooltip.Content>
-									<p class="font-mono">{selectedOption.model}</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						{:else}
-							<span class="min-w-0 font-medium">Select model</span>
-						{/if}
+									<Tooltip.Content>
+										<p class="font-mono">{selectedOption.model}</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{:else}
+								<span class="min-w-0 font-medium">Select model</span>
+							{/if}
 
-						{#if updating || isLoadingModel}
-							<Loader2 class="h-3 w-3.5 animate-spin" />
-						{:else}
-							<ChevronDown class="h-3 w-3.5" />
-						{/if}
-					</button>
+							{#if updating || isLoadingModel}
+								<Loader2 class="h-3 w-3.5 animate-spin" />
+							{:else}
+								<ChevronDown class="h-3 w-3.5" />
+							{/if}
+						</button>
+					{/snippet}
 				</DropdownMenu.Trigger>
 
 				<DropdownMenu.Content
@@ -407,8 +413,12 @@
 
 				{#if selectedOption}
 					<Tooltip.Root>
-						<Tooltip.Trigger class="min-w-0 overflow-hidden">
-							<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+						<Tooltip.Trigger>
+							{#snippet child({ props: tooltipProps })}
+								<span {...tooltipProps} class="min-w-0 overflow-hidden">
+									<ModelId modelId={selectedOption.model} class="min-w-0" showOrgName />
+								</span>
+							{/snippet}
 						</Tooltip.Trigger>
 
 						<Tooltip.Content>
