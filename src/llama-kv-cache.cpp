@@ -135,7 +135,18 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
+        // MXFP: align block count to 16 for cp.async
+        uint32_t n_embd_k_alloc = n_embd_k_gqa;
+        const bool is_mxfp_k = ggml_is_type_mxfp(type_k);
+        if (is_mxfp_k) {
+            const int qk = (int)ggml_blck_size(type_k);
+            GGML_ASSERT(n_embd_k_gqa % qk == 0 && "MXFP K cache requires n_embd_k_gqa divisible by block size");
+            const int blocks = (int)n_embd_k_gqa / qk;
+            const int blocks_aligned = (blocks + 15) & ~15;
+            n_embd_k_alloc = (uint32_t)(blocks_aligned * qk);
+        }
+
+        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_alloc, kv_size, n_stream) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
 
         has_k && ggml_format_name(k, "cache_k_l%d", il);
@@ -1025,19 +1036,15 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     auto * k = layers[ikv].k;
 
-    const uint64_t kv_size      = get_size();
-    const uint64_t n_embd_k_gqa = k->ne[0];
-
-    assert(n_embd_k_gqa == hparams.n_embd_k_gqa(il));
-
+    // note: for MXFP types, k->ne[0] may be padded for block alignment; use nb[] for strides
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k(il)),
-            ggml_row_size(k->type, n_embd_k_gqa),
-            ggml_row_size(k->type, n_embd_k_gqa*kv_size),
-            ggml_row_size(k->type, n_embd_k_gqa*kv_size)*sinfo.s0);
+            k->nb[1],
+            k->nb[2],
+            k->nb[2]*sinfo.s0);
 }
 
 ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1092,19 +1099,35 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
     const int64_t n_stream = k->ne[2];
+    const int64_t kv_size = get_size();
 
     if (n_stream > 1) {
-        const int64_t kv_size = get_size();
-
-        assert(n_embd_gqa == k->ne[0]);
-        assert(kv_size    == k->ne[1]);
+        assert(kv_size == k->ne[1]);
 
         // merge the buffer across all streams because the idxs are global
-        k = ggml_reshape_2d(ctx, k, n_embd_gqa, kv_size*n_stream);
+        // note: use view_2d to preserve nb[1] (includes MXFP alignment padding)
+        k = ggml_view_2d(ctx, k, k->ne[0], kv_size*n_stream, k->nb[1], 0);
+    }
+
+    const bool is_mxfp = ggml_is_type_mxfp(k->type);
+
+    // for MXFP: ne[0] may be padded, narrow view to n_embd_gqa while keeping row stride
+    ggml_tensor * k_dst = k;
+    if (is_mxfp) {
+        k_dst = ggml_view_2d(ctx, k, n_embd_gqa, k->ne[1], k->nb[1], 0);
     }
 
     // store the current K values into the cache
-    return ggml_set_rows(ctx, k, k_cur, k_idxs);
+    ggml_tensor * result = ggml_set_rows(ctx, k_dst, k_cur, k_idxs);
+
+    // enable Hadamard rotation for MXFP K cache (QuaRot arXiv:2404.00456, BRQ arXiv:2511.04214)
+    // skipped when DK != DV (MLA) and for E5M2/E3M2 (2-bit mantissa, no benefit).
+    // condition must match flash attention read path (ops.cpp: DK == DV).
+    if (is_mxfp && hparams.n_embd_head_k(il) == hparams.n_embd_head_v(il) && ggml_mxfp_use_hadamard(k->type)) {
+        ((int32_t *)result->op_params)[0] = 1;
+    }
+
+    return result;
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
