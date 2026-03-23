@@ -2415,24 +2415,29 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                                   dev_d.get_info<sycl::info::device::name>().c_str(),
                                   ggml_sycl_info().gpu_dpct_ids[gpu_d]);
                 } catch (const std::exception & e) {
-                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable: %s\n", gpu_d, e.what());
+                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable: %s\n",
+                                  gpu_d, e.what());
                 } catch (...) {
-                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable (unknown error)\n", gpu_d);
+                    GGML_LOG_WARN("[MOE-MULTI-GPU] Early init: device %d unavailable "
+                                  "(unknown error)\n", gpu_d);
                 }
             }
             if (n_early_ok > 0) {
                 g_moe_multi_gpu_active.store(true, std::memory_order_release);
                 GGML_LOG_INFO("[MOE-MULTI-GPU] Enabled (%s): %d secondary GPUs registered\n",
-                              moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=1" : "auto-detected MoE + multi-GPU",
+                              moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=1"
+                                         : "auto-detected MoE + multi-GPU",
                               n_early_ok);
             } else {
-                GGML_LOG_WARN("[MOE-MULTI-GPU] No secondary GPUs registered (tried %d devices)\n",
-                              total_gpus - 1);
+                GGML_LOG_WARN("[MOE-MULTI-GPU] No secondary GPUs registered "
+                              "(tried %d devices)\n", total_gpus - 1);
             }
         } else if (!multi_gpu_on) {
             GGML_LOG_INFO("[MOE-MULTI-GPU] Disabled: %s\n",
                           moe_opt_in ? "env GGML_SYCL_MOE_MULTI_GPU=0"
-                                     : "single GPU detected (use ONEAPI_DEVICE_SELECTOR=\"level_zero:0,1\" for dual GPU)");
+                                     : "single GPU detected "
+                                       "(use ONEAPI_DEVICE_SELECTOR=\"level_zero:0,1\" "
+                                       "for dual GPU)");
         }
     }
 
@@ -6515,6 +6520,111 @@ static bool ggml_sycl_pipeline_moe_enabled() {
     return v != 0;
 }
 
+// ----- Pipeline CPU: environment variable gate -----
+// When GGML_SYCL_PIPELINE_CPU=1, CPU expert compute from MoE layer N
+// overlaps with GPU attention for layer N+1.  Instead of blocking until
+// CPU experts finish and scattering results immediately, the merge is
+// deferred to the start of the next MoE layer (or graph boundary).
+// This gives one full (residual + norm + attention) cycle of overlap time.
+static bool ggml_sycl_pipeline_cpu_enabled() {
+    static std::atomic<int> val{ -1 };
+    int                     v = val.load(std::memory_order_acquire);
+    if (v < 0) {
+        const char * env = getenv("GGML_SYCL_PIPELINE_CPU");
+        int          nv  = env ? atoi(env) : 0;  // Default: OFF
+        val.compare_exchange_strong(v, nv, std::memory_order_release, std::memory_order_acquire);
+        v = val.load(std::memory_order_acquire);
+    }
+    return v != 0;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline CPU: deferred cross-layer merge
+// ---------------------------------------------------------------------------
+struct pending_cpu_pipeline {
+    std::future<void> future;
+    float *       out_pinned;
+    sycl::queue * stream;
+    sycl::context sycl_ctx;
+    struct scatter_entry {
+        char * dst_device;
+        int    N;
+    };
+    std::vector<scatter_entry> entries;
+    std::vector<cpu_expert_task> tasks;
+    int  device_id;
+    bool from_pool;
+    bool owns_buffers;
+    bool active;
+    const ggml_tensor * dst_tensor;
+    int layer_id;
+
+    pending_cpu_pipeline() : out_pinned(nullptr), stream(nullptr),
+        sycl_ctx(), device_id(-1), from_pool(false), owns_buffers(false),
+        active(false), dst_tensor(nullptr), layer_id(-1) {}
+};
+
+static thread_local pending_cpu_pipeline g_pending_cpu_pipeline;
+
+static void flush_pending_cpu_pipeline() {
+    if (!g_pending_cpu_pipeline.active) return;
+    try {
+        if (g_pending_cpu_pipeline.future.valid()) {
+            g_pending_cpu_pipeline.future.get();
+        }
+        if (g_pending_cpu_pipeline.stream && g_pending_cpu_pipeline.out_pinned) {
+            const float * src = g_pending_cpu_pipeline.out_pinned;
+            for (auto & e : g_pending_cpu_pipeline.entries) {
+                if (e.dst_device) {
+                    g_pending_cpu_pipeline.stream->memcpy(
+                        e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
+                }
+                src += e.N;
+            }
+        }
+    } catch (const std::exception & ex) {
+        GGML_LOG_ERROR("[PIPELINE-CPU] Deferred merge failed: %s\n", ex.what());
+    }
+    static std::atomic<int> pipeline_log{ 0 };
+    if (pipeline_log.fetch_add(1, std::memory_order_relaxed) < 5) {
+        GGML_LOG_INFO("[PIPELINE-CPU] Flushed deferred merge from layer %d (%zu entries)\n",
+                      g_pending_cpu_pipeline.layer_id,
+                      g_pending_cpu_pipeline.entries.size());
+    }
+    g_pending_cpu_pipeline.entries.clear();
+    g_pending_cpu_pipeline.tasks.clear();
+    g_pending_cpu_pipeline.out_pinned   = nullptr;
+    g_pending_cpu_pipeline.stream       = nullptr;
+    g_pending_cpu_pipeline.sycl_ctx     = sycl::context();
+    g_pending_cpu_pipeline.device_id    = -1;
+    g_pending_cpu_pipeline.from_pool    = false;
+    g_pending_cpu_pipeline.owns_buffers = false;
+    g_pending_cpu_pipeline.active       = false;
+    g_pending_cpu_pipeline.dst_tensor   = nullptr;
+    g_pending_cpu_pipeline.layer_id     = -1;
+}
+
+static bool flush_pending_cpu_pipeline_if_consumed(const ggml_tensor * consuming_dst) {
+    if (!g_pending_cpu_pipeline.active) return false;
+    if (!consuming_dst)                 return false;
+    const ggml_tensor * pending_dst = g_pending_cpu_pipeline.dst_tensor;
+    if (!pending_dst) {
+        flush_pending_cpu_pipeline();
+        return true;
+    }
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        const ggml_tensor * s = consuming_dst->src[i];
+        while (s) {
+            if (s == pending_dst) {
+                flush_pending_cpu_pipeline();
+                return true;
+            }
+            s = s->view_src;
+        }
+    }
+    return false;
+}
+
 // ----- Deferred secondary GPU scatter (async B50 dispatch) -----
 // Stores scatter metadata from dispatch_experts_secondary_gpu() so
 // B50 GEMM kernels run in parallel with B580 primary GPU dispatch.
@@ -6767,6 +6877,7 @@ static void pipeline_scatter_start_async(int device) {
 
 // Public entry point for graph boundary flush
 void ggml_sycl_cpu_tg_flush_pending() {
+    flush_pending_cpu_pipeline();
     flush_pending_cpu_scatter();
     flush_prev_scatter_bufs();  // Final cleanup for last async scatter
     if (ggml_sycl_pipeline_moe_enabled()) {
@@ -30614,6 +30725,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // scatter's output tensor.  Enables deferral overlap (e.g. up→gate).
             flush_pending_cpu_scatter_if_consumed(dst);
             flush_pending_secondary_scatter_if_consumed(dst);
+            flush_pending_cpu_pipeline_if_consumed(dst);
 
             // Check if multi-GPU secondary dispatch is available.  When active,
             // fusion is disabled because secondary experts scatter directly to
@@ -31830,22 +31942,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
-                    // CPU down mul_mat — defer via g_pending_scatter for overlap
-                    // with subsequent GPU ops (same pattern as hybrid path).
+                    // CPU down mul_mat — defer for overlap with subsequent GPU ops.
+                    // Pipeline CPU mode: defer to g_pending_cpu_pipeline for cross-layer
+                    // overlap (CPU experts from layer N run during layer N+1 attention).
+                    // Standard mode: defer to g_pending_scatter (intra-layer deferral).
                     if (n_cpu_d > 0) {
-                        // Store tasks in g_pending_scatter to keep the array alive
-                        // until flush (the async compute captures a raw pointer).
-                        g_pending_scatter.tasks.clear();
-                        g_pending_scatter.tasks.reserve(n_cpu_d);
+                        const bool use_cpu_pipeline = ggml_sycl_pipeline_cpu_enabled();
+                        auto & target_tasks = use_cpu_pipeline
+                            ? g_pending_cpu_pipeline.tasks
+                            : g_pending_scatter.tasks;
+                        target_tasks.clear();
+                        target_tasks.reserve(n_cpu_d);
                         for (size_t fi = 0; fi < n_cpu_d; fi++) {
-                            g_pending_scatter.tasks.push_back(dt[fi]);
+                            target_tasks.push_back(dt[fi]);
                         }
-
-                        // Submit to CPU thread pool
-                        auto * tasks_ptr = g_pending_scatter.tasks.data();
+                        auto * tasks_ptr = target_tasks.data();
                         int    n_tasks   = static_cast<int>(n_cpu_d);
                         auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
-
                         std::future<void> fut;
                         if (cpu_pool.is_active()) {
                             fut = cpu_pool.submit_batch(tasks_ptr, n_tasks);
@@ -31854,31 +31967,49 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                 ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
                             });
                         }
-
-                        // Populate deferred scatter entries
-                        g_pending_scatter.entries.clear();
-                        g_pending_scatter.entries.reserve(n_cpu_d);
-                        for (size_t fi = 0; fi < n_cpu_d; fi++) {
-                            const size_t  ci   = g_moe_fusion.cpu_indices[fi];
-                            const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
-                            const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
-                            char *        slot = dst_d + id * nb1 + iid1 * nb2;
-                            g_pending_scatter.entries.push_back(
-                                { slot, static_cast<int>(N_d) });
+                        if (use_cpu_pipeline) {
+                            g_pending_cpu_pipeline.entries.clear();
+                            g_pending_cpu_pipeline.entries.reserve(n_cpu_d);
+                            for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                                const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                                char *        slot = dst_d + id * nb1 + iid1 * nb2;
+                                g_pending_cpu_pipeline.entries.push_back(
+                                    { slot, static_cast<int>(N_d) });
+                            }
+                            g_pending_cpu_pipeline.future       = std::move(fut);
+                            g_pending_cpu_pipeline.out_pinned   = tl_down_out.ptr;
+                            g_pending_cpu_pipeline.stream       = stream;
+                            g_pending_cpu_pipeline.sycl_ctx     = stream->get_context();
+                            g_pending_cpu_pipeline.device_id    = ctx.device;
+                            g_pending_cpu_pipeline.from_pool    = false;
+                            g_pending_cpu_pipeline.owns_buffers = false;
+                            g_pending_cpu_pipeline.active       = true;
+                            g_pending_cpu_pipeline.dst_tensor   = dst;
+                            g_pending_cpu_pipeline.layer_id     = cur_layer_fast;
+                        } else {
+                            g_pending_scatter.entries.clear();
+                            g_pending_scatter.entries.reserve(n_cpu_d);
+                            for (size_t fi = 0; fi < n_cpu_d; fi++) {
+                                const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_d));
+                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_d));
+                                char *        slot = dst_d + id * nb1 + iid1 * nb2;
+                                g_pending_scatter.entries.push_back(
+                                    { slot, static_cast<int>(N_d) });
+                            }
+                            g_pending_scatter.future       = std::move(fut);
+                            g_pending_scatter.out_pinned   = tl_down_out.ptr;
+                            g_pending_scatter.act_pinned   = nullptr;
+                            g_pending_scatter.stream       = stream;
+                            g_pending_scatter.sycl_ctx     = stream->get_context();
+                            g_pending_scatter.device_id    = ctx.device;
+                            g_pending_scatter.from_pool    = false;
+                            g_pending_scatter.owns_buffers = false;
+                            g_pending_scatter.active       = true;
+                            g_pending_scatter.dst_tensor   = dst;
                         }
-
-                        // Set up deferred scatter metadata.  owns_buffers=false because
-                        // tl_down_out is a thread_local static that manages its own memory.
-                        g_pending_scatter.future      = std::move(fut);
-                        g_pending_scatter.out_pinned  = tl_down_out.ptr;
-                        g_pending_scatter.act_pinned  = nullptr;
-                        g_pending_scatter.stream      = stream;
-                        g_pending_scatter.sycl_ctx    = stream->get_context();
-                        g_pending_scatter.device_id   = ctx.device;
-                        g_pending_scatter.from_pool   = false;
-                        g_pending_scatter.owns_buffers = false;
-                        g_pending_scatter.active      = true;
-                        g_pending_scatter.dst_tensor  = dst;
                     } else {
                         // No CPU experts — just wait for GPU events
                         sycl::event::wait(down_events);
@@ -33368,6 +33499,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // This enables expert deferral: cold CPU experts from layer N
             // compute in parallel with layer N+1's GPU attention window.
             flush_pending_cpu_scatter_if_consumed(dst);
+            flush_pending_cpu_pipeline_if_consumed(dst);
             // Only flush secondary scatter if ring buffers are full.
             // This allows inter-layer pipelining: layer N+1's B50 dispatch
             // can start while layer N's results are still being scattered.
@@ -33584,6 +33716,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 g_pending_scatter.active       = true;
                 g_pending_scatter.dst_tensor   = dst;
                 g_pending_scatter.entries      = std::move(r.entries);
+            };
+
+            // Apply CPU dispatch result to pipeline (cross-layer overlap).
+            auto apply_cpu_result_to_pipeline = [&](cpu_dispatch_result & r) {
+                if (!r.valid) return;
+                g_pending_cpu_pipeline.tasks        = std::move(r.tasks);
+                g_pending_cpu_pipeline.future       = std::move(r.future);
+                g_pending_cpu_pipeline.out_pinned   = r.out_pinned;
+                g_pending_cpu_pipeline.stream       = stream;
+                g_pending_cpu_pipeline.sycl_ctx     = stream->get_context();
+                g_pending_cpu_pipeline.device_id    = r.device_id;
+                g_pending_cpu_pipeline.from_pool    = r.from_pool;
+                g_pending_cpu_pipeline.owns_buffers = r.owns_buffers;
+                g_pending_cpu_pipeline.active       = true;
+                g_pending_cpu_pipeline.dst_tensor   = dst;
+                g_pending_cpu_pipeline.layer_id     = layer_id;
+                g_pending_cpu_pipeline.entries.clear();
+                g_pending_cpu_pipeline.entries.reserve(r.entries.size());
+                for (auto & e : r.entries) {
+                    g_pending_cpu_pipeline.entries.push_back({ e.dst_device, e.N });
+                }
             };
 
             // Synchronous dispatch + scatter setup: used by the sequential
@@ -34200,12 +34353,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             // ----- Join / sequential CPU dispatch -----
-            // TG path: wait for async CPU thread, then apply results to
-            // g_pending_scatter on the main thread (thread_local safety).
-            // PP path: run CPU dispatch sequentially after GPU0 submission.
+            // Pipeline CPU: store in g_pending_cpu_pipeline for cross-layer overlap.
+            // Standard: store in g_pending_scatter (intra-layer deferral).
             if (cpu_async_safe && cpu_compute_future.valid()) {
                 auto cpu_result = cpu_compute_future.get();
-                apply_cpu_result_to_scatter(cpu_result);
+                if (ggml_sycl_pipeline_cpu_enabled()) {
+                    apply_cpu_result_to_pipeline(cpu_result);
+                } else {
+                    apply_cpu_result_to_scatter(cpu_result);
+                }
             } else if (have_cpu_experts) {
                 do_cpu_dispatch();
             }
@@ -35115,6 +35271,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     // nothing leaks across graphs.
     flush_pending_cpu_scatter_if_consumed(dst);
     flush_pending_secondary_scatter_if_consumed(dst);
+    flush_pending_cpu_pipeline_if_consumed(dst);
 
     // Debug: trace operations in multi-process mode
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
@@ -35567,23 +35724,26 @@ GGML_API void ggml_backend_sycl_get_device_description(int device, char * descri
 
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
-    // For secondary GPU devices (device >= scheduler's visible count), the scheduler-
-    // filtered map falls back to identity mapping which is wrong when non-GPU devices
-    // are interleaved in dpct enumeration.  Use ggml_sycl_get_gpu_device() which
-    // accesses the pre-hiding gpu_dpct_ids[] map for correct device resolution.
+    // For secondary GPU devices (device >= scheduler's visible count), the
+    // scheduler-filtered map falls back to identity mapping which is wrong
+    // when non-GPU devices are interleaved in dpct enumeration.  Use
+    // ggml_sycl_get_gpu_device() which accesses the pre-hiding gpu_dpct_ids[]
+    // map for correct device resolution.
     const auto & info = ggml_sycl_info();
     if (device >= 0 && device < info.total_gpu_count && device >= info.device_count) {
         auto & dev = ggml_sycl_get_gpu_device(device);
         SYCL_CHECK(CHECK_TRY_ERROR(dev.get_memory_info(*free, *total)));
     } else {
         ggml_sycl_set_device(device);
-        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(device).get_memory_info(*free, *total)));
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            ggml_sycl_get_device(device).get_memory_info(*free, *total)));
     }
     GGML_SYCL_DEBUG("[MEM-QUERY] dev=%d free=%.1f MB total=%.1f MB consumed=%.1f MB\n",
                     device, *free / (1024.0 * 1024.0), *total / (1024.0 * 1024.0),
                     (*total - *free) / (1024.0 * 1024.0));
 } catch (const sycl::exception & exc) {
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
+              << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
 
