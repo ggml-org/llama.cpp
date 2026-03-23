@@ -1422,6 +1422,20 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
 
+    GGML_API void ggml_mul_mat_add_scale(
+            struct ggml_tensor * a,
+            struct ggml_tensor * scale);
+
+    GGML_API const struct ggml_tensor * ggml_mul_mat_get_scale(
+            const struct ggml_tensor * a);
+
+    GGML_API void ggml_mul_mat_id_add_scale(
+            struct ggml_tensor * a,
+            struct ggml_tensor * scale);
+
+    GGML_API const struct ggml_tensor * ggml_mul_mat_id_get_scale(
+            const struct ggml_tensor * a);
+
     // A: m columns, n rows,
     // B: p columns, n rows,
     // result is m columns, p rows
