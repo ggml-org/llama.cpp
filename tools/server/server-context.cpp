@@ -166,6 +166,11 @@ struct server_slot {
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
+    // Diagnostic counters for speculation debugging
+    int32_t n_spec_cycles = 0;  // Total compute_draft calls
+    int32_t n_spec_empty  = 0;  // compute_draft returned empty (no prediction)
+    int32_t n_spec_skip   = 0;  // sample_and_accept returned skip (full rejection)
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -191,6 +196,9 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+        n_spec_cycles    = 0;
+        n_spec_empty     = 0;
+        n_spec_skip      = 0;
 
         task_prev = std::move(task);
         task.reset();
@@ -341,9 +349,12 @@ struct server_slot {
         timings.predicted_per_second   = 1e3 / t_token_generation * n_decoded;
 
         // Add speculative metrics
-        if (n_draft_total > 0) {
+        if (n_draft_total > 0 || n_spec_cycles > 0) {
             timings.draft_n          = n_draft_total;
             timings.draft_n_accepted = n_draft_accepted;
+            timings.spec_cycles      = n_spec_cycles;
+            timings.spec_empty       = n_spec_empty;
+            timings.spec_skip        = n_spec_skip;
         }
 
         return timings;
@@ -396,12 +407,13 @@ struct server_slot {
                 t_token_generation, n_decoded, t_gen, n_gen_second,
                 t_prompt_processing + t_token_generation, n_prompt_tokens_processed + n_decoded);
 
-        if (n_draft_total > 0) {
-            const float draft_ratio = (float) n_draft_accepted / n_draft_total;
+        if (n_draft_total > 0 || n_spec_cycles > 0) {
+            const float draft_ratio = n_draft_total > 0 ? (float) n_draft_accepted / n_draft_total : 0.0f;
             SLT_CNT(*this,
-                    "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
-                    draft_ratio, n_draft_accepted, n_draft_total
-            );
+                    "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n"
+                    "spec cycles = %5d (empty = %5d, skip = %5d, accept = %5d)\n",
+                    draft_ratio, n_draft_accepted, n_draft_total, n_spec_cycles, n_spec_empty, n_spec_skip,
+                    n_spec_cycles - n_spec_empty - n_spec_skip);
         }
 
         if (spec_session) {
@@ -2242,6 +2254,10 @@ private:
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
                 // compute draft and add draft to internal batch
                 draft = slot.spec_session->compute_draft(cached_text_tokens, slot.sampled, n_draft_max_slot);
+                slot.n_spec_cycles++;
+                if (draft.empty()) {
+                    slot.n_spec_empty++;
+                }
                 if (draft.size() > 0) {
                     SLT_DBG(slot, "compute_draft: id=%d, #cached_text_tokens=%zu, #tokens=%zu, #i_batch_dft=%zu\n",
                             slot.sampled,
@@ -3014,6 +3030,7 @@ private:
                 slot.i_batch_dft.clear();
                 const size_t n_draft = accept_response.draft_size_initial;
                 if (accept_response.skip_acceptance) {
+                    slot.n_spec_skip++;
                     SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", accept_response.tokens.size(), n_draft);
                     continue;
                 }

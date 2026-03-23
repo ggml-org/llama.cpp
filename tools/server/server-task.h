@@ -274,6 +274,11 @@ struct result_timings {
     int32_t draft_n = 0;
     int32_t draft_n_accepted = 0;
 
+    // Diagnostic spec counters
+    int32_t spec_cycles = 0;
+    int32_t spec_empty  = 0;
+    int32_t spec_skip   = 0;
+
     json to_json() const;
 };
 

@@ -624,9 +624,12 @@ json result_timings::to_json() const {
         {"predicted_per_second",   predicted_per_second},
     };
 
-    if (draft_n > 0) {
+    if (draft_n > 0 || spec_cycles > 0) {
         base["draft_n"] = draft_n;
         base["draft_n_accepted"] = draft_n_accepted;
+        base["spec_cycles"]      = spec_cycles;
+        base["spec_empty"]       = spec_empty;
+        base["spec_skip"]        = spec_skip;
     }
 
     return base;
