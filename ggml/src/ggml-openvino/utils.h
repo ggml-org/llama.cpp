@@ -40,11 +40,17 @@ struct graph_key_hash {
     }
 };
 
+struct decoder_runtime_ctx {
+    decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) :
+        mutex(mutex) {}
+    std::shared_ptr<std::mutex> mutex;
+    std::shared_ptr<GgmlOvDecoder> ptr;
+};
+
 struct ov_runtime_context {
-    std::mutex ov_compute_mutex;
     std::string device;
     bool stateful;
-    std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
+    std::unordered_map<graph_key, std::shared_ptr<decoder_runtime_ctx>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
@@ -116,6 +122,13 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                    const ggml_tensor * ggml_tensor);
 
 bool is_naive(struct ggml_cgraph * cgraph);
+
+/**
+ * @brief Heuristically checks whether the given computation graph is a split-model fragment.
+ * @param cgraph Pointer to the GGML computation graph to analyze.
+ * @return true if the graph is identified as split; otherwise false.
+ */
+bool is_model_splitted(struct ggml_cgraph * cgraph);
 
 enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
                                ov::Core & core,

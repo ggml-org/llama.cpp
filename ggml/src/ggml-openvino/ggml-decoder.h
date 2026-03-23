@@ -69,6 +69,7 @@ public:
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
                   bool is_stateful = false,
+                  bool model_is_splitted = false,
                   bool is_prefill = false,
                   int prefill_chunk_size = 256);
 
@@ -175,7 +176,11 @@ public:
 
     virtual bool is_stateful() const override { return m_is_stateful; }
 
-    ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const;
+    virtual bool is_splited_model() const override {
+        return m_model_is_splitted;
+    }
+
+    ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input, int dynamic_dim_index=-1) const;
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
 
@@ -205,6 +210,7 @@ public:
     bool m_is_prefill = false;
     bool m_naive = false;
     int m_prefill_chunk_size = 0;
+    bool m_model_is_splitted = false; // label the cgraph is splited or not
 
     static ov::Shape get_shape(const ggml_tensor * tensor);
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
@@ -272,6 +278,9 @@ private:
     void compute_model_inputs();
     void compute_model_outputs();
 
+    // Infer and propagate dynamic-dimension indices for all tensors in the GGML graph.
+    void compute_node_dynamic_dims();
+
     void validate_cgraph() const;
 
     ggml_cgraph * m_cgraph = nullptr;
@@ -284,6 +293,7 @@ private:
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::vector<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
+    std::map<ggml_tensor *, int> m_node_dynamic_dims;
 
     ModelParams m_model_params;
     ComputeParams m_compute_params;
