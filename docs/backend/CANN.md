@@ -42,12 +42,22 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ### Ascend NPU
 
-**Verified devices**
+You can retrieve your Ascend device IDs using the following command:
 
-| Ascend NPU                    | Status  |
-|:-----------------------------:|:-------:|
-| Atlas 300T A2                 | Support |
-| Atlas 300I Duo                | Support |
+```sh
+lspci -n | grep -Eo '19e5:d[0-9a-f]{3}' | cut -d: -f2
+```
+
+**Devices**
+
+| Device Id | Product Series | Product Models | Chip Model | Verified Status |
+|:---------:|----------------|----------------|:----------:|:---------------:|
+|    d803   | Atlas A3 Train |                |    910C    |                 |
+|    d803   | Atlas A3 Infer |                |    910C    |                 |
+|    d802   | Atlas A2 Train |                |    910B    |                 |
+|    d802   | Atlas A2 Infer | Atlas 300I A2  |    910B    |     Support     |
+|    d801   | Atlas Train    |                |     910    |                 |
+|    d500   | Atlas Infer    | Atlas 300I Duo |    310P    |     Support     |
 
 *Notes:*
 
@@ -56,6 +66,9 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 
 ## Model Supports
+
+<details>
+<summary>Text-only</summary>
 
 | Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
@@ -118,8 +131,11 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 | Trillion-7B-preview         |   √   |   √  |   √  |
 | Ling models                 |   √   |   √  |   √  |
 
+</details>
 
-**Multimodal**
+<details>
+<summary>Multimodal</summary>
+
 | Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
 | LLaVA 1.5 models, LLaVA 1.6 models      |   x   |   x  |   x  |
@@ -134,15 +150,22 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 |  GLM-EDGE                   |   √   |   √  |   √  |
 |  Qwen2-VL                   |   √   |   √  |   √  |
 
+</details>
+
 
 
 ## DataType Supports
 
-| DataType               | Status  |
-|:----------------------:|:-------:|
-| FP16                   | Support |
-| Q8_0                   | Support |
-| Q4_0                   | Support |
+| DataType               | 910B    | 310P    |
+|:----------------------:|:-------:|:-------:|
+| FP16                   | Support | Support |
+| Q8_0                   | Support | Partial |
+| Q4_0                   | Support | Partial |
+| BF16                   | Support |         |
+
+> **310P note**
+> - `Q8_0`: data transform / buffer path is implemented, and `GET_ROWS` is supported, but quantized `MUL_MAT` / `MUL_MAT_ID` are not supported.
+> - `Q4_0`: data transform / buffer path is implemented, but quantized `MUL_MAT` / `MUL_MAT_ID` are not supported.
 
 ## Docker
 
@@ -160,7 +183,20 @@ npu-smi info
 
 # Select the cards that you want to use, make sure these cards are not used by someone.
 # Following using cards of device0.
-docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/dcmi:/usr/local/dcmi -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info -v /PATH_TO_YOUR_MODELS/:/app/models -it llama-cpp-cann -m /app/models/MODEL_PATH -ngl 32 -p "Building a website can be done in 10 simple steps:"
+docker run --name llamacpp \
+  --device /dev/davinci0 \
+  --device /dev/davinci_manager \
+  --device /dev/devmm_svm \
+  --device /dev/hisi_hdc \
+  -v /usr/local/dcmi:/usr/local/dcmi \
+  -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+  -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
+  -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
+  -v /PATH_TO_YOUR_MODELS/:/app/models \
+  -it llama-cpp-cann \
+  -m /app/models/MODEL_PATH \
+  -ngl 32 \
+  -p "Building a website can be done in 10 simple steps:"
 ```
 
 *Notes:*
@@ -171,69 +207,57 @@ docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager
 
 ### I. Setup Environment
 
-1. **Install Ascend Driver and firmware**
+1. **Configure Ascend user and group**
 
     ```sh
-    # create driver running user.
-    sudo groupadd -g HwHiAiUser
+    sudo groupadd HwHiAiUser
     sudo useradd -g HwHiAiUser -d /home/HwHiAiUser -m HwHiAiUser -s /bin/bash
     sudo usermod -aG HwHiAiUser $USER
-
-    # download driver from https://www.hiascend.com/hardware/firmware-drivers/community according to your system
-    # and install driver.
-    sudo sh Ascend-hdk-910b-npu-driver_x.x.x_linux-{arch}.run --full --install-for-all
     ```
 
-    Once installed, run `npu-smi info` to check whether driver is installed successfully.
+2. **Install dependencies**
+
+    **Ubuntu/Debian:**
     ```sh
-    +-------------------------------------------------------------------------------------------+
-    | npu-smi 24.1.rc2               Version: 24.1.rc2                                          |
-    +----------------------+---------------+----------------------------------------------------+
-    | NPU   Name           | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
-    | Chip                 | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
-    +======================+===============+====================================================+
-    | 2     xxx            | OK            | 64.4        51                15   / 15            |
-    | 0                    | 0000:01:00.0  | 0           1873 / 15077      0    / 32768         |
-    +======================+===============+====================================================+
-    | 5     xxx            | OK            | 64.0        52                15   / 15            |
-    | 0                    | 0000:81:00.0  | 0           1874 / 15077      0    / 32768         |
-    +======================+===============+====================================================+
-    | No running processes found in NPU 2                                                       |
-    +======================+===============+====================================================+
-    | No running processes found in NPU 5                                                       |
-    +======================+===============+====================================================+
+    sudo apt-get update
+    sudo apt-get install -y gcc python3 python3-pip linux-headers-$(uname -r)
     ```
 
-2. **Install Ascend Firmware**
+    **RHEL/CentOS:**
     ```sh
-    # download driver from https://www.hiascend.com/hardware/firmware-drivers/community according to your system
-    # and install driver.
-    sudo sh Ascend-hdk-910b-npu-firmware_x.x.x.x.X.run --full
+    sudo yum makecache
+    sudo yum install -y gcc python3 python3-pip kernel-headers-$(uname -r) kernel-devel-$(uname -r)
     ```
-    If the following message appears, firmware is installed successfully.
+
+3. **Install CANN (driver + toolkit)**
+
+    > The `Ascend-cann` package includes both the driver and toolkit. 
+    > `$ARCH` can be `x86_64` or `aarch64`, `$CHIP` can be `910b` or `310p`.
+
     ```sh
-    Firmware package installed successfully!
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.5.T63/Ascend-cann_8.5.0_linux-$ARCH.run
+    sudo bash ./Ascend-cann_8.5.0_linux-$ARCH.run --install
+
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.5.T63/Ascend-cann-$CHIP-ops_8.5.0_linux-$ARCH.run
+    sudo bash ./Ascend-cann-$CHIP-ops_8.5.0_linux-$ARCH.run --install
     ```
 
+4. **Verify installation**
 
-3. **Install CANN toolkit and kernels**
-
-    CANN toolkit and kernels can be obtained from the official [CANN Toolkit](https://www.hiascend.com/zh/developer/download/community/result?module=cann) page.
-
-    Please download the corresponding version that satified your system. The minimum version required is 8.0.RC2.alpha002 and here is the install command.
     ```sh
-    pip3 install attrs numpy decorator sympy cffi pyyaml pathlib2 psutil protobuf scipy requests absl-py wheel typing_extensions
-    sh Ascend-cann-toolkit_8.0.RC2.alpha002_linux-aarch64.run --install
-    sh Ascend-cann-kernels-910b_8.0.RC2.alpha002_linux.run --install
+    npu-smi info
     ```
 
-    Set Ascend Variables:
+    If device information is displayed correctly, the driver is functioning properly.
+
     ```sh
-    echo "source ~/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc
-    source ~/.bashrc
+    # Set environment variables (adjust path if needed)
+    source /usr/local/Ascend/cann/set_env.sh
+
+    python3 -c "import acl; print(acl.get_soc_name())"
     ```
 
-Upon a successful installation, CANN is enabled for the available ascend devices.
+    If the command outputs the chip model, the installation was successful.
 
 ### II. Build llama.cpp
 
