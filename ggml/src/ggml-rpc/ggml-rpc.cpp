@@ -1443,7 +1443,9 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     const rpc_tensor * tensor = it_ptr->second;
 
     struct ggml_tensor * result = deserialize_tensor(ctx, tensor);
-    if (result == nullptr) {
+    if (result == nullptr || result->buffer == nullptr) {
+        GGML_LOG_ERROR("[%s] invalid tensor: null %s (id=%" PRIu64 ")\n",
+                       __func__, result == nullptr ? "tensor" : "buffer", id);
         return nullptr;
     }
     tensor_map[id] = result;
