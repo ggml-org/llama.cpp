@@ -1,0 +1,85 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_integer_dot_product : require
+
+#define MMQ
+#define B_TYPE block_q8_1_x4
+
+#include "mul_mat_vec_base.glsl"
+#include "mul_mat_vecq_funcs.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
+    }
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    for (uint jcol = 0; jcol < NUM_COLS; jcol++) {
+        const uint b_base = (jcol * p.batch_stride_b);
+        for (uint n = 0; n < num_rows; ++n) {
+            const uint ib0 = a_offset / QUANT_K + (first_row + n) * num_blocks_per_row;
+            FLOAT_TYPE acc = 0.0f;
+            for (uint i = tid/8; i < num_blocks_per_row; i+=gl_WorkGroupSize.x/8) {
+                const float d = float(data_a[ib0 + i].d);
+                [[unroll]] for (uint j = 0; j < 64; j += 32) {
+                    [[unroll]] for (uint l = 0; l < 4; l+=2) {
+                        const uint k = (tid % 8) * 4;
+                        const uint a_idx = j * 4 + l * 32 + k;
+
+                        const i32vec2 a_packed = repack(ib0 + i, a_idx);
+
+                        const uint b0_idx = i * QUANT_K + j * 4 + l * 32;
+                        const uint b1_idx = i * QUANT_K + j * 4 + (l+1) * 32;
+
+                        const uint b0_block_idx = b_offset + (b_base + b0_idx) / QUANT_K_Q8_1;
+                        const uint b1_block_idx = b_offset + (b_base + b1_idx) / QUANT_K_Q8_1;
+                        const uint b0_block_idx_outer = b0_block_idx / 4;
+                        const uint b1_block_idx_outer = b1_block_idx / 4;
+                        const uint b0_block_idx_inner = b0_block_idx % 4;
+                        const uint b1_block_idx_inner = b1_block_idx % 4;
+                        vec2 ds0 = vec2(data_b[b0_block_idx_outer].ds[b0_block_idx_inner]);
+                        vec2 ds1 = vec2(data_b[b1_block_idx_outer].ds[b1_block_idx_inner]);
+
+                        const uint vec_idx = k / 4;
+                        int32_t b0_packed = data_b[b0_block_idx_outer].qs[b0_block_idx_inner * 8 + vec_idx];
+                        int32_t b1_packed = data_b[b1_block_idx_outer].qs[b1_block_idx_inner * 8 + vec_idx];
+
+                        int32_t q0_sum = dotPacked4x8EXT(a_packed.x, b0_packed);
+                        acc += mul_q8_1(q0_sum, d, ds0, 4);
+
+                        int32_t q1_sum = dotPacked4x8EXT(a_packed.y, b1_packed);
+                        acc += mul_q8_1(q1_sum, d, ds1, 4);
+                    }
+                }
+            }
+            temp[jcol][n] = acc; 
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

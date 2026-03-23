@@ -666,6 +666,63 @@ float16_t dequantFuncIQ4_NL(const in decodeBufIQ4_NL bl, const in uint blockCoor
 }
 #endif
 
+#if defined(DATA_A_TQ2_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
+   block_tq2_0 block;
+};
+
+float16_t dequantFuncTQ2_0(const in decodeBufTQ2_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+
+    const uint upper = idx / 128;
+
+    const uint byte = (upper * 32) + (idx % 32);
+    const uint shift = ((idx % 128) / 32) * 2;
+
+    const int c = (int(bl.block.qs[byte]) >> shift) & 3;
+
+    return d * float16_t(c - 1);
+}
+#endif
+
+#if defined(DATA_A_TQ1_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
+   block_tq1_0 block;
+};
+
+float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+
+    const uint pow3[6] = uint[6](1, 3, 9, 27, 81, 243);
+
+    uint val;
+    if (idx < 160) {
+        const uint trit = idx / 32;
+        const uint byte = idx % 32;
+        const uint q = uint(bl.block.qs[byte]);
+        val = (((q * pow3[trit]) & 255) * 3) / 256;
+    } else if (idx < 240) {
+        const uint relative_idx = idx - 160;
+        const uint trit = relative_idx / 16;
+        const uint byte = relative_idx % 16;
+        const uint q = uint(bl.block.qs[32 + byte]);
+        val = (((q * pow3[trit]) & 255) * 3) / 256;
+    } else {
+        const uint relative_idx = idx - 240;
+        const uint trit = relative_idx / 4;
+        const uint byte = relative_idx % 4;
+        const uint q = uint(bl.block.qh[byte]);
+        val = (((q * pow3[trit]) & 255) * 3) / 256;
+    }
+
+    return d * float16_t(val - 1);
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufMXFP4 {
    block_mxfp4 block;
@@ -727,6 +784,10 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
 #define dequantFuncA dequantFuncIQ4_XS
 #elif defined(DATA_A_IQ4_NL)
 #define dequantFuncA dequantFuncIQ4_NL
+#elif defined(DATA_A_TQ2_0)
+#define dequantFuncA dequantFuncTQ2_0
+#elif defined(DATA_A_TQ1_0)
+#define dequantFuncA dequantFuncTQ1_0
 #elif defined(DATA_A_MXFP4)
 #define dequantFuncA dequantFuncMXFP4
 #elif defined(DATA_A_F32)
