@@ -461,7 +461,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -480,7 +480,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -796,7 +796,7 @@ static void repack_row_q8x4x2(uint8_t * y, const block_q8_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -814,7 +814,7 @@ static void unpack_row_q8x4x2(block_q8_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -1149,7 +1149,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         e[7]        = x[i * 8 + 7].e;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }
@@ -1168,7 +1168,7 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_e = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }

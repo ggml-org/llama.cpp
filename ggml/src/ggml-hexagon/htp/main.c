@@ -214,7 +214,7 @@ static int vtcm_alloc(struct htp_context * ctx) {
     HAP_compute_res_attr_init(&attr);
     HAP_compute_res_attr_set_serialize(&attr, 0);
     HAP_compute_res_attr_set_cache_mode(&attr, 1);
-    HAP_compute_res_attr_set_vtcm_param_v2(&attr, vtcm_size, 0, vtcm_size);
+    HAP_compute_res_attr_set_vtcm_param_v2(&attr, vtcm_size, vtcm_size, vtcm_size); // single page
     HAP_compute_res_attr_set_release_callback(&attr, vtcm_release_callback, (void *) ctx);
     HAP_compute_res_attr_set_hmx_param(&attr, 1);
 
@@ -319,7 +319,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
         // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
-        ctx->dma[i] = dma_queue_create(64);
+        ctx->dma[i] = dma_queue_create(128);
     }
 
     // init worker pool

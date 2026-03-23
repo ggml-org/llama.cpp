@@ -48,5 +48,5 @@ adb $adbserial $adbhost shell " \
   ADSP_LIBRARY_PATH=$basedir/$branch/lib \
     $ndev $nhvx $opmask $verbose $experimental $profile $hb ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
         --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 \
-        --batch-size 128 -ngl 99 $cli_opts $@ \
+        --ubatch-size 256 -fa 1 -ngl 99 $cli_opts $@    \
 "

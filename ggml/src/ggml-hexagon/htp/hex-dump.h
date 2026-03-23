@@ -21,6 +21,15 @@ static inline void hex_dump_uint8_line(char * pref, const uint8_t * x, uint32_t 
     FARF(HIGH, "%s\n", str);
 }
 
+static inline void hex_dump_uint32_line(char * pref, const uint32_t * x, uint32_t n) {
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
+    for (int i = 0; i < n; i++) {
+        p += snprintf(p, p_end - p, "%u, ", (unsigned int) x[i]);
+    }
+    FARF(HIGH, "%s\n", str);
+}
+
 static inline void hex_dump_int32_line(char * pref, const int32_t * x, uint32_t n) {
     char str[1024], *p = str, *p_end = str + sizeof(str);
     p += snprintf(p, p_end - p, "%s: ", pref);
