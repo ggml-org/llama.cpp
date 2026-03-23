@@ -1185,6 +1185,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .partial_utf8 = */             {},
         /* .lazy = */                     false,
         /* .awaiting_trigger = */         false,
+        /* .trigger_suppressed = */       false,
         /* .trigger_buffer = */           "",
         /* .trigger_buffer_positions = */ {},
         /* .trigger_tokens = */           {},
@@ -1291,6 +1292,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .partial_utf8 = */             {},
         /* .lazy = */                     lazy,
         /* .awaiting_trigger = */         lazy,
+        /* .trigger_suppressed = */       false,
         /* .trigger_buffer = */           "",
         /* .trigger_buffer_positions = */ {},
         std::move(vec_trigger_tokens),
@@ -1314,6 +1316,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.partial_utf8,
         grammar.lazy,
         grammar.awaiting_trigger,
+        grammar.trigger_suppressed,
         grammar.trigger_buffer,
         grammar.trigger_buffer_positions,
         grammar.trigger_tokens,
@@ -1385,6 +1388,15 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
     const auto & piece = grammar.vocab->token_to_piece(token);
 
     if (grammar.awaiting_trigger) {
+        // When trigger is suppressed (e.g. during reasoning), still buffer tokens but skip trigger detection
+        if (grammar.trigger_suppressed) {
+            auto position = std::make_pair(grammar.trigger_buffer.size(), grammar.trigger_buffer.size() + piece.size());
+            grammar.trigger_buffer_positions.push_back(std::make_pair(token, position));
+            grammar.trigger_buffer += piece;
+            LLAMA_LOG_DEBUG("Grammar trigger suppressed, buffering token %d (`%s`)\n", token, piece.c_str());
+            return;
+        }
+
         if (std::find(grammar.trigger_tokens.begin(), grammar.trigger_tokens.end(), token) != grammar.trigger_tokens.end()) {
             grammar.awaiting_trigger = false;
             grammar.trigger_buffer.clear();

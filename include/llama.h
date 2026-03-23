@@ -1380,6 +1380,13 @@ extern "C" {
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens);
 
+    /// @details Suppress or un-suppress trigger detection on a grammar sampler.
+    ///          When suppressed, the grammar still buffers tokens but does not check for triggers.
+    ///          Useful for suppressing grammar activation during reasoning/thinking blocks.
+    ///          No-op if the sampler is not a grammar sampler.
+    LLAMA_API void llama_sampler_grammar_set_trigger_suppressed(
+            struct llama_sampler * smpl,
+                              bool suppressed);
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(

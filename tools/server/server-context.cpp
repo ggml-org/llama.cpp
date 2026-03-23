@@ -92,6 +92,8 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
+    bool in_reasoning   = false; // true when inside a thinking/reasoning block
+    llama_token thinking_end_first_token = LLAMA_TOKEN_NULL; // first token of thinking end tag (for EOG interception)
 
     stop_type stop;
 
@@ -173,6 +175,8 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        in_reasoning   = false;
+        thinking_end_first_token = LLAMA_TOKEN_NULL;
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -1181,6 +1185,29 @@ private:
             }
 
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+
+            // determine initial reasoning state from generation prompt
+            // if the generation prompt ends inside a thinking block, suppress grammar triggers initially
+            if (!task.params.thinking_end_tag.empty()) {
+                const auto & gen_prompt = task.params.sampling.generation_prompt;
+                const auto & start_tag  = task.params.thinking_start_tag;
+                const auto & end_tag    = task.params.thinking_end_tag;
+
+                // tokenize the thinking end tag so we can intercept EOG during reasoning
+                auto end_tag_tokens = common_tokenize(ctx, end_tag, false, true);
+                if (!end_tag_tokens.empty()) {
+                    slot.thinking_end_first_token = end_tag_tokens[0];
+                }
+
+                auto last_start = start_tag.empty() ? std::string::npos : gen_prompt.rfind(start_tag);
+                auto last_end   = gen_prompt.rfind(end_tag);
+                if (last_start != std::string::npos
+                        && (last_end == std::string::npos || last_end < last_start)) {
+                    slot.in_reasoning = true;
+                    common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), true);
+                    SLT_DBG(slot, "starting in reasoning state, grammar triggers suppressed\n%s", "");
+                }
+            }
         } else {
             slot.smpl.reset();
         }
@@ -1208,6 +1235,34 @@ private:
             slot.generated_tokens.push_back(result.tok);
         }
         slot.has_next_token = true;
+
+        // update reasoning state and propagate to grammar trigger suppression
+        if (!slot.task->params.thinking_end_tag.empty() && slot.smpl) {
+            const auto & end_tag   = slot.task->params.thinking_end_tag;
+            const auto & start_tag = slot.task->params.thinking_start_tag;
+            if (slot.in_reasoning) {
+                // check if the end tag just appeared at the end of generated_text
+                if (slot.generated_text.size() >= end_tag.size()
+                        && slot.generated_text.compare(
+                            slot.generated_text.size() - end_tag.size(),
+                            end_tag.size(), end_tag) == 0) {
+                    slot.in_reasoning = false;
+                    common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), false);
+                    SLT_DBG(slot, "reasoning ended, grammar triggers un-suppressed\n%s", "");
+                }
+            } else {
+                // check if the start tag just appeared at the end of generated_text
+                if (!start_tag.empty()
+                        && slot.generated_text.size() >= start_tag.size()
+                        && slot.generated_text.compare(
+                            slot.generated_text.size() - start_tag.size(),
+                            start_tag.size(), start_tag) == 0) {
+                    slot.in_reasoning = true;
+                    common_sampler_set_grammar_trigger_suppressed(slot.smpl.get(), true);
+                    SLT_DBG(slot, "reasoning started, grammar triggers suppressed\n%s", "");
+                }
+            }
+        }
 
         // check if there is incomplete UTF-8 character at the end
         bool incomplete = validate_utf8(slot.generated_text) < slot.generated_text.size();
@@ -2834,6 +2889,16 @@ private:
                 const int tok_idx = slot.i_batch - i;
 
                 llama_token id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
+
+                // if the model emits EOG while still inside a reasoning block,
+                // force the first token of the thinking end tag instead
+                if (slot.in_reasoning
+                        && slot.thinking_end_first_token != LLAMA_TOKEN_NULL
+                        && llama_vocab_is_eog(vocab, id)) {
+                    SLT_DBG(slot, "intercepted EOG during reasoning, forcing thinking end token %d\n",
+                        slot.thinking_end_first_token);
+                    id = slot.thinking_end_first_token;
+                }
 
                 slot.i_batch = -1;
 
