@@ -92,7 +92,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_q_pe, "indexer_q_pe", il);
 
-                // {n_embd_indexer_head_qk_rope + n_embd_indexer_head_qk_nope, n_head, n_tokens}
+                // {n_embd_indexer_head_rope + n_embd_indexer_head_nope, n_head, n_tokens}
                 indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
                 cb(indexer_q, "indexer_q", il);
 
@@ -102,14 +102,14 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 indexer_k = build_norm(indexer_k, model.layers[il].indexer_k_norm, model.layers[il].indexer_k_norm_b, LLM_NORM, il);
                 cb(indexer_k, "indexer_k", il);
 
-                // split into {n_embd_indexer_head_qk_rope, 1, n_tokens}
+                // split into {n_embd_indexer_head_rope, 1, n_tokens}
                 ggml_tensor * indexer_k_pe =
                     ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_rope, 1, n_tokens,
                                  ggml_row_size(indexer_k->type, n_embd_indexer_head), 
                                  ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1, 0); 
                 cb(indexer_k_pe, "indexer_k_pe", il);
 
-                // and {n_embd_indexer_head_qk_nope, 1, n_tokens}
+                // and {n_embd_indexer_head_nope, 1, n_tokens}
                 ggml_tensor * indexer_k_nope =
                     ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_nope, 1, n_tokens,
                                  ggml_row_size(indexer_k->type, n_embd_indexer_head), 
@@ -122,20 +122,22 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_k_pe, "indexer_k_pe", il);
 
-                // {n_embd_indexer_head_qk_rope + n_embd_indexer_head_qk_nope, 1, n_tokens}
+                // {n_embd_indexer_head_rope + n_embd_indexer_head_nope, 1, n_tokens}
                 indexer_k = ggml_concat(ctx0, indexer_k_pe, indexer_k_nope, 0);
                 cb(indexer_k, "indexer_k", il);
 
+                // perform Hadamard transform on indexer q and k
                 indexer_q = ggml_hadamard(ctx0, indexer_q, n_embd_indexer_head);
                 cb(indexer_q, "indexer_q", il);
                 indexer_k = ggml_hadamard(ctx0, indexer_k, n_embd_indexer_head);
                 cb(indexer_k, "indexer_k", il);
 
-                // store to KV cache
+                // store indexer keys to KV cache
                 const auto * mctx_cur = is_mla ? inp_attn_k->mctx : inp_attn_kv->mctx;
                 const auto & k_idxs = is_mla ? inp_attn_k->get_k_idxs() : inp_attn_kv->get_k_idxs();
                 ggml_build_forward_expand(gf, mctx_cur->cpy_ik(ctx0, indexer_k, k_idxs, il));
 
+                // prepare indexer weights
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
                 cb(indexer_weights, "indexer_weights", il);
 
@@ -150,6 +152,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 indexer_q = ggml_view_4d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2]/n_stream, n_stream, indexer_q->nb[1], indexer_q->nb[2], indexer_q->nb[3]/n_stream, 0);
                 indexer_weights = ggml_view_4d(ctx0, indexer_weights, indexer_weights->ne[0], indexer_weights->ne[1]/n_stream, indexer_weights->ne[2], n_stream, indexer_weights->nb[1], indexer_weights->nb[2]/n_stream, indexer_weights->nb[3]/n_stream, 0);
 
+                // calculate indexer kq
                 indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
                 cb(indexer_q, "indexer_q", il);
                 indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
@@ -158,15 +161,19 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
                 cb(indexer_kq, "indexer_kq", il);
 
+                // ReLU requires contiguous tensors
                 indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
                 cb(indexer_kq, "indexer_kq", il);
 
+                // apply ReLU
                 ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
                 cb(indexer_score, "indexer_score", il);
 
+                // multiply scores by indexer weights
                 indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
                 cb(indexer_score, "indexer_score", il);
 
+                // sum by q n_indexer_head dimension
                 indexer_score = ggml_sum_rows(ctx0, indexer_score);
                 cb(indexer_score, "indexer_score", il);
 
@@ -176,6 +183,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 indexer_score = ggml_cont(ctx0, indexer_score);
                 cb(indexer_score, "indexer_score", il);
 
+                // TODO maybe pre-scale indexer weights, so we won't have to do it here
                 indexer_score = ggml_scale(ctx0, indexer_score, 1.0f / sqrtf(float(n_embd_indexer_head)));
                 cb(indexer_score, "indexer_score", il);
 
@@ -184,6 +192,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 indexer_score = ggml_add(ctx0, indexer_score, kq_mask_f32);
                 cb(indexer_score, "indexer_score", il);
 
+                // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
                 ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
                 cb(top_k, "top_k", il);
