@@ -555,6 +555,28 @@ struct ggml_webgpu_cpy_pipeline_key_hash {
     }
 };
 
+/** Glu **/
+
+struct ggml_webgpu_glu_pipeline_key {
+    ggml_glu_op glu_op;
+    ggml_type   type;
+    bool        split;
+
+    bool operator==(const ggml_webgpu_glu_pipeline_key & other) const {
+        return glu_op == other.glu_op && type == other.type && split == other.split;
+    }
+};
+
+struct ggml_webgpu_glu_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_glu_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.glu_op);
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.split);
+        return seed;
+    }
+};
+
 class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
@@ -603,6 +625,7 @@ class ggml_webgpu_shader_lib {
         set_rows_pipelines;
     std::unordered_map<ggml_webgpu_set_pipeline_key, webgpu_pipeline, ggml_webgpu_set_pipeline_key_hash> set_pipelines;
     std::unordered_map<ggml_webgpu_cpy_pipeline_key, webgpu_pipeline, ggml_webgpu_cpy_pipeline_key_hash> cpy_pipelines;
+    std::unordered_map<ggml_webgpu_glu_pipeline_key, webgpu_pipeline, ggml_webgpu_glu_pipeline_key_hash> glu_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -1753,6 +1776,79 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         cpy_pipelines[key]       = pipeline;
         return cpy_pipelines[key];
+    }
+
+    webgpu_pipeline get_glu_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_glu_pipeline_key key = {
+            .glu_op = ggml_get_glu_op(context.dst),
+            .type   = context.dst->type,
+            .split  = (context.src1 != nullptr),
+        };
+
+        auto it = glu_pipelines.find(key);
+        if (it != glu_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "glu";
+
+        switch (key.glu_op) {
+            case GGML_GLU_OP_REGLU:
+                defines.push_back("OP_REGLU");
+                variant += "_reglu";
+                break;
+            case GGML_GLU_OP_GEGLU:
+                defines.push_back("OP_GEGLU");
+                variant += "_geglu";
+                break;
+            case GGML_GLU_OP_SWIGLU:
+                defines.push_back("OP_SWIGLU");
+                variant += "_swiglu";
+                break;
+            case GGML_GLU_OP_SWIGLU_OAI:
+                defines.push_back("OP_SWIGLU_OAI");
+                variant += "_swiglu_oai";
+                break;
+            case GGML_GLU_OP_GEGLU_ERF:
+                defines.push_back("OP_GEGLU_ERF");
+                variant += "_geglu_erf";
+                break;
+            case GGML_GLU_OP_GEGLU_QUICK:
+                defines.push_back("OP_GEGLU_QUICK");
+                variant += "_geglu_quick";
+                break;
+            default:
+                GGML_ABORT("Unsupported GLU op");
+        }
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                defines.push_back("TYPE_F32");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("TYPE_F16");
+                variant += "_f16";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for GLU shader");
+        }
+
+        if (key.split) {
+            variant += "_split";
+        } else {
+            defines.push_back("NO_SPLIT");
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_glu, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        glu_pipelines[key]       = pipeline;
+        return glu_pipelines[key];
     }
 
 
