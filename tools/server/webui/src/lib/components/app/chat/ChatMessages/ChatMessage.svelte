@@ -6,6 +6,9 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import { AGENTIC_REGEX, TRIM_NEWLINES_REGEX } from '$lib/constants/agentic';
+	import { copyToClipboard } from '$lib/utils/clipboard';
+	import { config } from '$lib/stores/settings.svelte';
 	import { MessageRole, AttachmentType } from '$lib/enums';
 	import {
 		ChatMessageAssistant,
@@ -128,6 +131,18 @@
 	}
 
 	function handleCopy() {
+		if (
+			config().copyWithoutThinking &&
+			message.role === MessageRole.ASSISTANT &&
+			message.content
+		) {
+			const stripped = message.content
+				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+				.replace(TRIM_NEWLINES_REGEX, '');
+			void copyToClipboard(stripped);
+			return;
+		}
 		chatActions.copy(message);
 	}
 
