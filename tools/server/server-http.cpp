@@ -8,9 +8,11 @@
 #include <string>
 #include <thread>
 
+#ifdef LLAMA_BUILD_WEBUI
 // auto generated files (see README.md for details)
 #include "index.html.gz.hpp"
 #include "loading.html.hpp"
+#endif
 
 //
 // HTTP implementation using cpp-httplib
@@ -181,11 +183,14 @@ bool server_http_context::init(const common_params & params) {
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         bool ready = is_ready.load();
         if (!ready) {
+#ifdef LLAMA_BUILD_WEBUI
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || tmp.back() == "html") {
                 res.status = 503;
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-            } else {
+            } else
+#endif
+            {
                 // no endpoints is allowed to be accessed when the server is not ready
                 // this is to prevent any data races or inconsistent states
                 res.status = 503;
@@ -249,6 +254,7 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
+#ifdef LLAMA_BUILD_WEBUI
             // using embedded static index.html
             srv->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
                 if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
@@ -262,6 +268,7 @@ bool server_http_context::init(const common_params & params) {
                 }
                 return false;
             });
+#endif
         }
     }
     return true;
