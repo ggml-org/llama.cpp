@@ -11249,6 +11249,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 CL_CHECK(clReleaseMemObject(src1_sub_buffer));
                 CL_CHECK(clReleaseMemObject(buf_src1_image));
                 CL_CHECK(clReleaseMemObject(buf_src2));
+                free(host_src2);
+                free(host_src2_reorder);
                 return;
             } // else fallback to generic kernel
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
