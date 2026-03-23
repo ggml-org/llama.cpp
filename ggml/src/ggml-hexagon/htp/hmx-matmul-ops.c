@@ -747,7 +747,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
                 {
                     const size_t n_cols_first = hex_smin((size_t) params->n, n_chunk_n_cols);
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_curr, weight_group),
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, weight_group),
                                       fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_first);
                 }
 
