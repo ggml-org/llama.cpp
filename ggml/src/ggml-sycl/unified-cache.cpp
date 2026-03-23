@@ -1965,14 +1965,13 @@ float host_cache::compute_score(const host_cache_entry & entry) const {
     // Boost MoE experts with high popularity (low rank = more popular).
     // This makes popular experts resist eviction after warmup profiling.
     if (entry.type == cache_entry_type::MOE_EXPERT && entry.layer_id >= 0 && entry.expert_id >= 0) {
-        auto & placement_table = get_expert_placement_table();
-        if (placement_table.is_initialized()) {
-            auto placement = placement_table.get(entry.layer_id, entry.expert_id);
-            if (placement.popularity_rank >= 0) {
+        if (is_expert_popularity_initialized()) {
+            int pop_rank = get_expert_popularity_rank(entry.layer_id, entry.expert_id);
+            if (pop_rank >= 0) {
                 // Top experts (rank 0-3) get 4x-1x boost; rank 4+ get no boost
                 int boost_slots = 4;
-                if (placement.popularity_rank < boost_slots) {
-                    float boost = static_cast<float>(boost_slots - placement.popularity_rank);
+                if (pop_rank < boost_slots) {
+                    float boost = static_cast<float>(boost_slots - pop_rank);
                     base_score *= (1.0f + boost);
                 }
             }
@@ -4837,13 +4836,12 @@ float unified_cache::compute_score(const unified_cache_entry & entry) const {
     // Boost MoE experts with high popularity (low rank = more popular).
     // This makes popular experts resist VRAM eviction after warmup profiling.
     if (entry.type == cache_entry_type::MOE_EXPERT && entry.layer_id >= 0 && entry.expert_id >= 0) {
-        auto & placement_table = get_expert_placement_table();
-        if (placement_table.is_initialized()) {
-            auto placement = placement_table.get(entry.layer_id, entry.expert_id);
-            if (placement.popularity_rank >= 0) {
+        if (is_expert_popularity_initialized()) {
+            int pop_rank = get_expert_popularity_rank(entry.layer_id, entry.expert_id);
+            if (pop_rank >= 0) {
                 int boost_slots = 4;
-                if (placement.popularity_rank < boost_slots) {
-                    float boost = static_cast<float>(boost_slots - placement.popularity_rank);
+                if (pop_rank < boost_slots) {
+                    float boost = static_cast<float>(boost_slots - pop_rank);
                     base_score *= (1.0f + boost);
                 }
             }
@@ -7280,69 +7278,9 @@ void unpin_routed_experts(const int32_t * expert_ids,
     GGML_SYCL_DEBUG("[UNPIN] Layer %d: Unpinned %zu experts\n", layer_id, unique_experts.size());
 }
 
-// --- ExpertPlacementTable implementation ---
-
-void ExpertPlacementTable::init(int n_layers, int n_experts_per_layer) {
-    std::unique_lock lock(mutex_);
-    n_layers_  = n_layers;
-    n_experts_ = n_experts_per_layer;
-    table_.reserve(static_cast<size_t>(n_layers) * n_experts_per_layer);
-}
-
-void ExpertPlacementTable::set(int layer_id, int expert_id,
-                                const ExpertPlacement & placement) {
-    std::unique_lock lock(mutex_);
-    table_[make_key(layer_id, expert_id)] = placement;
-}
-
-ExpertPlacement ExpertPlacementTable::get(int layer_id, int expert_id) const {
-    std::shared_lock lock(mutex_);
-    auto it = table_.find(make_key(layer_id, expert_id));
-    if (it != table_.end()) {
-        return it->second;
-    }
-    return {};  // Invalid placement (device_id = -1, ptrs = nullptr)
-}
-
-void ExpertPlacementTable::set_device_ptr(int layer_id, int expert_id,
-                                           int device_id, void * ptr) {
-    std::unique_lock lock(mutex_);
-    auto it = table_.find(make_key(layer_id, expert_id));
-    if (it != table_.end()) {
-        it->second.device_id  = device_id;
-        it->second.device_ptr = ptr;
-    }
-}
-
-void ExpertPlacementTable::set_popularity(int layer_id, int expert_id, int rank) {
-    std::unique_lock lock(mutex_);
-    auto it = table_.find(make_key(layer_id, expert_id));
-    if (it != table_.end()) {
-        it->second.popularity_rank = rank;
-    }
-}
-
-std::vector<std::pair<int, ExpertPlacement>>
-ExpertPlacementTable::get_layer_experts(int layer_id) const {
-    std::shared_lock lock(mutex_);
-    std::vector<std::pair<int, ExpertPlacement>> result;
-    for (int e = 0; e < n_experts_; e++) {
-        auto it = table_.find(make_key(layer_id, e));
-        if (it != table_.end()) {
-            result.push_back({e, it->second});
-        }
-    }
-    std::sort(result.begin(), result.end(),
-              [](const auto & a, const auto & b) {
-                  return a.second.popularity_rank < b.second.popularity_rank;
-              });
-    return result;
-}
-
-ExpertPlacementTable & get_expert_placement_table() {
-    static ExpertPlacementTable table;
-    return table;
-}
+// (ExpertPlacementTable removed — the cache IS the placement.
+//  Popularity tracking now in g_expert_popularity via
+//  get_expert_popularity_rank() / set_expert_popularity_rank().)
 
 // === OneDNN FP16 Scratch Buffer Implementation ===
 

@@ -319,7 +319,7 @@ class ExpertPredictor {
     bool is_prefetch_disabled() const;
 
     // Get frequency ranking for a layer: sorted (expert_id, count) pairs,
-    // most-activated first. Used to populate ExpertPlacementTable popularity_rank.
+    // most-activated first. Used for popularity-based prestage ordering.
     std::vector<std::pair<int, uint32_t>> get_frequency_ranking(int layer_idx) const;
 
   private:

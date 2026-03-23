@@ -136,25 +136,6 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // Look up expert in placement table.
-    auto & ptable = get_expert_placement_table();
-    if (!ptable.is_initialized()) {
-        return false;
-    }
-
-    auto placement = ptable.get(layer_idx, expert_idx);
-
-    // Already in VRAM on THIS device via another path (e.g. Phase 2 upload) — skip.
-    if (placement.device_ptr && placement.device_id == device_id_) {
-        prefetch_hits_++;
-        return false;
-    }
-
-    // No source pointer — cannot prefetch.
-    if (!placement.data_ptr || placement.weight_bytes == 0) {
-        return false;
-    }
-
     // Use SOA-correct caching via unified cache.
     // This handles AOS→SOA layout conversion, VRAM allocation, and placement
     // table update — all through the proven ensure_cached_layout() path.
@@ -238,19 +219,6 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 
     expert_key key{ layer_idx, expert_idx };
 
-    // Fast path: check if expert was SOA-cached via unified cache path.
-    // moe_expert_ensure_soa_cached() updates the placement table directly,
-    // bypassing inflight_ and cached_slots_.
-    {
-        auto & ptable = get_expert_placement_table();
-        if (ptable.is_initialized()) {
-            auto placement = ptable.get(layer_idx, expert_idx);
-            if (placement.device_ptr && placement.device_id == device_id_) {
-                return placement.device_ptr;
-            }
-        }
-    }
-
     // Phase 1: Check cached LRU pool, in-flight completed, or extract event.
     // Release mutex before blocking on event.wait() to avoid deadlock.
     sycl::event ev_copy;
@@ -304,18 +272,8 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
     if (!it->second.completed) {
         it->second.completed = true;
         completed_count_++;
-
-        // Update placement table so the dispatch path finds device_ptr.
-        // Do NOT overwrite CPU-assigned (device_id=-1) experts — they were
-        // intentionally placed on CPU due to VRAM pressure constraints.
-        auto & ptable = get_expert_placement_table();
-        if (ptable.is_initialized()) {
-            auto existing = ptable.get(layer_idx, expert_idx);
-            if (existing.device_id != -1) {
-                ptable.set_device_ptr(layer_idx, expert_idx, device_id_, it->second.device_ptr);
-            }
-        }
-
+        // Cache already tracks the pointer via ensure_cached_layout.
+        // No separate placement table update needed.
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
                         layer_idx, expert_idx, it->second.device_ptr);
     }
@@ -351,12 +309,8 @@ void ExpertPrefetcher::cancel_all() {
     }
     inflight_.clear();
 
-    // Clear all cached LRU entries and their placement table pointers.
-    auto & ptable = get_expert_placement_table();
+    // Clear all cached LRU entries.
     for (const auto & [ck, si] : cached_slots_) {
-        if (ptable.is_initialized()) {
-            ptable.set_device_ptr(ck.layer, ck.expert_id, 0, nullptr);
-        }
         if (si >= 0 && si < static_cast<int>(vram_pool_.size())) {
             vram_pool_[si].free       = true;
             vram_pool_[si].cached_key  = { -1, -1 };
@@ -375,16 +329,7 @@ void * ExpertPrefetcher::get_cached_ptr(int layer_idx, int expert_idx) const {
         return nullptr;
     }
 
-    // Check placement table first (covers SOA-cached entries via unified cache).
-    auto & ptable = get_expert_placement_table();
-    if (ptable.is_initialized()) {
-        auto placement = ptable.get(layer_idx, expert_idx);
-        if (placement.device_ptr && placement.device_id == device_id_) {
-            return placement.device_ptr;
-        }
-    }
-
-    // Fall back to prefetcher's own LRU pool (legacy path).
+    // Fall back to prefetcher's own LRU pool.
     expert_key key{ layer_idx, expert_idx };
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = cached_slots_.find(key);
@@ -586,12 +531,8 @@ int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
         return -1;  // Cannot evict (all slots in-flight or invalid)
     }
 
-    // Evict the LRU entry: clear placement table, remove from cache map.
+    // Evict the LRU entry: remove from cache map.
     expert_key evicted_key = vram_pool_[lru_slot].cached_key;
-    auto & ptable = get_expert_placement_table();
-    if (ptable.is_initialized()) {
-        ptable.set_device_ptr(evicted_key.layer, evicted_key.expert_id, 0, nullptr);
-    }
     cached_slots_.erase(evicted_key);
     lru_evictions_++;
 
@@ -615,11 +556,6 @@ void ExpertPrefetcher::release_vram_slot(int slot) {
         expert_key key = vram_pool_[slot].cached_key;
         if (key.layer >= 0) {
             cached_slots_.erase(key);
-            // Clear placement table device_ptr for the evicted expert.
-            auto & ptable = get_expert_placement_table();
-            if (ptable.is_initialized()) {
-                ptable.set_device_ptr(key.layer, key.expert_id, 0, nullptr);
-            }
         }
         vram_pool_[slot].free            = true;
         vram_pool_[slot].cached_key      = { -1, -1 };
@@ -638,19 +574,8 @@ void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & e
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    auto & ptable = get_expert_placement_table();
-    if (!ptable.is_initialized()) {
-        return;
-    }
-
     int preloaded = 0;
     for (int eid : expert_ids) {
-        // Skip if already in VRAM via any path.
-        auto placement = ptable.get(layer_idx, eid);
-        if (placement.device_ptr) {
-            continue;
-        }
-
         // Use SOA-correct caching via unified cache (same as hint_locked).
         // This fixes the pre-existing bug where raw memcpy copied AOS layout
         // to VRAM but MMVQ kernels expect SOA layout.

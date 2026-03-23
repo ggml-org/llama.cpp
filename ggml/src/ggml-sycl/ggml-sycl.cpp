@@ -641,14 +641,12 @@ struct moe_warmup_state {
 
 static moe_warmup_state g_moe_warmup;
 
-// Apply warmup results: sort experts by popularity and update placement table.
+// Apply warmup results: sort experts by popularity and update popularity ranks.
 // Called once after warmup completes.
 static void moe_apply_popularity_placement() {
-    auto & placement_table = ggml_sycl::get_expert_placement_table();
-    if (!placement_table.is_initialized()) return;
-
     const int nl = g_moe_warmup.n_layers;
     const int ne = g_moe_warmup.n_experts;
+    if (nl <= 0 || ne <= 0) return;
 
     // Build reverse map: sequential layer index -> hash-based layer_id.
     // g_moe_layer_seq[device] maps hash -> sequential; we invert it.
@@ -660,7 +658,7 @@ static void moe_apply_popularity_placement() {
 
     int total_placed = 0;
     for (int l = 0; l < nl; l++) {
-        // Map sequential index back to hash-based layer_id for placement table
+        // Map sequential index back to hash-based layer_id for popularity ranking
         auto it = seq_to_hash.find(l);
         if (it == seq_to_hash.end()) continue;
         int hash_layer_id = it->second;
@@ -678,7 +676,7 @@ static void moe_apply_popularity_placement() {
         // Assign popularity ranks using hash-based layer_id
         for (int rank = 0; rank < (int)sorted_experts.size(); rank++) {
             int eid = sorted_experts[rank].second;
-            placement_table.set_popularity(hash_layer_id, eid, rank);
+            ggml_sycl::set_expert_popularity_rank(hash_layer_id, eid, rank);
         }
         total_placed += (int)sorted_experts.size();
     }
@@ -779,6 +777,41 @@ using ggml_sycl::expert_group_key;
 
 static std::unordered_map<int64_t, expert_tensor_group> g_expert_groups;
 static std::shared_mutex                                g_expert_groups_mutex;
+
+// ---------------------------------------------------------------------------
+// Lightweight popularity ranking: maps (layer_id, expert_id) -> popularity rank.
+// Replaces ExpertPlacementTable's popularity_rank field.
+// Rank 0 = most popular, -1 = unranked.
+// Thread-safe via shared_mutex (writes rare, reads frequent on eviction path).
+// ---------------------------------------------------------------------------
+static std::unordered_map<int64_t, int> g_expert_popularity;
+static std::shared_mutex                g_expert_popularity_mutex;
+static bool                             g_expert_popularity_initialized = false;
+
+static int64_t make_popularity_key(int layer_id, int expert_id) {
+    return (int64_t(layer_id) << 32) | int64_t(uint32_t(expert_id));
+}
+
+namespace ggml_sycl {
+
+int get_expert_popularity_rank(int layer_id, int expert_id) {
+    std::shared_lock<std::shared_mutex> lock(g_expert_popularity_mutex);
+    auto it = g_expert_popularity.find(make_popularity_key(layer_id, expert_id));
+    return (it != g_expert_popularity.end()) ? it->second : -1;
+}
+
+void set_expert_popularity_rank(int layer_id, int expert_id, int rank) {
+    std::unique_lock<std::shared_mutex> lock(g_expert_popularity_mutex);
+    g_expert_popularity[make_popularity_key(layer_id, expert_id)] = rank;
+    g_expert_popularity_initialized = true;
+}
+
+bool is_expert_popularity_initialized() {
+    std::shared_lock<std::shared_mutex> lock(g_expert_popularity_mutex);
+    return g_expert_popularity_initialized;
+}
+
+}  // namespace ggml_sycl
 
 // Check if an expert's weights are fully resident in VRAM on a given device.
 // Checks the unified cache for ALL 3 tensors (gate, up, down) across multiple
@@ -918,8 +951,7 @@ static bool ggml_sycl_gpu_reorder_disabled();
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
 // ---------------------------------------------------------------------------
 static void moe_prestage_popular_experts() {
-    auto & ptable = ggml_sycl::get_expert_placement_table();
-    if (!ptable.is_initialized()) return;
+    if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
     std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
     if (g_moe_expert_meta.empty()) return;
@@ -982,10 +1014,10 @@ static void moe_prestage_popular_experts() {
     }
     std::sort(priority_list.begin(), priority_list.end(),
               [&](const moe_expert_meta * a, const moe_expert_meta * b) {
-                  auto pa = ptable.get(a->layer_id, a->expert_idx);
-                  auto pb = ptable.get(b->layer_id, b->expert_idx);
-                  int ra = (pa.popularity_rank >= 0) ? pa.popularity_rank : INT_MAX;
-                  int rb = (pb.popularity_rank >= 0) ? pb.popularity_rank : INT_MAX;
+                  int ra_raw = ggml_sycl::get_expert_popularity_rank(a->layer_id, a->expert_idx);
+                  int rb_raw = ggml_sycl::get_expert_popularity_rank(b->layer_id, b->expert_idx);
+                  int ra = (ra_raw >= 0) ? ra_raw : INT_MAX;
+                  int rb = (rb_raw >= 0) ? rb_raw : INT_MAX;
                   if (ra != rb) return ra < rb;
                   // Same popularity: gate before up before down
                   return static_cast<int>(a->tensor_role) < static_cast<int>(b->tensor_role);
@@ -1014,13 +1046,9 @@ static void moe_prestage_popular_experts() {
         for (const auto & meta : g_moe_expert_meta) {
             if (meta.block_num < 0) continue;
 
-            auto placement = ptable.get(meta.layer_id, meta.expert_idx);
-            // Skip already-placed, CPU-assigned, and secondary-GPU experts
-            if (placement.device_ptr != nullptr) {
+            // Skip experts already resident in VRAM on any device
+            if (is_expert_resident(meta.block_num, meta.expert_idx, device)) {
                 skipped++;
-                continue;
-            }
-            if (placement.device_id == -1 || placement.device_id >= 1) {
                 continue;
             }
 
@@ -1029,7 +1057,8 @@ static void moe_prestage_popular_experts() {
             mg.block_num  = meta.block_num;
             mg.expert_idx = meta.expert_idx;
 
-            int rank = (placement.popularity_rank >= 0) ? placement.popularity_rank : INT_MAX;
+            int pop_rank = ggml_sycl::get_expert_popularity_rank(meta.layer_id, meta.expert_idx);
+            int rank = (pop_rank >= 0) ? pop_rank : INT_MAX;
             mg.pop_rank = std::min(mg.pop_rank, rank);
 
             switch (meta.tensor_role) {
@@ -1170,22 +1199,8 @@ static void moe_prestage_popular_experts() {
                 down_ok ? &down_req : nullptr);
 
             if (ok) {
-                // Update placement table for all staged tensors
-                if (gate_ok && mg.gate) {
-                    void * ptr = cache->lookup(grp.gate_key, GGML_LAYOUT_SOA);
-                    if (ptr) ptable.set_device_ptr(mg.gate->layer_id, mg.gate->expert_idx,
-                                                   device, ptr);
-                }
-                if (up_ok && mg.up) {
-                    void * ptr = cache->lookup(grp.up_key, GGML_LAYOUT_SOA);
-                    if (ptr) ptable.set_device_ptr(mg.up->layer_id, mg.up->expert_idx,
-                                                   device, ptr);
-                }
-                if (down_ok && mg.down) {
-                    void * ptr = cache->lookup(grp.down_key, GGML_LAYOUT_SOA);
-                    if (ptr) ptable.set_device_ptr(mg.down->layer_id, mg.down->expert_idx,
-                                                   device, ptr);
-                }
+                // Cache already has the staged pointers — no separate tracking needed.
+                // is_expert_resident() / get_expert_device_ptr() query the cache directly.
                 expert_groups_staged++;
                 prestaged += (gate_ok ? 1 : 0) + (up_ok ? 1 : 0) + (down_ok ? 1 : 0);
             } else {
@@ -1296,27 +1311,21 @@ static void moe_prestage_popular_experts() {
             for (const auto * meta : priority_list) {
                 if (sec_budgets.empty()) break;
 
-                auto placement = ptable.get(meta->layer_id, meta->expert_idx);
-
-                // Skip experts already placed on GPU0
-                if (placement.device_ptr != nullptr && placement.device_id == 0) {
+                // Skip experts already resident on GPU0 (cache IS the placement)
+                if (meta->block_num >= 0 && is_expert_resident(meta->block_num, meta->expert_idx, 0)) {
                     continue;
                 }
 
-                // Skip experts already placed on a secondary GPU
-                if (placement.device_ptr != nullptr && placement.device_id >= 1) {
-                    for (auto & b : sec_budgets) {
-                        if (b.dev == placement.device_id) {
-                            b.skipped++;
-                            break;
-                        }
+                // Skip experts already resident on a secondary GPU
+                bool already_on_secondary = false;
+                for (auto & b : sec_budgets) {
+                    if (meta->block_num >= 0 && is_expert_resident(meta->block_num, meta->expert_idx, b.dev)) {
+                        b.skipped++;
+                        already_on_secondary = true;
+                        break;
                     }
-                    continue;
                 }
-
-                // Respect placement table: CPU-assigned experts (device_id=-1)
-                // must NOT be prestaged to secondary GPUs.
-                if (placement.device_id == -1) {
+                if (already_on_secondary) {
                     continue;
                 }
 
@@ -1404,8 +1413,7 @@ static void moe_prestage_popular_experts() {
                         if ((result.status == ggml_sycl::cache_layout_status::READY ||
                              result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
                             && result.device_ptr) {
-                            ptable.set_device_ptr(item.meta->layer_id, item.meta->expert_idx,
-                                                  budget.dev, result.device_ptr);
+                            // Cache already tracks the pointer — no separate table needed.
                             budget.staged++;
                         }
                     } catch (...) {
@@ -1540,8 +1548,7 @@ static void moe_prestage_popular_experts() {
                         if ((result.status == ggml_sycl::cache_layout_status::READY ||
                              result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
                             && result.device_ptr) {
-                            ptable.set_device_ptr(ci.meta->layer_id, ci.meta->expert_idx,
-                                                  budget.dev, result.device_ptr);
+                            // Cache already tracks the pointer — no separate table needed.
                             budget.staged++;
                         }
                     } catch (...) {
@@ -1649,17 +1656,8 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
         auto result = cache->ensure_cached_layout(req, {});
         if ((result.status == cache_layout_status::READY ||
              result.status == cache_layout_status::IN_PROGRESS) && result.device_ptr) {
-            // Update placement table so fused path finds this device pointer.
-            // IMPORTANT: Do NOT overwrite CPU-assigned (device_id=-1) experts.
-            // Those were intentionally placed on CPU due to VRAM pressure.
-            auto & ptable = get_expert_placement_table();
-            if (ptable.is_initialized()) {
-                auto existing = ptable.get(meta->layer_id, meta->expert_idx);
-                if (existing.device_id != -1) {
-                    ptable.set_device_ptr(meta->layer_id, meta->expert_idx,
-                                          device_id, result.device_ptr);
-                }
-            }
+            // Cache already tracks the pointer — no separate table needed.
+            // is_expert_resident() / get_expert_device_ptr() query the cache directly.
             return result.device_ptr;
         }
     } catch (...) {
@@ -1688,8 +1686,7 @@ uint32_t get_expert_frequency(int layer_hash, int expert_id) {
 // experts via moe_prestage_popular_experts() when ranks change.
 // ---------------------------------------------------------------------------
 static void moe_periodic_rerank() {
-    auto & ptable = ggml_sycl::get_expert_placement_table();
-    if (!ptable.is_initialized()) return;
+    if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
     const int nl = g_moe_warmup.n_layers;
     const int ne = g_moe_warmup.n_experts;
@@ -1719,12 +1716,11 @@ static void moe_periodic_rerank() {
         // Update ranks, count changes
         for (int rank = 0; rank < (int) sorted_experts.size(); rank++) {
             int eid      = sorted_experts[rank].second;
-            auto old     = ptable.get(hash_layer_id, eid);
-            int old_rank = old.popularity_rank;
+            int old_rank = ggml_sycl::get_expert_popularity_rank(hash_layer_id, eid);
             if (old_rank != rank) {
                 ranks_changed++;
             }
-            ptable.set_popularity(hash_layer_id, eid, rank);
+            ggml_sycl::set_expert_popularity_rank(hash_layer_id, eid, rank);
         }
 
         // Reset epoch counters for this layer for the next epoch
@@ -1825,8 +1821,7 @@ struct adaptive_prestage_state {
 
 private:
     void scan_candidates() {
-        auto & ptable = ggml_sycl::get_expert_placement_table();
-        if (!ptable.is_initialized()) return;
+        if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
         const int nl = g_moe_warmup.n_layers;
         const int ne = g_moe_warmup.n_experts;
@@ -1840,6 +1835,19 @@ private:
 
         std::vector<promotion_candidate> candidates;
 
+        // We need block_num for is_expert_resident checks. Build layer_hash->block_num map
+        // from g_moe_expert_meta.
+        std::unordered_map<int64_t, int> expert_block_nums;
+        {
+            std::shared_lock<std::shared_mutex> meta_lock(g_moe_expert_meta_mutex);
+            for (const auto & meta : g_moe_expert_meta) {
+                if (meta.block_num >= 0) {
+                    int64_t key = (int64_t(meta.layer_id) << 32) | int64_t(uint32_t(meta.expert_idx));
+                    expert_block_nums[key] = meta.block_num;
+                }
+            }
+        }
+
         for (int l = 0; l < nl; l++) {
             auto it = seq_to_hash.find(l);
             if (it == seq_to_hash.end()) continue;
@@ -1850,9 +1858,12 @@ private:
                     std::memory_order_relaxed);
                 if (count < hit_threshold) continue;
 
-                // Check if expert is already in VRAM (device_ptr != nullptr)
-                auto placement = ptable.get(hash_layer_id, e);
-                if (placement.device_ptr != nullptr) continue;
+                // Check if expert is already in VRAM via the cache
+                int64_t ekey = (int64_t(hash_layer_id) << 32) | int64_t(uint32_t(e));
+                auto bn_it = expert_block_nums.find(ekey);
+                if (bn_it != expert_block_nums.end() && is_expert_resident(bn_it->second, e, 0)) {
+                    continue;
+                }
 
                 // CPU-resident expert with high hit count -- candidate for promotion
                 candidates.push_back({ l, hash_layer_id, e, count });
@@ -1918,12 +1929,24 @@ private:
                     break;
                 }
 
-                // Re-check placement -- another thread may have promoted it
-                auto & ptable_chk = ggml_sycl::get_expert_placement_table();
-                auto   placement = ptable_chk.get(c.hash_layer_id, c.expert_id);
-                if (placement.device_ptr != nullptr) {
-                    skipped++;
-                    continue;
+                // Re-check cache -- another thread may have promoted it.
+                // Use metadata to get block_num for is_expert_resident check.
+                {
+                    int block_num = -1;
+                    {
+                        std::shared_lock<std::shared_mutex> meta_lock(g_moe_expert_meta_mutex);
+                        for (const auto & meta : g_moe_expert_meta) {
+                            if (meta.layer_id == c.hash_layer_id && meta.expert_idx == c.expert_id
+                                && meta.block_num >= 0) {
+                                block_num = meta.block_num;
+                                break;
+                            }
+                        }
+                    }
+                    if (block_num >= 0 && is_expert_resident(block_num, c.expert_id, 0)) {
+                        skipped++;
+                        continue;
+                    }
                 }
 
                 // Use the existing SOA caching infrastructure for promotion.
@@ -2395,11 +2418,10 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         expert_list.size());
 
     // -----------------------------------------------------------------------
-    // Initialize ExpertPlacementTable with discovered dimensions
+    // Initialize popularity tracking and warmup profiling
+    // (ExpertPlacementTable removed — the cache IS the placement.)
     // -----------------------------------------------------------------------
-    auto & placement_table = ggml_sycl::get_expert_placement_table();
-    placement_table.init(n_moe_layers, n_experts_per_layer);
-    GGML_SYCL_DEBUG("[MOE-HYBRID] ExpertPlacementTable initialized: %d layers, %d experts/layer\n",
+    GGML_SYCL_DEBUG("[MOE-HYBRID] Popularity tracking initialized: %d layers, %d experts/layer\n",
                     n_moe_layers, n_experts_per_layer);
 
     // Initialize warmup profiling for popularity-aware placement
@@ -2408,22 +2430,15 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
     // Initialize adaptive prestage background thread (if enabled via env var)
     g_adaptive_prestage.init();
 
-    // Populate placement table — initially all experts are CPU-only
-    for (const auto & info : expert_list) {
-        ggml_sycl::ExpertPlacement placement{};
-        placement.device_id       = -1;  // CPU-only initially
-        placement.data_ptr        = const_cast<void *>(info.data_ptr);
-        placement.host_src_ptr    = const_cast<void *>(info.host_src_ptr);
-        placement.weight_bytes    = info.bytes;
-        placement.popularity_rank = -1;  // Unranked initially (profiling will update)
-        placement_table.set(info.layer_id, info.expert_idx, placement);
-    }
+    // No separate placement table needed — the unified cache tracks all
+    // expert tensors.  Expert residency is checked via is_expert_resident()
+    // and get_expert_device_ptr() which query the cache directly.
     {
         int n_with_host_ptr = 0;
         for (const auto & info : expert_list) {
             if (info.host_src_ptr) n_with_host_ptr++;
         }
-        GGML_LOG_INFO("[MOE-HYBRID] ExpertPlacementTable populated: %zu entries, %d with host_src_ptr, %zu device-only\n",
+        GGML_LOG_INFO("[MOE-HYBRID] Expert registry: %zu entries, %d with host_src_ptr, %zu device-only\n",
                       expert_list.size(), n_with_host_ptr, expert_list.size() - n_with_host_ptr);
     }
 
@@ -2612,9 +2627,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 if (!info.extra) {
                     continue;
                 }
-                auto p      = placement_table.get(info.layer_id, info.expert_idx);
-                p.device_id = 0;
-                placement_table.set(info.layer_id, info.expert_idx, p);
+                // No placement table update needed — the cache handles GPU0 placement
+                // lazily during graph_compute.  is_expert_resident() checks the cache.
                 n_gpu0++;
                 if (gpu0_can_hold_all) {
                     placed[ei] = true;
@@ -2851,9 +2865,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 free_staging();
                 if (result.status == cache_layout_status::READY
                     || result.status == cache_layout_status::IN_PROGRESS) {
-                    placement_table.set_device_ptr(
-                        info.layer_id, info.expert_idx, budget.dev, result.device_ptr);
-                    placement_table.set_popularity(
+                    // Cache already tracks the pointer — no separate table needed.
+                    set_expert_popularity_rank(
                         info.layer_id, info.expert_idx, static_cast<int>(total_uploaded));
                     budget.n_slots--;
                     budget.n_uploaded++;
@@ -2870,33 +2883,38 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                           phase2_ms / 1000.0, phase2_timeout ? " (timeout)" : "");
         }
 
-        // Verify Phase 2 placement table integrity
+        // Verify Phase 2 placement via cache residency
         {
             int gpu1_count = 0;
             int gpu0_count = 0;
             int cpu_count  = 0;
             // Check first tensor's experts to see which are on GPU0 vs GPU1
             int first_lid = expert_list.empty() ? -1 : expert_list[0].layer_id;
-            std::vector<int> gpu0_experts, gpu1_experts;
+            int first_block = -1;
+            if (!expert_list.empty()) {
+                first_block = moe_extract_block_number(expert_list[0].tensor->name);
+            }
+            std::vector<int> gpu0_experts_v, gpu1_experts_v;
             for (const auto & info : expert_list) {
-                auto p = placement_table.get(info.layer_id, info.expert_idx);
-                if (p.device_id == 1) {
+                int blk = moe_extract_block_number(info.tensor->name);
+                bool on_gpu1 = (blk >= 0 && n_gpu > 1) ? is_expert_resident(blk, info.expert_idx, 1) : false;
+                bool on_gpu0 = (blk >= 0) ? is_expert_resident(blk, info.expert_idx, 0) : false;
+                if (on_gpu1) {
                     gpu1_count++;
-                    if (info.layer_id == first_lid) gpu1_experts.push_back(info.expert_idx);
-                } else if (p.device_id == 0) {
+                    if (info.layer_id == first_lid) gpu1_experts_v.push_back(info.expert_idx);
+                } else if (on_gpu0) {
                     gpu0_count++;
-                    if (info.layer_id == first_lid) gpu0_experts.push_back(info.expert_idx);
+                    if (info.layer_id == first_lid) gpu0_experts_v.push_back(info.expert_idx);
                 } else {
                     cpu_count++;
                 }
             }
-            GGML_LOG_INFO("[MOE-HYBRID] Phase 2 verify: GPU0=%d GPU1=%d CPU=%d in placement table\n",
+            GGML_LOG_INFO("[MOE-HYBRID] Phase 2 verify: GPU0=%d GPU1=%d CPU=%d (cache-based)\n",
                           gpu0_count, gpu1_count, cpu_count);
-            // Show which expert IDs are on GPU0 for first tensor
             std::string gpu0_str;
-            for (int e : gpu0_experts) gpu0_str += std::to_string(e) + ",";
+            for (int e : gpu0_experts_v) gpu0_str += std::to_string(e) + ",";
             GGML_LOG_INFO("[MOE-HYBRID] First tensor L%d: GPU0 experts=[%s] (%zu), GPU1 experts=%zu\n",
-                          first_lid, gpu0_str.c_str(), gpu0_experts.size(), gpu1_experts.size());
+                          first_lid, gpu0_str.c_str(), gpu0_experts_v.size(), gpu1_experts_v.size());
         }
 
         // --- Phase 4: CPU spill for oversized expert sets -----------------------
@@ -2910,83 +2928,19 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         // Unprestaged experts (device_ptr==nullptr) → CPU fallback naturally.
         // Phase 4 had bugs: gate/up/down spilled independently, ran before
         // popularity ranking. The dispatch fallback chain handles it correctly.
-        if (false) {
-            // Collect GPU0-assigned expert indices (sorted by popularity for eviction)
-            struct gpu0_expert_info {
-                size_t list_idx;     // index into expert_list
-                int    layer_id;
-                int    expert_idx;
-                int    popularity;   // lower = more popular (keep on GPU)
-            };
-            std::vector<gpu0_expert_info> gpu0_experts_vec;
+        // Phase 4 (CPU spill) REMOVED — dispatch handles CPU fallback via
+        // is_expert_resident() checks.  Experts not in VRAM fall through to
+        // CPU dispatch naturally.
 
-            for (size_t ei = 0; ei < expert_list.size(); ei++) {
-                auto p = placement_table.get(expert_list[ei].layer_id, expert_list[ei].expert_idx);
-                if (p.device_id == 0) {
-                    gpu0_experts_vec.push_back({
-                        ei, expert_list[ei].layer_id, expert_list[ei].expert_idx,
-                        p.popularity_rank >= 0 ? p.popularity_rank : INT_MAX
-                    });
-                }
-            }
-
-            // GPU0 capacity: how many experts fit in the VRAM budget.
-            // Use the cache budget (accounts for KV, compute, staging reserves).
-            const size_t gpu0_capacity = (gpu0_cache_budget > 0 && expert_weight_bytes > 0)
-                                             ? gpu0_cache_budget / expert_weight_bytes
-                                             : 0;
-
-            if (gpu0_experts_vec.size() > gpu0_capacity) {
-                const size_t to_spill = gpu0_experts_vec.size() - gpu0_capacity;
-
-                // Sort by popularity: evict least popular first (highest rank / unranked)
-                std::sort(gpu0_experts_vec.begin(), gpu0_experts_vec.end(),
-                    [](const gpu0_expert_info & a, const gpu0_expert_info & b) {
-                        return a.popularity > b.popularity;  // descending: least popular first
-                    });
-
-                size_t n_spilled = 0;
-                for (size_t si = 0; si < to_spill && si < gpu0_experts_vec.size(); si++) {
-                    const auto & info = gpu0_experts_vec[si];
-                    auto p = placement_table.get(info.layer_id, info.expert_idx);
-                    p.device_id   = -1;       // CPU-routed
-                    p.device_ptr  = nullptr;   // no VRAM allocation
-                    // Keep host_src_ptr and data_ptr for CPU dispatch AOS access
-                    placement_table.set(info.layer_id, info.expert_idx, p);
-                    n_spilled++;
-                }
-
-                GGML_LOG_INFO("[MOE-PHASE4] CPU spill: GPU0 has %zu experts, capacity=%zu, "
-                              "spilled %zu to CPU (host AOS vec_dot)\n",
-                              gpu0_experts_vec.size(), gpu0_capacity, n_spilled);
-            } else {
-                GGML_LOG_INFO("[MOE-PHASE4] No spill needed: GPU0 has %zu experts, capacity=%zu\n",
-                              gpu0_experts_vec.size(), gpu0_capacity);
-            }
-        }
-
-        // Log distribution summary (recalculated after Phase 4 spill)
+        // Log distribution summary (cache-based, after Phase 2 upload)
         {
-            size_t n_gpu0_final = 0, n_secondary_final = 0, n_cpu_final = 0;
-            for (const auto & info : expert_list) {
-                auto p = placement_table.get(info.layer_id, info.expert_idx);
-                if (p.device_id == 0) {
-                    n_gpu0_final++;
-                } else if (p.device_id > 0) {
-                    n_secondary_final++;
-                } else {
-                    n_cpu_final++;
-                }
-            }
-            std::string dist_summary = "GPU0=" + std::to_string(n_gpu0_final) + "(cache)";
+            std::string dist_summary = "GPU0=" + std::to_string(n_gpu0) + "(cache)";
             for (const auto & b : budgets) {
                 dist_summary += " GPU" + std::to_string(b.dev) + "=" + std::to_string(b.n_uploaded);
             }
-            GGML_LOG_INFO("[MOE-HYBRID] Expert distribution: %s CPU=%zu (%zu total, %.1f KB/expert)\n",
-                          dist_summary.c_str(), n_cpu_final, expert_list.size(),
+            GGML_LOG_INFO("[MOE-HYBRID] Expert distribution: %s (%zu total, %.1f KB/expert)\n",
+                          dist_summary.c_str(), expert_list.size(),
                           expert_weight_bytes / 1024.0);
-            GGML_LOG_INFO("[MOE-HYBRID] Phase 4 verify: GPU0=%zu GPU1=%zu CPU=%zu in placement table\n",
-                          n_gpu0_final, n_secondary_final, n_cpu_final);
         }
     }
 
@@ -23861,13 +23815,10 @@ static void ggml_sycl_update_moe_hotset(ggml_sycl::unified_cache *   cache,
         cache->set_hot(key, ggml_sycl::cache_entry_type::MOE_EXPERT, layer_id, expert_id, layout, true);
     }
 
-    // Feedback popularity data to ExpertPlacementTable so N-device dispatch
-    // can use it for placement decisions (T4 integration).
-    auto & ptable = ggml_sycl::get_expert_placement_table();
-    if (ptable.is_initialized()) {
-        for (size_t i = 0; i < static_cast<size_t>(n_experts) && i < indices.size(); ++i) {
-            ptable.set_popularity(layer_id, indices[i], static_cast<int>(i));
-        }
+    // Feedback popularity data so N-device dispatch and eviction scoring
+    // can use it for placement decisions.
+    for (size_t i = 0; i < static_cast<size_t>(n_experts) && i < indices.size(); ++i) {
+        ggml_sycl::set_expert_popularity_rank(layer_id, indices[i], static_cast<int>(i));
     }
 }
 
@@ -24303,55 +24254,53 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             continue;
         }
 
-        // Skip cache staging for experts already in VRAM via placement table.
-        // This covers:
-        //   - Secondary GPU experts (device_id >= 1) from Phase 2 (staged in SOA)
-        //   - GPU0 prefetch pool experts (device_id == 0) from ExpertPrefetcher
-        // Using the existing device_ptr avoids redundant staging through
-        // ensure_cached_layout and saves VRAM budget.
-        //
-        // Check placement table for pre-staged experts (secondary GPU or prefetch pool).
-        // Prefetch pool copies raw AOS bytes without layout conversion.
-        // Only use the shortcut when the requested layout is AOS.  For SOA/COALESCED,
-        // fall through to ensure_cached_layout which performs the AOS→SOA conversion.
+        // Skip cache staging for experts already in VRAM on any device.
+        // Uses the cache directly via is_expert_resident / get_expert_device_ptr.
         {
-            auto &    ptable       = ggml_sycl::get_expert_placement_table();
-            const int pt_layer_id  = moe_cache_layer_id(src0->name);
-            auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
-            if (existing.device_ptr != nullptr) {
-                if (existing.device_id >= 1) {
-                    GGML_SYCL_DEBUG("[MOE] Expert %ld on secondary GPU%d, skipping GPU0 staging\n",
-                                    (long) e, existing.device_id);
+            const int block_num = moe_extract_block_number(src0->name);
+            if (block_num >= 0) {
+                // Check secondary GPUs first
+                const int n_gpus = ggml_sycl_info().total_gpu_count;
+                bool on_secondary = false;
+                for (int d = 1; d < n_gpus; d++) {
+                    if (is_expert_resident(block_num, static_cast<int>(e), d)) {
+                        GGML_SYCL_DEBUG("[MOE] Expert %ld on secondary GPU%d, skipping GPU0 staging\n",
+                                        (long) e, d);
+                        on_secondary = true;
+                        break;
+                    }
+                }
+                if (on_secondary) {
                     continue;
                 }
-                // GPU0 prefetch pool: only use shortcut for AOS layout.
-                // Prefetch pool copies raw bytes (AOS) without layout conversion.
+                // Check GPU0 cache for AOS layout shortcut
                 if (layout == GGML_LAYOUT_AOS) {
-                    extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = existing.device_ptr;
-                    stats_vram_ready++;
-                    GGML_SYCL_DEBUG("[MOE] Expert %ld cached in prefetch pool (AOS), device_ptr=%p\n",
-                                    (long) e, existing.device_ptr);
-                    continue;
+                    void * dev_ptr = get_expert_device_ptr(block_num, static_cast<int>(e),
+                                                            moe_classify_tensor(src0->name), device);
+                    if (dev_ptr) {
+                        extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = dev_ptr;
+                        stats_vram_ready++;
+                        GGML_SYCL_DEBUG("[MOE] Expert %ld cached (AOS), device_ptr=%p\n",
+                                        (long) e, dev_ptr);
+                        continue;
+                    }
                 }
-                GGML_SYCL_DEBUG("[MOE] Expert %ld in prefetch pool but layout=%d != AOS, staging via cache\n",
-                                (long) e, (int) layout);
-                // Fall through to cache staging for layout conversion.
             }
         }
 
         // OPT-4: Skip SOA cache staging for experts that will route to CPU dispatch.
         // When skip_cpu_routed_experts is set (MoE hybrid mode), experts without a
-        // placement table entry or prefetcher cache hit will fall back to CPU anyway.
+        // cache entry or prefetcher cache hit will fall back to CPU anyway.
         // CPU dispatch reads src0->data directly (host AOS) — no SOA conversion needed.
-        // This avoids wasted ensure_cached_layout overhead and VRAM pressure.
         if (skip_cpu_routed_experts) {
-            auto &    ptable_skip  = ggml_sycl::get_expert_placement_table();
-            const int pt_lid_skip  = moe_cache_layer_id(src0->name);
-            auto      skip_place   = ptable_skip.get(pt_lid_skip, static_cast<int>(e));
-            if (skip_place.device_ptr == nullptr) {
-                // No placement — check prefetcher LRU caches on all GPUs
+            const int block_num_skip = moe_extract_block_number(src0->name);
+            bool found_in_cache = (block_num_skip >= 0) &&
+                                  is_expert_resident(block_num_skip, static_cast<int>(e), device);
+            if (!found_in_cache) {
+                // Check prefetcher LRU caches on all GPUs
                 bool found_in_prefetch = false;
                 const int n_devs = ggml_sycl_info().total_gpu_count;
+                const int pt_lid_skip = moe_cache_layer_id(src0->name);
                 for (int d = 0; d < n_devs && !found_in_prefetch; d++) {
                     auto & pf = g_expert_prefetchers[d];
                     if (pf.is_initialized() && pf.get_cached_ptr(pt_lid_skip, static_cast<int>(e))) {
@@ -24360,7 +24309,6 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 }
                 if (!found_in_prefetch) {
                     // Expert has no GPU-resident copy — will route to CPU.
-                    // Leave pointer as nullptr so partition loop sends to cpu_entries.
                     GGML_SYCL_DEBUG("[MOE-OPT4] Expert %ld skipped (CPU-routed, no GPU copy)\n", (long) e);
                     stats_miss++;
                     continue;
@@ -24480,17 +24428,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 stats_vram_ready++;
                 GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache HIT (fast path), ptr=%p\n", (long) e, cached_ptr);
 
-                // Bridge into placement table: only update if expert is NOT
-                // assigned to CPU (device_id=-1) by the placement table.
-                // CPU-assigned experts must stay on CPU even if cached in VRAM.
-                {
-                    auto &    ptable       = ggml_sycl::get_expert_placement_table();
-                    const int pt_layer_id  = moe_cache_layer_id(src0->name);
-                    auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
-                    if (existing.device_id == 0) {
-                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
-                    }
-                }
+                // Cache already tracks the pointer — no separate table needed.
                 continue;
             }
             // Cache miss: fully non-blocking path. Leave pointer as nullptr so
@@ -24515,14 +24453,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 stats_vram_ready++;
                 GGML_SYCL_DEBUG("[OPT-FUSED-AOS] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
 
-                {
-                    auto &    ptable       = ggml_sycl::get_expert_placement_table();
-                    const int pt_layer_id  = moe_cache_layer_id(src0->name);
-                    auto existing = ptable.get(pt_layer_id, static_cast<int>(e));
-                    if (existing.device_id == 0) {
-                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
-                    }
-                }
+                // Cache already tracks the pointer — no separate table needed.
                 continue;
             }
             // Cache miss: use host-pinned AOS data directly via PCIe zero-copy.
@@ -24555,14 +24486,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 stats_vram_ready++;
                 GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
 
-                {
-                    auto &    ptable      = ggml_sycl::get_expert_placement_table();
-                    const int pt_layer_id = moe_cache_layer_id(src0->name);
-                    auto      existing    = ptable.get(pt_layer_id, static_cast<int>(e));
-                    if (existing.device_id == 0) {
-                        ptable.set_device_ptr(pt_layer_id, static_cast<int>(e), device, cached_ptr);
-                    }
-                }
+                // Cache already tracks the pointer — no separate table needed.
 
                 const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
                 if (cache && need_drop) {
@@ -30874,8 +30798,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // fusion is disabled because secondary experts scatter directly to
             // the gate/up output tensors while fusion bypasses those tensors.
             const bool multi_gpu_fast = g_moe_multi_gpu_active.load(std::memory_order_acquire);
-            auto & placement_table_pre = ggml_sycl::get_expert_placement_table();
-            const bool have_secondary_pre = multi_gpu_fast && placement_table_pre.is_initialized();
+            const bool have_secondary_pre = multi_gpu_fast;
 
             // --- Gate+Up+SiLU fusion (disabled when multi-GPU secondary dispatch active) ---
             {
@@ -32625,10 +32548,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 static std::atomic<int> route_log_fast{0};
                 if (route_log_fast.fetch_add(1, std::memory_order_relaxed) < 5) {
                     GGML_LOG_INFO("[CPU-TG-ROUTE] layer=%d: GPU0=%zu secondary=%zu CPU=%d "
-                                  "skipped=%d ptable=%d\n",
+                                  "skipped=%d multi_gpu=%d\n",
                                   layer_id_fast, n_gpu0, n_secondary_total, n_tasks,
                                   n_sec_skipped,
-                                  placement_table_pre.is_initialized() ? 1 : 0);
+                                  have_secondary_pre ? 1 : 0);
                 }
             }
 
@@ -33926,11 +33849,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             if (false) {  // GPU probe now in CPU-TG path above
                 // GPU probe handled partition — skip to shared dispatch
             } else if (cpu_expert_tg_active) {
-                auto & placement_table = ggml_sycl::get_expert_placement_table();
                 // For batch=1 TG, VRAM-resident experts on any GPU are dispatched
                 // to their device; host-resident experts fall back to CPU.
+                // Uses the cache directly via is_expert_resident / get_expert_device_ptr.
                 gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
                 cpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
+
+                const int block_tg = moe_extract_block_number(src0->name ? src0->name : "");
+                const moe_tensor_type role_tg = moe_classify_tensor(src0->name ? src0->name : "");
 
                 for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                     for (int64_t id = 0; id < n_ids; id++) {
@@ -33938,30 +33864,43 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
                         // Route expert to GPU with cached weights, CPU only as fallback.
-                        // Priority: placement table (any GPU) > cache-resolved ptr (GPU0) > CPU.
-                        // Default: device_id=-1, device_ptr=nullptr (CPU fallback)
-                        auto placement = placement_table.is_initialized()
-                            ? placement_table.get(layer_id, i02)
-                            : decltype(placement_table.get(0, 0)){};
+                        // Priority: GPU0 cache > secondary GPU cache > prefetcher > CPU.
+                        bool routed = false;
 
-                        if (placement.device_id == 0 && placement.device_ptr) {
-                            gpu_entries.push_back({ iid1, id, i02, placement.device_ptr, /* device_id */ 0 });
-                        } else if (placement.device_id >= 1
-                                   && placement.device_id < n_gpu_devs
-                                   && placement.device_ptr != nullptr
-                                   && g_secondary_queues[placement.device_id] != nullptr) {
-                            per_gpu_entries[placement.device_id].push_back(
-                                { iid1, id, i02, placement.device_ptr });
-                        } else if (expert_ptrs_host && i02 < n_as
+                        // Check GPU0 cache
+                        if (block_tg >= 0 && is_expert_resident(block_tg, i02, 0)) {
+                            void * ptr = get_expert_device_ptr(block_tg, i02, role_tg, 0);
+                            if (ptr) {
+                                gpu_entries.push_back({ iid1, id, i02, ptr, /* device_id */ 0 });
+                                routed = true;
+                            }
+                        }
+
+                        // Check secondary GPUs
+                        if (!routed && block_tg >= 0) {
+                            for (int d = 1; d < n_gpu_devs && !routed; d++) {
+                                if (!g_secondary_queues[d]) continue;
+                                if (is_expert_resident(block_tg, i02, d)) {
+                                    void * ptr = get_expert_device_ptr(block_tg, i02, role_tg, d);
+                                    if (ptr) {
+                                        per_gpu_entries[d].push_back({ iid1, id, i02, ptr });
+                                        routed = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check cache-resolved ptr from update_moe_ptr_table
+                        if (!routed && expert_ptrs_host && i02 < n_as
                                    && expert_ptrs_host[i02] != nullptr) {
                             gpu_entries.push_back(
                                 { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
-                        } else {
-                            // Check prefetcher VRAM pool before CPU fallback.
-                            // ExpertPrefetcher LRU cache may hold this expert
-                            // from a previous demand_load or hint().
-                            bool found_cached = false;
-                            for (int d = 0; d < n_gpu_devs && !found_cached; d++) {
+                            routed = true;
+                        }
+
+                        // Check prefetcher VRAM pool before CPU fallback.
+                        if (!routed) {
+                            for (int d = 0; d < n_gpu_devs && !routed; d++) {
                                 auto & pf = g_expert_prefetchers[d];
                                 if (!pf.is_initialized()) continue;
                                 void * cached = pf.get_cached_ptr(layer_id, i02);
@@ -33971,12 +33910,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                     } else if (g_secondary_queues[d] != nullptr) {
                                         per_gpu_entries[d].push_back({ iid1, id, i02, cached });
                                     }
-                                    found_cached = true;
+                                    routed = true;
                                 }
                             }
-                            if (!found_cached) {
-                                cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
-                            }
+                        }
+
+                        if (!routed) {
+                            cpu_entries.push_back({ iid1, id, i02, nullptr, /* device_id */ 0 });
                         }
                     }
                 }
@@ -33993,10 +33933,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 {
                     static std::atomic<int> hybrid_route_log{0};
                     if (hybrid_route_log.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        fprintf(stderr, "[MOE-HYBRID] layer=%d: gpu0=%zu cpu=%zu sec=%zu ptable_init=%d\n",
+                        fprintf(stderr, "[MOE-HYBRID] layer=%d: gpu0=%zu cpu=%zu sec=%zu multi_gpu=%d\n",
                                 layer_id, gpu_entries.size(), cpu_entries.size(),
                                 secondary_count,
-                                placement_table.is_initialized() ? 1 : 0);
+                                g_moe_multi_gpu_active.load(std::memory_order_acquire) ? 1 : 0);
                     }
                 }
 
@@ -34130,7 +34070,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Route each predicted expert to the correct device's prefetcher
                 // based on the placement table. Experts placed on secondary GPUs
                 // get prefetched into that device's LRU pool.
-                auto & placement_tbl = ggml_sycl::get_expert_placement_table();
                 const int n_gpu_hint = ggml_sycl_info().total_gpu_count;
                 // Check if GPU0 prefetcher is initialized for expert caching.
                 // Let hint() manage VRAM pressure internally — ensure_cached_layout
@@ -34199,14 +34138,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
             }
 
-            // N-device placement-table-driven partition.
-            // ExpertPlacementTable maps (layer_id, expert_id) → device_id + device_ptr.
-            // device_id == 0       → gpu_entries (primary GPU, batched MMVQ)
-            // device_id == 1..N-1  → per_gpu_entries[d] (secondary GPUs, activation shipping)
-            // device_id == -1      → cpu_entries (CPU vec_dot fallback)
-            auto & placement_table = ggml_sycl::get_expert_placement_table();
+            // N-device cache-driven partition.
+            // The cache IS the placement — query directly via
+            // is_expert_resident() / get_expert_device_ptr().
             const int n_gpu        = ggml_sycl_info().total_gpu_count;
             const bool multi_gpu   = g_moe_multi_gpu_active.load(std::memory_order_acquire);
+
+            const int block_pp = moe_extract_block_number(src0->name ? src0->name : "");
+            const moe_tensor_type role_pp = moe_classify_tensor(src0->name ? src0->name : "");
 
             gpu_entries.reserve(static_cast<size_t>(ids->ne[1] * n_ids));
             if (multi_gpu) {
@@ -34221,76 +34160,76 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                     GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
-                    if (placement_table.is_initialized()) {
-                        // Placement-table path: N-device dispatch based on expert residency.
-                        auto placement = placement_table.get(layer_id, i02);
-                        if (placement.device_id >= 0 && placement.device_id < n_gpu) {
-                            if (placement.device_id == 0) {
-                                // GPU0: prefer placement ptr, fallback to cache-resolved ptr
-                                void * ptr = placement.device_ptr;
-                                if (!ptr && expert_ptrs_host && i02 < n_as) {
-                                    ptr = const_cast<void *>(expert_ptrs_host[i02]);
-                                }
-                                if (ptr) {
-                                    gpu_entries.push_back({ iid1, id, i02, ptr });
-                                } else {
-                                    cpu_entries.push_back({ iid1, id, i02, nullptr });
-                                }
-                            } else if (multi_gpu && placement.device_ptr != nullptr
-                                       && placement.device_id < n_gpu_devs
-                                       && g_secondary_queues[placement.device_id] != nullptr) {
-                                per_gpu_entries[placement.device_id].push_back(
-                                    { iid1, id, i02, placement.device_ptr });
-                            } else {
-                                // No static placement ptr — check if any prefetcher
-                                // has this expert cached (demand-driven LRU).
-                                bool found_cached = false;
-                                for (int d = 0; d < n_gpu && !found_cached; d++) {
-                                    auto & pf = g_expert_prefetchers[d];
-                                    if (!pf.is_initialized()) continue;
-                                    void * cached = pf.get_cached_ptr(layer_id, i02);
-                                    if (cached) {
-                                        if (d == 0) {
-                                            gpu_entries.push_back({ iid1, id, i02, cached });
-                                        } else if (d < n_gpu_devs && g_secondary_queues[d]) {
-                                            per_gpu_entries[d].push_back({ iid1, id, i02, cached });
-                                        }
-                                        found_cached = true;
-                                    }
-                                }
-                                if (!found_cached && multi_gpu) {
-                                    // Try on-demand DMA to secondary GPUs before CPU fallback.
-                                    for (int d = 1; d < n_gpu && !found_cached; d++) {
-                                        auto & pf = g_expert_prefetchers[d];
-                                        if (!pf.is_initialized()) continue;
-                                        void * loaded = pf.demand_load(layer_id, i02);
-                                        if (loaded) {
-                                            n_demand_loaded++;
-                                            if (d < n_gpu_devs && g_secondary_queues[d]) {
-                                                per_gpu_entries[d].push_back({ iid1, id, i02, loaded });
-                                            } else {
-                                                gpu_entries.push_back({ iid1, id, i02, loaded });
-                                            }
-                                            found_cached = true;
-                                        }
-                                    }
-                                }
-                                if (!found_cached) {
-                                    cpu_entries.push_back({ iid1, id, i02, nullptr });
-                                }
+                    bool routed = false;
+
+                    // Check GPU0 cache
+                    if (block_pp >= 0 && is_expert_resident(block_pp, i02, 0)) {
+                        void * ptr = get_expert_device_ptr(block_pp, i02, role_pp, 0);
+                        if (!ptr && expert_ptrs_host && i02 < n_as) {
+                            ptr = const_cast<void *>(expert_ptrs_host[i02]);
+                        }
+                        if (ptr) {
+                            gpu_entries.push_back({ iid1, id, i02, ptr });
+                            routed = true;
+                        }
+                    }
+
+                    // Check secondary GPU caches
+                    if (!routed && multi_gpu && block_pp >= 0) {
+                        for (int d = 1; d < n_gpu && !routed; d++) {
+                            if (d >= n_gpu_devs || !g_secondary_queues[d]) continue;
+                            void * ptr = get_expert_device_ptr(block_pp, i02, role_pp, d);
+                            if (ptr) {
+                                per_gpu_entries[d].push_back({ iid1, id, i02, ptr });
+                                routed = true;
                             }
-                        } else {
-                            // CPU-only expert (device_id == -1).
-                            cpu_entries.push_back({ iid1, id, i02, nullptr });
                         }
-                    } else {
-                        // Fallback: use moe_expert_ptrs_host table from update_moe_ptr_table.
-                        if (expert_ptrs_host && i02 < n_as && expert_ptrs_host[i02] != nullptr) {
-                            gpu_entries.push_back(
-                                { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
-                        } else {
-                            cpu_entries.push_back({ iid1, id, i02, nullptr });
+                    }
+
+                    // Check cache-resolved ptr from update_moe_ptr_table
+                    if (!routed && expert_ptrs_host && i02 < n_as && expert_ptrs_host[i02] != nullptr) {
+                        gpu_entries.push_back(
+                            { iid1, id, i02, const_cast<void *>(expert_ptrs_host[i02]) });
+                        routed = true;
+                    }
+
+                    // Check prefetcher VRAM pool
+                    if (!routed) {
+                        for (int d = 0; d < n_gpu && !routed; d++) {
+                            auto & pf = g_expert_prefetchers[d];
+                            if (!pf.is_initialized()) continue;
+                            void * cached = pf.get_cached_ptr(layer_id, i02);
+                            if (cached) {
+                                if (d == 0) {
+                                    gpu_entries.push_back({ iid1, id, i02, cached });
+                                } else if (d < n_gpu_devs && g_secondary_queues[d]) {
+                                    per_gpu_entries[d].push_back({ iid1, id, i02, cached });
+                                }
+                                routed = true;
+                            }
                         }
+                    }
+
+                    // Try on-demand DMA to secondary GPUs before CPU fallback
+                    if (!routed && multi_gpu) {
+                        for (int d = 1; d < n_gpu && !routed; d++) {
+                            auto & pf = g_expert_prefetchers[d];
+                            if (!pf.is_initialized()) continue;
+                            void * loaded = pf.demand_load(layer_id, i02);
+                            if (loaded) {
+                                n_demand_loaded++;
+                                if (d < n_gpu_devs && g_secondary_queues[d]) {
+                                    per_gpu_entries[d].push_back({ iid1, id, i02, loaded });
+                                } else {
+                                    gpu_entries.push_back({ iid1, id, i02, loaded });
+                                }
+                                routed = true;
+                            }
+                        }
+                    }
+
+                    if (!routed) {
+                        cpu_entries.push_back({ iid1, id, i02, nullptr });
                     }
                 }
             }
