@@ -404,15 +404,6 @@ const std::vector<ggml_type> kv_cache_types = {
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
-    if (s == "mxfp4") {
-        return GGML_TYPE_MXFP4;
-    }
-    if (s == "mxfp6") {
-        return GGML_TYPE_MXFP6;
-    }
-    if (s == "mxfp8") {
-        return GGML_TYPE_MXFP8;
-    }
     for (const auto & type : kv_cache_types) {
         if (ggml_type_name(type) == s) {
             return type;

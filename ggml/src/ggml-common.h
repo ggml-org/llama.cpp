@@ -199,13 +199,12 @@ typedef struct {
 static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4_1 block size/padding");
 
 // E8M0 shared exponent constants (OCP MX v1.0 SS5.3).
-// EMAX_OFFSET = ceil(log2(max_finite)), MSE_RANGE = search radius for optimal scale.
-#define MXFP_E8M0_MSE_RANGE      2
-#define MXFP4_E2M1_EMAX_OFFSET   2   // ceil(log2(6.0))
-#define MXFP6_E2M3_EMAX_OFFSET   3   // ceil(log2(7.5))
-#define MXFP6_E3M2_EMAX_OFFSET   5   // ceil(log2(28.0))
-#define MXFP8_E4M3_EMAX_OFFSET   8   // ceil(log2(448))
-#define MXFP8_E5M2_EMAX_OFFSET  16   // ceil(log2(57344))
+// EMAX_OFFSET ≈ log2(max_finite), used by round(log2(amax)) base estimate.
+#define MXFP4_E2M1_EMAX_OFFSET   2   // floor(log2(6.0))   = 2
+#define MXFP6_E2M3_EMAX_OFFSET   3   //  ceil(log2(7.5))   = 3
+#define MXFP6_E3M2_EMAX_OFFSET   5   //  ceil(log2(28.0))  = 5
+#define MXFP8_E4M3_EMAX_OFFSET   8   // floor(log2(448))   = 8
+#define MXFP8_E5M2_EMAX_OFFSET  16   //  ceil(log2(57344)) = 16
 
 // MXFP type properties -- shared across all backends.
 #define MXFP_BITS_PER_ELEM_E2M1  4
@@ -1635,13 +1634,17 @@ GGML_MXFP_FUNC void ggml_mxfp_unpack_fp6x4(const uint8_t in[3], uint8_t v[4]) {
 
 // E8M0 shared exponent → float conversion.
 // E8M0 encoding: value = 2^(x - 127) for x > 0, 2^(-127) for x == 0.
+// E8M0 = 255 is NaN per MX spec, but we clamp to 254 (max finite) to match
+// the encode path which also clamps to 254, preventing Inf * 0 = NaN in dequant.
 GGML_MXFP_FUNC float ggml_mxfp_e8m0_to_fp32(uint8_t x) {
+    if (x == 255) { x = 254; }
     uint32_t bits = (x == 0) ? 0x00400000u : ((uint32_t)x << 23);
     return GGML_MXFP_U32_AS_F32(bits);
 }
 
 // E8M0 → float/2. Used with MXFP4 since E2M1 values are doubled in kvalues_mxfp4.
 GGML_MXFP_FUNC float ggml_mxfp_e8m0_to_fp32_half(uint8_t x) {
+    if (x == 255) { x = 254; }
     uint32_t bits = (x < 2) ? (0x00200000u << x) : ((uint32_t)(x - 1) << 23);
     return GGML_MXFP_U32_AS_F32(bits);
 }

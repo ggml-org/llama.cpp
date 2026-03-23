@@ -1121,8 +1121,9 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     ggml_tensor * result = ggml_set_rows(ctx, k_dst, k_cur, k_idxs);
 
     // enable Hadamard rotation for MXFP K cache (QuaRot arXiv:2404.00456, BRQ arXiv:2511.04214)
-    // skipped for MLA (V is a view of K) and E5M2/E3M2 (2-bit mantissa, no benefit)
-    if (is_mxfp && !hparams.is_mla() && ggml_mxfp_use_hadamard(k->type)) {
+    // skipped when DK != DV (MLA) and for E5M2/E3M2 (2-bit mantissa, no benefit).
+    // condition must match flash attention read path (ops.cpp: DK == DV).
+    if (is_mxfp && hparams.n_embd_head_k(il) == hparams.n_embd_head_v(il) && ggml_mxfp_use_hadamard(k->type)) {
         ((int32_t *)result->op_params)[0] = 1;
     }
 

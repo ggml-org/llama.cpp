@@ -263,8 +263,6 @@ float fp8_e4m3_to_float(uint8_t v)    { return ggml_mxfp_fp8_e4m3_to_float(v); }
 uint8_t float_to_fp8_e4m3_rn(float x) { return ggml_mxfp_float_to_fp8_e4m3(x); }
 
 // ====================== MXFP quantization infrastructure
-//
-// MSE-optimal E8M0: tests candidates around round(log2(amax)), picks lowest quantization error.
 
 typedef struct {
     int      emax_offset;    // type-specific offset to max representable exponent
@@ -272,33 +270,13 @@ typedef struct {
     int      bits_per_elem;  // 8 = byte-aligned, 6 = packed via fp6x4
     uint8_t  (*to_elem)(float);
     float    (*to_float)(uint8_t);
-    float    (*mse_error)(float val, float inv_scale, float scale); // NULL = use generic round-trip via to_elem/to_float
 } mxfp_elem_traits_t;
 
 static inline int best_index_mxfp4(float x, float e);
 
-// MSE error for MXFP4 (kvalues are doubled, so scale is halved)
-static float mse_error_mxfp4(float val, float inv_scale, float scale) {
-    const float d = scale * 0.5f;
-    const float inv_d = (d > 0.0f) ? 1.0f / d : 0.0f;
-    const float normalized = fabsf(val) * inv_d;
-    (void)inv_scale;
-    float qval;
-    if      (normalized < 0.5f)  qval = 0.0f;
-    else if (normalized < 1.5f)  qval = 1.0f;
-    else if (normalized < 2.5f)  qval = 2.0f;
-    else if (normalized < 3.5f)  qval = 3.0f;
-    else if (normalized < 5.0f)  qval = 4.0f;
-    else if (normalized < 7.0f)  qval = 6.0f;
-    else if (normalized < 10.0f) qval = 8.0f;
-    else                         qval = 12.0f;
-    const float err = fabsf(val) - qval * d;
-    return err * err;
-}
 
-static const mxfp_elem_traits_t mxfp4_traits = { MXFP4_E2M1_EMAX_OFFSET, MXFP4_SOA_QS_PER_BLOCK, 4, NULL, NULL, mse_error_mxfp4 };
-
-static inline uint8_t mxfp_compute_e8m0_mse(const float * x, int qk, const mxfp_elem_traits_t * traits) {
+// E8M0 shared exponent: round(log2(amax)) — no MSE search needed.
+static inline uint8_t mxfp_compute_e8m0(const float * x, int qk, int emax_offset) {
     float amax = 0.0f;
     for (int j = 0; j < qk; j++) {
         const float a = fabsf(x[j]);
@@ -306,36 +284,8 @@ static inline uint8_t mxfp_compute_e8m0_mse(const float * x, int qk, const mxfp_
     }
     if (amax == 0.0f) return 0;
 
-    const int e_base = ggml_mxfp_e8m0_base_estimate(amax, traits->emax_offset);
-
-    int e_lo = e_base - MXFP_E8M0_MSE_RANGE;
-    int e_hi = e_base + MXFP_E8M0_MSE_RANGE;
-    if (e_lo < 1)   e_lo = 1;
-    if (e_hi < 1)   e_hi = 1;
-    if (e_hi > 254) e_hi = 254;
-    int best_e = e_base < 0 ? 0 : (e_base > 254 ? 254 : e_base);
-    float best_mse = 1e30f;
-
-    for (int test_e = e_lo; test_e <= e_hi; ++test_e) {
-        const float test_scale = GGML_E8M0_TO_FP32((uint8_t)test_e);
-        const float test_inv = 1.0f / test_scale;
-        float mse = 0.0f;
-        for (int j = 0; j < qk; ++j) {
-            if (traits->mse_error) {
-                mse += traits->mse_error(x[j], test_inv, test_scale);
-            } else {
-                const float recon = traits->to_float(traits->to_elem(x[j] * test_inv)) * test_scale;
-                const float err = x[j] - recon;
-                mse += err * err;
-            }
-        }
-        if (mse < best_mse) {
-            best_mse = mse;
-            best_e = test_e;
-        }
-    }
-
-    return (uint8_t)best_e;
+    const int e = ggml_mxfp_e8m0_base_estimate(amax, emax_offset);
+    return (uint8_t)(e < 0 ? 0 : (e > 254 ? 254 : e));
 }
 
 static inline int best_index_mxfp4(float x, float e) {
@@ -353,26 +303,112 @@ static inline int best_index_mxfp4(float x, float e) {
     return (x < 0.0f) ? (idx + 8) : idx;
 }
 
-void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_MXFP4;
+// Per-block MXFP4 quantize: shared between AoS and SoA paths.
+static inline void quantize_block_mxfp4(const float * GGML_RESTRICT src, uint8_t * GGML_RESTRICT qs, uint8_t * e_out) {
+    const uint8_t e = mxfp_compute_e8m0(src, QK_MXFP4, MXFP4_E2M1_EMAX_OFFSET);
+    const float d = GGML_E8M0_TO_FP32_HALF(e);
+    *e_out = e;
+    for (int j = 0; j < QK_MXFP4/2; ++j) {
+        const uint8_t x0 = best_index_mxfp4(src[0          + j], d);
+        const uint8_t x1 = best_index_mxfp4(src[QK_MXFP4/2 + j], d);
+        qs[j] = x0 | (x1 << 4);
+    }
+}
 
-    assert(k % qk == 0);
+// Per-block MXFP4 quantize round-trip: apply quantization error without materializing bytes.
+// Used for Q preprocessing in flash attention — matches K's error pattern.
+static inline void roundtrip_block_mxfp4(float * GGML_RESTRICT vals) {
+    const uint8_t e = mxfp_compute_e8m0(vals, QK_MXFP4, MXFP4_E2M1_EMAX_OFFSET);
+    const float d = GGML_E8M0_TO_FP32_HALF(e);
+    for (int j = 0; j < QK_MXFP4; ++j) {
+        const int idx = best_index_mxfp4(vals[j], d);
+        vals[j] = kvalues_mxfp4[idx] * d;  // kvalues are doubled, d is halved — matches dequant
+    }
+}
 
-    const int nb = k / qk;
+// Per-block generic MXFP quantize round-trip (MXFP8/MXFP6).
+static inline void roundtrip_block_mxfp(float * GGML_RESTRICT vals, const mxfp_elem_traits_t * traits) {
+    const uint8_t e = mxfp_compute_e8m0(vals, 32, traits->emax_offset);
+    const float d = GGML_E8M0_TO_FP32(e);
+    const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        vals[j] = traits->to_float(traits->to_elem(vals[j] * inv_d)) * d;
+    }
+}
 
-    for (int i = 0; i < nb; i++) {
-        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*qk], qk, &mxfp4_traits);
-        const float d = GGML_E8M0_TO_FP32_HALF(e);
+// Fused Hadamard + quantize round-trip: one pass, output is float with quantization error.
+void mxfp4_hadamard_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        ggml_mxfp_hadamard_32_inplace(dst + i);
+        roundtrip_block_mxfp4(dst + i);
+    }
+}
 
-        y[i].e = e;
+// Non-Hadamard round-trip for MXFP4 (Hadamard disabled or V cache).
+void mxfp4_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        roundtrip_block_mxfp4(dst + i);
+    }
+}
 
-        for (int j = 0; j < qk/2; ++j) {
-            const uint8_t x0 = best_index_mxfp4(x[i*qk + 0    + j], d);
-            const uint8_t x1 = best_index_mxfp4(x[i*qk + qk/2 + j], d);
+// Per-block MXFP4 dequant: shared between AoS and SoA paths.
+static inline void dequantize_block_mxfp4(const uint8_t * GGML_RESTRICT qs, uint8_t e, float * GGML_RESTRICT dst) {
+    const float d = GGML_E8M0_TO_FP32_HALF(e);
+    for (int j = 0; j < QK_MXFP4/2; ++j) {
+        dst[0          + j] = kvalues_mxfp4[qs[j] & 0x0F] * d;
+        dst[QK_MXFP4/2 + j] = kvalues_mxfp4[qs[j] >>   4] * d;
+    }
+}
 
-            y[i].qs[j]  = x0;
-            y[i].qs[j] |= x1 << 4;
+// Per-block generic MXFP quantize/dequant: shared between AoS and SoA for MXFP8/MXFP6.
+static inline void quantize_block_mxfp(const float * GGML_RESTRICT src, uint8_t * GGML_RESTRICT qs,
+                                        uint8_t * e_out, const mxfp_elem_traits_t * traits) {
+    const uint8_t e = mxfp_compute_e8m0(src, 32, traits->emax_offset);
+    const float d = GGML_E8M0_TO_FP32(e);
+    const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+    *e_out = e;
+    if (traits->bits_per_elem == 8) {
+        for (int j = 0; j < 32; ++j) {
+            qs[j] = traits->to_elem(src[j] * inv_d);
         }
+    } else {
+        for (int j = 0; j < 32; j += 4) {
+            uint8_t vals[4];
+            for (int jj = 0; jj < 4; jj++) {
+                vals[jj] = traits->to_elem(src[j + jj] * inv_d);
+            }
+            pack_fp6x4(vals, &qs[j * 3 / 4]);
+        }
+    }
+}
+
+static inline void dequantize_block_mxfp(const uint8_t * GGML_RESTRICT qs, uint8_t e,
+                                           float * GGML_RESTRICT dst, const mxfp_elem_traits_t * traits) {
+    const float d = GGML_E8M0_TO_FP32(e);
+    if (traits->bits_per_elem == 8) {
+        for (int j = 0; j < 32; ++j) {
+            dst[j] = traits->to_float(qs[j]) * d;
+        }
+    } else {
+        for (int j = 0; j < 32; j += 4) {
+            uint8_t vals[4];
+            unpack_fp6x4(&qs[j * 3 / 4], vals);
+            for (int jj = 0; jj < 4; jj++) {
+                dst[j + jj] = traits->to_float(vals[jj]) * d;
+            }
+        }
+    }
+}
+
+void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP4 == 0);
+    const int nb = k / QK_MXFP4;
+    for (int i = 0; i < nb; i++) {
+        quantize_block_mxfp4(&x[i*QK_MXFP4], y[i].qs, &y[i].e);
     }
 }
 
@@ -522,22 +558,10 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_MXFP4;
-
-    assert(k % qk == 0);
-
-    const int nb = k / qk;
-
+    assert(k % QK_MXFP4 == 0);
+    const int nb = k / QK_MXFP4;
     for (int i = 0; i < nb; i++) {
-        const float d = GGML_E8M0_TO_FP32_HALF(x[i].e);
-
-        for (int j = 0; j < qk/2; ++j) {
-            const int8_t x0 = kvalues_mxfp4[x[i].qs[j] & 0x0F];
-            const int8_t x1 = kvalues_mxfp4[x[i].qs[j] >>   4];
-
-            y[i*qk + j + 0   ] = x0*d;
-            y[i*qk + j + qk/2] = x1*d;
-        }
+        dequantize_block_mxfp4(x[i].qs, x[i].e, &y[i*QK_MXFP4]);
     }
 }
 
@@ -582,112 +606,95 @@ uint8_t float_to_fp8_e5m2_rn(float x) { return ggml_mxfp_float_to_fp8_e5m2(x); }
 void pack_fp6x4(const uint8_t v[4], uint8_t out[3])   { ggml_mxfp_pack_fp6x4(v, out); }
 void unpack_fp6x4(const uint8_t in[3], uint8_t v[4])   { ggml_mxfp_unpack_fp6x4(in, v); }
 
-static const mxfp_elem_traits_t mxfp8_e4m3_traits = { MXFP8_E4M3_EMAX_OFFSET, MXFP8_SOA_QS_PER_BLOCK, 8, float_to_fp8_e4m3_rn, fp8_e4m3_to_float, NULL };
-static const mxfp_elem_traits_t mxfp6_e2m3_traits = { MXFP6_E2M3_EMAX_OFFSET, MXFP6_SOA_QS_PER_BLOCK, 6, float_to_fp6_e2m3_rn, fp6_e2m3_to_float, NULL };
+static const mxfp_elem_traits_t mxfp8_e4m3_traits = { MXFP8_E4M3_EMAX_OFFSET, MXFP8_SOA_QS_PER_BLOCK, 8, float_to_fp8_e4m3_rn, fp8_e4m3_to_float };
+static const mxfp_elem_traits_t mxfp6_e2m3_traits = { MXFP6_E2M3_EMAX_OFFSET, MXFP6_SOA_QS_PER_BLOCK, 6, float_to_fp6_e2m3_rn, fp6_e2m3_to_float };
+
+// MXFP8 AoS quantize/dequant — uses shared per-block helpers.
+void quantize_row_mxfp8_ref(const float * GGML_RESTRICT x, block_mxfp8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+    for (int i = 0; i < nb; i++) {
+        quantize_block_mxfp(&x[i*QK_MXFP8], y[i].qs, &y[i].e, &mxfp8_e4m3_traits);
+    }
+}
+
+void dequantize_row_mxfp8(const block_mxfp8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP8 == 0);
+    const int nb = k / QK_MXFP8;
+    for (int i = 0; i < nb; i++) {
+        dequantize_block_mxfp(x[i].qs, x[i].e, &y[i*QK_MXFP8], &mxfp8_e4m3_traits);
+    }
+}
+
+// MXFP6 AoS quantize/dequant — uses shared per-block helpers.
+void quantize_row_mxfp6_ref(const float * GGML_RESTRICT x, block_mxfp6 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+    for (int i = 0; i < nb; i++) {
+        quantize_block_mxfp(&x[i*QK_MXFP6], y[i].qs, &y[i].e, &mxfp6_e2m3_traits);
+    }
+}
+
+void dequantize_row_mxfp6(const block_mxfp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+    const int nb = k / QK_MXFP6;
+    for (int i = 0; i < nb; i++) {
+        dequantize_block_mxfp(x[i].qs, x[i].e, &y[i*QK_MXFP6], &mxfp6_e2m3_traits);
+    }
+}
 
 // ====================== SoA (Struct-of-Arrays) quantize/dequantize for flash attention
 
 void quantize_row_mxfp4_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
     assert(k % QK_MXFP4 == 0);
     const int nb = k / QK_MXFP4;
-    char * row = (char *)dst;
-    char * qs_base  = row;
-    char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
+    char * qs_base   = (char *)dst;
+    char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
 
     for (int i = 0; i < nb; i++) {
-        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*QK_MXFP4], QK_MXFP4, &mxfp4_traits);
-        const float d = GGML_E8M0_TO_FP32_HALF(e);
-
-        e8m0_base[i] = (char)e;
-
         uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP4_SOA_QS_PER_BLOCK));
-        for (int j = 0; j < QK_MXFP4/2; ++j) {
-            const uint8_t x0 = best_index_mxfp4(x[i*QK_MXFP4 + 0        + j], d);
-            const uint8_t x1 = best_index_mxfp4(x[i*QK_MXFP4 + QK_MXFP4/2 + j], d);
-            qs[j] = x0 | (x1 << 4);
-        }
+        quantize_block_mxfp4(&x[i*QK_MXFP4], qs, (uint8_t *)&e8m0_base[i]);
     }
 }
 
 void dequantize_row_mxfp4_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_MXFP4 == 0);
     const int nb = k / QK_MXFP4;
-    const char * row = (const char *)src;
-    const char * qs_base   = row;
-    const char * e8m0_base = row + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
+    const char * qs_base   = (const char *)src;
+    const char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
 
     for (int i = 0; i < nb; i++) {
-        const float d = GGML_E8M0_TO_FP32_HALF((uint8_t)e8m0_base[i]);
         const uint8_t * qs = (const uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP4_SOA_QS_PER_BLOCK));
-
-        for (int j = 0; j < QK_MXFP4/2; ++j) {
-            const int8_t x0 = kvalues_mxfp4[qs[j] & 0x0F];
-            const int8_t x1 = kvalues_mxfp4[qs[j] >>   4];
-            y[i*QK_MXFP4 + j + 0         ] = x0*d;
-            y[i*QK_MXFP4 + j + QK_MXFP4/2] = x1*d;
-        }
+        dequantize_block_mxfp4(qs, (uint8_t)e8m0_base[i], &y[i*QK_MXFP4]);
     }
 }
 
-// Unified SoA quantize for byte-aligned (FP8) and 6-bit packed (FP6) MXFP formats.
+// Unified SoA quantize/dequantize — delegates to shared per-block helpers.
 static void quantize_row_mxfp_soa_impl(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst,
                                          int64_t k, const mxfp_elem_traits_t * traits) {
-    const int qk = 32;
-    assert(k % qk == 0);
-    const int nb = k / qk;
+    assert(k % 32 == 0);
+    const int nb = k / 32;
     const int qpb = traits->qs_per_block;
     char * qs_base   = (char *)dst;
     char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, qpb);
 
     for (int i = 0; i < nb; i++) {
-        const uint8_t e = mxfp_compute_e8m0_mse(&x[i*qk], qk, traits);
-        const float d = GGML_E8M0_TO_FP32(e);
-        const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
-        e8m0_base[i] = (char)e;
-
         uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, qpb));
-        if (traits->bits_per_elem == 8) {
-            for (int j = 0; j < qk; ++j) {
-                qs[j] = traits->to_elem(x[i*qk + j] * inv_d);
-            }
-        } else {
-            for (int j = 0; j < qk; j += 4) {
-                uint8_t vals[4];
-                for (int jj = 0; jj < 4; jj++) {
-                    vals[jj] = traits->to_elem(x[i*qk + j + jj] * inv_d);
-                }
-                pack_fp6x4(vals, &qs[j * 3 / 4]);
-            }
-        }
+        quantize_block_mxfp(&x[i*32], qs, (uint8_t *)&e8m0_base[i], traits);
     }
 }
 
-// Unified SoA dequantize for byte-aligned (FP8) and 6-bit packed (FP6) MXFP formats.
 static void dequantize_row_mxfp_soa_impl(const void * GGML_RESTRICT src, float * GGML_RESTRICT y,
                                            int64_t k, const mxfp_elem_traits_t * traits) {
-    const int qk = 32;
-    assert(k % qk == 0);
-    const int nb = k / qk;
+    assert(k % 32 == 0);
+    const int nb = k / 32;
     const int qpb = traits->qs_per_block;
     const char * qs_base   = (const char *)src;
     const char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, qpb);
 
     for (int i = 0; i < nb; i++) {
-        const float d = GGML_E8M0_TO_FP32((uint8_t)e8m0_base[i]);
         const uint8_t * qs = (const uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, qpb));
-        if (traits->bits_per_elem == 8) {
-            for (int j = 0; j < qk; ++j) {
-                y[i*qk + j] = traits->to_float(qs[j]) * d;
-            }
-        } else {
-            for (int j = 0; j < qk; j += 4) {
-                uint8_t vals[4];
-                unpack_fp6x4(&qs[j * 3 / 4], vals);
-                for (int jj = 0; jj < 4; jj++) {
-                    y[i*qk + j + jj] = traits->to_float(vals[jj]) * d;
-                }
-            }
-        }
+        dequantize_block_mxfp(qs, (uint8_t)e8m0_base[i], &y[i*32], traits);
     }
 }
 
@@ -703,6 +710,83 @@ void quantize_row_mxfp6_soa(const float * GGML_RESTRICT x, void * GGML_RESTRICT 
 void dequantize_row_mxfp6_soa(const void * GGML_RESTRICT src, float * GGML_RESTRICT y, int64_t k) {
     dequantize_row_mxfp_soa_impl(src, y, k, &mxfp6_e2m3_traits);
 }
+
+// Fused Hadamard + SoA quantize: one read, one write, 32-float stack buffer per block.
+// Eliminates the full-row temp buffer and extra memory pass.
+void quantize_row_mxfp4_soa_hadamard(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    assert(k % QK_MXFP4 == 0);
+    const int nb = k / QK_MXFP4;
+    char * qs_base   = (char *)dst;
+    char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, MXFP4_SOA_QS_PER_BLOCK);
+
+    for (int i = 0; i < nb; i++) {
+        float tmp[32];
+        memcpy(tmp, &x[i*QK_MXFP4], QK_MXFP4 * sizeof(float));
+        ggml_mxfp_hadamard_32_inplace(tmp);
+        uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, MXFP4_SOA_QS_PER_BLOCK));
+        quantize_block_mxfp4(tmp, qs, (uint8_t *)&e8m0_base[i]);
+    }
+}
+
+static void quantize_row_mxfp_soa_hadamard_impl(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst,
+                                                   int64_t k, const mxfp_elem_traits_t * traits) {
+    assert(k % 32 == 0);
+    const int nb = k / 32;
+    const int qpb = traits->qs_per_block;
+    char * qs_base   = (char *)dst;
+    char * e8m0_base = qs_base + MXFP_SOA_E8M0_OFFSET(nb, qpb);
+
+    for (int i = 0; i < nb; i++) {
+        float tmp[32];
+        memcpy(tmp, &x[i*32], 32 * sizeof(float));
+        ggml_mxfp_hadamard_32_inplace(tmp);
+        uint8_t * qs = (uint8_t *)(qs_base + MXFP_SOA_QS_OFFSET(i, qpb));
+        quantize_block_mxfp(tmp, qs, (uint8_t *)&e8m0_base[i], traits);
+    }
+}
+
+void quantize_row_mxfp8_soa_hadamard(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    quantize_row_mxfp_soa_hadamard_impl(x, dst, k, &mxfp8_e4m3_traits);
+}
+void quantize_row_mxfp6_soa_hadamard(const float * GGML_RESTRICT x, void * GGML_RESTRICT dst, int64_t k) {
+    quantize_row_mxfp_soa_hadamard_impl(x, dst, k, &mxfp6_e2m3_traits);
+}
+
+// MXFP8/6 quantize round-trips (with and without Hadamard).
+void mxfp8_hadamard_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        ggml_mxfp_hadamard_32_inplace(dst + i);
+        roundtrip_block_mxfp(dst + i, &mxfp8_e4m3_traits);
+    }
+}
+
+void mxfp6_hadamard_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        ggml_mxfp_hadamard_32_inplace(dst + i);
+        roundtrip_block_mxfp(dst + i, &mxfp6_e2m3_traits);
+    }
+}
+
+void mxfp8_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        roundtrip_block_mxfp(dst + i, &mxfp8_e4m3_traits);
+    }
+}
+
+void mxfp6_roundtrip(const float * GGML_RESTRICT src, float * GGML_RESTRICT dst, int64_t k) {
+    assert(k % 32 == 0);
+    for (int64_t i = 0; i < k; i += 32) {
+        memcpy(dst + i, src + i, 32 * sizeof(float));
+        roundtrip_block_mxfp(dst + i, &mxfp6_e2m3_traits);
+    }
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -2371,6 +2455,18 @@ size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     GGML_UNUSED(quant_weights);
     quantize_row_nvfp4_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+}
+
+size_t quantize_mxfp8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp8_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP8, n_per_row);
+}
+
+size_t quantize_mxfp6(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp6_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP6, n_per_row);
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)

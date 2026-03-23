@@ -4909,8 +4909,106 @@ void ggml_compute_forward_get_rows(
     //}
 }
 
-// NEON-optimized Hadamard; scalar fallback below
-#if defined(__ARM_NEON)
+// SIMD-optimized Hadamard; scalar fallback below
+#if defined(__AVX2__) || defined(__AVX__)
+static void hadamard_32_inplace(float vals[32]) {
+    // 32 floats = 4 × __m256
+    __m256 v0 = _mm256_loadu_ps(vals +  0);
+    __m256 v1 = _mm256_loadu_ps(vals +  8);
+    __m256 v2 = _mm256_loadu_ps(vals + 16);
+    __m256 v3 = _mm256_loadu_ps(vals + 24);
+
+    // Stride 1: butterfly on adjacent pairs within each 256-bit register
+    {
+        // Interleave even/odd elements, add/sub
+        __m256 a, b, s, d;
+        a = _mm256_shuffle_ps(v0, v0, _MM_SHUFFLE(2, 2, 0, 0));
+        b = _mm256_shuffle_ps(v0, v0, _MM_SHUFFLE(3, 3, 1, 1));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v0 = _mm256_shuffle_ps(s, d, _MM_SHUFFLE(2, 0, 2, 0));
+        v0 = _mm256_shuffle_ps(v0, v0, _MM_SHUFFLE(3, 1, 2, 0));
+
+        a = _mm256_shuffle_ps(v1, v1, _MM_SHUFFLE(2, 2, 0, 0));
+        b = _mm256_shuffle_ps(v1, v1, _MM_SHUFFLE(3, 3, 1, 1));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v1 = _mm256_shuffle_ps(s, d, _MM_SHUFFLE(2, 0, 2, 0));
+        v1 = _mm256_shuffle_ps(v1, v1, _MM_SHUFFLE(3, 1, 2, 0));
+
+        a = _mm256_shuffle_ps(v2, v2, _MM_SHUFFLE(2, 2, 0, 0));
+        b = _mm256_shuffle_ps(v2, v2, _MM_SHUFFLE(3, 3, 1, 1));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v2 = _mm256_shuffle_ps(s, d, _MM_SHUFFLE(2, 0, 2, 0));
+        v2 = _mm256_shuffle_ps(v2, v2, _MM_SHUFFLE(3, 1, 2, 0));
+
+        a = _mm256_shuffle_ps(v3, v3, _MM_SHUFFLE(2, 2, 0, 0));
+        b = _mm256_shuffle_ps(v3, v3, _MM_SHUFFLE(3, 3, 1, 1));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v3 = _mm256_shuffle_ps(s, d, _MM_SHUFFLE(2, 0, 2, 0));
+        v3 = _mm256_shuffle_ps(v3, v3, _MM_SHUFFLE(3, 1, 2, 0));
+    }
+
+    // Stride 2: butterfly on pairs separated by 2 within 128-bit lanes
+    {
+        __m256 a, b, s, d;
+        a = _mm256_permute_ps(v0, _MM_SHUFFLE(1, 0, 1, 0));
+        b = _mm256_permute_ps(v0, _MM_SHUFFLE(3, 2, 3, 2));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v0 = _mm256_blend_ps(s, d, 0xCC); // 0b11001100
+
+        a = _mm256_permute_ps(v1, _MM_SHUFFLE(1, 0, 1, 0));
+        b = _mm256_permute_ps(v1, _MM_SHUFFLE(3, 2, 3, 2));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v1 = _mm256_blend_ps(s, d, 0xCC);
+
+        a = _mm256_permute_ps(v2, _MM_SHUFFLE(1, 0, 1, 0));
+        b = _mm256_permute_ps(v2, _MM_SHUFFLE(3, 2, 3, 2));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v2 = _mm256_blend_ps(s, d, 0xCC);
+
+        a = _mm256_permute_ps(v3, _MM_SHUFFLE(1, 0, 1, 0));
+        b = _mm256_permute_ps(v3, _MM_SHUFFLE(3, 2, 3, 2));
+        s = _mm256_add_ps(a, b); d = _mm256_sub_ps(a, b);
+        v3 = _mm256_blend_ps(s, d, 0xCC);
+    }
+
+    // Stride 4: butterfly between 128-bit lanes within each 256-bit register
+    {
+        __m128 lo, hi;
+        lo = _mm256_castps256_ps128(v0); hi = _mm256_extractf128_ps(v0, 1);
+        v0 = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_add_ps(lo, hi)), _mm_sub_ps(lo, hi), 1);
+
+        lo = _mm256_castps256_ps128(v1); hi = _mm256_extractf128_ps(v1, 1);
+        v1 = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_add_ps(lo, hi)), _mm_sub_ps(lo, hi), 1);
+
+        lo = _mm256_castps256_ps128(v2); hi = _mm256_extractf128_ps(v2, 1);
+        v2 = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_add_ps(lo, hi)), _mm_sub_ps(lo, hi), 1);
+
+        lo = _mm256_castps256_ps128(v3); hi = _mm256_extractf128_ps(v3, 1);
+        v3 = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_add_ps(lo, hi)), _mm_sub_ps(lo, hi), 1);
+    }
+
+    // Stride 8: butterfly between registers
+    {
+        __m256 s, d;
+        s = _mm256_add_ps(v0, v1); d = _mm256_sub_ps(v0, v1); v0 = s; v1 = d;
+        s = _mm256_add_ps(v2, v3); d = _mm256_sub_ps(v2, v3); v2 = s; v3 = d;
+    }
+
+    // Stride 16: butterfly between register pairs
+    {
+        __m256 s, d;
+        s = _mm256_add_ps(v0, v2); d = _mm256_sub_ps(v0, v2); v0 = s; v2 = d;
+        s = _mm256_add_ps(v1, v3); d = _mm256_sub_ps(v1, v3); v1 = s; v3 = d;
+    }
+
+    // Normalize by 1/sqrt(32)
+    const __m256 norm = _mm256_set1_ps(MXFP_HADAMARD_32_NORM);
+    _mm256_storeu_ps(vals +  0, _mm256_mul_ps(v0, norm));
+    _mm256_storeu_ps(vals +  8, _mm256_mul_ps(v1, norm));
+    _mm256_storeu_ps(vals + 16, _mm256_mul_ps(v2, norm));
+    _mm256_storeu_ps(vals + 24, _mm256_mul_ps(v3, norm));
+}
+#elif defined(__ARM_NEON)
 static void hadamard_32_inplace(float vals[32]) {
     float32x4_t v0 = vld1q_f32(vals +  0);
     float32x4_t v1 = vld1q_f32(vals +  4);
@@ -5032,9 +5130,15 @@ static void ggml_compute_forward_set_rows_f32(
     ggml_from_float_t mxfp_soa_quantize = dst_traits->from_float_soa;
     ggml_from_float_t from_float = mxfp_soa_quantize ? nullptr : dst_traits->from_float;
 
-    std::vector<float> had_tmp;
-    if (apply_hadamard) {
-        had_tmp.resize(nc);
+    // Fused Hadamard+quantize: one pass per block, 32-float stack buffer, no heap allocation.
+    ggml_from_float_t mxfp_soa_hadamard_quantize = nullptr;
+    if (apply_hadamard && mxfp_soa_quantize) {
+        switch (dst->type) {
+            case GGML_TYPE_MXFP4: mxfp_soa_hadamard_quantize = (ggml_from_float_t)quantize_row_mxfp4_soa_hadamard; break;
+            case GGML_TYPE_MXFP8: mxfp_soa_hadamard_quantize = (ggml_from_float_t)quantize_row_mxfp8_soa_hadamard; break;
+            case GGML_TYPE_MXFP6: mxfp_soa_hadamard_quantize = (ggml_from_float_t)quantize_row_mxfp6_soa_hadamard; break;
+            default: break;
+        }
     }
 
     for (int64_t i03 = 0; i03 < ne03; ++i03) {
@@ -5051,20 +5155,12 @@ static void ggml_compute_forward_set_rows_f32(
                 const float * src_row = (const float *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03);
                 char * dst_row = ((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3);
 
-                if (apply_hadamard) {
-                    memcpy(had_tmp.data(), src_row, nc * sizeof(float));
-                    ggml_apply_hadamard_blocks(had_tmp.data(), nc);
-                    if (mxfp_soa_quantize) {
-                        mxfp_soa_quantize(had_tmp.data(), dst_row, nc);
-                    } else {
-                        from_float(had_tmp.data(), dst_row, nc);
-                    }
+                if (mxfp_soa_hadamard_quantize) {
+                    mxfp_soa_hadamard_quantize(src_row, dst_row, nc);
+                } else if (mxfp_soa_quantize) {
+                    mxfp_soa_quantize(src_row, dst_row, nc);
                 } else {
-                    if (mxfp_soa_quantize) {
-                        mxfp_soa_quantize(src_row, dst_row, nc);
-                    } else {
-                        from_float(src_row, dst_row, nc);
-                    }
+                    from_float(src_row, dst_row, nc);
                 }
             }
         }
@@ -8268,7 +8364,6 @@ typedef void (*mxfp_soa_dequantize_fn)(const void *, float *, int64_t);
 struct mxfp_kv_params {
     mxfp_soa_dequantize_fn dequantize;
     bool    multihead;
-    int64_t soa_elems;
     int     qs_per_block;
     int     head_qs_bytes;
     int64_t head_e8m0_offset;
@@ -8277,11 +8372,27 @@ struct mxfp_kv_params {
 
 // MXFP dispatch parameters for flash attention.
 struct mxfp_fa_params {
-    mxfp_soa_quantize_fn q_quantize;
+    mxfp_soa_quantize_fn q_quantize;    // SoA quantize for Q (used only when Hadamard is off AND non-MXFP K path)
+    // Fused Q round-trip: Hadamard + quantize + dequant in one pass, no SoA buffer.
+    void (*q_roundtrip)(const float *, float *, int64_t);
     mxfp_kv_params k;
     mxfp_kv_params v;
     bool apply_hadamard;
 };
+
+// Compute the SoA row base pointer for a given KV position and head.
+// In multihead mode, the SoA region spans all heads at one KV position,
+// so the row base must NOT include the per-head offset (head_idx * nb2).
+// mxfp_dequant_head handles per-head indexing within the SoA region.
+// In per-head mode, each head has its own SoA region, so the base includes nb2.
+static inline const char * mxfp_row_ptr(
+        const mxfp_kv_params & kv, const char * data,
+        int64_t kv_pos, size_t nb1, int head_idx, size_t nb2, int batch_idx, size_t nb3) {
+    if (kv.multihead) {
+        return data + kv_pos*nb1 + batch_idx*nb3;
+    }
+    return data + kv_pos*nb1 + head_idx*nb2 + batch_idx*nb3;
+}
 
 // Extract one head's SoA data from a multihead row and dequantize.
 static inline void mxfp_dequant_head(
@@ -8305,7 +8416,6 @@ static mxfp_kv_params mxfp_kv_params_init(ggml_type type, int64_t D, size_t nb2,
     mxfp_kv_params kv = {};
     kv.dequantize      = ggml_get_type_traits_cpu(type)->to_float_soa;
     kv.multihead       = (nb2 == (size_t)ggml_row_size(type, D));
-    kv.soa_elems       = kv.multihead ? ne2 * D : D;
     kv.qs_per_block    = ggml_mxfp_qs_per_block(type);
     kv.blocks_per_head = (int)(D / 32);
     kv.head_qs_bytes   = kv.blocks_per_head * kv.qs_per_block;
@@ -8327,6 +8437,17 @@ static mxfp_fa_params mxfp_fa_params_init(
     if (is_mxfp_k) {
         p.q_quantize = ggml_get_type_traits_cpu(k->type)->from_float_soa;
         p.k = mxfp_kv_params_init(k->type, DK, nbk2, nek2);
+    }
+
+    // Select fused Q round-trip (Hadamard + quantize error, no SoA buffer).
+    if (is_mxfp_k) {
+        const bool had = is_mxfp_k && (DK == DV) && ggml_mxfp_use_hadamard(k->type);
+        switch (k->type) {
+            case GGML_TYPE_MXFP4: p.q_roundtrip = had ? mxfp4_hadamard_roundtrip : mxfp4_roundtrip; break;
+            case GGML_TYPE_MXFP8: p.q_roundtrip = had ? mxfp8_hadamard_roundtrip : mxfp8_roundtrip; break;
+            case GGML_TYPE_MXFP6: p.q_roundtrip = had ? mxfp6_hadamard_roundtrip : mxfp6_roundtrip; break;
+            default: break;
+        }
     }
     if (is_mxfp_v) {
         p.v = mxfp_kv_params_init(v->type, DV, nbv2, nev2);
@@ -8486,22 +8607,14 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const char * k_base = (const char *) k->data + k_base_offset;
         const char * v_base = (const char *) v->data + v_base_offset;
 
-        const char * k_row_base = mxfp.k.multihead ? ((const char *) k->data + ik3*nbk3) : nullptr;
-        const char * v_row_base = mxfp.v.multihead ? ((const char *) v->data + iv3*nbv3) : nullptr;
+        const char * k_data_base = (const char *) k->data;
+        const char * v_data_base = (const char *) v->data;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         float Q_f32[MXFP_FA_MAX_D];
-        if (is_mxfp_k) {
-            // Q preprocessing: Hadamard + SoA round-trip captures same quantization loss as K.
-            if (mxfp.apply_hadamard) {
-                float q_tmp[MXFP_FA_MAX_D];
-                memcpy(q_tmp, pq, DK * sizeof(float));
-                ggml_apply_hadamard_blocks(q_tmp, DK);
-                mxfp.q_quantize(q_tmp, Q_q, DK);
-            } else {
-                mxfp.q_quantize(pq, Q_q, DK);
-            }
-            mxfp.k.dequantize(Q_q, Q_f32, DK);
+        if (mxfp.q_roundtrip) {
+            // Q preprocessing: fused Hadamard + quantize round-trip, no SoA buffer.
+            mxfp.q_roundtrip(pq, Q_f32, DK);
         } else {
             if (mxfp.apply_hadamard) {
                 float q_tmp[MXFP_FA_MAX_D];
@@ -8526,7 +8639,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float s; // KQ value
 
             if (is_mxfp_k) {
-                const char * k_row = mxfp.k.multihead ? k_row_base + ic*nbk1 : k_base + ic*nbk1;
+                const char * k_row = mxfp_row_ptr(mxfp.k, k_data_base,
+                    ic, nbk1, ik2, nbk2, ik3, nbk3);
                 mxfp_dequant_head(mxfp.k, k_row, ik2, k_head_soa, k_dequant_buf, DK);
                 ggml_vec_dot_f32(DK, &s, 0, k_dequant_buf, 0, Q_f32, 0, 1);
             } else {
@@ -8572,7 +8686,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
                 // V += v*expf(s - M)
                 if (mxfp.v.dequantize) {
-                    const char * v_row = mxfp.v.multihead ? v_row_base + ic*nbv1 : v_base + ic*nbv1;
+                    const char * v_row = mxfp_row_ptr(mxfp.v, v_data_base,
+                        ic, nbv1, iv2, nbv2, iv3, nbv3);
                     mxfp_dequant_head(mxfp.v, v_row, iv2, v_head_soa, v_dequant_buf, DV);
                     ggml_vec_mad_f32(DV, VKQ32, v_dequant_buf, vs);
                 } else if (v_to_float) {
@@ -8723,7 +8838,6 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     if (is_mxfp_v) { GGML_ASSERT(DV <= MXFP_FA_MAX_D); }
 
     float k_dequant_buf[MXFP_FA_MAX_D];
-    float v_dequant_buf[MXFP_FA_MAX_D];
 
     char k_head_soa[MXFP_FA_SOA_BUF];
     char v_head_soa[MXFP_FA_SOA_BUF];
@@ -8786,13 +8900,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 const float * pq = (const float *) ((char *) q->data + ((iq1 + tq)*nbq1 + iq2*nbq2 + iq3*nbq3));
                 memcpy(Q_f32 + tq * DK, pq, DK * sizeof(float));
 
-                if (is_mxfp_k) {
-                    if (mxfp.apply_hadamard) {
-                        ggml_apply_hadamard_blocks(Q_f32 + tq * DK, DK);
-                    }
-                    uint8_t q_mxfp_buf[MXFP_FA_SOA_BUF];
-                    mxfp.q_quantize(Q_f32 + tq * DK, q_mxfp_buf, DK);
-                    mxfp.k.dequantize(q_mxfp_buf, Q_f32 + tq * DK, DK);
+                if (mxfp.q_roundtrip) {
+                    // In-place: Q_f32 is already populated by memcpy above, roundtrip overwrites.
+                    mxfp.q_roundtrip(Q_f32 + tq * DK, Q_f32 + tq * DK, DK);
                 }
             }
             for (int tq = tile_rows; tq < Q_TILE_SZ; tq++) {
@@ -8843,7 +8953,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                         K_f32[dk * KV_TILE_SZ + tk] = k_f32_src[dk];
                     }
                 } else if (mxfp.k.dequantize) {
-                    mxfp_dequant_head(mxfp.k, k_data, ik2, k_head_soa, k_dequant_buf, DK);
+                    const char * k_row = mxfp_row_ptr(mxfp.k, (const char *)k->data,
+                        ic + tk, nbk1, ik2, nbk2, ik3, nbk3);
+                    mxfp_dequant_head(mxfp.k, k_row, ik2, k_head_soa, k_dequant_buf, DK);
                     for (int64_t dk = 0; dk < DK; dk++) {
                         K_f32[dk * KV_TILE_SZ + tk] = k_dequant_buf[dk];
                     }
@@ -8913,8 +9025,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 } else if (v_type == GGML_TYPE_F32) {
                     memcpy(V32 + tk * DV, v_data, DV * sizeof(float));
                 } else if (mxfp.v.dequantize) {
-                    mxfp_dequant_head(mxfp.v, v_data, iv2, v_head_soa, v_dequant_buf, DV);
-                    memcpy(V32 + tk * DV, v_dequant_buf, DV * sizeof(float));
+                    const char * v_row = mxfp_row_ptr(mxfp.v, (const char *)v->data,
+                        ic + tk, nbv1, iv2, nbv2, iv3, nbv3);
+                    mxfp_dequant_head(mxfp.v, v_row, iv2, v_head_soa, V32 + tk * DV, DV);
                 } else {
                     v_to_float(v_data, V32 + tk * DV, DV);
                 }
@@ -9087,10 +9200,10 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     // Split-KV: parallelize across KV chunks for single-query decode (token generation).
     // Only for types whose tiled/one_chunk paths produce identical results (f32, f16, MXFP).
     // Standard quant types (q8_0, q4_0) must use the scalar path to preserve vec_dot semantics.
-    const bool kv_is_f32_f16_or_mxfp = (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16
+    const bool k_is_f32_f16_or_mxfp = (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16
                                          || ggml_is_type_mxfp(k->type));
     const bool use_split_kv_path = !use_ref && (neq1 == 1 && neq3 == 1)
-                                   && kv_is_f32_f16_or_mxfp
+                                   && k_is_f32_f16_or_mxfp
                                    && q->type == GGML_TYPE_F32 && nek1 >= 512;
 
     if (use_split_kv_path) {
@@ -9151,7 +9264,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         // Tiled path: f32, f16, and MXFP only (quant types use one_chunk)
         bool use_tiled = !use_ref &&
                                (q->type == GGML_TYPE_F32 &&
-                                kv_is_f32_f16_or_mxfp &&
+                                k_is_f32_f16_or_mxfp &&
                                 (k->type == v->type || ggml_is_type_mxfp(k->type)) &&
                                 neq1 >= Q_TILE_SZ);
 #ifdef GGML_SIMD

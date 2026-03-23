@@ -6390,7 +6390,7 @@ struct test_flash_attn_ext : public test_case {
                 init_tensor_uniform(t, -10.0f, 10.0f);
             } else if (strcmp(t->name, "m") == 0) {
                 init_tensor_kq_mask(t);
-            } else if ((strcmp(t->name, "k") == 0 || strcmp(t->name, "v") == 0) && ggml_is_type_mxfp(t->type)) {
+            } else if (ggml_is_type_mxfp(t->type)) {
                 init_tensor_mxfp_soa(t);
             } else {
                 init_tensor_uniform(t);
@@ -7398,7 +7398,7 @@ static const ggml_type all_types[] = {
     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
     GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
     GGML_TYPE_Q8_0,
-    GGML_TYPE_MXFP4,
+    GGML_TYPE_MXFP4, GGML_TYPE_MXFP8, GGML_TYPE_MXFP6,
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,
@@ -7533,11 +7533,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // SET_ROWS with Hadamard rotation (exercises the op_params[0] flag used by MXFP KV cache)
-    for (ggml_type type : {GGML_TYPE_MXFP4, GGML_TYPE_MXFP8,
-                           GGML_TYPE_MXFP6}) {
+    for (ggml_type type : {GGML_TYPE_MXFP4, GGML_TYPE_MXFP8, GGML_TYPE_MXFP6}) {
         // ne[0] must be divisible by 32 (Hadamard block size)
         test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 128, 5, 1, 1 }, { 1, 1 }, 1, false, true));
         test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 256, 5, 1, 3 }, { 1, 1 }, 1, false, true));
+        // multi-row, broadcast, views
+        test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 128, 5, 1, 1 }, { 1, 1 }, 1, true,  true));
+        test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 256, 11, 1, 1 }, { 2, 3 }, 7, false, true));
+        test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 512, 5, 3, 1 }, { 1, 1 }, 1, false, true));
     }
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION }) {

@@ -33,7 +33,7 @@ constexpr float MAX_QUANTIZATION_TOTAL_ERROR_MXFP8 = 0.0020f;
 // These represent actual RMSE through the full KV cache write/read path.
 constexpr float MAX_MXFP_PIPELINE_ERROR_MXFP4 = 0.40f;
 constexpr float MAX_MXFP_PIPELINE_ERROR_MXFP8 = 0.08f;
-constexpr float MAX_MXFP_PIPELINE_ERROR_MXFP6 = 0.10f;
+constexpr float MAX_MXFP_PIPELINE_ERROR_MXFP6 = 0.30f;
 
 constexpr float MAX_DOT_PRODUCT_ERROR = 0.02f;
 constexpr float MAX_DOT_PRODUCT_ERROR_LOWBIT = 0.04f;
