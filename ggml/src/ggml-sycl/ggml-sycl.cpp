@@ -23960,7 +23960,10 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // All three block the inference thread and cause 120B MoE hangs.
         // The background async prestage (moe_prestage_popular_experts) will
         // eventually cache the SOA version for future tokens.
-        if ((layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) && src0_is_usm_accessible) {
+        // Non-blocking path for ALL layouts when source is USM-accessible.
+        // On cache hit: use cached pointer. On miss: use host-pinned AOS zero-copy.
+        // NEVER call ensure_cached_layout during inference (blocks on fill/DMA).
+        if (src0_is_usm_accessible) {
             void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
             if (cached_ptr) {
                 // Cache hit: use the already-cached SOA/COALESCED pointer directly.
