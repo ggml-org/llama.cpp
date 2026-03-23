@@ -486,7 +486,7 @@ class ModelBase:
             elif quant_method == "modelopt":
                 # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
                 # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
-                # are dequantized here. input_scale tensors are unused.
+                # are dequantized here. k/v scale tensors are unused.
                 for name in self.model_tensors.keys():
                     if name.endswith(".weight_scale"):
                         weight_name = name.removesuffix("_scale")
@@ -494,7 +494,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
-                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
+                    if name.endswith((".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -542,7 +542,6 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-
         new_name = self.map_tensor_name(name)
 
         # Handle gate/up expert tensor fusion if enabled
@@ -607,7 +606,12 @@ class ModelBase:
     def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
         return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
 
-    def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
+        if "language_model." in name:
+            name = name.replace("language_model.", "")
+
+        new_name = self.map_tensor_name(name)
+
         raw, shape = self._nvfp4_pack(weight, scale)
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
@@ -619,10 +623,18 @@ class ModelBase:
             logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
             self.gguf_writer.add_tensor(scale_name, scale2_f32)
 
+        # Emit per-tensor input_scale as a separate F32 tensor when non-trivial
+        if not self._nvfp4_scale2_is_trivial(input_scale):
+            input_scale_f32 = input_scale.float().numpy().flatten()
+            input_scale_name = new_name.replace(".weight", ".input_scale")
+            logger.info(f"  + {input_scale_name} (per-tensor NVFP4 input_scale, shape [{input_scale_f32.size}])")
+            self.gguf_writer.add_tensor(input_scale_name, input_scale_f32)
+
     def _generate_nvfp4_tensors(self):
         # Per-layer expert merging to avoid holding all experts in memory
         expert_blocks: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
         expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
+        expert_input_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
         n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
         consumed: list[str] = []
@@ -632,6 +644,7 @@ class ModelBase:
                 continue
             scale_name = name.replace(".weight", ".weight_scale")
             scale2_name = name.replace(".weight", ".weight_scale_2")
+            input_scale_name = name.replace(".weight", ".input_scale")
             if scale_name not in self.model_tensors:
                 continue
             # Force eager materialization of lazy tensors
@@ -643,11 +656,14 @@ class ModelBase:
                 continue
 
             scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
+            input_scale = LazyTorchTensor.to_eager(self.model_tensors.get(input_scale_name, lambda: torch.tensor(1.0))())
 
             # Mark tensors for removal from model_tensors (already written to gguf)
             consumed.extend([name, scale_name])
             if scale2_name in self.model_tensors:
                 consumed.append(scale2_name)
+            if input_scale_name in self.model_tensors:
+                consumed.append(input_scale_name)
 
             # Check if this is a per-expert tensor
             m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
@@ -663,34 +679,37 @@ class ModelBase:
                 if key not in expert_blocks:
                     expert_blocks[key] = []
                     expert_scales[key] = []
+                    expert_input_scales[key] = []
                     expert_shapes[key] = shape
                 expert_blocks[key].append((expert_id, raw.copy()))
                 # Collect per-expert scale2 (scalar per expert)
                 expert_scales[key].append((expert_id, float(scale2.float().sum())))
+                # Collect per-expert input_scale (scalar per expert)
+                expert_input_scales[key].append((expert_id, float(input_scale.float().sum())))
 
                 # Flush when all experts for this (layer, proj) are collected
                 if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
-                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_shapes, bid, proj_type)
+                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
             else:
-                new_name = self.map_tensor_name(name)
-                self._repack_nvfp4(new_name, weight, scale, scale2)
+                self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
         for (bid, proj_type) in list(expert_blocks.keys()):
-            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_shapes, bid, proj_type)
+            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
         for name in consumed:
             self.model_tensors.pop(name, None)
 
-        # Remove unused auxiliary tensors (input_scale, k_scale, v_scale)
+        # Remove any remaining unused auxiliary tensors
         for name in list(self.model_tensors.keys()):
             if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
-    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_shapes, bid, proj_type):
+    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type):
         experts = expert_blocks.pop(key)
         scales = expert_scales.pop(key)
+        input_scales = expert_input_scales.pop(key)
         shape = expert_shapes.pop(key)
 
         experts.sort(key=lambda x: x[0])
@@ -707,6 +726,14 @@ class ModelBase:
             scale_name = new_name.replace(".weight", ".scale")
             logger.info(f"  + {scale_name} (per-expert NVFP4 scale2, shape [{len(scales)}])")
             self.gguf_writer.add_tensor(scale_name, scale_vals)
+
+        # Emit per-expert input_scale tensor if any expert has non-trivial input_scale
+        input_scales.sort(key=lambda x: x[0])
+        input_scale_vals = np.array([s[1] for s in input_scales], dtype=np.float32)
+        if not np.allclose(input_scale_vals, 1.0, atol=1e-6):
+            input_scale_name = new_name.replace(".weight", ".input_scale")
+            logger.info(f"  + {input_scale_name} (per-expert NVFP4 input_scale, shape [{len(input_scales)}])")
+            self.gguf_writer.add_tensor(input_scale_name, input_scale_vals)
 
         del experts, merged
 
@@ -5004,6 +5031,97 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         perm = list(range(len(new_shape)))
         perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
         return tensor.permute(*perm).contiguous().reshape(*shape)
+
+    def _transform_nvfp4_weight(self, name: str, weight: Tensor, scale: Tensor) -> tuple[Tensor, Tensor]:
+        if not name.endswith((
+            ".linear_attn.in_proj_qkv.weight",
+            ".linear_attn.in_proj_z.weight",
+            ".linear_attn.in_proj_a.weight",
+            ".linear_attn.in_proj_b.weight",
+            ".linear_attn.out_proj.weight",
+        )):
+            return weight, scale
+
+        num_k_heads = self.hparams["linear_num_key_heads"]
+        num_v_heads = self.hparams["linear_num_value_heads"]
+        head_k_dim = self.hparams["linear_key_head_dim"]
+        head_v_dim = self.hparams["linear_value_head_dim"]
+        num_v_per_k = num_v_heads // num_k_heads
+
+        def unpack_nibbles(qs: Tensor) -> Tensor:
+            lo = torch.bitwise_and(qs, 0x0F)
+            hi = torch.bitwise_right_shift(qs, 4)
+            return torch.stack((lo, hi), dim=-1).reshape(*qs.shape[:-1], qs.shape[-1] * 2)
+
+        def pack_nibbles(codes: Tensor) -> Tensor:
+            codes = codes.reshape(*codes.shape[:-1], codes.shape[-1] // 2, 2)
+            lo = torch.bitwise_and(codes[..., 0], 0x0F)
+            hi = torch.bitwise_left_shift(torch.bitwise_and(codes[..., 1], 0x0F), 4)
+            return torch.bitwise_or(lo, hi).contiguous()
+
+        def apply_col_perm(qs: Tensor, scales: Tensor, col_perm: Tensor) -> tuple[Tensor, Tensor]:
+            assert qs.ndim >= 2
+            assert scales.ndim >= 2
+
+            k = qs.shape[-1] * 2
+            assert col_perm.numel() == k
+            assert k % 16 == 0
+
+            group_cols = col_perm.reshape(-1, 16)
+            group_starts = group_cols[:, 0]
+            expected = group_starts.unsqueeze(1) + torch.arange(16, dtype=col_perm.dtype)
+            assert torch.equal(group_cols, expected)
+            assert torch.all(group_starts % 16 == 0)
+
+            group_perm = (group_starts // 16).to(dtype=torch.long)
+            expected_groups = torch.arange(scales.shape[-1], dtype=torch.long)
+            assert group_perm.numel() == scales.shape[-1]
+            assert torch.equal(torch.sort(group_perm).values, expected_groups)
+
+            codes = unpack_nibbles(qs)
+            codes = codes.index_select(-1, col_perm.to(device=qs.device, dtype=torch.long))
+            qs = pack_nibbles(codes)
+            scales = scales.index_select(-1, group_perm.to(device=scales.device))
+            return qs, scales
+
+        def reorder_rows(qs: Tensor, scales: Tensor, head_dim: int) -> tuple[Tensor, Tensor]:
+            row_perm = self._reorder_v_heads(
+                torch.arange(num_v_heads * head_dim, dtype=torch.long).unsqueeze(-1),
+                0, num_k_heads, num_v_per_k, head_dim,
+            ).squeeze(-1)
+            return (
+                qs.index_select(0, row_perm.to(device=qs.device)),
+                scales.index_select(0, row_perm.to(device=scales.device)),
+            )
+
+        if name.endswith(".linear_attn.in_proj_qkv.weight"):
+            q_dim = head_k_dim * num_k_heads
+            k_dim = head_k_dim * num_k_heads
+            q = weight[:q_dim]
+            k = weight[q_dim:q_dim + k_dim]
+            v = weight[q_dim + k_dim:]
+            q_scale = scale[:q_dim]
+            k_scale = scale[q_dim:q_dim + k_dim]
+            v_scale = scale[q_dim + k_dim:]
+            v, v_scale = reorder_rows(v, v_scale, head_v_dim)
+            return torch.cat([q, k, v], dim=0), torch.cat([q_scale, k_scale, v_scale], dim=0)
+
+        if name.endswith(".linear_attn.in_proj_z.weight"):
+            weight, scale = reorder_rows(weight, scale, head_v_dim)
+        elif name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
+            weight, scale = reorder_rows(weight, scale, 1)
+        elif name.endswith(".linear_attn.out_proj.weight"):
+            col_perm = self._reorder_v_heads(
+                torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
+                1, num_k_heads, num_v_per_k, head_v_dim,
+            ).squeeze(0)
+            weight, scale = apply_col_perm(weight, scale, col_perm)
+
+        return weight, scale
+
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
+        weight, scale = self._transform_nvfp4_weight(name, weight, scale)
+        super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_k_heads = self.hparams.get("linear_num_key_heads", 0)
