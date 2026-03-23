@@ -1,0 +1,285 @@
+{#- ========== MiroThinker Tool Parsing Macro ========== #}
+
+{%- macro function_name(tool) %}
+    {%- if tool.function is defined %}
+        {{- tool.function.name }}
+    {%- elif tool.name is defined and tool.description is defined %}
+        {{- tool.name }}
+    {%- endif %}
+{%- endmacro %}
+{%- macro function_description(tool) %}
+    {%- if tool.function is defined %}
+        {{- tool.function.description }}
+    {%- elif tool.name is defined and tool.description is defined %}
+        {{- tool.description }}
+    {%- endif %}
+{%- endmacro %}
+{%- macro function_parameters(tool) %}
+    {%- if tool.function is defined %}
+        {{- tool.function.parameters }}
+    {%- elif tool.name is defined and tool.description is defined %}
+        {{- tool.parameters }}
+    {%- endif %}
+{%- endmacro %}
+
+{%- macro render_tool(server_name, tool, last_server) %}
+    {%- if tool.mt_visited is not defined %}
+        {%- if server_name != last_server %}
+            {{- "\n## Server name: " + server_name + "\n" }}
+        {%- endif %}
+        {{- "### Tool name: " + function_name(tool) + "\n" }}
+        {{- "Description: " + function_description(tool) + "\n" }}
+        {{- "Input JSON schema: " + (function_parameters(tool) | tojson) + "\n" }}
+        {{- "\n" }}
+    {%- endif %}
+{%- endmacro %}
+
+{%- macro render_tool_server(tool) %}
+    {%- if (function_name(tool).split('_sandbox') | length > 1) or function_name(tool).startswith('run_') or (function_name(tool).split('python') | length > 1) %}
+        {{- "tool-python" }}
+    {%- elif function_name(tool).split('_search') | length > 1 %}
+        {{- "search_and_scrape_webpage" }}
+    {%- elif function_name(tool) == 'scrape_and_extract_info' %}
+        {{- "jina_scrape_llm_summary" }}
+    {%- else %}
+        {{- "generic-extras" }}
+    {%- endif %}
+{%- endmacro %}
+
+{%- macro render_tool_call(message) %}
+    {%- if message.tool_calls %}
+        {{- "\n<use_mcp_tool>" }}
+        {%- for tool_call in message.tool_calls %}
+            {%- set function = tool_call.function %}
+            {{- "\n<server_name>" }}
+            {{- render_tool_server(tool_call) }}
+            {{- "</server_name>\n<tool_name>" }}
+            {{- function.name }}
+            {{- "</tool_name>\n<arguments>\n" }}
+            {{- function.arguments | tojson }}
+            {{- "\n</arguments>" }}
+        {%- endfor %}
+        {{- "\n</use_mcp_tool>" }}
+    {%- endif %}
+{%- endmacro %}
+
+{#- ========== MiroThinker System Message ========== #}
+
+{%- set system_message = namespace(role='system', content='') %}
+{%- if date_string is string %}
+    {%- set date_string = 'Today is: ' + date_string %}
+{%- else %}
+    {%- set date_string = '' %}
+{%- endif %}
+{%- if tools %}
+    {%- set system_message.content = "In this environment you have access to a set of tools you can use to answer the user's question. \n\nYou only have access to the tools provided below. You can only use one tool per message, and will receive the result of that tool in the user's next response. You use tools step-by-step to accomplish a given task, with each tool-use informed by the result of the previous tool-use. " + date_string + "\n\n# Tool-Use Formatting Instructions \n\nTool-use is formatted using XML-style tags. The tool-use is enclosed in <use_mcp_tool></use_mcp_tool> and each parameter is similarly enclosed within its own set of tags.\n\nThe Model Context Protocol (MCP) connects to servers that provide additional tools and resources to extend your capabilities. You can use the server's tools via the `use_mcp_tool`.\n\nDescription: \nRequest to use a tool provided by a MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.\n\nParameters:\n- server_name: (required) The name of the MCP server providing the tool\n- tool_name: (required) The name of the tool to execute\n- arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema, quotes within string must be properly escaped, ensure it's valid JSON\n\nUsage:\n<use_mcp_tool>\n<server_name>server name here</server_name>\n<tool_name>tool name here</tool_name>\n<arguments>\n{\n\"param1\": \"value1\",\n\"param2\": \"value2 \\\"escaped string\\\"\"\n}\n</arguments>\n</use_mcp_tool>\n\nImportant Notes:\n- Tool-use must be placed **at the end** of your response, **top-level**, and not nested within other tags.\n- Always adhere to this format for the tool use to ensure proper parsing and execution.\n\nString and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.\nHere are the functions available in JSONSchema format:\n\n" %}
+    {%- set ns = namespace(formatted_tools = '', last_server=None) %}
+    {%- for tool_server in ['tool-python', 'search_and_scrape_webpage', 'jina_scrape_llm_summary', 'generic-extras'] %}
+        {%- for tool in tools %}
+            {%- set this_server = render_tool_server(tool) %}
+            {%- if this_server == tool_server %}
+                {%- set ns.formatted_tools = ns.formatted_tools + render_tool(tool_server, tool, ns.last_server) %}
+                {%- set ns.last_server = server_name %}
+                {%- set tool.mt_visited = 1 %}
+            {%- endif %}
+        {%- endfor %}
+    {%- endfor %}
+    {%- set system_message.content = system_message.content + ns.formatted_tools + "\n# General Objective\n\nYou accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.\n\n" %}
+    {%- set tools = None %}
+    {%- if messages[0].role == 'system' %}
+        {%- if messages[0].content.split('</use_mcp_tool>') | length > 1 %}
+            {%- set system_message = messages[0] %}
+            {%- set messages = messages[1:] %}
+        {%- endif %}
+        {%- if messages[0].content.split('</tools>') | length > 1 %}
+            {%- set messages = messages[1:] %}
+        {%- endif %}
+    {%- endif %}
+{%- else %}
+    {%- set system_message.content = "In this environment you have access to a set of tools you can use to answer the user's question.  " + date_string + "\n\nImportant Notes:\n- Tool-use must be placed **at the end** of your response, **top-level**, and not nested within other tags.\n- Always adhere to this format for the tool use to ensure proper parsing and execution.\n\nString and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.\n\n# General Objective\n\nYou accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.\n\n" %}
+    {%- if messages[0].role == 'system' %}
+        {%- set system_message = messages[0] %}
+        {%- set messages = messages[1:] %}
+    {%- endif %}
+{%- endif %}
+{%- set messages = [system_message] + messages %}
+
+{#- ========== MiroThinker Context Management ========== #}
+
+{%- set tool_count = namespace(keep=5, total=0) %}
+{%- if keep_tool_result is defined %}
+    {%- set tool_count.keep = keep_tool_result %}
+{%- endif %}
+{%- if tool_count.keep != -1 %}
+    {%- for message in messages %}
+        {%- if message.role == 'assistant' %}
+            {%- if message.tool_calls %}
+                {%- set message.have_tools = message.tool_calls | length %}
+                {%- set tool_count.total = tool_count.total + message.have_tools %}
+            {%- else %}
+                {%- set msg = message.content %}
+                {%- if msg.endswith('\n</use_mcp_tool>') %}
+                    {%- set msg = msg[:-16] %}
+                    {%- set msg = msg.split('\n<use_mcp_tool>') %}
+                    {%- if msg | length > 1 %}
+                        {%- set message.have_tools = (msg[-1].split('</server_name>\n<tool_name>') | length) - 1 %}
+                        {%- set tool_count.total = tool_count.total + message.have_tools %}
+                    {%- endif %}
+                {%- endif %}
+            {%- endif %}
+        {%- endif %}
+    {%- endfor %}
+    {%- if tool_count.total > tool_count.keep %}
+        {%- set tool_count.total = tool_count.total - tool_count.keep %}
+    {%- else %}
+        {%- set tool_count.total = 0 %}
+    {%- endif %}
+    {%- set should_consume = namespace(count=0) %}
+    {%- for message in messages %}
+        {%- if message.role == 'assistant' %}
+            {%- if message.have_tools is defined %}
+                {%- if message.have_tools < tool_count.total %}
+                    {%- set should_consume.count = should_consume.count + message.have_tools %}
+                    {%- set tool_count.total = tool_count.total - message.have_tools %}
+                {%- else %}
+                    {%- set should_consume.count = should_consume.count + tool_count.total %}
+                    {%- set tool_count.total = 0 %}
+                {%- endif %}
+            {%- endif %}
+        {%- elif message.role == 'user' or message.role == 'tool' %}
+            {%- if should_consume.count > 0 %}
+                {%- set message.content = 'Tool result is omitted to save tokens.' %}
+                {%- set should_consume.count = should_consume.count - 1 %}
+            {%- endif %}
+        {%- endif %}
+    {%- endfor %}
+{%- endif %}
+
+{#- ========== MiroThinker Tool Response ========== #}
+
+{%- for message in messages %}
+    {%- if message.role == 'assistant' %}
+        {%- if message.tool_calls %}
+            {%- set message.content = message.content + render_tool_call() %}
+            {%- set message.tool_calls = [] %}
+        {%- endif %}
+    {%- elif message.role == 'user' %}
+        {%- if message.content.startswith('<tool_response>') %}
+            {%- set message.content = message.content[15:] | trim %}
+            {%- if message.content.endswith('</tool_response>') %}
+                {%- set message.content = message.content[:-16] | trim %}
+            {%- endif %}
+        {%- endif %}
+    {%- elif message.role == 'tool' %}
+        {%- set message.role = 'user' %}
+    {%- endif %}
+{%- endfor %}
+
+{#- ========== MiroThinker Tool Usage Patched ========== #}
+
+{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content + '\n\n' }}
+    {%- endif %}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
+{%- for forward_message in messages %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- set message = messages[index] %}
+    {%- set current_content = message.content if message.content is not none else '' %}
+    {%- set tool_start = '<tool_response>' %}
+    {%- set tool_start_length = tool_start|length %}
+    {%- set start_of_message = current_content[:tool_start_length] %}
+    {%- set tool_end = '</tool_response>' %}
+    {%- set tool_end_length = tool_end|length %}
+    {%- set start_pos = (current_content|length) - tool_end_length %}
+    {%- if start_pos < 0 %}
+        {%- set start_pos = 0 %}
+    {%- endif %}
+    {%- set end_of_message = current_content[start_pos:] %}
+    {%- if ns.multi_step_tool and message.role == "user" and not(start_of_message == tool_start and end_of_message == tool_end) %}
+        {%- set ns.multi_step_tool = false %}
+        {%- set ns.last_query_index = index %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set content = message.content %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in message.content %}
+                {%- set content = (message.content.split('</think>')|last).lstrip('\n') %}
+                {%- set reasoning_content = (message.content.split('</think>')|first).rstrip('\n') %}
+                {%- set reasoning_content = (reasoning_content.split('<think>')|last).lstrip('\n') %}
+            {%- endif %}
+        {%- endif %}
+        {%- if loop.index0 > ns.last_query_index %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {%- else %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {%- endif %}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- endif %}
+{%- endif %}
+
+{#- ========== Workaround for llama.cpp crashing ========== #}
+{%- for message in messages %}
+    {%- if message.role == "assistant" %}
+        {%- if message.tool_calls | length == 0 %}
+            {%- set fake_function = namespace(name='fake_name', arguments='{}') %}
+            {%- set fake_function = namespace(function=fake_function) %}
+            {%- set message.tool_calls = [fake_function, fake_function] %}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{#- ========== Workaround for llama.cpp crashing ========== #}
