@@ -815,6 +815,9 @@ struct llm_tokenizer_ugm : llm_tokenizer {
 
             // First four bytes of precompiled_charsmap contains length of binary
             // blob containing XOR-compressed compact double array (XCDA) entries
+            if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
+            }
             uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
             charsmap_offset += sizeof(xcda_blob_size);
             if (xcda_blob_size + charsmap_offset >= precompiled_charsmap.size()) {
@@ -1135,7 +1138,15 @@ private:
                 throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
             }
             const char * prefix_replacement = &(tokenizer.prefix_replacements)[longest_prefix_offset];
-            return { prefix_replacement, strlen(prefix_replacement), longest_prefix_length };
+            size_t max_len = tokenizer.prefix_replacements_size - longest_prefix_offset;
+            size_t repl_len = 0;
+            while (repl_len < max_len && prefix_replacement[repl_len] != '\0') {
+                repl_len++;
+            }
+            if (repl_len == max_len) {
+                throw std::runtime_error("Unterminated string in precompiled charsmap!");
+            }
+            return { prefix_replacement, repl_len, longest_prefix_length };
         }
 
         // check if the input prefix contains a valid sequence of UTF-8 code units
