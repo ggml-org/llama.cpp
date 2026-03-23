@@ -7658,7 +7658,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     // load tensor data
     const char * limit_env = getenv("LLAMA_ARG_PARALLEL_LOAD");
-    const size_t default_limit = 4;
+    const size_t default_limit = 0;
     const int limit_val = limit_env ? atoi(limit_env) : (int) default_limit;
     const size_t n_contexts = ctx_buf_maps.size();
     const size_t parallel_limit = limit_val <= 0 ? n_contexts : (size_t) limit_val;

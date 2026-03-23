@@ -2366,7 +2366,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
     add_opt(common_arg(
         {"-pl", "--parallel-load"}, "N",
-        string_format("max parallel jobs for model loading (default: %d, -1 = no cap (up to #contexts), 1 = sequential)", params.n_parallel_load),
+        "max parallel jobs for model loading (default: all GPUs, 1 = sequential)",
         [](common_params & params, int value) {
             params.n_parallel_load = value;
             if (params.n_parallel_load <= 0) {
