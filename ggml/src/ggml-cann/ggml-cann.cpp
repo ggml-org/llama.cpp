@@ -2225,6 +2225,19 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
             // If no matching graph is found, add a new ACL graph.
             ggml_cann_graph * new_graph = ggml_cann_graph::create_from_cgraph(cgraph);
             cann_ctx->graph_lru_cache.push(new_graph);
+
+            // Pre-load rope cache before graph capture.  During capture the
+            // stream cannot perform host-to-device memcpy or device memory
+            // malloc/free.  Running the full cache init now populates the
+            // cache metadata so these branches are skipped during capture,
+            // while also warming up the memory pool.
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (node->op == GGML_OP_ROPE) {
+                    ggml_cann_rope_cache_preload(*cann_ctx, node);
+                    break;
+                }
+            }
         }
     }
 #else
