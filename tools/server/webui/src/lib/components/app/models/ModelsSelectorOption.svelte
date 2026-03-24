@@ -140,7 +140,7 @@
 					tooltip="Unload model"
 					class="h-3 w-3 text-red-500 hover:text-red-600"
 					onclick={(e) => {
-						e.stopPropagation();
+						e?.stopPropagation();
 						modelsStore.unloadModel(option.model)
 					}}
 				/>
