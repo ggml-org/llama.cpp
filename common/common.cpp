@@ -848,9 +848,13 @@ std::string fs_get_cache_directory() {
         }
         return p;
     };
-    if (getenv("LLAMA_CACHE")) {
-        cache_directory = std::getenv("LLAMA_CACHE");
+    const char * cache_env = std::getenv("LLAMA_CACHE");
+    if (cache_env) {
+        cache_directory = std::string(cache_env);
     } else {
+#if defined(LLAMA_CACHE)
+        cache_directory = LLAMA_CACHE;
+#else
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
@@ -881,6 +885,7 @@ std::string fs_get_cache_directory() {
 #endif
         cache_directory = ensure_trailing_slash(cache_directory);
         cache_directory += "llama.cpp";
+#endif /* defined(LLAMA_CACHE) */
     }
     return ensure_trailing_slash(cache_directory);
 }
