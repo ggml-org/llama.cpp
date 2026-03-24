@@ -947,6 +947,133 @@ dequant_q4_0_block_vectorized(const block_q4_0_unified * block) {
 }
 
 /**
+ * Vectorized dequantization of a full Q4_0 block from SOA layout to FP16.
+ *
+ * SOA Layout: [qs: N rows x K/32 blocks x 16 bytes/block] [d: N rows x K/32 blocks x sizeof(half)]
+ * The qs bytes for a block are contiguous at: qs_base + row * row_qs_bytes + block_idx * 16
+ * The scale for a block is at: d_base + row * k_blocks + block_idx
+ *
+ * @param qs_base         Base pointer to all quantized byte values
+ * @param d_base          Base pointer to all scale values (after all qs)
+ * @param row             Row index (N dimension)
+ * @param k_blocks        Number of K blocks per row (K / 32)
+ * @param block_idx       Block index within the row
+ * @return simd<sycl::half, 32> containing dequantized weights
+ */
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK4_0>
+dequant_q4_0_block_vectorized_soa(const uint8_t *    qs_base,
+                                   const sycl::half * d_base,
+                                   int64_t            row,
+                                   int                k_blocks,
+                                   int                block_idx) {
+    // SOA addressing: qs bytes are contiguous per-row
+    const int row_qs_bytes = k_blocks * 16;  // 16 bytes per block (32 nibbles / 2)
+    const uint8_t * qs = qs_base + row * row_qs_bytes + block_idx * 16;
+    const sycl::half d = d_base[row * k_blocks + block_idx];
+
+    // Load all 16 packed bytes at once
+    esimd::simd<uint8_t, 16> packed;
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        packed[i] = qs[i];
+    }
+
+    // Extract low nibbles: (packed & 0x0F) - 8
+    esimd::simd<int32_t, 16> lo_nibbles = esimd::simd<int32_t, 16>(packed & 0x0F) - 8;
+
+    // Extract high nibbles: (packed >> 4) - 8
+    esimd::simd<int32_t, 16> hi_nibbles = esimd::simd<int32_t, 16>(packed >> 4) - 8;
+
+    // Convert to half precision and apply scale
+    // Result layout: [lo_0, lo_1, ..., lo_15, hi_0, hi_1, ..., hi_15]
+    esimd::simd<sycl::half, UNIFIED_QK4_0> result;
+
+    // Low nibbles go to positions 0-15
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        result[i] = static_cast<sycl::half>(lo_nibbles[i]) * d;
+    }
+
+    // High nibbles go to positions 16-31
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        result[i + 16] = static_cast<sycl::half>(hi_nibbles[i]) * d;
+    }
+
+    return result;
+}
+
+/**
+ * Vectorized dequantization of a tile of Q4_0 weights from SOA layout.
+ *
+ * SOA-aware version of dequant_q4_0_tile_vectorized. Uses separate qs/d
+ * arrays instead of contiguous block_q4_0_unified structs.
+ *
+ * @tparam TILE_K  K dimension tile size (should be multiple of ESIMD_K_PER_DPAS)
+ * @param qs_base         Base pointer to all quantized byte values
+ * @param d_base          Base pointer to all scale values
+ * @param n_global        Global N index for this weight row
+ * @param k_start         Starting K index for this tile
+ * @param K               Total K dimension
+ * @param k_blocks_per_row Number of Q4_0 blocks per weight row
+ * @param k_len           Valid K elements in this tile
+ * @return simd containing dequantized weights in row-major order
+ */
+template <int TILE_K>
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
+dequant_q4_0_tile_vectorized_soa(
+    const uint8_t *    qs_base,
+    const sycl::half * d_base,
+    int64_t            n_global,
+    int64_t            k_start,
+    int64_t            K,
+    int                k_blocks_per_row,
+    int                k_len) {
+
+    esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
+
+    // For TILE_K=16 (ESIMD_K_PER_DPAS), we may span at most 2 Q4_0 blocks
+    // since each block has 32 weights and TILE_K=16
+
+    // Calculate which block(s) we need
+    const int first_block_idx = static_cast<int>(k_start / UNIFIED_QK4_0);
+    const int start_in_block = static_cast<int>(k_start % UNIFIED_QK4_0);
+
+    // Dequantize the full first block from SOA layout
+    esimd::simd<sycl::half, UNIFIED_QK4_0> full_block =
+        dequant_q4_0_block_vectorized_soa(qs_base, d_base, n_global, k_blocks_per_row, first_block_idx);
+
+    // Copy weights from the block to result
+    const int remaining_in_block = UNIFIED_QK4_0 - start_in_block;
+    const int weights_from_first_block = (remaining_in_block < k_len) ? remaining_in_block : k_len;
+
+    #pragma unroll
+    for (int i = 0; i < TILE_K; i++) {
+        if (i < weights_from_first_block) {
+            result[i] = full_block[start_in_block + i];
+        }
+    }
+
+    // If we need weights from a second block (tile spans block boundary)
+    if (weights_from_first_block < k_len) {
+        const int second_block_idx = first_block_idx + 1;
+        if (second_block_idx < k_blocks_per_row) {
+            esimd::simd<sycl::half, UNIFIED_QK4_0> full_block_2 =
+                dequant_q4_0_block_vectorized_soa(qs_base, d_base, n_global, k_blocks_per_row, second_block_idx);
+
+            #pragma unroll
+            for (int i = 0; i < TILE_K; i++) {
+                if (i >= weights_from_first_block && i < k_len) {
+                    result[i] = full_block_2[i - weights_from_first_block];
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
  * Vectorized dequantization of a partial Q4_0 block to FP16.
  *
  * For tiles that don't align to full 32-weight blocks, this function
@@ -1727,9 +1854,68 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(
 }
 
 /**
+ * Load Q4_0 weights from SOA layout to SLM with VNNI packing for ESIMD dpas.
+ *
+ * SOA Layout: [qs: N rows x K/32 blocks x 16 bytes/block] [d: N rows x K/32 blocks x sizeof(half)]
+ *
+ * @param weights       Raw pointer to SOA weight data
+ * @param slm_offset    SLM byte offset for weights buffer
+ * @param n_start       Starting N index
+ * @param k_start       Starting K index for this tile
+ * @param N             Total N dimension
+ * @param K             Total K dimension
+ * @param N_total       Total number of weight rows (for SOA scale offset calculation)
+ * @param k_blocks_per_row Number of blocks per weight row
+ * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_soa(
+    const void * weights,
+    uint32_t     slm_offset,
+    int64_t      n_start,
+    int64_t      k_start,
+    int64_t      N,
+    int64_t      K,
+    int64_t      N_total,
+    int          k_blocks_per_row,
+    int          k_len) {
+
+    // SOA layout pointers
+    const uint8_t *    qs_base = static_cast<const uint8_t *>(weights);
+    const int64_t      total_blocks = N_total * k_blocks_per_row;
+    const int64_t      d_byte_offset = total_blocks * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(weights) + d_byte_offset);
+
+    // Load and dequantize weights with VNNI packing using vectorized SOA dequantization
+    esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
+
+    #pragma unroll
+    for (int n = 0; n < TILE_N; n++) {
+        const int64_t n_global = n_start + n;
+        if (n_global >= N) continue;
+
+        // Use vectorized SOA tile dequantization for this row
+        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
+            dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(
+                qs_base, d_base, n_global, k_start, K, k_blocks_per_row, k_len);
+
+        // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+        #pragma unroll
+        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+            const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
+            w_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+        }
+    }
+
+    // Store to SLM
+    esimd::slm_block_store<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(slm_offset, w_vec);
+}
+
+/**
  * Generic weight loader dispatcher for ESIMD VNNI path.
  *
- * Dispatches to the appropriate weight loader based on quantization type.
+ * Dispatches to the appropriate weight loader based on quantization type and layout.
  *
  * @param weights       Pointer to weight blocks (void*, cast internally)
  * @param slm_offset    SLM byte offset for weights buffer
@@ -1740,6 +1926,8 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(
  * @param k_blocks_per_row Number of blocks per weight row
  * @param k_len         Valid K elements in this tile
  * @param quant_type    Quantization type (QUANT_TYPE_Q4_0 or QUANT_TYPE_MXFP4)
+ * @param layout        Memory layout (AOS or SOA)
+ * @param N_total       Total weight rows for SOA offset (only used when layout==SOA)
  */
 template <int TILE_M, int TILE_N>
 SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(
@@ -1751,14 +1939,23 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(
     int64_t      K,
     int          k_blocks_per_row,
     int          k_len,
-    int          quant_type) {
+    int          quant_type,
+    LayoutMode   layout = LayoutMode::AOS,
+    int64_t      N_total = 0) {
+
+    // SOA path: only Q4_0 supported (MXFP4 always uses AOS)
+    if (layout == LayoutMode::SOA && quant_type != QUANT_TYPE_MXFP4) {
+        load_weights_to_slm_vnni_soa<TILE_M, TILE_N>(
+            weights, slm_offset, n_start, k_start, N, K, N_total, k_blocks_per_row, k_len);
+        return;
+    }
 
     if (quant_type == QUANT_TYPE_MXFP4) {
         load_weights_to_slm_vnni_mxfp4<TILE_M, TILE_N>(
             static_cast<const block_mxfp4_unified *>(weights),
             slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
     } else {
-        // Default: Q4_0
+        // Default: Q4_0 AOS
         load_weights_to_slm_vnni<TILE_M, TILE_N>(
             static_cast<const block_q4_0_unified *>(weights),
             slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
@@ -1869,7 +2066,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
         // Load weights and activations to buffer 0
         load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
             args.weights, ESIMD_SLM_BUF0_WEIGHTS,
-            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type);
+            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type,
+            args.layout, args.N);
         load_activations_to_slm<TILE_M, TILE_N>(
             args.activations, ESIMD_SLM_BUF0_ACTS,
             m_start, k_start, args.M, args.K, k_len);
@@ -1899,7 +2097,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
 
             load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
                 args.weights, ESIMD_SLM_BUF0_WEIGHTS,
-                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type);
+                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type,
+                args.layout, args.N);
             load_activations_to_slm<TILE_M, TILE_N>(
                 args.activations, ESIMD_SLM_BUF0_ACTS,
                 m_start, k_start, args.M, args.K, k_len);
@@ -1961,7 +2160,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
 
                 load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
                     args.weights, load_w_off,
-                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len, args.quant_type);
+                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len, args.quant_type,
+                    args.layout, args.N);
                 load_activations_to_slm<TILE_M, TILE_N>(
                     args.activations, load_a_off,
                     m_start, next_k_start, args.M, args.K, next_k_len);
@@ -2042,6 +2242,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
     const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
+    // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
+    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_soa = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const int64_t      d_byte_offset = total_blocks_soa * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(args.weights) + d_byte_offset);
+
     // Initialize accumulator: [8 x 16] float
     esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
 
@@ -2075,11 +2283,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
             const int64_t n_global = n_start + n;
             if (n_global >= args.N) continue;
 
-            // Vectorized tile dequantization: dispatch based on quant type
+            // Vectorized tile dequantization: dispatch based on quant type and layout
             esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights;
             if (is_mxfp4) {
                 row_weights = dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(weights_mx, n_global, k_start, args.K,
                                                                               k_blocks_per_row, k_len);
+            } else if (use_soa) {
+                row_weights = dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(qs_base, d_base, n_global, k_start, args.K,
+                                                                                  k_blocks_per_row, k_len);
             } else {
                 row_weights = dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(weights_q4, n_global, k_start, args.K,
                                                                              k_blocks_per_row, k_len);
@@ -2203,6 +2414,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
+    // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
+    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_i8 = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_i8 = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const int64_t      d_byte_offset_i8 = total_blocks_i8 * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base_i8 = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(args.weights) + d_byte_offset_i8);
+
     // Initialize FP32 accumulator for final result: [8 x 16]
     // We accumulate in FP32 because each K-tile has different scales
     esimd::simd<float, ESIMD_ACC_SIZE> fp_acc = 0.0f;
@@ -2267,7 +2486,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
 
                 const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
 
-                // Dequantize based on quant type
+                // Dequantize based on quant type and layout
                 float w_val;
                 if (is_mxfp4) {
                     const block_mxfp4_unified * blk   = &weights_mx[block_idx];
@@ -2279,6 +2498,19 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
                         kval = kvalues_mxfp4_unified[blk->qs[idx_in_block - 16] >> 4];
                     }
                     w_val = static_cast<float>(kval) * scale;
+                } else if (use_soa) {
+                    // SOA layout: separate qs and d arrays
+                    const int row_qs_bytes = k_blocks_per_row * 16;
+                    const uint8_t * qs_row = qs_base_i8 + n_global * row_qs_bytes;
+                    const float d = static_cast<float>(d_base_i8[n_global * k_blocks_per_row + k_block_idx]);
+                    const uint8_t * qs = qs_row + k_block_idx * 16;
+                    int qs_val;
+                    if (idx_in_block < 16) {
+                        qs_val = qs[idx_in_block] & 0x0F;
+                    } else {
+                        qs_val = qs[idx_in_block - 16] >> 4;
+                    }
+                    w_val = static_cast<float>(qs_val - 8) * d;
                 } else {
                     const block_q4_0_unified * blk = &weights_q4[block_idx];
                     const float                d   = static_cast<float>(blk->d);
@@ -2485,6 +2717,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
+    // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
+    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_coop = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_coop = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const int64_t      d_byte_offset_coop = total_blocks_coop * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base_coop = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(args.weights) + d_byte_offset_coop);
+
     // Initialize SLM for this work-group
     // Layout: [weights: 16 x 16 half][activations: 16 x 16 half]
     esimd::slm_init<COOP_SLM_TOTAL_BYTES>();
@@ -2555,10 +2795,13 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             esimd::simd<sycl::half, ELEMS_PER_ROW> w_row = sycl::half(0.0f);
 
             if (n_global < args.N) {
-                // Vectorized dequantization: dispatch based on quant type
+                // Vectorized dequantization: dispatch based on quant type and layout
                 if (is_mxfp4) {
                     w_row = dequant_mxfp4_tile_vectorized<ELEMS_PER_ROW>(weights_mx, n_global, k_start, args.K,
                                                                          k_blocks_per_row, k_len);
+                } else if (use_soa) {
+                    w_row = dequant_q4_0_tile_vectorized_soa<ELEMS_PER_ROW>(qs_base_coop, d_base_coop, n_global, k_start, args.K,
+                                                                             k_blocks_per_row, k_len);
                 } else {
                     w_row = dequant_q4_0_tile_vectorized<ELEMS_PER_ROW>(weights_q4, n_global, k_start, args.K,
                                                                         k_blocks_per_row, k_len);
@@ -2772,6 +3015,14 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
     const block_q4_0_unified *  weights_q4 = static_cast<const block_q4_0_unified *>(args.weights);
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
+    // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
+    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_lg = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_lg = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const int64_t      d_byte_offset_lg = total_blocks_lg * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base_lg = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(args.weights) + d_byte_offset_lg);
+
     // Initialize SLM for this work-group
     esimd::slm_init<LARGE_SLM_TOTAL_BYTES>();
 
@@ -2809,17 +3060,25 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
             esimd::simd<sycl::half, ELEMS_PER_ROW> w_row = sycl::half(0.0f);
 
             if (n_global < args.N) {
-                // Dequantize 32 elements, dispatching based on quant type
+                // Dequantize 32 elements, dispatching based on quant type and layout
                 if (is_mxfp4) {
-                    // MXFP4: use vectorized tile dequantization
+                    // MXFP4: use vectorized tile dequantization (always AOS)
                     esimd::simd<sycl::half, ELEMS_PER_ROW> dq = dequant_mxfp4_tile_vectorized<ELEMS_PER_ROW>(
                         weights_mx, n_global, k_start, args.K, k_blocks_per_row, k_len);
 #        pragma unroll
                     for (int k = 0; k < ELEMS_PER_ROW; k++) {
                         w_row[k] = (k < k_len) ? dq[k] : sycl::half(0.0f);
                     }
+                } else if (use_soa) {
+                    // Q4_0 SOA: use vectorized SOA tile dequantization
+                    esimd::simd<sycl::half, ELEMS_PER_ROW> dq = dequant_q4_0_tile_vectorized_soa<ELEMS_PER_ROW>(
+                        qs_base_lg, d_base_lg, n_global, k_start, args.K, k_blocks_per_row, k_len);
+#        pragma unroll
+                    for (int k = 0; k < ELEMS_PER_ROW; k++) {
+                        w_row[k] = (k < k_len) ? dq[k] : sycl::half(0.0f);
+                    }
                 } else {
-// Q4_0: inline scalar dequantization
+// Q4_0 AOS: inline scalar dequantization
 #        pragma unroll
                     for (int k = 0; k < ELEMS_PER_ROW; k++) {
                         if (k >= k_len) {
