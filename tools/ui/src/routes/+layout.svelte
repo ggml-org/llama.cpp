@@ -13,7 +13,7 @@
 		DialogConversationTitleUpdate,
 		SidebarNavigation
 	} from '$lib/components/app';
-
+	import { PwaWrapper } from '$lib/components/app/misc';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -241,55 +241,58 @@
 	{/if}
 </svelte:head>
 
-<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<ModeWatcher />
-	<Toaster richColors />
+<PwaWrapper>
+	<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
+		<ModeWatcher />
 
-	<DialogConversationTitleUpdate
-		bind:open={titleUpdateDialogOpen}
-		currentTitle={titleUpdateCurrentTitle}
-		newTitle={titleUpdateNewTitle}
-		onConfirm={handleTitleUpdateConfirm}
-		onCancel={handleTitleUpdateCancel}
-	/>
+		<Toaster richColors />
 
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex h-dvh w-full">
-			<Sidebar.Root variant="floating" class="h-full"
-				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
-			>
+		<DialogConversationTitleUpdate
+			bind:open={titleUpdateDialogOpen}
+			currentTitle={titleUpdateCurrentTitle}
+			newTitle={titleUpdateNewTitle}
+			onConfirm={handleTitleUpdateConfirm}
+			onCancel={handleTitleUpdateCancel}
+		/>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
-				{#if mounted}
-					<div in:fade={{ duration: 200 }}>
-						<Sidebar.Trigger
-							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-								: 'left-0!'}"
-							style="translate: 1rem 1rem;"
-						/>
-					</div>
+        <Sidebar.Provider bind:open={sidebarOpen}>
+	    	<div class="flex h-screen w-full">
+		    	<Sidebar.Root variant="floating" class="h-full"
+			    	><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
+			    >
+
+				{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
+					{#if mounted}
+						<div in:fade={{ duration: 200 }}>
+							<Sidebar.Trigger
+								class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+									? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+									: 'left-0!'}"
+								style="translate: 1rem 1rem;"
+							/>
+						</div>
+					{/if}
 				{/if}
-			{/if}
 
-			{#if isDesktop && !alwaysShowSidebarOnDesktop}
-				<DesktopIconStrip
-					{sidebarOpen}
-					onSearchClick={() => {
-						if (chatSidebar?.activateSearchMode) {
-							chatSidebar.activateSearchMode();
-						}
+				{#if isDesktop && !alwaysShowSidebarOnDesktop}
+					<DesktopIconStrip
+						{sidebarOpen}
+						onSearchClick={() => {
+							if (chatSidebar?.activateSearchMode) {
+								chatSidebar.activateSearchMode();
+							}
 
-						sidebarOpen = true;
-					}}
-				/>
-			{/if}
+							sidebarOpen = true;
+						}}
+					/>
+				{/if}
 
-			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden"
-				>{@render children?.()}</Sidebar.Inset
-			>
-		</div>
-	</Sidebar.Provider>
-</Tooltip.Provider>
+				<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
+					{@render children?.()}
+				</Sidebar.Inset>
+			</div>
+		</Sidebar.Provider>
+	</Tooltip.Provider>
+</PwaWrapper>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />

@@ -51,3 +51,12 @@ export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
  * Preview button is shown only for HTML code blocks.
  */
 export { default as CodeBlockActions } from './CodeBlockActions.svelte';
+
+/**
+ * **PwaWrapper** - Progressive Web App head tags
+ *
+ * Injects PWA prerequisites into `<svelte:head>`: web app manifest link,
+ * theme-color meta tags (light/dark), Apple mobile web app meta tags,
+ * and app description. Renders children passthrough.
+ */
+export { default as PwaWrapper } from './PwaWrapper.svelte';

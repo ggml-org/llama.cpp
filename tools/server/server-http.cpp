@@ -190,8 +190,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end()) {
+        // If path is public or is static file, skip validation
+        if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/" || req.path == "/sw.js" || req.path == "/manifest.webmanifest") {
             return true;
         }
 
