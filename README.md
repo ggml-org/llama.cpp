@@ -17,6 +17,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- **HuggingFace cache migration: models downloaded with `-hf` are now stored in the standard HuggingFace cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
