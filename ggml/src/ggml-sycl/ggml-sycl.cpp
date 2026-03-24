@@ -948,6 +948,30 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue & queue, void * dst,
                                                  const std::vector<sycl::event> & deps);
 static bool ggml_sycl_gpu_reorder_disabled();
 
+// Determine the effective layout for an expert tensor, given its quant type and
+// column count.  layout_policy::get_optimal() returns the preferred layout for
+// the type (e.g. COALESCED for MXFP4), but COALESCED requires
+// (ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0.  If the expert
+// dimensions don't meet this constraint, fall back to SOA.
+static layout_mode moe_effective_expert_layout(ggml_type type, int64_t ncols, int device) {
+    const layout_mode optimal = layout_policy::get_optimal(type, tensor_usage::MOE_EXPERT_WEIGHT, device);
+    if (optimal == GGML_LAYOUT_COALESCED) {
+        int block_size = 0;
+        switch (type) {
+            case GGML_TYPE_Q4_0:   block_size = QK4_0;   break;
+            case GGML_TYPE_Q8_0:   block_size = QK8_0;   break;
+            case GGML_TYPE_Q6_K:   block_size = QK_K;    break;
+            case GGML_TYPE_MXFP4:  block_size = QK_MXFP4; break;
+            default: break;
+        }
+        if (block_size > 0 && ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS) != 0) {
+            // Dimensions don't support coalesced tiling — fall back to SOA
+            return GGML_LAYOUT_SOA;
+        }
+    }
+    return optimal;
+}
+
 // ---------------------------------------------------------------------------
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
@@ -1099,7 +1123,11 @@ static void moe_prestage_popular_experts() {
 
         auto t0 = std::chrono::high_resolution_clock::now();
 
-        // Helper: build staging data + cache_layout_request for one tensor
+        // Helper: build staging data + cache_layout_request for one tensor.
+        // Uses layout_policy::get_optimal() to determine the correct layout
+        // for the tensor's quant type (e.g. COALESCED for MXFP4, SOA for Q4_0).
+        // GPU reorder only supports AOS->SOA; for other layouts, fall back to
+        // CPU reorder via ggml_sycl_fill_reordered_host.
         auto build_tensor_data = [&](const moe_expert_meta *           meta,
                                      ggml_sycl::staging_tensor_data &  sd,
                                      ggml_sycl::cache_layout_request & req,
@@ -1111,9 +1139,12 @@ static void moe_prestage_popular_experts() {
                 meta->tensor, meta->extra, meta->expert_idx);
             if (!ckey.valid) return false;
 
-            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
-                meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
-            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+            // Determine optimal layout for this expert's type and dimensions
+            const layout_mode optimal_layout = moe_effective_expert_layout(
+                meta->type, meta->ne0, device);
+            const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
+                meta->type, meta->ne0, meta->ne1, optimal_layout, device);
+            const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
 
             sd.src_ptr   = meta->data_ptr;
             sd.src_size  = meta->bytes;
@@ -1128,11 +1159,13 @@ static void moe_prestage_popular_experts() {
             req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
             req.layer_id         = meta->layer_id;
             req.expert_id        = meta->expert_idx;
-            req.layout           = GGML_LAYOUT_SOA;
+            req.layout           = optimal_layout;
             req.validate_content = false;
             req.skip_fill_wait   = true;
 
-            if (use_gpu_reorder) {
+            // GPU reorder only supports AOS->SOA transform; for other layouts
+            // (COALESCED, XMX_TILED, AOS) use CPU reorder path which handles all.
+            if (use_gpu_reorder && optimal_layout == GGML_LAYOUT_SOA) {
                 gpu_fctx.type              = meta->type;
                 gpu_fctx.ncols             = meta->ne0;
                 gpu_fctx.nrows             = meta->ne1;
@@ -1151,7 +1184,7 @@ static void moe_prestage_popular_experts() {
                 host_fctx.nrows         = meta->ne1;
                 host_fctx.nbytes        = meta->bytes;
                 host_fctx.dst_bytes     = dst_bytes;
-                host_fctx.layout        = GGML_LAYOUT_SOA;
+                host_fctx.layout        = optimal_layout;
                 host_fctx.src_is_device = false;
                 host_fctx.device_id     = device;
 
@@ -1199,11 +1232,18 @@ static void moe_prestage_popular_experts() {
 
             if (!gate_ok && !up_ok && !down_ok) continue;
 
+            // Determine the optimal layout from the first available tensor's type
+            // and dimensions.  All tensors in an expert group share the same quant type.
+            const moe_expert_meta * rep_meta = mg.gate ? mg.gate : (mg.up ? mg.up : mg.down);
+            const layout_mode group_layout = rep_meta
+                ? moe_effective_expert_layout(rep_meta->type, rep_meta->ne0, device)
+                : GGML_LAYOUT_SOA;
+
             // Stage all 3 tensors atomically
             bool ok = cache->stage_expert_group(
                 mg.block_num, mg.expert_idx, grp,
                 gate_sd, up_sd, down_sd,
-                GGML_LAYOUT_SOA,
+                group_layout,
                 gate_ok ? &gate_req : nullptr,
                 up_ok   ? &up_req   : nullptr,
                 down_ok ? &down_req : nullptr);
@@ -1318,6 +1358,7 @@ static void moe_prestage_popular_experts() {
                 ggml_sycl_cache_id           key;
                 size_t                       dst_bytes;
                 int                          budget_idx;  // index into sec_budgets
+                layout_mode                  optimal_layout;  // layout for this expert type
             };
             std::vector<sec_work_item> sec_work;
 
@@ -1342,9 +1383,12 @@ static void moe_prestage_popular_experts() {
                     continue;
                 }
 
-                const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
-                    meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, 0);
-                const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+                // Determine optimal layout for this expert's type and dimensions (same as Phase 1)
+                const layout_mode sec_optimal_layout = moe_effective_expert_layout(
+                    meta->type, meta->ne0, 0);
+                const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
+                    meta->type, meta->ne0, meta->ne1, sec_optimal_layout, 0);
+                const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
 
                 int    best_idx   = -1;
                 size_t best_space = 0;
@@ -1381,7 +1425,7 @@ static void moe_prestage_popular_experts() {
                 // remains accurate for subsequent experts.
                 budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
 
-                sec_work.push_back({ meta, key, dst_bytes, best_idx });
+                sec_work.push_back({ meta, key, dst_bytes, best_idx, sec_optimal_layout });
             }
 
             const bool sec_use_gpu = !ggml_sycl_gpu_reorder_disabled();
@@ -1390,8 +1434,11 @@ static void moe_prestage_popular_experts() {
                 // --- Phase 2b (GPU path): GPU reorder for secondary devices ---
                 // Per-device fallback temp buffer tracking for deferred free
                 // (only used when pre-allocated buffer is unavailable).
+                // GPU reorder only supports SOA; for other layouts (COALESCED etc.)
+                // fall back to host reorder within this same loop.
                 std::unordered_map<int, std::vector<void *>> sec_temp_bufs;
                 std::vector<ggml_sycl_gpu_reorder_fill_ctx> sec_fill_ctxs(sec_work.size());
+                std::vector<ggml_sycl_reorder_fill_ctx>     sec_host_fill_ctxs(sec_work.size());
 
                 auto t0 = std::chrono::high_resolution_clock::now();
 
@@ -1403,21 +1450,6 @@ static void moe_prestage_popular_experts() {
 
                     auto & item = sec_work[i];
                     auto & budget = sec_budgets[item.budget_idx];
-                    auto & fctx = sec_fill_ctxs[i];
-
-                    // Get pre-allocated reorder temp buffer for this secondary device
-                    void * sec_prealloc      = budget.cache ? budget.cache->get_reorder_temp_buffer() : nullptr;
-                    size_t sec_prealloc_size = budget.cache ? budget.cache->get_reorder_temp_size()   : 0;
-
-                    fctx.type              = item.meta->type;
-                    fctx.ncols             = item.meta->ne0;
-                    fctx.nrows             = item.meta->ne1;
-                    fctx.src_bytes         = item.meta->bytes;
-                    fctx.dst_bytes         = item.dst_bytes;
-                    fctx.temp_bufs         = sec_prealloc ? nullptr : &sec_temp_bufs[budget.dev];
-                    fctx.owner_queue       = nullptr;
-                    fctx.prealloc_temp      = sec_prealloc;
-                    fctx.prealloc_temp_size = sec_prealloc_size;
 
                     ggml_sycl::cache_layout_request req{};
                     req.key              = item.key;
@@ -1427,11 +1459,44 @@ static void moe_prestage_popular_experts() {
                     req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
                     req.layer_id         = item.meta->layer_id;
                     req.expert_id        = item.meta->expert_idx;
-                    req.layout           = GGML_LAYOUT_SOA;
+                    req.layout           = item.optimal_layout;
                     req.validate_content = false;
                     req.skip_fill_wait   = true;
-                    req.fill_fn          = ggml_sycl_fill_reordered_gpu;
-                    req.fill_ctx         = &fctx;
+
+                    // GPU reorder only supports AOS->SOA; use host reorder for other layouts
+                    if (item.optimal_layout == GGML_LAYOUT_SOA) {
+                        auto & fctx = sec_fill_ctxs[i];
+
+                        // Get pre-allocated reorder temp buffer for this secondary device
+                        void * sec_prealloc      = budget.cache ? budget.cache->get_reorder_temp_buffer() : nullptr;
+                        size_t sec_prealloc_size = budget.cache ? budget.cache->get_reorder_temp_size()   : 0;
+
+                        fctx.type              = item.meta->type;
+                        fctx.ncols             = item.meta->ne0;
+                        fctx.nrows             = item.meta->ne1;
+                        fctx.src_bytes         = item.meta->bytes;
+                        fctx.dst_bytes         = item.dst_bytes;
+                        fctx.temp_bufs         = sec_prealloc ? nullptr : &sec_temp_bufs[budget.dev];
+                        fctx.owner_queue       = nullptr;
+                        fctx.prealloc_temp      = sec_prealloc;
+                        fctx.prealloc_temp_size = sec_prealloc_size;
+
+                        req.fill_fn  = ggml_sycl_fill_reordered_gpu;
+                        req.fill_ctx = &fctx;
+                    } else {
+                        auto & hctx = sec_host_fill_ctxs[i];
+                        hctx.type          = item.meta->type;
+                        hctx.ncols         = item.meta->ne0;
+                        hctx.nrows         = item.meta->ne1;
+                        hctx.nbytes        = item.meta->bytes;
+                        hctx.dst_bytes     = item.dst_bytes;
+                        hctx.layout        = item.optimal_layout;
+                        hctx.src_is_device = false;
+                        hctx.device_id     = budget.dev;
+
+                        req.fill_fn  = ggml_sycl_fill_reordered_host;
+                        req.fill_ctx = &hctx;
+                    }
 
                     try {
                         auto result = budget.cache->ensure_cached_layout(req, {});
@@ -1492,7 +1557,7 @@ static void moe_prestage_popular_experts() {
                     ci.reorder_ctx.nrows         = item.meta->ne1;
                     ci.reorder_ctx.nbytes        = item.meta->bytes;
                     ci.reorder_ctx.dst_bytes     = item.dst_bytes;
-                    ci.reorder_ctx.layout        = GGML_LAYOUT_SOA;
+                    ci.reorder_ctx.layout        = item.optimal_layout;
                     ci.reorder_ctx.src_is_device = false;
                     ci.reorder_ctx.device_id     = budget.dev;
 
@@ -1562,7 +1627,7 @@ static void moe_prestage_popular_experts() {
                     req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
                     req.layer_id         = ci.meta->layer_id;
                     req.expert_id        = ci.meta->expert_idx;
-                    req.layout           = GGML_LAYOUT_SOA;
+                    req.layout           = ci.reorder_ctx.layout;
                     req.validate_content = false;
                     req.skip_fill_wait   = true;
                     req.fill_fn          = nullptr;
@@ -1647,19 +1712,21 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
         meta->tensor, meta->extra, meta->expert_idx);
     if (!key.valid) return nullptr;
 
-    // Compute SOA byte count for this expert's dimensions
-    const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
-        meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device_id);
-    const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
+    // Compute layout byte count for this expert's dimensions using optimal layout
+    const layout_mode optimal_layout = moe_effective_expert_layout(
+        meta->type, meta->ne0, device_id);
+    const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
+        meta->type, meta->ne0, meta->ne1, optimal_layout, device_id);
+    const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
 
-    // Build AOS→SOA reorder context
+    // Build AOS → optimal layout reorder context
     ggml_sycl_reorder_fill_ctx reorder_ctx{};
     reorder_ctx.type          = meta->type;
     reorder_ctx.ncols         = meta->ne0;
     reorder_ctx.nrows         = meta->ne1;
     reorder_ctx.nbytes        = meta->bytes;
     reorder_ctx.dst_bytes     = dst_bytes;
-    reorder_ctx.layout        = GGML_LAYOUT_SOA;
+    reorder_ctx.layout        = optimal_layout;
     reorder_ctx.src_is_device = false;
     reorder_ctx.device_id     = device_id;
 
@@ -1672,7 +1739,7 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     req.type             = cache_entry_type::MOE_EXPERT;
     req.layer_id         = meta->layer_id;
     req.expert_id        = meta->expert_idx;
-    req.layout           = GGML_LAYOUT_SOA;
+    req.layout           = optimal_layout;
     req.validate_content = false;
     req.fill_fn          = ggml_sycl_fill_reordered_host;
     req.fill_ctx         = &reorder_ctx;
@@ -2819,13 +2886,15 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     continue;
                 }
 
-                // Compute SOA layout size for this expert type
+                // Compute optimal layout size for this expert type
                 const int64_t ncols       = info.tensor->ne[0];
                 const int64_t nrows       = info.tensor->ne[1];
                 auto &        budget      = budgets[best_idx];
-                const size_t  soa_bytes   = ggml_sycl_layout_bytes_for_dims(
-                    info.tensor->type, ncols, nrows, GGML_LAYOUT_SOA, budget.dev);
-                const size_t  dst_bytes   = (soa_bytes > 0) ? soa_bytes : info.bytes;
+                const layout_mode adaptive_layout = moe_effective_expert_layout(
+                    info.tensor->type, ncols, budget.dev);
+                const size_t  layout_bytes = ggml_sycl_layout_bytes_for_dims(
+                    info.tensor->type, ncols, nrows, adaptive_layout, budget.dev);
+                const size_t  dst_bytes   = (layout_bytes > 0) ? layout_bytes : info.bytes;
 
                 // Budget guard: stop uploading to this device if the SOA-expanded
                 // expert size would exceed the remaining VRAM.  Without this check,
@@ -2871,14 +2940,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     }
                 }
 
-                // Set up reorder context for AOS→SOA conversion
+                // Set up reorder context for AOS → optimal layout conversion
                 reorder_ctx             = {};
                 reorder_ctx.type        = info.tensor->type;
                 reorder_ctx.ncols       = ncols;
                 reorder_ctx.nrows       = nrows;
                 reorder_ctx.nbytes      = info.bytes;
                 reorder_ctx.dst_bytes   = dst_bytes;
-                reorder_ctx.layout      = GGML_LAYOUT_SOA;
+                reorder_ctx.layout      = adaptive_layout;
                 reorder_ctx.src_is_device = false;  // upload_src is always host-accessible
                 reorder_ctx.device_id   = budget.dev;
 
@@ -2890,7 +2959,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 req.type             = cache_entry_type::MOE_EXPERT;
                 req.layer_id         = info.layer_id;
                 req.expert_id        = info.expert_idx;
-                req.layout           = GGML_LAYOUT_SOA;
+                req.layout           = adaptive_layout;
                 req.validate_content = false;
                 req.fill_fn          = ggml_sycl_fill_reordered_host;
                 req.fill_ctx         = &reorder_ctx;

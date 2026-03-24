@@ -4720,7 +4720,7 @@ static int eviction_tier(const unified_cache_entry & entry) {
     // -1: host-resident (already slow, evict first to reclaim tracking)
     //  0: MoE experts (cold), 1: MoE experts (hot), 2: dense (cold), 3: dense (hot)
     if (entry.host_resident) {
-        return -1;  // Host-resident entries evict first (they're already slow)
+        return -1;
     }
     const int base = (entry.type == cache_entry_type::DENSE_WEIGHT) ? 2 : 0;
     return base + (entry.hot ? 1 : 0);
