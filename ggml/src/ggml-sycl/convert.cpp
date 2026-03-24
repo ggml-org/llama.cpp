@@ -123,6 +123,20 @@ static void dequantize_row_q4_0_sycl_reorder(const void * vx, dst_t * y, const i
 }
 
 template <typename dst_t>
+static void dequantize_row_q4_0_sycl_coalesced(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+
+    int constexpr WARP_K = WARP_SIZE * QK4_0;
+    const int n_warp     = (k + WARP_K - 1) / WARP_K;
+    GGML_ASSERT(k % 2 == 0);
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) * sycl::range<3>(1, 1, WARP_SIZE),
+                                           sycl::range<3>(1, 1, WARP_SIZE)),
+                         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             dequantize_block_q4_0_coalesced(vx, y, k, item_ct1);
+                         });
+}
+
+template <typename dst_t>
 static void dequantize_row_q4_1_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
     const int64_t nb32 = k / 32;
     const int64_t nb   = (k + 255) / 256;
@@ -1047,16 +1061,18 @@ void reorder_q4_0_coalesced_to_soa_sycl(const void *    src,
 }
 
 to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst, bool full_tensor) {
-    // SoA-aware reorder kernels compute d_offset from k parameter.
+    // SoA/Coalesced-aware reorder kernels compute d_offset from k parameter.
     // This only works when k == full tensor size. For row slices, use standard kernels.
-    // Only SOA layout has reorder dequantization kernels (no COALESCED version).
     const ggml_tensor_extra_gpu * extra =
         dst->src[0]->extra ? static_cast<const ggml_tensor_extra_gpu *>(dst->src[0]->extra) : nullptr;
-    const bool use_reorder = full_tensor && ggml_sycl_layout_is_soa(extra);
+    const bool use_reorder    = full_tensor && ggml_sycl_layout_is_soa(extra);
+    const bool use_coalesced  = full_tensor && ggml_sycl_layout_is_coalesced(extra);
 
     switch (type) {
         case GGML_TYPE_Q4_0:
-            if (use_reorder) {
+            if (use_coalesced) {
+                return dequantize_row_q4_0_sycl_coalesced;
+            } else if (use_reorder) {
                 return dequantize_row_q4_0_sycl_reorder;
             } else {
                 return dequantize_block_sycl<QK4_0, QR4_0, dequantize_q4_0>;
@@ -1119,16 +1135,18 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst, bool ful
 }
 
 to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor * dst, bool full_tensor) {
-    // SoA-aware reorder kernels compute d_offset from k parameter.
+    // SoA/Coalesced-aware reorder kernels compute d_offset from k parameter.
     // This only works when k == full tensor size. For row slices, use standard kernels.
-    // Only SOA layout has reorder dequantization kernels (no COALESCED version).
     const ggml_tensor_extra_gpu * extra =
         dst->src[0]->extra ? static_cast<const ggml_tensor_extra_gpu *>(dst->src[0]->extra) : nullptr;
-    const bool use_reorder = full_tensor && ggml_sycl_layout_is_soa(extra);
+    const bool use_reorder    = full_tensor && ggml_sycl_layout_is_soa(extra);
+    const bool use_coalesced  = full_tensor && ggml_sycl_layout_is_coalesced(extra);
 
     switch (type) {
         case GGML_TYPE_Q4_0:
-            if (use_reorder) {
+            if (use_coalesced) {
+                return dequantize_row_q4_0_sycl_coalesced;
+            } else if (use_reorder) {
                 return dequantize_row_q4_0_sycl_reorder;
             } else {
                 return dequantize_row_q4_0_sycl;

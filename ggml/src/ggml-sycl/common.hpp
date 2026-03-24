@@ -632,6 +632,9 @@ inline bool ggml_sycl_host_task_stable_for_queue(const sycl::queue & q) {
 bool          ggml_sycl_cpu_offload_available();
 sycl::queue * ggml_sycl_get_cpu_queue();
 
+// Forward declaration — defined later in this header after MoE helpers.
+inline bool is_coalesced_supported(ggml_type type);
+
 struct layout_policy {
     static layout_mode get_optimal(ggml_type qtype, tensor_usage usage, int device_id = -1) {
         static const bool xmx_moe_enabled   = (std::getenv("GGML_SYCL_XMX_MOE") != nullptr);
@@ -667,10 +670,11 @@ struct layout_policy {
             return GGML_LAYOUT_AOS;
         }
 
-        // Attention/FFN weights: SOA for better TG (batch>1) performance
+        // Attention/FFN weights: COALESCED for best TG performance (tile-based warp-aligned access).
+        // Types that don't support coalesced fall through to the default SOA path below.
         if (usage == tensor_usage::ATTENTION_WEIGHT || usage == tensor_usage::FFN_WEIGHT) {
-            if (qtype == GGML_TYPE_Q4_0 || qtype == GGML_TYPE_Q8_0 || qtype == GGML_TYPE_Q6_K) {
-                return GGML_LAYOUT_SOA;  // SOA for better TG performance
+            if (is_coalesced_supported(qtype)) {
+                return GGML_LAYOUT_COALESCED;
             }
         }
 
@@ -2170,9 +2174,10 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         layout_mode registered_layout = GGML_LAYOUT_AOS;
         if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &registered_layout)) {
             // If no layout choice exists, allow AoS to fall back to raw storage.
-            // Also allow SOA in S1 mode — cache creates it on demand.
-            const bool s1_soa_ok = ggml_backend_sycl_all_weights_host() && target == GGML_LAYOUT_SOA;
-            if (target != GGML_LAYOUT_AOS && !s1_soa_ok) {
+            // Also allow SOA/COALESCED in S1 mode — cache creates it on demand.
+            const bool s1_reordered_ok = ggml_backend_sycl_all_weights_host() &&
+                (target == GGML_LAYOUT_SOA || target == GGML_LAYOUT_COALESCED);
+            if (target != GGML_LAYOUT_AOS && !s1_reordered_ok) {
                 if (out_source) {
                     *out_source = "no_layout_choice";
                 }
@@ -2183,11 +2188,12 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
             }
         } else {
             // Verify the registered layout matches the requested target.
-            // Exception: In S1 mode (all_weights_host), SOA is requested for TG
+            // Exception: In S1 mode (all_weights_host), SOA/COALESCED is requested
             // but only the PP layout (e.g. ONEDNN_PACKED) was registered during warmup.
-            // Allow SOA through — the unified cache materializes it on demand.
-            const bool s1_soa_request = ggml_backend_sycl_all_weights_host() && target == GGML_LAYOUT_SOA;
-            if (!unified_aos_request && !s1_soa_request && registered_layout != target) {
+            // Allow through — the unified cache materializes it on demand.
+            const bool s1_reordered_request = ggml_backend_sycl_all_weights_host() &&
+                (target == GGML_LAYOUT_SOA || target == GGML_LAYOUT_COALESCED);
+            if (!unified_aos_request && !s1_reordered_request && registered_layout != target) {
                 if (out_source) {
                     *out_source = "layout_mismatch";
                 }

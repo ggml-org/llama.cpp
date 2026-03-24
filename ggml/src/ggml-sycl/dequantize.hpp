@@ -245,6 +245,62 @@ static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * 
 
 }
 
+// COALESCED layout dequant: word-major interleaved within tiles of WARP_SIZE blocks.
+// Quant bytes for block b in tile t:
+//   word w at offset: tile_base + w * WARP_SIZE * 4 + block_in_tile * 4
+// Scale (d) values are contiguous after ALL quant bytes (same as SOA).
+template<typename dst_t>
+static void dequantize_block_q4_0_coalesced(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
+                                  const sycl::nd_item<3> &item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    auto k = nb32;
+    // assume 32 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int lane_ib = i * WARP_SIZE + tid;
+
+    if (lane_ib >= k / QK4_0) {
+        return;
+    }
+
+    dst_t * y_ptr = yy + lane_ib * QK4_0;
+
+    // Scale: same position as SOA (contiguous after all quants)
+    auto s_ptr = (const sycl::half *)((const uint8_t *) vx + k / 2) + lane_ib;
+    const float d = float(*s_ptr);
+
+    // COALESCED qs addressing: tile-interleaved word-major layout
+    constexpr int TILE_BLOCKS     = WARP_SIZE;  // 32 blocks per tile
+    constexpr int BYTES_PER_BLOCK = QK4_0 / 2;  // 16 bytes per block
+    constexpr int WORDS_PER_BLOCK = BYTES_PER_BLOCK / 4;  // 4 words of 4 bytes
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;  // 128 bytes between word planes
+
+    const int tile          = lane_ib / TILE_BLOCKS;
+    const int block_in_tile = lane_ib % TILE_BLOCKS;
+    // Row-based addressing: blocks_per_row = k / QK4_0 (total blocks / nrows, but
+    // dequant sees a flattened 1D array of k elements, so row_qs_bytes = k/2 for the
+    // full tensor). Tile base within the quant region:
+    const int tile_base = tile * (TILE_BLOCKS * BYTES_PER_BLOCK);
+
+    // Read 16 bytes (4 words x 4 bytes) from tile-interleaved positions
+    uint8_t qs_buf[BYTES_PER_BLOCK];
+#pragma unroll
+    for (int w = 0; w < WORDS_PER_BLOCK; w++) {
+        const uint8_t * src = (const uint8_t *) vx + tile_base + w * WORD_PLANE_STRIDE + block_in_tile * 4;
+#pragma unroll
+        for (int b = 0; b < 4; b++) {
+            qs_buf[w * 4 + b] = src[b];
+        }
+    }
+
+#pragma unroll
+    for (int l = 0; l < QK4_0 / 2; ++l) {
+        int vq = qs_buf[l];
+        y_ptr[l + 0]  = d * ((vq & 0xF) - 8);
+        y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    }
+}
+
 template<typename dst_t>
 static void dequantize_block_q4_1(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
                                   const sycl::nd_item<3> &item_ct1) {

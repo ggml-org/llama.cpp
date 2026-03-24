@@ -10172,25 +10172,37 @@ static void ggml_sycl_preload_model_weights() {
 
                     const size_t src_size = ggml_nbytes(tensor);
 
-                    // S1-PRELOAD: upload SOA directly for quantized types that
-                    // support SOA reorder.  This avoids blocking AOS->SOA conversion
-                    // during inference that causes 120B MoE hangs.
-                    // For non-quantized types (f32, f16), upload as AOS (SOA
-                    // doesn't apply -- these are norm/embedding weights).
+                    // S1-PRELOAD: upload COALESCED directly for quantized types
+                    // that support it (Q4_0, Q8_0, Q6_K, MXFP4).  COALESCED is
+                    // the preferred TG layout — tile-based warp-aligned access
+                    // gives ~6% faster TG than SOA.  The reorder_weight_cpu()
+                    // function handles AOS→COALESCED in a single pass.
+                    // Types that support SOA but not COALESCED (e.g. Q4_K) get SOA.
+                    // Non-quantized types (f32, f16) get AOS (norm/embedding weights).
+                    const bool use_coalesced =
+                        ggml_is_quantized(tensor->type) && is_coalesced_supported(tensor->type) &&
+                        ggml_sycl_supports_reorder_mmvq(tensor->type);
                     const bool use_soa =
-                        ggml_is_quantized(tensor->type) && ggml_sycl_supports_reorder_mmvq(tensor->type);
-                    layout_mode preload_layout = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+                        !use_coalesced && ggml_is_quantized(tensor->type) &&
+                        ggml_sycl_supports_reorder_mmvq(tensor->type);
+                    layout_mode preload_layout = use_coalesced ? GGML_LAYOUT_COALESCED
+                                               : use_soa      ? GGML_LAYOUT_SOA
+                                                               : GGML_LAYOUT_AOS;
                     size_t      dst_size       = src_size;
 
                     ggml_sycl_reorder_fill_ctx reorder_ctx{};
-                    if (use_soa) {
-                        dst_size              = ggml_sycl_get_padded_weight_bytes(tensor->type, tensor->ne[0], src_size);
+                    if (use_coalesced || use_soa) {
+                        dst_size = ggml_sycl_layout_bytes_for_dims(
+                            tensor->type, tensor->ne[0], ggml_nrows(tensor), preload_layout, device);
+                        if (dst_size == 0) {
+                            dst_size = ggml_sycl_get_padded_weight_bytes(tensor->type, tensor->ne[0], src_size);
+                        }
                         reorder_ctx.type      = tensor->type;
                         reorder_ctx.ncols     = tensor->ne[0];
                         reorder_ctx.nrows     = ggml_nrows(tensor);
                         reorder_ctx.nbytes    = src_size;
                         reorder_ctx.dst_bytes = dst_size;
-                        reorder_ctx.layout    = GGML_LAYOUT_SOA;
+                        reorder_ctx.layout    = preload_layout;
                         reorder_ctx.src_is_device = false;
                         reorder_ctx.device_id     = device;
                     }
@@ -23499,33 +23511,9 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             } else {
                 target = layout_policy::get_with_override(src->type, usage, ctx.device);
             }
-            // In S1 mode (all_weights_host), finalize_layouts does NOT eagerly
-            // materialize layouts.  The S1 preload already cached SOA copies in
-            // VRAM.  If the kernel selector picked a higher-priority layout
-            // (e.g. COALESCED) that isn't cached, register the actually-cached
-            // layout instead.  Otherwise the per-op dispatch path gets a layout
-            // mismatch (registered=COALESCED vs cached=SOA) and falls back to
-            // AOS — losing the SOA performance benefit and potentially producing
-            // garbage when the upgrade side-effect corrupts tensor layout metadata.
-            if (ggml_backend_sycl_all_weights_host() && target != GGML_LAYOUT_AOS &&
-                ggml_sycl::unified_cache_enabled()) {
-                ggml_sycl_cache_id s1_key = ggml_backend_sycl_get_weight_cache_key(src, ctx.device);
-                if (s1_key.valid) {
-                    if (auto * s1_cache = ggml_sycl::get_unified_cache_for_device(ctx.device)) {
-                        if (!s1_cache->is_cached(s1_key, target)) {
-                            // Target layout not cached.  Check if a lower-priority
-                            // layout IS cached (e.g. SOA from S1 preload).
-                            layout_mode fallback = GGML_LAYOUT_AOS;
-                            if (target == GGML_LAYOUT_COALESCED && s1_cache->is_cached(s1_key, GGML_LAYOUT_SOA)) {
-                                fallback = GGML_LAYOUT_SOA;
-                            }
-                            if (fallback != GGML_LAYOUT_AOS) {
-                                target = fallback;
-                            }
-                        }
-                    }
-                }
-            }
+            // S1-PRELOAD now caches COALESCED directly (not SOA), so the
+            // layout registered here matches what the cache contains.
+            // No fallback needed — COALESCED is a first-class layout.
             if (!has_override && host_weights && src->type == GGML_TYPE_Q6_K && usage == tensor_usage::EMBEDDING) {
                 // Host-backed Q6_K embeddings can hang in SOA paths; keep AoS except for output.weight,
                 // which prefers SoA and falls back to AoS if host-resident.
@@ -25988,14 +25976,21 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
     if (unified_enabled) {
         const bool src1_contiguous = ggml_is_contiguous(src1) && !ggml_is_transposed(src1) && !ggml_is_permuted(src1);
         if (src1_contiguous) {
-            // SOA for quantized types: dequant handles SOA→FP16, oneDNN sees FP16.
+            // Prefer COALESCED for quantized types that support it (best TG performance).
+            // Dequant handles COALESCED→FP16 / SOA→FP16 for oneDNN PP path.
             // Non-quantized types (FP16/FP32) keep AOS.
-            const bool use_soa = ggml_sycl_unified_soa_enabled() &&
-                                 ggml_is_quantized(src0->type) &&
-                                 ggml_sycl_supports_reorder_mmvq(src0->type);
+            const bool use_reordered = ggml_sycl_unified_soa_enabled() &&
+                                       ggml_is_quantized(src0->type) &&
+                                       ggml_sycl_supports_reorder_mmvq(src0->type);
             decision.valid   = true;
             decision.backend = MatmulBackend::UnifiedKernel;
-            decision.layout  = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+            if (use_reordered && is_coalesced_supported(src0->type)) {
+                decision.layout = GGML_LAYOUT_COALESCED;
+            } else if (use_reordered) {
+                decision.layout = GGML_LAYOUT_SOA;
+            } else {
+                decision.layout = GGML_LAYOUT_AOS;
+            }
             return decision;
         }
     }
@@ -26032,12 +26027,18 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
     auto set_decision = [&](ggml_sycl_mul_mat_kernel kernel) {
         decision.valid = true;
         if (kernel == ggml_sycl_mul_mat_kernel::UNIFIED_MATMUL) {
-            const bool use_soa = ggml_sycl_unified_soa_enabled() &&
-                                 ggml_is_quantized(src0->type) &&
-                                 ggml_sycl_supports_reorder_mmvq(src0->type);
+            const bool use_reordered = ggml_sycl_unified_soa_enabled() &&
+                                       ggml_is_quantized(src0->type) &&
+                                       ggml_sycl_supports_reorder_mmvq(src0->type);
             decision.backend = MatmulBackend::UnifiedKernel;
             decision.kernel  = kernel;
-            decision.layout  = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+            if (use_reordered && is_coalesced_supported(src0->type)) {
+                decision.layout = GGML_LAYOUT_COALESCED;
+            } else if (use_reordered) {
+                decision.layout = GGML_LAYOUT_SOA;
+            } else {
+                decision.layout = GGML_LAYOUT_AOS;
+            }
             return;
         }
         decision.backend = MatmulBackend::LegacyKernel;
@@ -28062,19 +28063,25 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
 
                     if (!force_legacy) {
-                        // SOA layout for all batch sizes when type is quantized.
-                        // TG (M=1): MMVQ reads SOA directly for coalesced access.
-                        // PP (M>1): dequant kernel converts SOA→FP16, oneDNN sees FP16.
-                        // Fallback to AOS if SOA not yet cached (e.g. first PP before TG).
-                        const bool  prefer_soa      = ggml_sycl_unified_soa_enabled() &&
-                                                      ggml_is_quantized(src0->type) &&
-                                                      ggml_sycl_supports_reorder_mmvq(src0->type);
-                        layout_mode requested_layout = prefer_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+                        // Prefer COALESCED layout for quantized types (best TG performance).
+                        // COALESCED dequant→FP16 is available for Q4_0 (oneDNN PP path).
+                        // Fallback chain: COALESCED → SOA → AOS.
+                        const bool  prefer_reordered = ggml_sycl_unified_soa_enabled() &&
+                                                       ggml_is_quantized(src0->type) &&
+                                                       ggml_sycl_supports_reorder_mmvq(src0->type);
+                        const bool  prefer_coalesced = prefer_reordered && is_coalesced_supported(src0->type);
+                        layout_mode requested_layout = prefer_coalesced ? GGML_LAYOUT_COALESCED
+                                                     : prefer_reordered ? GGML_LAYOUT_SOA
+                                                                        : GGML_LAYOUT_AOS;
                         const char *      src0_ptr_source  = nullptr;
                         const void *      src0_data =
                             ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
-                        // Fallback: if SOA not cached yet, accept AOS — dequant handles both.
-                        if (!src0_data && prefer_soa) {
+                        // Fallback: COALESCED → SOA → AOS
+                        if (!src0_data && requested_layout == GGML_LAYOUT_COALESCED) {
+                            requested_layout = GGML_LAYOUT_SOA;
+                            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
+                        }
+                        if (!src0_data && requested_layout != GGML_LAYOUT_AOS) {
                             requested_layout = GGML_LAYOUT_AOS;
                             src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS, &src0_ptr_source);
                         }
@@ -28143,12 +28150,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             if (onednn_pp_enabled && M >= onednn_pp_threshold && ggml_is_quantized(src0->type) &&
                                 ggml_is_contiguous(src0)) {
                                 // Get dequantization function matching the actual data layout.
-                                // When src0 is in SOA layout and we requested SOA, use the
-                                // SOA-aware reorder dequant kernel. Otherwise use standard AOS.
-                                auto * extra_pp     = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                                bool   src0_is_soa  = (ggml_sycl_layout_is_soa(extra_pp)
-                                                       && requested_layout == GGML_LAYOUT_SOA);
-                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, src0_is_soa);
+                                // When src0 is in a reordered layout (SOA or COALESCED), use the
+                                // layout-aware dequant kernel. ggml_get_to_fp16_sycl inspects the
+                                // tensor extra to select the correct dequant (SOA vs COALESCED).
+                                auto * extra_pp            = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+                                bool   src0_is_reordered   = ggml_sycl_layout_is_soa_or_coalesced(extra_pp) &&
+                                                             requested_layout != GGML_LAYOUT_AOS;
+                                const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, src0_is_reordered);
                                 if (dequant_to_fp16) {
                                     // Calculate buffer sizes needed
                                     const size_t src0_elems        = static_cast<size_t>(N) * static_cast<size_t>(K);
@@ -28287,7 +28295,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                                     activations_scratch, DnnlGemmWrapper::to_dt<sycl::half>(),
                                                     dst_data, DnnlGemmWrapper::to_dt<float>(), ctx.stream());
 
-                                                used_onednn_fp16 = true;
+                                                used_onednn_fp16  = true;
+                                                unified_dispatched = true;
                                             } catch (const std::exception & e) {
                                                 GGML_LOG_WARN("[SYCL] oneDNN PP failed, falling back to unified kernel: %s\n",
                                                               e.what());
@@ -28307,8 +28316,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                 }
                             }
 
-                            if (!used_onednn_fp16)
+                            // ESIMD unified kernel only supports SOA and AOS qs access patterns.
+                            // COALESCED has tile-interleaved qs bytes that ESIMD can't read yet.
+                            // For COALESCED TG (batch=1), skip ESIMD and fall through to legacy
+                            // MMVQ_COALESCED dispatch.  For PP, oneDNN FP16 handles COALESCED above.
+                            if (!used_onednn_fp16 && requested_layout != GGML_LAYOUT_COALESCED)
 #    endif  // GGML_SYCL_DNNL
+#    if !GGML_SYCL_DNNL
+                            if (requested_layout != GGML_LAYOUT_COALESCED)
+#    endif
                             {
                                 // Convert layout_mode to LayoutMode enum for kernel
                                 const auto kernel_layout = (requested_layout == GGML_LAYOUT_SOA) ?
@@ -28348,6 +28364,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                         *ctx.stream(), src0_batch_ptr, src1_batch_ptr, dst_batch_ptr,
                                         M, N, K, src0->type, kernel_layout);
                                 }
+                                unified_dispatched = true;
                             }
 
                             // Optional numeric spot-check against a host reference.
@@ -28611,8 +28628,6 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                     }
                                 }
                             }
-
-                            unified_dispatched = true;
                         }
                     }
                 }  // end !force_legacy block
