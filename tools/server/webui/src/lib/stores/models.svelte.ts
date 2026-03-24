@@ -457,7 +457,7 @@ class ModelsStore {
 
 	/**
 	 * Select a model by its model name (used for syncing with conversation model)
-	 * @param modelName - Model name to select (e.g., "unsloth/gemma-3-12b-it-GGUF:latest")
+	 * @param modelName - Model name to select (e.g., "ggml-org/GLM-4.7-Flash-GGUF")
 	 */
 	selectModelByName(modelName: string): void {
 		const option = this.models.find((model) => model.model === modelName);

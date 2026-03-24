@@ -45,6 +45,7 @@ static int    opt_verbose      = 0;
 static int    opt_profile      = 0;
 static int    opt_hostbuf      = 1; // hostbuf ON by default
 static int    opt_experimental = 0;
+static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
 
 // Enable all stages by default
 static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_QUANTIZE | HTP_OPMASK_COMPUTE;
@@ -460,7 +461,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -479,7 +480,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -795,7 +796,7 @@ static void repack_row_q8x4x2(uint8_t * y, const block_q8_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -813,7 +814,7 @@ static void unpack_row_q8x4x2(block_q8_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -1148,7 +1149,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         e[7]        = x[i * 8 + 7].e;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }
@@ -1167,7 +1168,7 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_e = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }
@@ -1693,7 +1694,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     // Start the DSP-side service. We need to pass the queue ID to the
     // DSP in a FastRPC call; the DSP side will import the queue and start
     // listening for packets in a callback.
-    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx);
+    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: failed to start session: 0x%08x\n", (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
@@ -3372,6 +3373,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_profile = getenv("GGML_HEXAGON_PROFILE");
     const char * str_etm     = getenv("GGML_HEXAGON_ETM");
     const char * str_nhvx    = getenv("GGML_HEXAGON_NHVX");
+    const char * str_use_hmx = getenv("GGML_HEXAGON_USE_HMX");
     const char * str_ndev    = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch    = getenv("GGML_HEXAGON_ARCH");
 
@@ -3381,8 +3383,9 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0) : opt_opmask;
     opt_opsync       = str_opsync  ? atoi(str_opsync)  : 0;
     opt_profile      = str_profile ? atoi(str_profile) : 0;
-    opt_etm          = str_etm     ? atoi(str_etm) : 0;
+    opt_etm          = str_etm     ? atoi(str_etm)     : 0;
     opt_nhvx         = str_nhvx    ? strtoul(str_nhvx, NULL, 0) : opt_nhvx;
+    opt_use_hmx      = str_use_hmx ? atoi(str_use_hmx) : opt_use_hmx;
     opt_ndev         = str_ndev    ? strtoul(str_ndev, NULL, 0) : opt_ndev;
 
     if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
