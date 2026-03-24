@@ -308,22 +308,6 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
     return result;
 }
 
-common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
-                                             const common_peg_parser &             prs,
-                                             const autoparser::generation_params & inputs,
-                                             const std::string &                   reasoning_start) {
-    auto parser = prs;
-    if (!inputs.generation_prompt.empty()) {
-        size_t end_pos = inputs.generation_prompt.size();
-        if (!reasoning_start.empty() && inputs.generation_prompt.find(reasoning_start) != std::string::npos) {
-            end_pos = inputs.generation_prompt.find(reasoning_start);
-        }
-        std::string cut_genprompt = inputs.generation_prompt.substr(0, end_pos);
-        parser                    = p.literal(cut_genprompt) + parser;
-    }
-    return parser;
-}
-
 namespace autoparser {
 
 std::string apply_template(const common_chat_template & tmpl, const template_params & params) {

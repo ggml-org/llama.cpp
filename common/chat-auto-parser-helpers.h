@@ -58,11 +58,6 @@ std::vector<segment> segmentize_markers(const std::string & text);
 //                                   (MARKER, "</function>"), (MARKER, "</tool_call>") ]
 std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segments);
 
-// Wrap parser with generation prompt parser
-common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
-                                             const common_peg_parser &             prs,
-                                             const autoparser::generation_params & inputs,
-                                             const std::string &                   reasoning_start = {});
 namespace autoparser {
 
 // Apply a template with the given parameters, returning the rendered string (empty on failure)
