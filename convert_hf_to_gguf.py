@@ -703,7 +703,7 @@ class ModelBase:
 
         # Remove any remaining unused auxiliary tensors
         for name in list(self.model_tensors.keys()):
-            if name.endswith((".input_scale", ".k_scale", ".v_scale")):
+            if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
     def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type):
