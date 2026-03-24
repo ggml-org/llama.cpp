@@ -8181,8 +8181,7 @@ class DeepseekV32Model(TextModel):
         hparams = self.hparams
 
         # first_k_dense_replace: number of leading layers using dense FFN instead of MoE
-        first_k_dense_replace = hparams.get("first_k_dense_replace")
-        self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
         self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
