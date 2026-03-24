@@ -67,10 +67,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    permissions:
-      id-token: write
-      packages: read
-      contents: read
     strategy:
       matrix:
         include:
