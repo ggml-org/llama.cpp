@@ -63,6 +63,8 @@ add_library(${TARGET} STATIC
     debug.h
     download.cpp
     download.h
+    hf-cache.cpp
+    hf-cache.h
     http.h
     json-partial.cpp
     json-partial.h
