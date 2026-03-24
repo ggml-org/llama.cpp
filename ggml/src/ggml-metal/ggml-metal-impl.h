@@ -120,6 +120,10 @@
 #define OP_UNARY_NUM_EXP         114
 #define OP_UNARY_NUM_SOFTPLUS    115
 #define OP_UNARY_NUM_EXPM1       116
+#define OP_UNARY_NUM_FLOOR       117
+#define OP_UNARY_NUM_CEIL        118
+#define OP_UNARY_NUM_ROUND       119
+#define OP_UNARY_NUM_TRUNC       120
 
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
