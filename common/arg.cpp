@@ -623,7 +623,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
+    if (!params.force_pure_content_parser && !params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
             "error: the supplied chat template is not supported: %s%s\n",
             params.chat_template.c_str(),
