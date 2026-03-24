@@ -301,6 +301,8 @@ class Keys:
         IMAGE_SIZE          = "clip.vision.image_size"
         IMAGE_MIN_PIXELS    = "clip.vision.image_min_pixels"
         IMAGE_MAX_PIXELS    = "clip.vision.image_max_pixels"
+        PREPROC_MIN_TILES   = "clip.vision.preproc_min_tiles"
+        PREPROC_MAX_TILES   = "clip.vision.preproc_max_tiles"
         PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
@@ -3869,6 +3871,8 @@ class LlamaFileType(IntEnum):
     # MOSTLY_Q4_0_8_8      = 35  # removed from gguf files, use Q4_0 and runtime repack
     MOSTLY_TQ1_0         = 36  # except 1d tensors
     MOSTLY_TQ2_0         = 37  # except 1d tensors
+    MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
+    MOSTLY_NVFP4         = 39  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 

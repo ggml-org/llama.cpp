@@ -11,33 +11,33 @@ from typing import Any, Callable, Sequence, Mapping, Iterable, Protocol, ClassVa
 try:
     from sentencepiece import SentencePieceProcessor
 except ImportError:
-    SentencePieceProcessor = None
+    SentencePieceProcessor: Any = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 except ImportError:
     _mistral_common_installed = False
-    MistralTokenizer = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
-    _filter_valid_tokenizer_files = None
+    MistralTokenizer: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
+    _filter_valid_tokenizer_files: Any = None
 else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found]
         get_one_valid_tokenizer_file,
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.
-    get_one_valid_tokenizer_file = None
+    get_one_valid_tokenizer_file: Any = None
 
 
 import gguf
@@ -703,7 +703,7 @@ class MistralVocab(Vocab):
 
             tokenizer_file_path = base_path / tokenizer_file
 
-        self.tokenizer = MistralTokenizer.from_file(
+        self.tokenizer: Any = MistralTokenizer.from_file(
             tokenizer_file_path
         ).instruct_tokenizer.tokenizer
         self.tokenizer_type = (

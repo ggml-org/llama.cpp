@@ -1337,7 +1337,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_NONE)
-            .expect_content("<think>I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+            .expect_content("<think>\nI'm\nthinking\n</think>\nHello, world!\nWhat's up?")
             .run();
 
         tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")

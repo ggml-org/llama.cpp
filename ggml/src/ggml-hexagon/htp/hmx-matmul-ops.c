@@ -727,7 +727,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                     if (use_dma_activation) {
                         const size_t row_bytes    = (size_t) params->k * sizeof(float);
                         const size_t stride_bytes = (size_t) params->act_stride * sizeof(float);
-                        dma_queue_push_chained(ctx->dma[0],
+                        dma_queue_push(ctx->dma[0],
                                           dma_make_ptr(vtcm_f32_act, activation_chunk),
                                           row_bytes, stride_bytes, row_bytes, n_rows);
                         dma_queue_pop(ctx->dma[0]);
@@ -747,7 +747,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
                 {
                     const size_t n_cols_first = hex_smin((size_t) params->n, n_chunk_n_cols);
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_curr, weight_group),
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, weight_group),
                                       fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_first);
                 }
 
@@ -765,7 +765,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                             const size_t n_cols_next = hex_smin((size_t) params->n - nc_next, n_chunk_n_cols);
                             const __fp16 *next_weight_chunk = weight_group + nc_next * params->weight_stride;
 
-                            dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
+                            dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
                                               fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
                         }
 
@@ -891,7 +891,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
             if (use_dma_activation) {
                 const size_t row_bytes    = (size_t) k * sizeof(float);
                 const size_t stride_bytes = (size_t) act_stride * sizeof(float);
-                dma_queue_push_chained(ctx->dma[0],
+                dma_queue_push(ctx->dma[0],
                                   dma_make_ptr(vtcm_f32_act, activation_chunk),
                                   row_bytes, stride_bytes, row_bytes, n_rows);
                 dma_queue_pop(ctx->dma[0]);
@@ -916,7 +916,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
         {
             const size_t n_cols_first = hex_smin(n, n_chunk_n_cols);
 
-            dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
+            dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight),
                               fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_first);
         }
 
@@ -933,7 +933,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
                     const size_t n_cols_next       = hex_smin(n - nc_next, n_chunk_n_cols);
                     const __fp16 *next_weight_chunk = permuted_weight + nc_next * weight_stride;
 
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk),
                                       fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
                 }
 
@@ -1104,7 +1104,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
             // because UDMA roiwidth is 16-bit and total size can exceed 65535.
             {
                 const size_t n_cols_first = hex_smin(n, n_chunk_n_cols);
-                dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
+                dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
             }
 
             for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
@@ -1120,7 +1120,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
                         const uint8_t *next_weight_chunk = permuted_weight + nc_next * row_stride;
 
-                        dma_queue_push_chained(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
+                        dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
                     }
 
                     // Dequant + vscatter writes directly to [K, N] transposed tiles.
@@ -1173,7 +1173,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
             {
                 // Use 2D DMA (n_cols rows x row_stride) to avoid 16-bit roiwidth overflow.
                 const uint8_t *qweight_chunk_A0 = permuted_weight;
-                dma_queue_push_chained(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), row_stride, row_stride, row_stride, n_cols_A0);
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), row_stride, row_stride, row_stride, n_cols_A0);
             }
 
             {
@@ -1191,7 +1191,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                 const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
                 if (1 < n_chunk_cnt) {
                     const uint8_t *qweight_chunk_A1 = permuted_weight + n_chunk_n_cols * row_stride;
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), row_stride, row_stride, row_stride, n_cols_A1);
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), row_stride, row_stride, row_stride, n_cols_A1);
                 }
 
                 // C0
@@ -1218,7 +1218,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                 // issue A_{i+2}
                 if (i + 2 < n_chunk_cnt) {
                     const uint8_t *qweight_chunk_p2 = permuted_weight + nc_p2 * row_stride;
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), row_stride, row_stride, row_stride, n_cols_p2);
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), row_stride, row_stride, row_stride, n_cols_p2);
                 }
 
                 // wait for HMX (C_{i}) -- C_{i} is done
@@ -1443,7 +1443,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
                 {
                     const float *activation_block = x + mr * k + kk;
 
-                    dma_queue_push_chained(ctx->dma[0],
+                    dma_queue_push(ctx->dma[0],
                                      dma_make_ptr(vtcm_scratch1, activation_block),
                                      k_blk_sz * sizeof(float),
                                      k * sizeof(float),
@@ -1472,10 +1472,10 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
                     s.scale_width = nb_sub * HMX_X4X2_DBLK_SIZE;
 
                     // 2D DMA: quants sub-range
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(s.dst, s.src + s.quant_off),
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(s.dst, s.src + s.quant_off),
                                       s.dst_stride, s.src_stride, s.quant_width, s.n_rows);
                     // 2D DMA: scales sub-range
-                    dma_queue_push_chained(ctx->dma[0], dma_make_ptr(s.dst + s.quant_width, s.src + s.scale_off),
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(s.dst + s.quant_width, s.src + s.scale_off),
                                       s.dst_stride, s.src_stride, s.scale_width, s.n_rows);
                 }
                 TIMER_STOP(fetch);

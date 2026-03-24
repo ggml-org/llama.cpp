@@ -348,6 +348,34 @@ void analyze_reasoning::compare_thinking_enabled() {
                 mode = reasoning_mode::TAG_BASED;
             }
         }
+    } else if (!left_trimmed.empty() && !right_trimmed.empty()) {
+        // Full-output diff is noisy (e.g., SmolLM3 changes the system message when enable_thinking flips).
+        // Try to find reasoning markers by tail-anchoring:
+        // one output's generation prompt tail may appear in the other with extra reasoning markers appended.
+        const auto & output_A = comparison->output_A;
+        const auto & output_B = comparison->output_B;
+        const size_t anchor_len = 64;
+
+        for (int dir = 0; dir < 2; dir++) {
+            const auto & base     = dir == 0 ? output_B : output_A;
+            const auto & extended = dir == 0 ? output_A : output_B;
+
+            size_t len = std::min(base.size(), anchor_len);
+            std::string anchor = base.substr(base.size() - len);
+            auto pos = extended.rfind(anchor);
+            if (pos == std::string::npos || pos + len >= extended.size()) continue;
+
+            std::string extra = trim_whitespace(extended.substr(pos + len));
+            if (extra.empty()) continue;
+
+            auto seg = prune_whitespace_segments(segmentize_markers(extra));
+            if (seg.size() == 2 && seg[0].type == segment_type::MARKER && seg[1].type == segment_type::MARKER) {
+                if (start.empty()) start = seg[0].value;
+                if (end.empty())   end   = seg[1].value;
+                mode = reasoning_mode::TAG_BASED;
+                break;
+            }
+        }
     }
 
     if (mode == reasoning_mode::NONE && start.empty() && !end.empty()) {
@@ -409,7 +437,7 @@ void analyze_reasoning::compare_reasoning_scope() {
             if (result.result.success()) {
                 end = trim_trailing_whitespace(result.tags["post"]);
             } else {
-                LOG_DBG(ANSI_ORANGE "%s: Unable to extracft reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
+                LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
             }
         }
