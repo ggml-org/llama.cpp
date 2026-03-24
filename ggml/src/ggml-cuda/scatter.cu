@@ -44,21 +44,23 @@ void ggml_cuda_op_scatter(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(dst));
 
-    float c;
-    memcpy(&c, (float *) dst->op_params + 0, sizeof(float));
+    float c = ggml_get_op_params_f32(dst, 0);
+    bool inplace = ggml_get_op_params_i32(dst, 1);
 
     // step 1 - copy whole src0 to dst
-    cudaStream_t main_stream = ctx.stream();
-    char * dst_ddc = (char *) dst->data;
-    char * src0_ddc = (char *) src0->data;
+    if (!inplace) {
+        cudaStream_t main_stream = ctx.stream();
+        char * dst_ddc = (char *) dst->data;
+        char * src0_ddc = (char *) src0->data;
 
-    CUDA_CHECK(cudaMemcpyAsync(dst_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
+        CUDA_CHECK(cudaMemcpyAsync(dst_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
+    }
 
     // step 2 - set elements in dst indicated by ids to c
     const int32_t * src1_d = (const int32_t *) src1->data;
     float * dst_d = (float *) dst->data;
 
-    int threads = std::min((int) ne10, 768); // ids
+    int threads = std::min((int) ne10, 512); // ids
 
     int64_t total_blocks = ne11 * ne12 * ne13;
     int blocks = (int) std::min((int64_t) 65535, total_blocks);

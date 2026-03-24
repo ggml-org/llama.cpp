@@ -2486,6 +2486,12 @@ extern "C" {
         struct ggml_tensor  * ids,
         float                 c);
 
+    GGML_API struct ggml_tensor * ggml_scatter_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * ids,
+        float                 c);
+
     // custom operators
 
     typedef void (*ggml_custom1_op_t)(struct ggml_tensor * dst , const struct ggml_tensor * a, int ith, int nth, void * userdata);

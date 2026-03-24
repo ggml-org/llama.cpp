@@ -6648,6 +6648,65 @@ struct test_diag : public test_case {
     }
 };
 
+// GGML_OP_SCATTER
+struct test_scatter : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_ids;
+    const std::array<int64_t, 4> ne_a;
+    const std::array<int64_t, 4> ne_ids;
+    float c;
+    bool inplace;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, type_ids, ne_a, ne_ids, c, inplace);
+    }
+
+    test_scatter(ggml_type type_a = GGML_TYPE_F32,
+            ggml_type type_ids = GGML_TYPE_I32,
+            std::array<int64_t, 4> ne_a = {10, 10, 10, 10},
+            std::array<int64_t, 4> ne_ids = {3, 10, 10, 10},
+            float c = 2.0f,
+            bool inplace = false)
+        : type_a(type_a), type_ids(type_ids), ne_a(ne_a), ne_ids(ne_ids), c(c), inplace(inplace) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type_a, 4, ne_a.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * ids = ggml_new_tensor(ctx, type_ids, 4, ne_ids.data());
+        ggml_set_param(ids);
+        ggml_set_name(ids, "ids");
+
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_scatter_inplace(ctx, a, ids, c);
+        } else {
+            out = ggml_scatter(ctx, a, ids, c);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                // ids
+                const int num_pos_ids = ggml_nelements(t);
+                std::vector<int32_t> data(num_pos_ids);
+                for (int i = 0; i < num_pos_ids; i++) {
+                    data[i] = rand() % ne_a[0];
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, num_pos_ids * sizeof(int));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+
 
 enum llm_norm_type {
     LLM_NORM,
@@ -8474,6 +8533,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
+    // scatter
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 1, 1, 1}, {3, 1, 1, 1}, 0.0f, true));
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 1, 1, 1}, {3, 1, 1, 1}, 0.0f, false));
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, true));
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, false));
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -8729,6 +8794,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
+
+    // scatter
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, true));
+    test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, false));
 
     return test_cases;
 }

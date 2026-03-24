@@ -11265,7 +11265,9 @@ static void ggml_compute_forward_scatter_f32(
 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
+
     const float c = ggml_get_op_params_f32(dst, 0);
+    const bool inplace = ggml_get_op_params_i32(dst, 1);
 
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
@@ -11303,7 +11305,9 @@ static void ggml_compute_forward_scatter_f32(
         float * dst_ptr = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
 
         // copy whole row from src0
-        ggml_vec_cpy_f32(ne00, dst_ptr, src0_ptr);
+        if (!inplace) {
+            ggml_vec_cpy_f32(ne00, dst_ptr, src0_ptr);
+        }
 
         // set dst elements indicated by indices in src1 to c
         for (int j = 0; j < ne10; ++j) {

@@ -6205,26 +6205,43 @@ struct ggml_tensor * ggml_hadamard(
 
 // ggml_scatter
 
-struct ggml_tensor * ggml_scatter(
+static struct ggml_tensor * ggml_scatter_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * ids,
-        float                 c) {
+        float                 c,
+        bool                  inplace) {
 
     GGML_ASSERT(a->type == GGML_TYPE_F32);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
     GGML_ASSERT(a->ne[1] == ids->ne[1]);
 
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
-    float params[1] = { c };
-    ggml_set_op_params(result, &params, sizeof(params));
+    ggml_set_op_params_f32(result, 0, c);
+    ggml_set_op_params_i32(result, 1, inplace ? 1 : 0);
 
     result->op   = GGML_OP_SCATTER;
     result->src[0] = a;
     result->src[1] = ids;
 
     return result;
+}
+
+struct ggml_tensor * ggml_scatter(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * ids,
+        float                 c) {
+    return ggml_scatter_impl(ctx, a, ids, c, false);
+}
+
+struct ggml_tensor * ggml_scatter_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * ids,
+        float                 c) {
+    return ggml_scatter_impl(ctx, a, ids, c, true);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
