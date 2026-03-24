@@ -969,6 +969,18 @@ class unified_cache {
 
     size_t onednn_activations_scratch_size() const { return onednn_activations_scratch_size_; }
 
+    // === GPU Reorder Temp Buffer ===
+    // Pre-allocated device VRAM buffer reused by GPU-side AOS→SOA reorder.
+    // Avoids per-expert sycl::malloc_device that fails when VRAM is tight.
+
+    // Reserve the reorder temp buffer. Call once before weight loading begins.
+    // size_bytes: largest expert tensor size (AOS bytes) with margin.
+    bool reserve_reorder_temp(size_t size_bytes);
+
+    // Get pointer and size of the pre-allocated reorder temp buffer.
+    void * get_reorder_temp_buffer() const { return reorder_temp_buffer_; }
+    size_t get_reorder_temp_size() const { return reorder_temp_size_; }
+
     // === Persistent Scratch Buffers ===
     // Named scratch buffers for persistent kernels (TG optimization).
     // Unlike oneDNN scratch which is shared, these are dedicated per named buffer.
@@ -1086,6 +1098,12 @@ class unified_cache {
     size_t              dma_buffer_count_   = 0;
     size_t              dma_reserved_bytes_ = 0;
     std::mutex          dma_staging_mutex_;
+
+    // Reusable temp VRAM buffer for GPU-side AOS→SOA reorder during MoE prestage.
+    // Pre-allocated at cache init to avoid per-expert malloc_device that fails
+    // when VRAM is full after S1-PRELOAD fills it with dense weights.
+    void *     reorder_temp_buffer_ = nullptr;
+    size_t     reorder_temp_size_   = 0;
 
     // OneDNN FP16 scratch buffers for prompt processing.
     // Pre-allocated to avoid per-op allocations that cause OOM with large contexts.

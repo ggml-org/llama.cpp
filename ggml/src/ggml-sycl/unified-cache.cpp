@@ -1042,6 +1042,18 @@ unified_cache::~unified_cache() {
         onednn_activations_scratch_ = nullptr;
     }
 
+    // Free reorder temp buffer
+    if (reorder_temp_buffer_) {
+        alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
+        saturating_sub_used(reorder_temp_size_);
+        try {
+            sycl::free(reorder_temp_buffer_, queue_);
+        } catch (...) {
+        }
+        reorder_temp_buffer_ = nullptr;
+        reorder_temp_size_   = 0;
+    }
+
     // Free persistent scratch buffers
     for (auto & pair : persistent_scratches_) {
         if (pair.second.device_ptr) {
@@ -7388,6 +7400,49 @@ bool unified_cache::get_onednn_scratch(size_t weights_needed, size_t activations
     out.weights_size     = onednn_weights_scratch_size_;
     out.activations_size = onednn_activations_scratch_size_;
     return true;
+}
+
+bool unified_cache::reserve_reorder_temp(size_t size_bytes) {
+    // Already reserved with sufficient size?
+    if (reorder_temp_buffer_ && reorder_temp_size_ >= size_bytes) {
+        return true;
+    }
+
+    // Free existing if resizing
+    if (reorder_temp_buffer_) {
+        alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
+        try {
+            sycl::free(reorder_temp_buffer_, queue_);
+        } catch (...) {
+        }
+        saturating_sub_used(reorder_temp_size_);
+        reorder_temp_buffer_ = nullptr;
+        reorder_temp_size_   = 0;
+    }
+
+    // Allocate temp buffer for GPU-side AOS→SOA reorder.
+    // Called from moe_hybrid_init_once under std::call_once — single-threaded.
+    try {
+        reorder_temp_buffer_ = sycl::malloc_device(size_bytes, queue_);
+        if (!reorder_temp_buffer_) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] Failed to allocate reorder temp buffer (%.1f MB)\n",
+                          size_bytes / (1024.0f * 1024.0f));
+            return false;
+        }
+        reorder_temp_size_ = size_bytes;
+        used_.fetch_add(size_bytes, std::memory_order_relaxed);
+        const int dev_id = ggml_sycl_get_device_id_from_queue(queue_);
+        alloc_registry::instance().register_alloc(reorder_temp_buffer_, size_bytes,
+                                                  dev_id, alloc_type::DEVICE);
+        GGML_LOG_INFO("[UNIFIED-CACHE] Reserved GPU reorder temp buffer: %.1f MB\n",
+                      size_bytes / (1024.0f * 1024.0f));
+        return true;
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] Reorder temp buffer allocation failed: %s\n", e.what());
+        reorder_temp_buffer_ = nullptr;
+        reorder_temp_size_   = 0;
+        return false;
+    }
 }
 
 // Global scratch buffer state for lock management

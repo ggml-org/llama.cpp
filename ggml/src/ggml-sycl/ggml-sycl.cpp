@@ -834,7 +834,7 @@ static bool is_expert_resident(int block_id, int expert_id, int device_id) {
     static const ggml_layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED,
                                                 GGML_LAYOUT_AOS };
 
-    auto check_key = [&](const ggml_sycl_cache_id & key) -> bool {
+    auto check_key = [&](const ggml_sycl_cache_id & key, const char * /*role*/) -> bool {
         if (!key.valid) {
             return false;
         }
@@ -847,13 +847,13 @@ static bool is_expert_resident(int block_id, int expert_id, int device_id) {
     };
 
     // All registered roles must be cached
-    if (grp.has_gate && !check_key(grp.gate_key)) {
+    if (grp.has_gate && !check_key(grp.gate_key, "gate")) {
         return false;
     }
-    if (grp.has_up && !check_key(grp.up_key)) {
+    if (grp.has_up && !check_key(grp.up_key, "up")) {
         return false;
     }
-    if (grp.has_down && !check_key(grp.down_key)) {
+    if (grp.has_down && !check_key(grp.down_key, "down")) {
         return false;
     }
 
@@ -938,8 +938,10 @@ struct ggml_sycl_gpu_reorder_fill_ctx {
     int64_t                  nrows;
     size_t                   src_bytes;   // AOS size
     size_t                   dst_bytes;   // SOA size
-    std::vector<void *> *    temp_bufs;   // shared across all fill_fn calls, for deferred free
-    sycl::queue *            owner_queue; // queue that owns temp_bufs allocations
+    std::vector<void *> *    temp_bufs;        // fallback: deferred free list (nullptr when using prealloc)
+    sycl::queue *            owner_queue;      // queue that owns temp_bufs allocations
+    void *                   prealloc_temp       = nullptr;  // pre-allocated reorder temp buffer (from cache)
+    size_t                   prealloc_temp_size  = 0;        // size of pre-allocated buffer
 };
 static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue & queue, void * dst, size_t dst_size,
                                                  const void * src, size_t src_size, const void * ctx_void,
@@ -1083,9 +1085,15 @@ static void moe_prestage_popular_experts() {
         // Decide whether to use GPU-side or CPU-side reorder
         const bool use_gpu_reorder = !ggml_sycl_gpu_reorder_disabled();
 
-        // Temp VRAM buffers for GPU reorder (shared across all experts)
+        // Get pre-allocated reorder temp buffer from cache (reserved during moe_hybrid_init_once).
+        // Falls back to per-expert dynamic alloc if not reserved.
+        void * prealloc_temp      = cache ? cache->get_reorder_temp_buffer() : nullptr;
+        size_t prealloc_temp_size = cache ? cache->get_reorder_temp_size()   : 0;
+
+        // Fallback: deferred free list for dynamically allocated temp buffers
+        // (only used if pre-allocated buffer is unavailable or too small).
         std::vector<void *> temp_vram_bufs;
-        if (use_gpu_reorder) {
+        if (use_gpu_reorder && !prealloc_temp) {
             temp_vram_bufs.reserve(sorted_groups.size() * 3);
         }
 
@@ -1125,13 +1133,15 @@ static void moe_prestage_popular_experts() {
             req.skip_fill_wait   = true;
 
             if (use_gpu_reorder) {
-                gpu_fctx.type        = meta->type;
-                gpu_fctx.ncols       = meta->ne0;
-                gpu_fctx.nrows       = meta->ne1;
-                gpu_fctx.src_bytes   = meta->bytes;
-                gpu_fctx.dst_bytes   = dst_bytes;
-                gpu_fctx.temp_bufs   = &temp_vram_bufs;
-                gpu_fctx.owner_queue = nullptr;
+                gpu_fctx.type              = meta->type;
+                gpu_fctx.ncols             = meta->ne0;
+                gpu_fctx.nrows             = meta->ne1;
+                gpu_fctx.src_bytes         = meta->bytes;
+                gpu_fctx.dst_bytes         = dst_bytes;
+                gpu_fctx.temp_bufs         = prealloc_temp ? nullptr : &temp_vram_bufs;
+                gpu_fctx.owner_queue       = nullptr;
+                gpu_fctx.prealloc_temp      = prealloc_temp;
+                gpu_fctx.prealloc_temp_size = prealloc_temp_size;
 
                 req.fill_fn  = ggml_sycl_fill_reordered_gpu;
                 req.fill_ctx = &gpu_fctx;
@@ -1242,11 +1252,13 @@ static void moe_prestage_popular_experts() {
                       "%.1f ms total (%s reorder)\n",
                       expert_groups_staged, prestaged, total_ms,
                       use_gpu_reorder ? "GPU" : "CPU");
+
     }
 
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular expert tensors to GPU0 VRAM "
                   "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
                   prestaged, skipped, down_deferred, n_layers, avail);
+
     ggml_sycl_watchdog_heartbeat();
 
     // Phase 2: Fill secondary GPUs with the NEXT TIER of popular experts.
@@ -1375,7 +1387,8 @@ static void moe_prestage_popular_experts() {
 
             if (sec_use_gpu && !sec_work.empty()) {
                 // --- Phase 2b (GPU path): GPU reorder for secondary devices ---
-                // Per-device temp buffer tracking for deferred free.
+                // Per-device fallback temp buffer tracking for deferred free
+                // (only used when pre-allocated buffer is unavailable).
                 std::unordered_map<int, std::vector<void *>> sec_temp_bufs;
                 std::vector<ggml_sycl_gpu_reorder_fill_ctx> sec_fill_ctxs(sec_work.size());
 
@@ -1386,13 +1399,19 @@ static void moe_prestage_popular_experts() {
                     auto & budget = sec_budgets[item.budget_idx];
                     auto & fctx = sec_fill_ctxs[i];
 
-                    fctx.type        = item.meta->type;
-                    fctx.ncols       = item.meta->ne0;
-                    fctx.nrows       = item.meta->ne1;
-                    fctx.src_bytes   = item.meta->bytes;
-                    fctx.dst_bytes   = item.dst_bytes;
-                    fctx.temp_bufs   = &sec_temp_bufs[budget.dev];
-                    fctx.owner_queue = nullptr;
+                    // Get pre-allocated reorder temp buffer for this secondary device
+                    void * sec_prealloc      = budget.cache ? budget.cache->get_reorder_temp_buffer() : nullptr;
+                    size_t sec_prealloc_size = budget.cache ? budget.cache->get_reorder_temp_size()   : 0;
+
+                    fctx.type              = item.meta->type;
+                    fctx.ncols             = item.meta->ne0;
+                    fctx.nrows             = item.meta->ne1;
+                    fctx.src_bytes         = item.meta->bytes;
+                    fctx.dst_bytes         = item.dst_bytes;
+                    fctx.temp_bufs         = sec_prealloc ? nullptr : &sec_temp_bufs[budget.dev];
+                    fctx.owner_queue       = nullptr;
+                    fctx.prealloc_temp      = sec_prealloc;
+                    fctx.prealloc_temp_size = sec_prealloc_size;
 
                     ggml_sycl::cache_layout_request req{};
                     req.key              = item.key;
@@ -2416,6 +2435,27 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         "%d/%zu host-resident\n",
         n_moe_layers, n_experts_per_layer, n_experts_used, expert_weight_bytes / 1024.0, n_host_experts,
         expert_list.size());
+
+    // Pre-allocate a reusable temp VRAM buffer for GPU-side AOS→SOA reorder.
+    // Must happen BEFORE S1-PRELOAD fills VRAM with dense weights, otherwise
+    // per-expert sycl::malloc_device fails and all expert prestaging is lost.
+    // The buffer is reused sequentially by each expert's fill_fn during prestage.
+    // Allocate with ~12.5% margin over the largest expert tensor size.
+    if (expert_weight_bytes > 0 && !ggml_sycl_gpu_reorder_disabled()) {
+        const size_t reorder_temp_size = expert_weight_bytes + (expert_weight_bytes / 8);
+        ggml_sycl::unified_cache * gpu0_cache = ggml_sycl::get_unified_cache_for_device(device);
+        if (gpu0_cache) {
+            gpu0_cache->reserve_reorder_temp(reorder_temp_size);
+        }
+        // Also reserve on secondary GPUs (for Phase 2 prestage)
+        const int total_gpus = ggml_sycl_info().total_gpu_count;
+        for (int d = 1; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
+            ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(d);
+            if (sec_cache) {
+                sec_cache->reserve_reorder_temp(reorder_temp_size);
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Initialize popularity tracking and warmup profiling
@@ -8591,24 +8631,29 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
         pinned_src = staging;
     }
 
-    // Step 2: Allocate temp VRAM buffer for AOS data.
+    // Step 2: Get temp VRAM buffer for AOS data.
+    // Prefer pre-allocated buffer from cache (avoids per-expert malloc_device that
+    // fails when VRAM is full after S1-PRELOAD).  Fall back to dynamic alloc.
     void * temp_vram = nullptr;
-    try {
-        temp_vram = sycl::malloc_device(src_size, queue);
-    } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[GPU-REORDER] temp VRAM alloc failed (%zu bytes): %s\n", src_size, e.what());
-        if (staging) ggml_sycl_staging_pool().release(staging);
-        return queue.ext_oneapi_submit_barrier(deps);
-    }
-    if (!temp_vram) {
-        GGML_LOG_ERROR("[GPU-REORDER] temp VRAM alloc returned null (%zu bytes)\n", src_size);
-        if (staging) ggml_sycl_staging_pool().release(staging);
-        return queue.ext_oneapi_submit_barrier(deps);
-    }
-
-    // Track temp buffer for deferred free (after all kernels complete)
-    if (ctx->temp_bufs) {
-        ctx->temp_bufs->push_back(temp_vram);
+    if (ctx->prealloc_temp && ctx->prealloc_temp_size >= src_size) {
+        temp_vram = ctx->prealloc_temp;
+    } else {
+        try {
+            temp_vram = sycl::malloc_device(src_size, queue);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[GPU-REORDER] temp VRAM alloc failed (%zu bytes): %s\n", src_size, e.what());
+            if (staging) ggml_sycl_staging_pool().release(staging);
+            return queue.ext_oneapi_submit_barrier(deps);
+        }
+        if (!temp_vram) {
+            GGML_LOG_ERROR("[GPU-REORDER] temp VRAM alloc returned null (%zu bytes)\n", src_size);
+            if (staging) ggml_sycl_staging_pool().release(staging);
+            return queue.ext_oneapi_submit_barrier(deps);
+        }
+        // Track dynamically allocated temp buffer for deferred free
+        if (ctx->temp_bufs) {
+            ctx->temp_bufs->push_back(temp_vram);
+        }
     }
 
     // Step 3: DMA pinned host → temp VRAM (AOS)
@@ -12527,45 +12572,27 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         cached_kv_host.store(kv_host_val, std::memory_order_release);
     }
 
-    // Determine VRAM available for KV cache using actual free device memory.
-    // The budget-based calculation (budget - weights - runtime) can underestimate
-    // available VRAM because runtime_bytes may over-account shared/transient
-    // allocations.  Querying actual free VRAM gives a ground-truth measurement.
-    size_t free_mem = 0, total_mem = 0;
-    ggml_backend_sycl_get_device_memory(device, &free_mem, &total_mem);
-
-    // Reserve headroom for compute scratch, graph replay, etc.
-    size_t compute_reserve = std::max(size_t(256) << 20, total_mem / 10);
-    // When weights are on host-pinned (S1), the unified cache needs VRAM for
-    // SOA layout copies.  Reserve space for DENSE weights only — expert weights
-    // use LRU eviction in the remaining VRAM and should not block KV placement.
-    size_t weight_cache_reserve = 0;
-    if (ggml_backend_sycl_weights_evictable()) {
-        const size_t total_model = ggml_sycl_get_model_size();
-        size_t       expert_bytes = 0;
-        ggml_sycl_get_moe_info(&expert_bytes, nullptr, nullptr);
-        // Dense weight size = total model - expert weights.
-        // For MoE 120B: ~60GB total, ~58GB experts, ~2.2GB dense.
-        weight_cache_reserve = (total_model > expert_bytes) ? total_model - expert_bytes : total_model;
-    }
-    // Use conservative free estimate: the driver's free_mem can be overly
-    // optimistic early in loading (before page table / OS overhead is
-    // accounted for).  Cap at 65% of total VRAM to leave room for driver
-    // overhead, OS compositor, and GPU page tables from host-pinned mappings.
-    const size_t effective_free    = std::min(free_mem, total_mem * 65 / 100);
-    const size_t total_reserve     = compute_reserve + weight_cache_reserve;
-    size_t       kv_vram_cap       = 0;
+    // Determine VRAM available for KV cache by querying the unified cache.
+    // The unified cache is the single authority for all VRAM — it already
+    // accounts for weights pinned by S1-PRELOAD, runtime reservations (compute
+    // buffers, expert staging), and VRAM_BUDGET_PCT.  Using it directly avoids
+    // the stale driver free-memory estimates and double-counted reserves that
+    // previously caused ALL KV to land on host even when per-layer KV would fit.
+    //
+    // For Mistral 7B on B580: weights=3.9GB already pinned, unified cache
+    // reports ~5.5GB available → 4GB KV fits entirely on device.
+    // For 120B MoE: dense weights=2.2GB pinned, KV at -c 256 = 9MB (trivial),
+    // KV at -c 4096 = 288MB → both fit alongside expert LRU cache.
+    size_t kv_vram_cap = 0;
     if (kv_host_val == 1) {
         // User explicitly requested host KV — force all-cold
         kv_vram_cap = 0;
     } else {
-        kv_vram_cap = (effective_free > total_reserve) ? effective_free - total_reserve : 0;
+        kv_vram_cap = ggml_sycl::unified_cache_available_for_compute(device);
     }
 
-    GGML_SYCL_DEBUG("[KV-TIER] dev=%d free=%.0f MB eff_free=%.0f MB compute_rsv=%.0f MB weight_rsv=%.0f MB kv_cap=%.0f MB kv_req=%.0f MB\n",
-                    device, free_mem / (1024.0 * 1024.0), effective_free / (1024.0 * 1024.0),
-                    compute_reserve / (1024.0 * 1024.0), weight_cache_reserve / (1024.0 * 1024.0),
-                    kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
+    GGML_SYCL_DEBUG("[KV-TIER] dev=%d cache_available=%.0f MB kv_req=%.0f MB\n",
+                    device, kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
     // Use kv_tier_manager for per-layer hot/cold split.
     // When n_layer is known (from inventory), tier by layer so KV lives
     // alongside its attention weights on the same device/host tier.
@@ -12604,26 +12631,60 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     void * hot_base  = nullptr;
     void * cold_base = nullptr;
 
-    // Allocate hot region (device memory)
-    if (hot_size > 0) {
+    // Allocate hot region (device memory) with per-layer fallback.
+    // Instead of falling back to ALL-cold on failure, progressively reduce
+    // the hot layer count until the device allocation succeeds.  This ensures
+    // layers that fit in VRAM stay on device even when the total KV is too big.
+    const size_t kv_per_layer = (n_layers > 0) ? size / n_layers : size;
+    while (hot_size > 0) {
         auto err = CHECK_TRY_ERROR(hot_base = sycl::malloc_device(hot_size, *buft_ctx->stream));
         if (err == 0 && hot_base) {
             ggml_sycl::alloc_registry::instance().register_alloc(hot_base, hot_size, device,
                                                                  ggml_sycl::alloc_type::DEVICE);
+            ggml_sycl::unified_cache_add_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
+            break;
         }
-        if (err != 0 || !hot_base) {
-            // Device allocation failed — fall back to all-cold (host pinned) mode.
-            // This happens when VRAM is exhausted (e.g. 120B MoE on 12GB GPU).
+        // Device allocation failed for this hot_size.  Reduce hot layer count
+        // and retry with a smaller device region.
+        hot_base = nullptr;
+        // Compute current hot layer count from sizes (avoids env var override
+        // in kv_tier_manager that could prevent reduction).
+        uint32_t cur_hot = (kv_per_layer > 0) ? static_cast<uint32_t>(hot_size / kv_per_layer) : 0;
+        if (cur_hot <= 1) {
+            // Cannot reduce further — go all-cold
             GGML_LOG_WARN(
-                "[KV-TIER] Device %d: failed to allocate %.1f MB device memory for hot region, "
+                "[KV-TIER] Device %d: failed to allocate %.1f MB device memory for KV, "
                 "falling back to host-only KV cache\n",
                 device, hot_size / (1024.0 * 1024.0));
-            hot_base  = nullptr;
-            cold_size = size;
             hot_size  = 0;
-        } else {
-            ggml_sycl::unified_cache_add_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
+            cold_size = size;
+            break;
         }
+        // Halve the hot layers (binary search) for faster convergence
+        uint32_t new_hot = cur_hot / 2;
+        GGML_LOG_INFO(
+            "[KV-TIER] Device %d: %.1f MB device alloc failed, reducing hot layers %u -> %u\n",
+            device, hot_size / (1024.0 * 1024.0), cur_hot, new_hot);
+        // Recompute sizes directly from layer count (bypass manager env var override)
+        hot_size  = static_cast<size_t>(new_hot) * kv_per_layer;
+        hot_size  = (hot_size + 511) & ~size_t(511);
+        if (hot_size > size) {
+            hot_size = size;
+        }
+        cold_size = size - hot_size;
+    }
+
+    // Reconcile the tier manager with the actual hot/cold split achieved by
+    // the allocation loop.  Use set_actual_hot_layers() to bypass any env var
+    // override in configure() — what matters is the actual allocation result.
+    {
+        uint32_t actual_hot = (kv_per_layer > 0 && hot_size > 0)
+            ? static_cast<uint32_t>(hot_size / kv_per_layer)
+            : 0;
+        if (actual_hot > n_layers) {
+            actual_hot = n_layers;
+        }
+        mgr.set_actual_hot_layers(actual_hot);
     }
 
     // Allocate cold region (host memory, pinned if within cap)

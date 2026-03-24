@@ -43,6 +43,12 @@ class kv_tier_manager {
     // cold_bytes: bytes for host pinned memory region (remaining layers)
     void get_region_sizes(size_t total_bytes, size_t & hot_bytes, size_t & cold_bytes) const;
 
+    // Override the hot layer count after allocation.  Called when device
+    // allocation fails and the retry loop settles on fewer hot layers than
+    // configure() initially computed (e.g. due to VRAM fragmentation or
+    // env-var override that exceeds actual capacity).
+    void set_actual_hot_layers(uint32_t n_hot);
+
   private:
     bool     active_       = false;
     int      device_       = -1;

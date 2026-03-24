@@ -54,6 +54,14 @@ bool kv_tier_manager::is_hot(uint32_t layer_id) const {
     return layer_id < hot_layers_;
 }
 
+void kv_tier_manager::set_actual_hot_layers(uint32_t n_hot) {
+    if (n_hot > total_layers_) {
+        n_hot = total_layers_;
+    }
+    hot_layers_ = n_hot;
+    active_     = (hot_layers_ < total_layers_);
+}
+
 void kv_tier_manager::get_region_sizes(size_t total_bytes, size_t & hot_bytes, size_t & cold_bytes) const {
     if (!active_ || total_layers_ == 0) {
         hot_bytes  = total_bytes;
