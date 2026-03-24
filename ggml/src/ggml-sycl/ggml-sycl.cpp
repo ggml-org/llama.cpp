@@ -8217,6 +8217,7 @@ static void ggml_sycl_init_layout_info(ggml_tensor_extra_gpu * extra,
 }
 
 static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) try {
+    ggml_sycl_watchdog_heartbeat();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
@@ -25159,6 +25160,7 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
     ctx.graph_pinned_entries.reserve(target_layouts.size());
     size_t loaded = 0;
     for (const auto & entry : target_layouts) {
+        ggml_sycl_watchdog_heartbeat();
         const ggml_sycl_cache_id & cache_key  = entry.first;
         const ggml_tensor *        weight     = entry.second.tensor;
         const layout_mode          target     = entry.second.layout;
@@ -31282,6 +31284,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FIRST_SAVED;
+                    ggml_sycl_watchdog_heartbeat();
 
                     static std::atomic<int> flog_first{ 0 };
                     if (flog_first.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31432,6 +31435,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FUSED_READY;
+                    ggml_sycl_watchdog_heartbeat();
 
                     static std::atomic<int> flog_fuse{ 0 };
                     if (flog_fuse.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31482,6 +31486,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     {
+                        ggml_sycl_watchdog_heartbeat();
                         static std::atomic<int> fused_route_log{0};
                         if (fused_route_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                             GGML_LOG_INFO("[MOE-P4] layer=%d: gpu0=%zu cpu=%zu sec=%zu\n",
@@ -34921,6 +34926,7 @@ static inline bool should_force_gpu_dispatch(const ggml_tensor * dst) {
 }
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
+    ggml_sycl_watchdog_heartbeat();
     if (!g_sycl_loaded) {
         return false;
     }
@@ -35535,6 +35541,7 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
                                                const void *   data,
                                                size_t         offset,
                                                size_t         size) try {
+    ggml_sycl_watchdog_heartbeat();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
@@ -37244,7 +37251,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
 #endif  // GGML_SYCL_DNNL
 
+    ggml_sycl_watchdog_heartbeat();
     for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_sycl_watchdog_heartbeat();
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
         g_preclassified_node_idx = i;
         ggml_tensor * node       = cgraph->nodes[i];
@@ -44399,6 +44408,11 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         ~graph_inflight_guard() { counter.fetch_sub(1, std::memory_order_relaxed); }
     };
 
+    // Start watchdog on first graph_compute (deferred from backend init to
+    // allow model loading to complete without false timeout on large models).
+    static std::once_flag watchdog_once;
+    std::call_once(watchdog_once, []() { ggml_sycl_watchdog_start(); });
+
     const int inflight_prev = g_sycl_graph_inflight.fetch_add(1, std::memory_order_relaxed);
 
     graph_inflight_guard inflight_guard(g_sycl_graph_inflight);
@@ -44569,6 +44583,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 GGML_LOG_ERROR("[SYCL] pre-finalize sync failed: %s\n", e.what());
             }
         }
+        ggml_sycl_watchdog_heartbeat();
         finalize_layouts(*sycl_ctx, cgraph);
         GGML_SYCL_DEBUG("[DEBUG] finalize_layouts returned, now checking graph compatibility\n");
         if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
@@ -44980,6 +44995,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         return GGML_STATUS_SUCCESS;
     }
 normal_dispatch:
+    ggml_sycl_watchdog_heartbeat();
     // Leaving persistent TG path (e.g. PP phase): drop cached decode plans.
     if (sycl_ctx->unified_kernel && sycl_ctx->unified_kernel->has_cached_plan()) {
         sycl_ctx->unified_kernel->invalidate_plan_cache();
@@ -45376,6 +45392,7 @@ normal_dispatch:
         }
         // Pre-load and pin all dense weights before graph recording (weight streaming mode).
         // This ensures stable cache slot pointers during graph execution.
+        ggml_sycl_watchdog_heartbeat();
         if (!sycl_ctx->exec_graph && !sycl_ctx->weight_streaming_graphs_disabled) {
             if (!graph_preload_weights(*sycl_ctx, cgraph, cached_is_decode)) {
                 GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");
@@ -46531,7 +46548,8 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     }
 
     ggml_check_sycl();
-    ggml_sycl_watchdog_start();
+    // Watchdog deferred to first graph_compute — model loading (60GB for 120B)
+    // can take >60s and doesn't need hang detection.
     check_allow_gpu_index(device);
     ggml_backend_sycl_context * ctx = new ggml_backend_sycl_context(device);
     if (ctx == nullptr) {
