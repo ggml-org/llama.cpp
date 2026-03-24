@@ -22,6 +22,7 @@ static void test_calculate_diff_split_no_common(testing & t);
 static void test_calculate_diff_split_single_char(testing & t);
 static void test_calculate_diff_split_overlaps(testing & t);
 static void test_calculate_diff_split_tag_boundaries(testing & t);
+static void test_calculate_diff_split_generation_prompt(testing & t);
 static void test_calculate_diff_split(testing & t);
 
 static void test_until_common_prefix_basic(testing & t);
@@ -61,6 +62,9 @@ static void test_nemotron_tool_format(testing & t);
 static void test_cohere_reasoning_detection(testing & t);
 static void test_cohere_analysis(testing & t);
 
+// SmolLM3 template analysis tests
+static void test_smollm3_analysis(testing & t);
+
 // Marker separation
 static void test_marker_separation(testing & t);
 
@@ -95,6 +99,7 @@ int main(int argc, char * argv[]) {
     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
     t.test("cohere", test_cohere_analysis);
     t.test("nemotron", test_nemotron_analysis);
+    t.test("smollm3", test_smollm3_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
@@ -179,6 +184,7 @@ static void test_calculate_diff_split(testing & t) {
     t.test("calculate_diff_split single char", test_calculate_diff_split_single_char);
     t.test("calculate_diff_split overlaps", test_calculate_diff_split_overlaps);
     t.test("calculate_diff_split tag boundaries", test_calculate_diff_split_tag_boundaries);
+    t.test("calculate_diff_split generation prompt", test_calculate_diff_split_generation_prompt);
 }
 
 static void test_calculate_diff_split_basic(testing & t) {
@@ -499,6 +505,39 @@ static void test_calculate_diff_split_tag_boundaries(testing & t) {
         t.assert_true("special token right ends with |>", result.right.find("<|END_ACTION|>") != std::string::npos);
         t.assert_equal("special token suffix", "<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>",
                        result.suffix);
+    }
+}
+
+static void test_calculate_diff_split_generation_prompt(testing & t) {
+    // ChatML thinking template: left is a prefix of right, generation_prompt is the appended part.
+    // The trailing \n in left matches the trailing \n in the generation_prompt, causing
+    // the suffix matcher to steal it and rotate the diff result.
+    {
+        // Simplified reproduction: left ends with \n, right = left + "<|im_start|>assistant\n<think>\n"
+        std::string left  = "<|im_start|>user\nHello<|im_end|>\n";
+        std::string right = left + "<|im_start|>assistant\n<think>\n";
+        diff_split result = calculate_diff_split(left, right);
+        t.assert_equal("chatml prefix", left, result.prefix);
+        t.assert_equal("chatml left", "", result.left);
+        t.assert_equal("chatml right should be generation prompt",
+                       "<|im_start|>assistant\n<think>\n", result.right);
+        t.assert_equal("chatml suffix", "", result.suffix);
+    }
+
+    {
+        // More realistic: longer conversation ending with tool_response
+        std::string common =
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            "<|im_start|>user\nSearch for files<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\nLet me search.\n</think>\n\n"
+            "<tool_call>\n<function=search>\n</function>\n</tool_call><|im_end|>\n"
+            "<|im_start|>user\n<tool_response>\nNo files found\n</tool_response><|im_end|>\n";
+        std::string left  = common;
+        std::string right = common + "<|im_start|>assistant\n<think>\n";
+        diff_split result = calculate_diff_split(left, right);
+        t.assert_equal("tool_response left", "", result.left);
+        t.assert_equal("tool_response right should be generation prompt",
+                       "<|im_start|>assistant\n<think>\n", result.right);
     }
 }
 
@@ -1292,11 +1331,11 @@ static void test_nemotron_reasoning_detection(testing & t) {
 
     // Check reasoning markers
     t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
-    t.assert_equal("reasoning_end should be '</think>\\n'", "</think>\n", analysis.reasoning.end);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
 
     // Check reasoning mode detection
-    // Nemotron uses forced closed reasoning with add_generation_prompt
-    t.assert_equal("reasoning should be FORCED_CLOSED", reasoning_mode::FORCED_CLOSED, analysis.reasoning.mode);
+    // Nemotron uses tag-based reasoning; prefill handles the template's forced markers
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
 
     // Make sure reasoning markers don't spill over to content markers
     t.assert_equal("content start should be empty", "", analysis.content.start);
@@ -1411,6 +1450,47 @@ static void test_tool_format_cohere(testing & t) {
     t.assert_true("should support parallel calls", analysis.jinja_caps.supports_parallel_tool_calls);
     t.assert_true("should not require nonnull content", !analysis.content.requires_nonnull_content);
     t.assert_true("tools_array_wrapped should be true", analysis.tools.format.tools_array_wrapped);
+}
+
+// ============================================================================
+// SmolLM3 Template Analysis Tests
+// Tests for templates that change system message when enable_thinking flips
+// and prefill an empty <think></think> block in no-think mode.
+// ============================================================================
+static common_chat_template load_smollm3_template(testing & t) {
+    return load_template(t, "models/templates/HuggingFaceTB-SmolLM3-3B.jinja");
+}
+
+static void test_smollm3_reasoning_detection(testing & t);
+
+static void test_smollm3_analysis(testing & t) {
+    t.test("SmolLM3 reasoning detection", test_smollm3_reasoning_detection);
+}
+
+static void test_smollm3_reasoning_detection(testing & t) {
+    common_chat_template tmpl = load_smollm3_template(t);
+
+    // Run differential analysis
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    // SmolLM3 uses <think>/<think> reasoning tags.
+    // The template changes the entire system message when enable_thinking flips,
+    // so the analyzer must compare isolated generation prompts (not full outputs).
+    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
+
+    // Content should remain plain (no wrappers)
+    t.assert_equal("content start should be empty", "", analysis.content.start);
+    t.assert_equal("content end should be empty", "", analysis.content.end);
+    t.assert_equal("content should be PLAIN", content_mode::PLAIN, analysis.content.mode);
+
+    // Preserved tokens should include the reasoning markers
+    bool has_think_start = std::find(analysis.preserved_tokens.begin(), analysis.preserved_tokens.end(), "<think>") != analysis.preserved_tokens.end();
+    bool has_think_end = std::find(analysis.preserved_tokens.begin(), analysis.preserved_tokens.end(), "</think>") != analysis.preserved_tokens.end();
+    t.assert_true("preserved_tokens should contain '<think>'", has_think_start);
+    t.assert_true("preserved_tokens should contain '</think>'", has_think_end);
 }
 
 // ============================================================================

@@ -17,7 +17,7 @@ import {
  * @param urlString - The URL to get the favicon for
  * @returns The favicon URL or null if invalid
  */
-export function getFaviconUrl(urlString: string): string | null {
+export function getFaviconUrl(urlString: string, useProxy = true): string | null {
 	try {
 		const url = new URL(urlString);
 		const hostnameParts = url.hostname.split(DOMAIN_SEPARATOR);
@@ -27,7 +27,7 @@ export function getFaviconUrl(urlString: string): string | null {
 				: url.hostname;
 
 		const googleFaviconUrl = `${GOOGLE_FAVICON_BASE_URL}?domain=${rootDomain}&sz=${DEFAULT_FAVICON_SIZE}`;
-		return getProxiedUrlString(googleFaviconUrl);
+		return useProxy ? getProxiedUrlString(googleFaviconUrl) : googleFaviconUrl;
 	} catch {
 		return null;
 	}

@@ -139,10 +139,13 @@ class GGUFWriter:
                 size = prod(shape)
 
                 if "_exps." in name:
-                    expert_count = shape[-2 if ".bias" in name else -3]
-                    expert_params += (size // expert_count)
-                    expert_sum += expert_count
-                    n_expert_tensors += 1
+                    if len(shape) >= 3:
+                        expert_count = shape[-2 if ".bias" in name else -3]
+                        expert_params += (size // expert_count)
+                        expert_sum += expert_count
+                        n_expert_tensors += 1
+                    else:
+                        shared_params += size
                 else:
                     shared_params += size
 
@@ -422,8 +425,7 @@ class GGUFWriter:
         fout = self.fout[file_id]
 
         # pop the first tensor info
-        # TODO: cleaner way to get the first key
-        first_tensor_name = [name for name, _ in zip(self.tensors[file_id].keys(), range(1))][0]
+        first_tensor_name = next(iter(self.tensors[file_id]))
         ti = self.tensors[file_id].pop(first_tensor_name)
         assert ti.nbytes == tensor.nbytes
 
@@ -859,6 +861,9 @@ class GGUFWriter:
     def add_moe_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_EVERY_N_LAYERS.format(arch=self.arch), value)
 
+    def add_moe_latent_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MOE_LATENT_SIZE.format(arch=self.arch), value)
+
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
 
@@ -1151,6 +1156,12 @@ class GGUFWriter:
     def add_vision_min_pixels(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
 
+    def add_vision_preproc_max_tiles(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_MAX_TILES, value)
+
+    def add_vision_preproc_min_tiles(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_MIN_TILES, value)
+
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
 
@@ -1295,7 +1306,7 @@ class GGUFWriter:
         else:
             raise ValueError("Invalid GGUF metadata value type or value")
 
-        return kv_data
+        return bytes(kv_data)
 
     @staticmethod
     def format_n_bytes_to_str(num: int) -> str:

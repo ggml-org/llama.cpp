@@ -25,6 +25,15 @@
 # # with KLEIDIAI support
 # GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with BLAS support
+# GG_BUILD_BLAS=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with BLAS support (custom vendor)
+# GG_BUILD_BLAS=1 GG_BUILD_BLAS_VENDOR=Intel10_64lp bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with OPENVINO support
+# GG_BUILD_OPENVINO=1 GG_BUILD_LOW_PERF=1 GGML_OPENVINO_DEVICE=CPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -46,6 +55,7 @@ cd $sd/../
 SRC=`pwd`
 
 CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=${LLAMA_FATAL_WARNINGS:-ON} -DLLAMA_OPENSSL=OFF -DGGML_SCHED_NO_REALLOC=ON"
+CTEST_EXTRA=""
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
@@ -165,6 +175,22 @@ if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
         -DBUILD_SHARED_LIBS=OFF"
 fi
 
+if [ ! -z ${GG_BUILD_BLAS} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
+fi
+
+if [ ! -z ${GG_BUILD_OPENVINO} ]; then
+    if [ -z ${OpenVINO_DIR} ]; then
+        echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
+        echo "source /opt/intel/openvino/setupvars.sh"
+        exit 1
+    fi
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
+
+    # TODO: fix and re-enable the `test-llama-archs` test below
+    CTEST_EXTRA="-E test-llama-archs"
+fi
+
 ## helpers
 
 # download a file if it does not exist or if it is outdated
@@ -222,7 +248,7 @@ function gg_run_ctest_debug {
     (time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j$(nproc)                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest --output-on-failure -L main -E "test-opt|test-backend-ops" ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest --output-on-failure -L main -E "test-opt|test-backend-ops" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
 }
@@ -254,9 +280,9 @@ function gg_run_ctest_release {
     (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     if [ -z ${GG_BUILD_LOW_PERF} ]; then
-        (time ctest --output-on-failure -L 'main|python' ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest --output-on-failure -L 'main|python' ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
     else
-        (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest --output-on-failure -L main -E test-opt ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
     fi
 
     set +e

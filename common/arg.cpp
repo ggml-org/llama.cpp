@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "hf-cache.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -326,60 +327,48 @@ struct handle_model_result {
     common_params_model mmproj;
 };
 
-static handle_model_result common_params_handle_model(
-        struct common_params_model & model,
-        const std::string & bearer_token,
-        bool offline) {
+static handle_model_result common_params_handle_model(struct common_params_model & model,
+                                                      const std::string          & bearer_token,
+                                                      bool                         offline) {
     handle_model_result result;
-    // handle pre-fill default model path and url based on hf_repo and hf_file
-    {
-        if (!model.docker_repo.empty()) {  // Handle Docker URLs by resolving them to local paths
-            model.path = common_docker_resolve_model(model.docker_repo);
-            model.name = model.docker_repo; // set name for consistency
-        } else if (!model.hf_repo.empty()) {
-            // short-hand to avoid specifying --hf-file -> default it to --model
-            if (model.hf_file.empty()) {
-                if (model.path.empty()) {
-                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
-                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                        exit(1); // error message already printed
-                    }
-                    model.name    = model.hf_repo;      // repo name with tag
-                    model.hf_repo = auto_detected.repo; // repo name without tag
-                    model.hf_file = auto_detected.ggufFile;
-                    if (!auto_detected.mmprojFile.empty()) {
-                        result.found_mmproj   = true;
-                        result.mmproj.hf_repo = model.hf_repo;
-                        result.mmproj.hf_file = auto_detected.mmprojFile;
-                    }
-                } else {
-                    model.hf_file = model.path;
-                }
-            }
 
-            std::string model_endpoint = get_model_endpoint();
-            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
-            // make sure model path is present (for caching purposes)
-            if (model.path.empty()) {
-                // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
-                model.path = fs_get_cache_file(filename);
-            }
-
-        } else if (!model.url.empty()) {
-            if (model.path.empty()) {
-                auto f = string_split<std::string>(model.url, '#').front();
-                f = string_split<std::string>(f, '?').front();
-                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
-            }
-
+    if (!model.docker_repo.empty()) {
+        model.path = common_docker_resolve_model(model.docker_repo);
+        model.name = model.docker_repo;
+    } else if (!model.hf_repo.empty()) {
+        // If -m was used with -hf, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
         }
-    }
+        common_download_model_opts opts;
+        opts.download_mmproj = true;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
 
-    // then, download it if needed
-    if (!model.url.empty()) {
-        bool ok = common_download_model(model, bearer_token, offline);
-        if (!ok) {
+        if (download_result.model_path.empty()) {
+            LOG_ERR("error: failed to download model from Hugging Face\n");
+            exit(1);
+        }
+
+        model.name = model.hf_repo;
+        model.path = download_result.model_path;
+
+        if (!download_result.mmproj_path.empty()) {
+            result.found_mmproj = true;
+            result.mmproj.path  = download_result.mmproj_path;
+        }
+    } else if (!model.url.empty()) {
+        if (model.path.empty()) {
+            auto f = string_split<std::string>(model.url, '#').front();
+            f = string_split<std::string>(f, '?').front();
+            model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+        }
+
+        common_download_model_opts opts;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
+        if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
         }
@@ -538,6 +527,13 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
+
+    // TODO: Remove later
+    try {
+        hf_cache::migrate_old_cache_to_hf_cache(params.hf_token, params.offline);
+    } catch (const std::exception & e) {
+        LOG_WRN("HF cache migration failed: %s\n", e.what());
+    }
 
     // maybe handle remote preset
     if (!params.model.hf_repo.empty()) {
@@ -732,23 +728,28 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-completion",
         "llama-convert-llama2c-to-ggml",
         "llama-cvector-generator",
+        "llama-debug",
+        "llama-diffusion-cli",
         "llama-embedding",
         "llama-eval-callback",
         "llama-export-lora",
+        "llama-finetune",
+        "llama-fit-params",
+        "llama-gemma3-cli",
         "llama-gen-docs",
         "llama-gguf",
         "llama-gguf-hash",
         "llama-gguf-split",
-        "llama-gritlm",
+        "llama-idle",
         "llama-imatrix",
-        "llama-infill",
-        "llama-mtmd-cli",
-        "llama-llava-clip-quantize-cli",
+        "llama-llava-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
+        "llama-minicpmv-cli",
+        "llama-mtmd-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
@@ -1056,12 +1057,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-cl", "--cache-list"},
         "show list of models in cache",
         [](common_params &) {
-            printf("model cache directory: %s\n", fs_get_cache_directory().c_str());
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                auto & model = models[i];
-                printf("%4d. %s\n", (int) i + 1, model.to_string().c_str());
+                printf("%4zu. %s\n", i + 1, models[i].to_string().c_str());
             }
             exit(0);
         }
@@ -1825,23 +1824,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar"}, "GRAMMAR",
-        string_format("BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", params.sampling.grammar.c_str()),
+        "BNF-like grammar to constrain generations (see samples in grammars/ dir)",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = value;
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, value};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"--grammar-file"}, "FNAME",
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = read_file(value);
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(value)};
         }
     ).set_sparam());
     add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = json_schema_to_grammar(json::parse(value));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1858,7 +1857,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::istreambuf_iterator<char>(),
                 std::back_inserter(schema)
             );
-            params.sampling.grammar = json_schema_to_grammar(json::parse(schema));
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(schema))};
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -2578,7 +2577,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
         "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
-        "example: unsloth/phi-4-GGUF:q4_k_m\n"
+        "example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {
             params.model.hf_repo = value;
@@ -2666,7 +2665,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RESULTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3110,6 +3110,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
+        {"--skip-chat-parsing"},
+        {"--no-skip-chat-parsing"},
+        string_format(
+            "force a pure content parser, even if a Jinja template is specified; model will output everything "
+            "in the content section, including any reasoning and/or tool calls (default: disabled)"
+        ),
+        [](common_params & params, bool value) {
+            params.force_pure_content_parser = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SKIP_CHAT_PARSING"));
+    add_opt(common_arg(
         {"--prefill-assistant"},
         {"--no-prefill-assistant"},
         string_format(
@@ -3477,7 +3488,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.ngram_size_n),
