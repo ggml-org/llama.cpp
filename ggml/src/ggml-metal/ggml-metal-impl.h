@@ -8,6 +8,17 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
+
+#define SZ_SIMDGROUP 16
+#define N_MM_NK 2
+#define N_MM_NK_TOTAL (SZ_SIMDGROUP * N_MM_NK)
+
+#define N_MM_BLOCK_X 4
+#define N_MM_BLOCK_Y 2
+#define N_MM_SIMD_GROUP_X 2
+#define N_MM_SIMD_GROUP_Y 2
+#define N_THREADS_PER_SIMDGROUP 32
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 

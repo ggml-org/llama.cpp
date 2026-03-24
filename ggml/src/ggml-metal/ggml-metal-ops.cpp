@@ -2155,7 +2155,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //    default: break;
         //}
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op, props_dev->has_tensor);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -2183,7 +2183,18 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const size_t smem = pipeline.smem;
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 31)/32), ((ne01 + 63)/64), ne12*ne13, 128, 1, 1);
+
+        if (props_dev->has_tensor) {
+            ggml_metal_encoder_dispatch_threadgroups(enc,
+                                                     (ne11 + (SZ_SIMDGROUP * N_MM_SIMD_GROUP_X * N_MM_BLOCK_X) - 1) /
+                                                         (SZ_SIMDGROUP * N_MM_SIMD_GROUP_X * N_MM_BLOCK_X),
+                                                     (ne01 + (SZ_SIMDGROUP * N_MM_SIMD_GROUP_Y * N_MM_BLOCK_Y) - 1) /
+                                                         (SZ_SIMDGROUP * N_MM_SIMD_GROUP_Y * N_MM_BLOCK_Y),
+                                                     ne12 * ne13, N_THREADS_PER_SIMDGROUP * N_MM_SIMD_GROUP_X, N_MM_SIMD_GROUP_Y, 1);
+        } else {
+            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 31) / 32), ((ne01 + 63) / 64), ne12 * ne13, 128, 1, 1);
+        }
+
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
 
