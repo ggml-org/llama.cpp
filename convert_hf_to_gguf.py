@@ -31,10 +31,10 @@ import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
 try:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 
@@ -45,9 +45,9 @@ except ImportError:
     _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
     _mistral_common_installed = False
-    TokenizerVersion = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
+    TokenizerVersion: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
     _mistral_import_error_msg = (
         "Mistral format requires `mistral-common` to be installed. Please run "
         "`pip install mistral-common[image,audio]` to install it."
@@ -145,6 +145,7 @@ class ModelBase:
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
+        self._is_mxfp4 = False
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -220,7 +221,7 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None)
+                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None) # ty: ignore[invalid-assignment]
                     part_names = sorted(part_dict.keys())
             else:
                 weight_map = {}
@@ -712,6 +713,7 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
@@ -728,6 +730,7 @@ class ModelBase:
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -875,6 +878,12 @@ class ModelBase:
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
             self.metadata.name = self.dir_model.name
+
+        if self.ftype in (gguf.LlamaFileType.ALL_F32, gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16):
+            if self._is_nvfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
+            elif self._is_mxfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
@@ -4264,6 +4273,16 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
+
+    min_dynamic_tiles: int = 0
+    max_dynamic_tiles: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.min_dynamic_tiles = self.global_config.get("min_dynamic_patch", 0)
+        self.max_dynamic_tiles = self.global_config.get("max_dynamic_patch", 0)
+
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
         if isinstance(self.hparams_vision['image_size'], list):
@@ -4286,6 +4305,11 @@ class InternVisionModel(MmprojModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+        # older models may not have min/max_dynamic_patch in config
+        if self.min_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_min_tiles(self.min_dynamic_tiles)
+        if self.max_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_max_tiles(self.max_dynamic_tiles)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
@@ -5882,7 +5906,7 @@ class InternLM2Model(TextModel):
             logger.error(f'Error: Missing {tokenizer_path}')
             sys.exit(1)
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
 
@@ -6203,7 +6227,7 @@ class BertModel(TextModel):
 
             vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
-            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
             assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
 
@@ -8880,7 +8904,7 @@ class T5Model(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -9017,7 +9041,7 @@ class T5EncoderModel(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -11125,8 +11149,7 @@ class GptOssModel(TextModel):
 
     # TODO: remove once MXFP4 is supported more generally
     def dequant_model(self):
-        quant_config = self.hparams.get("quantization_config")
-        if quant_config is not None and quant_config.get("quant_method") == "mxfp4":
+        if self._is_mxfp4:
             return
         return super().dequant_model()
 
@@ -12279,6 +12302,7 @@ class LazyTorchTensor(gguf.LazyBase):
             kwargs = {}
 
         if func is torch.Tensor.numpy:
+            assert len(args)
             return args[0].numpy()
 
         return cls._wrap_fn(func)(*args, **kwargs)

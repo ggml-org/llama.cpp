@@ -26,7 +26,9 @@ jobs:
             {
               "bash": {
                 "*": "deny",
-                "gh issue*": "allow",
+                "gh issue view*": "allow",
+                "gh issue list*": "allow",
+                "gh issue comment*": "allow",
                 "gh search issues*": "allow"
               },
               "webfetch": "deny"
@@ -71,8 +73,8 @@ jobs:
           [comment]
           This issue might be similar or related to the following issue(s):
 
-            - #[related_issue_number]: [brief description of how they are related]
-            - #[related_issue_number]: [brief description of how they are related]
+            - #12942: [brief description of how they are related]
+            - #11234: [brief description of how they are related]
             ...
 
           _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
