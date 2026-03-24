@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.38.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002600"
+#define CPPHTTPLIB_VERSION "0.39.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002700"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -1001,8 +1001,8 @@ private:
 
   protected:
     std::streamsize xsputn(const char *s, std::streamsize n) override {
-      sink_.write(s, static_cast<size_t>(n));
-      return n;
+      if (sink_.write(s, static_cast<size_t>(n))) { return n; }
+      return 0;
     }
 
   private:
@@ -1058,9 +1058,12 @@ make_file_provider(const std::string &name, const std::string &filepath,
 
 inline std::pair<size_t, ContentProvider>
 make_file_body(const std::string &filepath) {
-  std::ifstream f(filepath, std::ios::binary | std::ios::ate);
-  if (!f) { return {0, ContentProvider{}}; }
-  auto size = static_cast<size_t>(f.tellg());
+  size_t size = 0;
+  {
+    std::ifstream f(filepath, std::ios::binary | std::ios::ate);
+    if (!f) { return {0, ContentProvider{}}; }
+    size = static_cast<size_t>(f.tellg());
+  }
 
   ContentProvider provider = [filepath](size_t offset, size_t length,
                                         DataSink &sink) -> bool {
@@ -1882,7 +1885,8 @@ private:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use ssl_backend_error() instead")]]
+  [[deprecated("Use ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
   uint64_t ssl_openssl_error() const {
     return ssl_backend_error_;
   }
@@ -2362,13 +2366,16 @@ protected:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use load_ca_cert_store() instead")]]
+  [[deprecated("Use load_ca_cert_store() instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_ca_cert_store(X509_STORE *ca_cert_store);
 
-  [[deprecated("Use tls::create_ca_store() instead")]]
+  [[deprecated("Use tls::create_ca_store() instead. "
+               "This function will be removed by v1.0.0.")]]
   X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
 
-  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead")]]
+  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead. "
+               "This function will be removed by v1.0.0.")]]
   virtual void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier);
 #endif
@@ -2597,14 +2604,17 @@ private:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  [[deprecated("Use set_session_verifier(session_t) instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier);
 
-  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  [[deprecated("Use Result::ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
   long get_verify_result() const;
 #endif
 };
@@ -2656,18 +2666,22 @@ private:
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
   [[deprecated("Use SSLServer(PemMemory) or "
-               "SSLServer(ContextSetupCallback) instead")]]
+               "SSLServer(ContextSetupCallback) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   SSLServer(X509 *cert, EVP_PKEY *private_key,
             X509_STORE *client_ca_cert_store = nullptr);
 
-  [[deprecated("Use SSLServer(ContextSetupCallback) instead")]]
+  [[deprecated("Use SSLServer(ContextSetupCallback) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   SSLServer(
       const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
 
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use update_certs_pem() instead")]]
+  [[deprecated("Use update_certs_pem() instead. "
+               "This function will be removed by v1.0.0.")]]
   void update_certs(X509 *cert, EVP_PKEY *private_key,
                     X509_STORE *client_ca_cert_store = nullptr);
 #endif
@@ -2752,18 +2766,22 @@ private:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use SSLClient(host, port, PemMemory) instead")]]
+  [[deprecated("Use SSLClient(host, port, PemMemory) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   explicit SSLClient(const std::string &host, int port, X509 *client_cert,
                      EVP_PKEY *client_key,
                      const std::string &private_key_password = std::string());
 
-  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  [[deprecated("Use Result::ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
   long get_verify_result() const;
 
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  [[deprecated("Use set_session_verifier(session_t) instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier) override;
 
@@ -3641,6 +3659,9 @@ public:
   SSEClient &set_reconnect_interval(int ms);
   SSEClient &set_max_reconnect_attempts(int n);
 
+  // Update headers (thread-safe)
+  SSEClient &set_headers(const Headers &headers);
+
   // State accessors
   bool is_connected() const;
   const std::string &last_event_id() const;
@@ -3665,6 +3686,7 @@ private:
   Client &client_;
   std::string path_;
   Headers headers_;
+  mutable std::mutex headers_mutex_;
 
   // Callbacks
   MessageHandler on_message_;
@@ -3785,6 +3807,12 @@ public:
   void set_read_timeout(time_t sec, time_t usec = 0);
   void set_write_timeout(time_t sec, time_t usec = 0);
   void set_websocket_ping_interval(time_t sec);
+  void set_tcp_nodelay(bool on);
+  void set_address_family(int family);
+  void set_ipv6_v6only(bool on);
+  void set_socket_options(SocketOptions socket_options);
+  void set_connection_timeout(time_t sec, time_t usec = 0);
+  void set_interface(const std::string &intf);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   void set_ca_cert_path(const std::string &path);
@@ -3810,6 +3838,13 @@ private:
   time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
+  int address_family_ = AF_UNSPEC;
+  bool tcp_nodelay_ = CPPHTTPLIB_TCP_NODELAY;
+  bool ipv6_v6only_ = CPPHTTPLIB_IPV6_V6ONLY;
+  SocketOptions socket_options_ = nullptr;
+  time_t connection_timeout_sec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_SECOND;
+  time_t connection_timeout_usec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_USECOND;
+  std::string interface_;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;
