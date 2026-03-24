@@ -57,7 +57,7 @@ llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 ## Description
 
 The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
-range of hardware - locally and in the cloud.
+range of hardware while running higher models on lower-end hardware - locally and in the cloud.
 
 - Plain C/C++ implementation without any dependencies
 - Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
