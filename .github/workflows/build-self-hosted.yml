@@ -68,7 +68,7 @@ jobs:
         id: ggml-ci
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_CUDA=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
@@ -82,7 +82,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm2:
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
@@ -96,7 +96,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   # TODO: provision AMX-compatible machine
   #ggml-ci-cpu-amx:
@@ -153,7 +153,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_METAL=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-webgpu:
     runs-on: [self-hosted, macOS, ARM64]
@@ -180,7 +180,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" GG_BUILD_NINJA=1 \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-vulkan:
@@ -195,7 +195,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-linux-intel-vulkan:
     runs-on: [self-hosted, Linux, Intel]
@@ -211,7 +211,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-intel-openvino-gpu-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
@@ -243,4 +243,4 @@ jobs:
         id: ggml-ci
         run: |
           source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
