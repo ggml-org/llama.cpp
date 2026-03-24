@@ -2029,9 +2029,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_hadamard(params, tensor);
             } break;
-        case GGML_OP_WHERE_ID:
+        case GGML_OP_SCATTER:
             {
-                ggml_compute_forward_where_id(params, tensor);
+                ggml_compute_forward_scatter(params, tensor);
             } break;
         case GGML_OP_MAP_CUSTOM1:
             {
@@ -2356,7 +2356,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_HADAMARD:
-        case GGML_OP_WHERE_ID:
+        case GGML_OP_SCATTER:
             {
                 n_tasks = n_threads;
             } break;

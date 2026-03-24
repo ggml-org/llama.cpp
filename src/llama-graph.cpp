@@ -2177,7 +2177,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask_f32, -INFINITY);
 
     // modify it by unmasking tokens that are in top_k indices
-    ggml_tensor * kq_mask_top_k = ggml_where_id(ctx0, kq_mask_f32, kq_mask_all, top_k);
+    ggml_tensor * kq_mask_top_k = ggml_scatter(ctx0, kq_mask_all, top_k, 0);
+
+    // combine with the original kq mask
+    kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask_f32);
     kq_mask_top_k = ggml_cast(ctx0, kq_mask_top_k, kq_mask->type);
 
     ggml_tensor * q = q_cur;

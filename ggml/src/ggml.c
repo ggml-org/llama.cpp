@@ -1033,7 +1033,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SOLVE_TRI",
     "GATED_DELTA_NET",
     "HADAMARD",
-    "WHERE_ID",
+    "SCATTER",
 
     "UNARY",
 
@@ -1145,7 +1145,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
     "hadamard(x)",
-    "where_id(x,y,ids)",
+    "scatter(x,ids,c)",
 
     "unary(x)",
 
@@ -6203,25 +6203,26 @@ struct ggml_tensor * ggml_hadamard(
     return result;
 }
 
-// ggml_where_id
+// ggml_scatter
 
-struct ggml_tensor * ggml_where_id(
+struct ggml_tensor * ggml_scatter(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        struct ggml_tensor  * ids) {
+        struct ggml_tensor  * ids,
+        float                 c) {
 
     GGML_ASSERT(a->type == GGML_TYPE_F32);
-    GGML_ASSERT(b->type == GGML_TYPE_F32);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
     GGML_ASSERT(a->ne[1] == ids->ne[1]);
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
 
-    result->op   = GGML_OP_WHERE_ID;
+    float params[1] = { c };
+    ggml_set_op_params(result, &params, sizeof(params));
+
+    result->op   = GGML_OP_SCATTER;
     result->src[0] = a;
-    result->src[1] = b;
-    result->src[2] = ids;
+    result->src[1] = ids;
 
     return result;
 }
