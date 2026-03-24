@@ -16,8 +16,8 @@ llm_build_bloom::llm_build_bloom(const llama_model & model, const llm_graph_para
     inpL = build_norm(inpL,
             model.tok_norm,
             model.tok_norm_b,
-            LLM_NORM, -1);
-    cb(inpL, "inp_norm", -1);
+            LLM_NORM, 0);
+    cb(inpL, "inp_norm", 0);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
