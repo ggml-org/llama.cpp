@@ -5097,6 +5097,30 @@ void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
         return;
     }
 
+    // During per-op dispatch (NOT graph recording), free immediately.
+    // Deferring via submit_barrier_all() on the compute queue causes a livelock:
+    // the barrier depends on previously submitted compute work, but the eviction
+    // loop cannot make progress (used_ never decreases) until the barrier completes
+    // and process_deferred_frees() calls saturating_sub_used().  By the time the
+    // eviction loop gives up, all cache entries have been uselessly evicted.
+    // Immediate free is safe here because graph recording is not active, so
+    // queue_.wait() will not interfere with SYCL graph capture.
+    if (!ggml_sycl_graph_recording_active()) {
+        bool immediate_ok = false;
+        try {
+            queue_.wait();
+            sycl::free(ptr, queue_);
+            immediate_ok = true;
+        } catch (...) {
+            // Fall through to deferred path below.
+        }
+        if (immediate_ok) {
+            saturating_sub_used(size);
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] immediate free: ptr=%p size=%zu\n", ptr, size);
+            return;
+        }
+    }
+
     deferred_free_entry entry{};
     entry.ptr  = ptr;
     entry.size = size;

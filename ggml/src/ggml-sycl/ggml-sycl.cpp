@@ -1218,9 +1218,10 @@ static void moe_prestage_popular_experts() {
                 break;
             }
 
-            // Periodic flush every 100 expert groups to prevent >20s accumulated queue
-            // work that triggers L0 DirectSubmission timeout false-positive hang.
-            if (expert_groups_staged > 0 && expert_groups_staged % 100 == 0) {
+            // Periodic flush every 50 expert groups to prevent >20s accumulated queue
+            // work that triggers L0 DirectSubmission timeout false-positive hang,
+            // and to keep the watchdog heartbeat alive during 409+ group prestaging.
+            if (expert_groups_staged > 0 && expert_groups_staged % 50 == 0) {
                 try {
                     cache->get_queue().wait();
                 } catch (...) {
@@ -1395,6 +1396,11 @@ static void moe_prestage_popular_experts() {
                 auto t0 = std::chrono::high_resolution_clock::now();
 
                 for (size_t i = 0; i < sec_work.size(); i++) {
+                    // Heartbeat every 50 experts during Phase 2 secondary GPU staging.
+                    if (i > 0 && i % 50 == 0) {
+                        ggml_sycl_watchdog_heartbeat();
+                    }
+
                     auto & item = sec_work[i];
                     auto & budget = sec_budgets[item.budget_idx];
                     auto & fctx = sec_fill_ctxs[i];
@@ -2413,6 +2419,10 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             expert_list.push_back({ layer_id, e, ptr, host_ptr, nb02, src0, src0_extra });
         }
     }
+
+    // Heartbeat after expert list scan — iterating 13K+ experts can take
+    // several seconds on 120B models, enough to approach the watchdog timeout.
+    ggml_sycl_watchdog_heartbeat();
 
     if (n_moe_layers == 0) {
         GGML_LOG_INFO("[MOE-HYBRID] No MUL_MAT_ID nodes found, MoE hybrid disabled\n");
@@ -10080,9 +10090,16 @@ static void ggml_sycl_preload_model_weights() {
             // handles allocation + fill + registration atomically)
 
             // Submit all H2D copies for this device without waiting
+            size_t preload_count = 0;
             for (size_t idx : indices) {
                 const auto & item   = items[idx];
                 const auto * tensor = item.tensor;
+
+                // Heartbeat every 50 weights to prevent watchdog timeout
+                // during bulk upload of 291+ dense/MoE weights.
+                if (++preload_count % 50 == 0) {
+                    ggml_sycl_watchdog_heartbeat();
+                }
 
                 if (item.is_moe) {
                     // MoE: submit all expert copies with skip_fill_wait
