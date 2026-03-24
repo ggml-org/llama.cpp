@@ -21,6 +21,7 @@ struct llama_cparams;
 struct llama_memory_context_i;
 
 class llama_kv_cache_context;
+class llama_ik_cache_context;
 class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
@@ -349,6 +350,39 @@ public:
 
     const llama_kv_cache_context * mctx;
 };
+
+// V-less input for the indexer KV cache
+class llm_graph_input_attn_ik : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_ik(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_ik_cache_context * mctx) :
+        hparams(hparams),
+        cparams(cparams),
+        mctx(mctx) {
+    }
+    ~llm_graph_input_attn_ik() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * get_k_idxs() const { return self_k_idxs; }
+
+    ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+
+    ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
+
+    ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
+
+    const llama_hparams hparams;
+    const llama_cparams cparams;
+
+    const llama_ik_cache_context * mctx;
+};
+
 
 class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
 public:
@@ -914,6 +948,20 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_k * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+            ggml_tensor * top_k, // [n_indexer_top_k, n_tokens]
+                  float   kq_scale,
+                    int   il) const;
+
     llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
 
     // note: if k_cur or v_cur are not provided, they will not be stored in the memory
@@ -944,6 +992,8 @@ struct llm_graph_context {
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
+
+    std::pair<llm_graph_input_attn_k *, llm_graph_input_attn_ik *> build_attn_inp_k_dsa() const;
 
     //
     // recurrent

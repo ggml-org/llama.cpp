@@ -1,14 +1,17 @@
 #include "models.h"
 
 #include "llama-kv-cache.h"
+#include "llama-ik-cache.h"
 
 llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     const bool is_mla = hparams.is_mla();
+    GGML_ASSERT(is_mla);
 
     // note: these are the actual head sizes you get when treating as MHA or after "decompression" using wv_b for MLA
     const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
+    GGML_UNUSED(n_embd_head_v);
 
     const int64_t n_embd_head_qk_rope = hparams.n_rot();
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
@@ -42,8 +45,9 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
-    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
+    std::pair<llm_graph_input_attn_k*, llm_graph_input_attn_ik*> inp_attn_dsa = build_attn_inp_k_dsa();
+    auto * inp_attn_k = inp_attn_dsa.first;
+    auto * inp_attn_ik = inp_attn_dsa.second;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -63,9 +67,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
             qr = build_norm(qr, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
             cb(qr, "qr", il);
 
-            ggml_tensor * kq_mask = is_mla ? inp_attn_k->get_kq_mask() : inp_attn_kv->get_kq_mask();
-            ggml_tensor * kq_mask_bak = ggml_dup(ctx0, kq_mask);
-            ggml_build_forward_expand(gf, kq_mask_bak);
+            ggml_tensor * top_k = nullptr;
 
             // lightning indexer
             {
@@ -133,9 +135,9 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
-                const auto * mctx_cur = is_mla ? inp_attn_k->mctx : inp_attn_kv->mctx;
-                const auto & k_idxs = is_mla ? inp_attn_k->get_k_idxs() : inp_attn_kv->get_k_idxs();
-                ggml_build_forward_expand(gf, mctx_cur->cpy_ik(ctx0, indexer_k, k_idxs, il));
+                const auto * mctx_cur = inp_attn_ik->mctx;
+                const auto & k_idxs = inp_attn_ik->get_k_idxs();
+                ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, indexer_k, k_idxs, il));
 
                 // prepare indexer weights
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
@@ -145,7 +147,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_weights, "indexer_weights", il);
 
                 // get cached indexer keys
-                indexer_k = mctx_cur->get_ik(ctx0, il);
+                indexer_k = mctx_cur->get_k(ctx0, il);
 
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];
@@ -188,24 +190,14 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_score, "indexer_score", il);
 
                 // mask indexer scores
-                ggml_tensor * kq_mask_f32 = ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-                indexer_score = ggml_add(ctx0, indexer_score, kq_mask_f32);
+                ggml_tensor * indexer_kq_mask = inp_attn_ik->get_kq_mask();
+                indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                 cb(indexer_score, "indexer_score", il);
 
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
-                ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+                top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
                 cb(top_k, "top_k", il);
-
-                // prepare new kq mask - starts filled with -INFINITY
-                ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask_f32, -INFINITY);
-                cb(kq_mask_all, "kq_mask_all", il);
-
-                // modify it by unmasking tokens that are in top_k indices
-                ggml_tensor * kq_mask_top_k = ggml_where_id(ctx0, kq_mask_f32, kq_mask_all, top_k);
-                cb(kq_mask_top_k, "kq_mask_top_k", il);
-
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cast(ctx0, kq_mask_top_k, kq_mask->type), kq_mask));
             }
 
             ggml_tensor * q = ggml_mul_mat(ctx0, model.layers[il].wq_b, qr);
@@ -250,7 +242,8 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
             kv_cmpr = build_norm(kv_cmpr, model.layers[il].attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
             cb(kv_cmpr, "kv_cmpr", il);
 
-            if (is_mla) {
+            // MLA attention
+            {
                 // {n_embd_head_qk_nope, n_tokens, n_head}
                 q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                 cb(q_nope, "q_nope_perm", il);
@@ -282,41 +275,8 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
                 cur = build_attn(inp_attn_k,
                         model.layers[il].wo, NULL,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
-            } else {
-                ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
-                cb(kv, "kv", il);
-
-                // split into {n_embd_head_qk_nope, n_head, n_tokens}
-                ggml_tensor * k_nope =
-                    ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
-                                 ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-                                 ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head, 0);
-                cb(k_nope, "k_nope_view", il);
-
-                // and {n_embd_head_v, n_head, n_tokens}
-                ggml_tensor * Vcur = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head, n_tokens,
-                                                  ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-                                                  ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
-                                                  ggml_row_size(kv->type, n_embd_head_qk_nope));
-                cb(Vcur, "Vcur_view", il);
-
-                Vcur = ggml_cont(ctx0, Vcur);
-                cb(Vcur, "Vcur_cont", il);
-
-                ggml_tensor * Qcur = ggml_concat(ctx0, q_nope, q_pe, 0);
-                cb(Qcur, "Qcur", il);
-
-                ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
-                cb(Kcur, "Kcur", il);
-
-                // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
-                cur = build_attn(inp_attn_kv,
-                            model.layers[il].wo, NULL,
-                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
             }
-
-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, kq_mask_bak, kq_mask));
         }
         if (il == effective_n_layers - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
