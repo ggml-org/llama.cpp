@@ -1,3 +1,4 @@
+#include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
@@ -23,13 +24,13 @@ static void foreach_function(const json & tools, const std::function<void(const 
 
 namespace autoparser {
 
-parser_build_context::parser_build_context(common_chat_peg_builder & p, const templates_params & inputs) :
+parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
     p(p),
     inputs(inputs),
     reasoning_parser(p.eps()) {}
 
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
-                                                  const struct templates_params & inputs) {
+                                                  const struct generation_params & inputs) {
     // Run differential analysis to extract template structure
     struct autoparser autoparser;
     autoparser.analyze_template(tmpl);
@@ -37,17 +38,16 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 }
 
 common_chat_params peg_generator::generate_parser(const common_chat_template &    tmpl,
-                                                  const struct templates_params & inputs,
+                                                  const struct generation_params & inputs,
                                                   const autoparser &              autoparser) {
-    // Build the parser using the analysis results
-    auto parser = autoparser.build_parser(inputs);
-
     // Create the result structure
     common_chat_params data;
     data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
-    data.parser           = parser.save();
+
+    auto parser = autoparser.build_parser(inputs);
+    data.parser = parser.save();
 
     // Build grammar if tools are present
     bool has_tools =
@@ -82,44 +82,37 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     return data;
 }
 
-common_peg_arena autoparser::build_parser(const templates_params & inputs) const {
+common_peg_arena autoparser::build_parser(const generation_params & inputs) const {
     if (!analysis_complete) {
         throw std::invalid_argument("Cannot call build_parser on autoparser without performing analysis first, call analyze_template(...)");
     }
     return build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        // If the template uses Python dict format (single-quoted strings in JSON structures),
-        // pre-register a json-string rule that accepts both quote styles. This must happen
-        // before any call to p.json() so that all JSON parsing inherits the flexible rule.
-        if (tools.format.uses_python_dicts) {
-            p.rule("json-string", p.quoted_string());
-        }
-
         parser_build_context ctx(p, inputs);
         bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-        bool                 enable_thinking   = inputs.enable_thinking;
 
-        ctx.extracting_reasoning = extract_reasoning && enable_thinking && reasoning.mode != reasoning_mode::NONE;
+        ctx.extracting_reasoning = extract_reasoning && reasoning.mode != reasoning_mode::NONE;
         ctx.content              = &content;
 
         // Build reasoning parser
         ctx.reasoning_parser = reasoning.build_parser(ctx);
+
+        auto parser = p.eps();
 
         bool has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            return ctx.reasoning_parser + p.space() + p.choice({
+            parser = ctx.reasoning_parser + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
             }) + p.end();
+        } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
+            parser = tools.build_parser(ctx);
+        } else {
+            parser = content.build_parser(ctx);
         }
-
-        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
-            return tools.build_parser(ctx);
-        }
-
-        return content.build_parser(ctx);
+        return p.prefix(inputs.generation_prompt, reasoning.start) + parser;
     });
 }
 
@@ -130,24 +123,15 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         return p.eps();
     }
 
-    bool thinking_forced_open   = (mode == reasoning_mode::FORCED_OPEN);
-    bool thinking_forced_closed = (mode == reasoning_mode::FORCED_CLOSED);
-
-    if (thinking_forced_open || thinking_forced_closed) {
-        // Thinking is forced open OR forced closed with enable_thinking=true
-        // In both cases, expect only the closing tag (opening was in template)
-        // However, since we might have incorrectly detected the open/close pattern,
-        // we admit an optional starting marker
-        return p.optional(p.literal(start)) + p.reasoning(p.until(end)) + end;
-    }
     if (mode == reasoning_mode::TAG_BASED || mode == reasoning_mode::TOOLS_ONLY) {
-        // Standard tag-based reasoning OR tools-only mode (reasoning appears with tools)
-        // Both use the same tag-based pattern if markers are available
-        if (!start.empty() && !end.empty()) {
-            return p.optional(start + p.reasoning(p.until(end)) + end);
+        if (!end.empty()) {
+            if (!start.empty()) {
+                // Standard tag-based: optional(<think>reasoning</think>)
+                return p.optional(start + p.reasoning(p.until(end)) + end + p.space());
+            }
+            // Delimiter-style (empty start)
+            return p.optional(p.reasoning(p.until(end)) + end + p.space());
         }
-    } else if (mode == reasoning_mode::DELIMITER) {
-        return p.optional(p.reasoning(p.until(end)) + end);
     }
 
     return p.eps();
@@ -335,7 +319,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                                                      "tool-" + name + "-arg-" + param_name + "-schema",
                                                                      param_schema, true)) :
                                     p.tool_arg_json_value(p.schema(
-                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, format.uses_python_dicts)) +
+                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
                                         p.space()) +
                 p.tool_arg_close(p.literal(arguments.value_suffix)));
 
@@ -384,7 +368,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             func_parser = p.atomic(p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
                 call_id_section) + p.space() + args_seq;
             matched_atomic = true;
-        } else if (!arguments.name_prefix.empty() && properties.size() > 0) {
+        } else if (!arguments.name_prefix.empty() && !required_parsers.empty()) {
+            // Only peek for an arg tag when there are required args that must follow.
+            // When all args are optional, the model may emit no arg tags at all (#20650).
             func_parser = p.atomic(p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
                 call_id_section + p.space() + p.peek(p.literal(arguments.name_prefix))) + args_seq;
             matched_atomic = true;

@@ -31,10 +31,10 @@ import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
 try:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 
@@ -45,9 +45,9 @@ except ImportError:
     _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
     _mistral_common_installed = False
-    TokenizerVersion = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
+    TokenizerVersion: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
     _mistral_import_error_msg = (
         "Mistral format requires `mistral-common` to be installed. Please run "
         "`pip install mistral-common[image,audio]` to install it."
@@ -145,6 +145,7 @@ class ModelBase:
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
+        self._is_mxfp4 = False
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -220,7 +221,7 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None)
+                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None) # ty: ignore[invalid-assignment]
                     part_names = sorted(part_dict.keys())
             else:
                 weight_map = {}
@@ -298,10 +299,15 @@ class ModelBase:
                 scale = scale.float()
 
                 if block_size is not None:
+                    dim_offset = scale.ndim - len(block_size)
                     for i, size in enumerate(block_size):
-                        scale = scale.repeat_interleave(size, i)
+                        scale = scale.repeat_interleave(size, dim_offset + i)
                     # unpad the scale (e.g. when the tensor size isn't a multiple of the block size)
                     scale = scale[tuple(slice(0, size) for size in weight.shape)]
+
+                # align scale dims to weight for correct broadcasting (e.g. [128] -> [128, 1, 1])
+                while scale.ndim < weight.ndim:
+                    scale = scale.unsqueeze(-1)
 
                 return weight.float() * scale
 
@@ -393,13 +399,15 @@ class ModelBase:
             elif quant_method == "fp8":
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
-                    if name.endswith(".weight_scale_inv"):
+                    if name.endswith("_scale_inv"):
                         weight_name = name.removesuffix("_scale_inv")
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
                     if name.endswith(".activation_scale"):  # unused
+                        tensors_to_remove.append(name)
+                    if name.endswith("_activation_scale"):  # Mistral-Small-4-119B-2602, unused
                         tensors_to_remove.append(name)
                     # mistral format
                     if name.endswith(".qscale_weight"):
@@ -705,6 +713,7 @@ class ModelBase:
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
+        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
@@ -721,6 +730,7 @@ class ModelBase:
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -868,6 +878,12 @@ class ModelBase:
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
             self.metadata.name = self.dir_model.name
+
+        if self.ftype in (gguf.LlamaFileType.ALL_F32, gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16):
+            if self._is_nvfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
+            elif self._is_mxfp4:
+                self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
@@ -1054,6 +1070,10 @@ class TextModel(ModelBase):
         if (n_head_kv := self.find_hparam(["num_key_value_heads", "n_kv_heads"], optional=True)) is not None:
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
+
+        if self.hparams.get("is_causal") is False:
+            self.gguf_writer.add_causal_attention(False)
+            logger.info("gguf: causal attention = False")
 
         # TODO: Handle "sliding_attention" similarly when models start implementing it
         rope_params = self.rope_parameters.get("full_attention", self.rope_parameters)
@@ -3031,10 +3051,16 @@ class LlavaVisionModel(MmprojModel):
     def get_token_id(self, token: str) -> int:
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
         with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-            added_tokens_decoder = json.load(f)['added_tokens_decoder']
+            added_tokens_decoder = json.load(f).get('added_tokens_decoder') or {}
             for id_, token_data in added_tokens_decoder.items():
-                if token_data["content"] == token:
+                if token_data.get("content") == token:
                     return int(id_)
+            # fallthrough to tokenizer.json
+        with open(self.dir_model / "tokenizer.json", "r", encoding="utf-8") as f:
+            tokenizer_json = json.load(f)
+            for token_data in tokenizer_json["added_tokens"]:
+                if token_data["content"] == token:
+                    return int(token_data["id"])
         raise ValueError(f"Token '{token}' not found in tokenizer config.")
 
     def set_gguf_parameters(self):
@@ -3196,40 +3222,6 @@ class Llama4VisionModel(MmprojModel):
                 yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MMPROJ_FC] + '.weight', data_torch)
             else:
                 yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register(
-    "Mistral3ForConditionalGeneration",
-    "Ministral3ForCausalLM",
-)
-class Mistral3Model(LlamaModel):
-    model_arch = gguf.MODEL_ARCH.MISTRAL3
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # for compatibility, we use LLAMA arch for older models
-        # TODO: remove this once everyone has migrated to newer version of llama.cpp
-        if self.hparams.get("model_type") != "ministral3":
-            self.model_arch = gguf.MODEL_ARCH.LLAMA
-            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
-            self.gguf_writer.add_architecture()
-            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        rope_params = self.rope_parameters
-        if self.hparams.get("model_type") == "ministral3":
-            assert rope_params, "ministral3 must have 'rope_parameters' config"
-            assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
-            self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
-            self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        name = name.replace("language_model.", "")
-        if "multi_modal_projector" in name or "vision_tower" in name:
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("DeciLMForCausalLM")
@@ -4281,6 +4273,16 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
+
+    min_dynamic_tiles: int = 0
+    max_dynamic_tiles: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.min_dynamic_tiles = self.global_config.get("min_dynamic_patch", 0)
+        self.max_dynamic_tiles = self.global_config.get("max_dynamic_patch", 0)
+
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
         if isinstance(self.hparams_vision['image_size'], list):
@@ -4303,6 +4305,11 @@ class InternVisionModel(MmprojModel):
         downsample_ratio = self.global_config.get("downsample_ratio")
         assert downsample_ratio is not None
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+        # older models may not have min/max_dynamic_patch in config
+        if self.min_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_min_tiles(self.min_dynamic_tiles)
+        if self.max_dynamic_tiles > 0:
+            self.gguf_writer.add_vision_preproc_max_tiles(self.max_dynamic_tiles)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
@@ -5899,7 +5906,7 @@ class InternLM2Model(TextModel):
             logger.error(f'Error: Missing {tokenizer_path}')
             sys.exit(1)
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
 
@@ -6220,7 +6227,7 @@ class BertModel(TextModel):
 
             vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
-            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
             assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
 
@@ -8271,6 +8278,8 @@ class DeepseekV2Model(TextModel):
     # TODO @ngxson : remove this when we support MTP for deepseek models
     skip_mtp = True
 
+    merge_expert = True
+
     def set_vocab(self):
         try:
             self._set_vocab_gpt2()
@@ -8409,7 +8418,7 @@ class DeepseekV2Model(TextModel):
                 return
 
         # process the experts separately
-        if name.find("mlp.experts") != -1:
+        if self.merge_expert and name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
@@ -8466,6 +8475,69 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register(
+    "Mistral3ForConditionalGeneration",
+    "Ministral3ForCausalLM",
+)
+class Mistral3Model(TextModel):
+    class Ministral3Model(LlamaModel):
+        model_arch = gguf.MODEL_ARCH.MISTRAL3
+
+        def set_gguf_parameters(self):
+            super().set_gguf_parameters()
+            rope_params = self.rope_parameters
+            if self.hparams.get("model_type") == "ministral3":
+                assert rope_params, "ministral3 must have 'rope_parameters' config"
+                assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
+                self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
+                self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
+
+        def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+            name = name.replace("language_model.", "")
+            if "multi_modal_projector" in name or "vision_tower" in name:
+                return
+
+            yield from super().modify_tensors(data_torch, name, bid)
+
+    class Mistral4Model(DeepseekV2Model):
+        model_arch = gguf.MODEL_ARCH.MISTRAL4
+        skip_mtp = False # model contains no MTP layers, so no need to skip
+        merge_expert = False # experts are already stacked as 3D
+
+        def modify_tensors(self, data_torch, name, bid):
+            if name.endswith(".down_proj") or name.endswith(".gate_up_proj"):
+                name = name + ".weight"
+            yield from super().modify_tensors(data_torch, name, bid)
+
+    model_arch = gguf.MODEL_ARCH.MISTRAL3 # unused
+    impl: TextModel
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams.get("model_type") == "mistral4":
+            self.impl = Mistral3Model.Mistral4Model(*args, **kwargs)
+        else:
+            self.impl = Mistral3Model.Ministral3Model(*args, **kwargs)
+
+    def set_vocab(self):
+        self.impl.set_vocab()
+
+    def set_gguf_parameters(self):
+        self.impl.set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        yield from self.impl.modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        self.impl.prepare_tensors()
+
+    def write_vocab(self):
+        self.impl.write_vocab()
+
+    def write(self):
+        self.impl.write()
 
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
@@ -8832,7 +8904,7 @@ class T5Model(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -8969,7 +9041,7 @@ class T5EncoderModel(TextModel):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
@@ -11077,8 +11149,7 @@ class GptOssModel(TextModel):
 
     # TODO: remove once MXFP4 is supported more generally
     def dequant_model(self):
-        quant_config = self.hparams.get("quantization_config")
-        if quant_config is not None and quant_config.get("quant_method") == "mxfp4":
+        if self._is_mxfp4:
             return
         return super().dequant_model()
 
@@ -12231,6 +12302,7 @@ class LazyTorchTensor(gguf.LazyBase):
             kwargs = {}
 
         if func is torch.Tensor.numpy:
+            assert len(args)
             return args[0].numpy()
 
         return cls._wrap_fn(func)(*args, **kwargs)

@@ -255,6 +255,10 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
     gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
 }
 
+ggml_tensor * clip_graph::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+    return ggml_mul_mat(ctx0, w, x);
+}
+
 void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
     if (il >= 0) {
         ggml_format_name(cur, "%s-%d", name, il);
@@ -326,7 +330,7 @@ ggml_tensor * clip_graph::build_vit(
             ggml_tensor * Vcur = nullptr;
             if (layer.qkv_w != nullptr) {
                 // fused qkv
-                cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+                cur = build_mm(layer.qkv_w, cur);
                 if (layer.qkv_b != nullptr) {
                     cur = ggml_add(ctx0, cur, layer.qkv_b);
                 }
@@ -360,17 +364,17 @@ ggml_tensor * clip_graph::build_vit(
 
             } else {
                 // separate q, k, v
-                Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
+                Qcur = build_mm(layer.q_w, cur);
                 if (layer.q_b) {
                     Qcur = ggml_add(ctx0, Qcur, layer.q_b);
                 }
 
-                Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
+                Kcur = build_mm(layer.k_w, cur);
                 if (layer.k_b) {
                     Kcur = ggml_add(ctx0, Kcur, layer.k_b);
                 }
 
-                Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
+                Vcur = build_mm(layer.v_w, cur);
                 if (layer.v_b) {
                     Vcur = ggml_add(ctx0, Vcur, layer.v_b);
                 }
@@ -517,7 +521,7 @@ ggml_tensor * clip_graph::build_ffn(
         ffn_op_type type_op,
         int il) const {
 
-    ggml_tensor * tmp = up ? ggml_mul_mat(ctx0, up, cur) : cur;
+    ggml_tensor * tmp = up ? build_mm(up, cur) : cur;
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -526,7 +530,7 @@ ggml_tensor * clip_graph::build_ffn(
     }
 
     if (gate) {
-        cur = ggml_mul_mat(ctx0, gate, cur);
+        cur = build_mm(gate, cur);
         cb(cur, "ffn_gate", il);
 
         if (gate_b) {
@@ -580,7 +584,7 @@ ggml_tensor * clip_graph::build_ffn(
     }
 
     if (down) {
-        cur = ggml_mul_mat(ctx0, down, cur);
+        cur = build_mm(down, cur);
     }
 
     if (down_b) {
@@ -646,7 +650,7 @@ ggml_tensor * clip_graph::build_attn(
     cb(cur, "kqv_out", il);
 
     if (wo) {
-        cur = ggml_mul_mat(ctx0, wo, cur);
+        cur = build_mm(wo, cur);
     }
 
     if (wo_b) {
@@ -1134,6 +1138,16 @@ struct clip_model_loader {
                         }
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
+                    {
+                        // older version of internvl doesn't have min/max tiles, we need to provide default values for them to avoid issues
+                        hparams.preproc_min_tiles = 1;
+                        hparams.preproc_max_tiles = 12;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
+                        GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles && hparams.preproc_max_tiles < INT32_MAX);
+                        set_internvl_dhr_res_candidates(model);
+                    } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
@@ -1157,7 +1171,6 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
-                case PROJECTOR_TYPE_LIGHTONOCR:
                     {
                         // ref: https://huggingface.co/mistral-community/pixtral-12b/blob/main/preprocessor_config.json
                         // TODO: verify the image_min_tokens
@@ -1165,6 +1178,15 @@ struct clip_model_loader {
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 1024);
+                        hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_LIGHTONOCR:
+                    {
+                        hparams.n_merge = 1;
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        hparams.image_longest_edge = hparams.image_size;
+                        get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIVL:
@@ -2176,6 +2198,27 @@ struct clip_model_loader {
             }
         }
     }
+
+    static void set_internvl_dhr_res_candidates(clip_model & model) {
+        auto & hparams = model.hparams;
+        int min_num = hparams.preproc_min_tiles;
+        int max_num = hparams.preproc_max_tiles;
+        if (min_num < 1) {
+           return; // avoid  divide by 0
+        }
+        for (int a = min_num; a <= max_num; ++a) {
+            int b_lo = (min_num + a - 1) / a;
+            int b_hi = max_num / a;
+            b_lo = std::max(b_lo, min_num);
+            b_hi = std::min(b_hi, max_num);
+            for (int b = b_lo; b <= b_hi; ++b) {
+                hparams.image_res_candidates.push_back(clip_image_size {
+                    a*hparams.image_size,
+                    b*hparams.image_size,
+                });
+            }
+        }
+    }
 };
 
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params) {
@@ -2722,17 +2765,22 @@ struct llava_uhd {
         return res;
     }
 
-    static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
+    static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst, bool overview_first = true) {
         std::vector<clip_image_u8_ptr> output;
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
         img_tool::resize(*img, *resized_img, inst.overview_size, inst.interpolation_overview,
                          inst.padding_overview, inst.pad_color_overview);
-        output.push_back(std::move(resized_img));
+        if (overview_first) {
+            output.push_back(std::move(resized_img));
+        }
 
         if (inst.slices.empty()) {
             // no slices, just return the resized image
+            if (!overview_first) {
+                output.push_back(std::move(resized_img));
+            }
             return output;
         }
 
@@ -2751,6 +2799,10 @@ struct llava_uhd {
             clip_image_u8_ptr img_slice(clip_image_u8_init());
             img_tool::crop(*refined_img, *img_slice, x, y, w, h);
             output.push_back(std::move(img_slice));
+        }
+
+        if (!overview_first) {
+            output.push_back(std::move(resized_img));
         }
 
         return output;
@@ -3137,10 +3189,20 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->grid_x = instructions.grid_size.width;
                 res_imgs->grid_y = instructions.grid_size.height;
             } break;
+        case PROJECTOR_TYPE_INTERNVL: // support dynamic high-resolution
+            {
+                GGML_ASSERT(!params.image_res_candidates.empty());
+                auto const inst = llava_uhd::get_slice_instructions(ctx, original_size);
+                std::vector<clip_image_u8_ptr> imgs = llava_uhd::slice_image(img, inst, false);
 
+                for (size_t i = 0; i < imgs.size(); ++i) {
+                    clip_image_f32_ptr res(clip_image_f32_init());
+                    normalize_image_u8_to_f32(*imgs[i], *res, params.image_mean, params.image_std);
+                    res_imgs->entries.push_back(std::move(res));
+                }
+            } break;
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
-        case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             {
                 clip_image_u8 resized_image;
@@ -3176,7 +3238,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
-        case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized_image;
@@ -3188,6 +3249,19 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     params.image_min_pixels,
                     params.image_max_pixels);
                 img_tool::resize(*img, resized_image, target_size, img_tool::RESIZE_ALGO_BILINEAR);
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+        case PROJECTOR_TYPE_LIGHTONOCR:
+            {
+                GGML_ASSERT(params.image_longest_edge > 0);
+                clip_image_u8 resized_image;
+                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+                    original_size,
+                    params.patch_size * params.n_merge,
+                    params.image_longest_edge);
+                img_tool::resize(*img, resized_image, target_size, img_tool::RESIZE_ALGO_BICUBIC);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));

@@ -2,6 +2,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
+#include "common.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 #include "peg-parser.h"
@@ -31,8 +32,9 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
       [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
               tmpl.src.find("reasoning_content") == std::string::npos &&
+              tmpl.src.find("<SPECIAL_12>") == std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
-              analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
+              analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
               analysis.reasoning.start = "<think>";
               analysis.reasoning.end   = "</think>";
               analysis.preserved_tokens.push_back("<think>");
@@ -185,7 +187,6 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("func_name_prefix: '%s'\n", tools.function.name_prefix.c_str());
     LOG_DBG("func_name_suffix: '%s'\n", tools.function.name_suffix.c_str());
     LOG_DBG("func_close: '%s'\n", tools.function.close.c_str());
-    LOG_DBG("python_dict_format: %s\n", tools.format.uses_python_dicts ? "true" : "false");
     LOG_DBG("arg_name_prefix: '%s'\n", tools.arguments.name_prefix.c_str());
     LOG_DBG("arg_name_suffix: '%s'\n", tools.arguments.name_suffix.c_str());
     LOG_DBG("arg_value_prefix: '%s'\n", tools.arguments.value_prefix.c_str());
@@ -295,16 +296,12 @@ void analyze_reasoning::compare_reasoning_presence() {
         }
         if (result.result.success()) {
             if (!result.tags["pre"].empty() && !result.tags["post"].empty()) {
-                if (parser_wrapped.parse_anywhere_and_extract(diff.right).result.success()) { // both tags in the diff = no forced close
-                    mode = reasoning_mode::TAG_BASED;
-                } else {
-                    mode = reasoning_mode::FORCED_CLOSED;
-                }
+                mode = reasoning_mode::TAG_BASED;
                 start = trim_whitespace(result.tags["pre"]);
-                end   = result.tags["post"];
+                end   = trim_trailing_whitespace(result.tags["post"]);
             } else if (!result.tags["post"].empty()) {
-                mode = reasoning_mode::DELIMITER;
-                end = result.tags["post"];
+                mode = reasoning_mode::TAG_BASED;
+                end = trim_trailing_whitespace(result.tags["post"]);
             }
         }
     }
@@ -331,53 +328,58 @@ void analyze_reasoning::compare_thinking_enabled() {
     const auto & diff = comparison->diff;
 
     std::string left_trimmed = trim_whitespace(diff.left);
+    std::string right_trimmed = trim_whitespace(diff.right);
 
     if (left_trimmed.empty() && !diff.right.empty()) {
-        std::string right_trimmed = trim_whitespace(diff.right);
-
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
             if (start.empty()) {
                 start = right_trimmed;
-                mode  = reasoning_mode::FORCED_OPEN;
+                mode  = reasoning_mode::TAG_BASED;
+            }
+        }
+    } else if (right_trimmed.empty() && !diff.left.empty()) {
+        if (!left_trimmed.empty() && string_ends_with(comparison->output_A, left_trimmed)) {
+            if (end.empty()) {
+                auto seg = prune_whitespace_segments(segmentize_markers(comparison->output_A));
+                if (seg.size() >= 2 && seg[seg.size() - 1].value == left_trimmed && seg[seg.size() - 2].type == segment_type::MARKER) {
+                    start = seg[seg.size() - 2].value;
+                }
+                end = left_trimmed;
+                mode = reasoning_mode::TAG_BASED;
+            }
+        }
+    } else if (!left_trimmed.empty() && !right_trimmed.empty()) {
+        // Full-output diff is noisy (e.g., SmolLM3 changes the system message when enable_thinking flips).
+        // Try to find reasoning markers by tail-anchoring:
+        // one output's generation prompt tail may appear in the other with extra reasoning markers appended.
+        const auto & output_A = comparison->output_A;
+        const auto & output_B = comparison->output_B;
+        const size_t anchor_len = 64;
+
+        for (int dir = 0; dir < 2; dir++) {
+            const auto & base     = dir == 0 ? output_B : output_A;
+            const auto & extended = dir == 0 ? output_A : output_B;
+
+            size_t len = std::min(base.size(), anchor_len);
+            std::string anchor = base.substr(base.size() - len);
+            auto pos = extended.rfind(anchor);
+            if (pos == std::string::npos || pos + len >= extended.size()) continue;
+
+            std::string extra = trim_whitespace(extended.substr(pos + len));
+            if (extra.empty()) continue;
+
+            auto seg = prune_whitespace_segments(segmentize_markers(extra));
+            if (seg.size() == 2 && seg[0].type == segment_type::MARKER && seg[1].type == segment_type::MARKER) {
+                if (start.empty()) start = seg[0].value;
+                if (end.empty())   end   = seg[1].value;
+                mode = reasoning_mode::TAG_BASED;
+                break;
             }
         }
     }
 
-    if (start.empty() && !end.empty()) {
-        mode = reasoning_mode::DELIMITER;
-    }
-
-    // Check for FORCED_CLOSED: when enable_thinking=false produces both start and end markers,
-    // but enable_thinking=true produces only the start marker
-    if (!comparison->output_A.empty() && !comparison->output_B.empty()) {
-        auto parser_start = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.literal(start) + p.space() + p.literal(end) + p.rest();
-        });
-        auto parser_start_end = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.literal(start)) + p.space() + p.negate(p.literal(end)) + p.rest();
-        });
-        if (!start.empty() && parser_start_end.parse_anywhere_and_extract(comparison->output_A).result.success() &&
-            parser_start.parse_anywhere_and_extract(comparison->output_B).result.success()) {
-            mode = reasoning_mode::FORCED_CLOSED;
-        } else if (!end.empty()) { // we extract the starting marker now since we didn't get it earlier
-            auto result = parser_start_end.parse_anywhere_and_extract(comparison->output_A);
-            if (result.result.success()) {
-                start = result.tags["pre"];
-                mode  = reasoning_mode::FORCED_CLOSED;
-            }
-        }
-    }
-
-    if (start.empty() && end.empty()) {  // we might still have the case of "just open" and "just close"
-        if (!diff.left.empty() && !diff.right.empty()) {
-            auto seg_A = segmentize_markers(trim_trailing_whitespace(diff.left));
-            auto seg_B = segmentize_markers(trim_trailing_whitespace(diff.right));
-            if (seg_A.size() == 1 && seg_B.size() == 1) {
-                mode = reasoning_mode::FORCED_CLOSED;
-                start = seg_B[0].value;
-                end = seg_A[0].value;
-            }
-        }
+    if (mode == reasoning_mode::NONE && start.empty() && !end.empty()) {
+        mode = reasoning_mode::TAG_BASED;
     }
 }
 
@@ -426,16 +428,16 @@ void analyze_reasoning::compare_reasoning_scope() {
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
         if (result.result.success()) {
             start = result.tags["pre"];
-            end = result.tags["post"];
+            end = trim_trailing_whitespace(result.tags["post"]);
         } else {
             auto parser_delimiter = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
                 return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())));
             });
             result = parser_delimiter.parse_anywhere_and_extract(comparison->output_B);
             if (result.result.success()) {
-                end = result.tags["post"];
+                end = trim_trailing_whitespace(result.tags["post"]);
             } else {
-                LOG_DBG(ANSI_ORANGE "%s: Unable to extracft reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
+                LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
             }
         }
@@ -600,33 +602,23 @@ void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
         return;
     }
 
-    enum class json_quote_style { NONE, DOUBLE_QUOTES, SINGLE_QUOTES };
-
-    auto in_json_haystack = [&haystack](const std::string & needle) -> json_quote_style {
+    auto in_json_haystack = [&haystack](const std::string & needle) -> bool {
         auto parser = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
             return p.choice({ p.literal("{"), p.literal(":") }) << p.choice({
-                p.tag("sq", p.literal("'") + p.literal(needle) + p.literal("'")),
                 p.tag("dq", p.literal("\"") + p.literal(needle) + p.literal("\"")) });
         });
         auto result = parser.parse_anywhere_and_extract(haystack);
-        if (!result.result.success()) {
-            return json_quote_style::NONE;
-        }
-        return result.tags.count("sq") && !result.tags["sq"].empty()
-            ? json_quote_style::SINGLE_QUOTES
-            : json_quote_style::DOUBLE_QUOTES;
+        return result.result.success();
     };
 
     auto fun_quote = in_json_haystack(fun_name_needle);
     auto arg_quote = in_json_haystack(arg_name_needle);
 
-    if (fun_quote != json_quote_style::NONE) {
+    if (fun_quote) {
         // no need to check further, we're in JSON land
         format.mode = tool_format::JSON_NATIVE;
-        format.uses_python_dicts = (fun_quote == json_quote_style::SINGLE_QUOTES);
-    } else if (arg_quote != json_quote_style::NONE) {
+    } else if (arg_quote) {
         format.mode = tool_format::TAG_WITH_JSON;
-        format.uses_python_dicts = (arg_quote == json_quote_style::SINGLE_QUOTES);
     } else {
         format.mode = tool_format::TAG_WITH_TAGGED;
     }

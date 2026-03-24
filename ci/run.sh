@@ -25,7 +25,13 @@
 # # with KLEIDIAI support
 # GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
-# # with OPENVINO support
+# # with BLAS support
+# GG_BUILD_BLAS=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with BLAS support (custom vendor)
+# GG_BUILD_BLAS=1 GG_BUILD_BLAS_VENDOR=Intel10_64lp bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with OPENVINO support
 # GG_BUILD_OPENVINO=1 GG_BUILD_LOW_PERF=1 GGML_OPENVINO_DEVICE=CPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 
@@ -167,6 +173,10 @@ if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
         -DGGML_CPU_AARCH64=ON \
         -DGGML_CPU_ARM_ARCH=${CPU} \
         -DBUILD_SHARED_LIBS=OFF"
+fi
+
+if [ ! -z ${GG_BUILD_BLAS} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
 fi
 
 if [ ! -z ${GG_BUILD_OPENVINO} ]; then
