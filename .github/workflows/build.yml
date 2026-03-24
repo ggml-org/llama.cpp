@@ -81,7 +81,7 @@ jobs:
         run: |
           sysctl -a
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
@@ -120,7 +120,7 @@ jobs:
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
           # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
@@ -168,7 +168,7 @@ jobs:
         id: cmake_build
         run: |
           export CMAKE_PREFIX_PATH=dawn
-          cmake -B build -G "Ninja Multi-Config" -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          cmake -B build -G "Ninja" -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -232,7 +232,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
@@ -284,7 +284,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -384,7 +384,7 @@ jobs:
         run: |
           export Dawn_DIR=dawn/lib64/cmake/Dawn
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_WEBGPU=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -423,7 +423,7 @@ jobs:
         run: |
           source emsdk/emsdk_env.sh
           emcmake cmake -B build-wasm \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_WEBGPU=ON \
             -DLLAMA_OPENSSL=OFF \
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
@@ -456,7 +456,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
@@ -488,7 +488,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_MUSA=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -536,7 +536,7 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx
@@ -586,7 +586,7 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
-            -G "Ninja Multi-Config" \
+            -G "Ninja" \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
@@ -686,19 +686,19 @@ jobs:
         include:
           - build: 'cpu-x64 (static)'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
+            defines: '-G "Ninja" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
           - build: 'openblas-x64'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
+            defines: '-G "Ninja" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
             arch: 'x64'
             defines: '-G "Ninja" -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'llvm-arm64'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
+            defines: '-G "Ninja" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
           - build: 'llvm-arm64-opencl-adreno'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            defines: '-G "Ninja" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
 
     steps:
       - name: Clone
@@ -867,7 +867,7 @@ jobs:
         # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G "Ninja Multi-Config" ^
+          cmake -S . -B build -G "Ninja" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
