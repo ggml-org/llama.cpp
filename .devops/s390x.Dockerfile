@@ -20,6 +20,7 @@ COPY . .
 RUN --mount=type=cache,target=/root/.ccache \
     --mount=type=cache,target=/app/build \
     cmake -S . -B build -G Ninja \
+        -DGGML_RPC=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \

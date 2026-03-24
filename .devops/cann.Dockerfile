@@ -39,6 +39,7 @@ ARG CHIP_TYPE
 RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
     && \
     cmake -B build \
+        -DGGML_RPC=ON \
         -DGGML_CANN=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DSOC_TYPE=ascend${CHIP_TYPE} \

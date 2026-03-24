@@ -51,6 +51,7 @@ COPY . .
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build/ReleaseOV -G Ninja \
+        -DGGML_RPC=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_OPENVINO=ON && \
     cmake --build build/ReleaseOV -j$(nproc)"
