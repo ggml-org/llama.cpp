@@ -3,7 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
-#include "reasoning-budget.h"
+#include "matcher-sampler.h"
 
 #include <algorithm>
 #include <cctype>
@@ -284,15 +284,82 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    // reasoning budget sampler — added first so it can force tokens before other samplers
-    if (params.reasoning_budget_tokens >= 0 && !params.reasoning_budget_forced.empty()) {
-        samplers.push_back(common_reasoning_budget_init(
-            vocab,
-            params.reasoning_budget_start,
-            params.reasoning_budget_end,
-            params.reasoning_budget_forced,
-            params.reasoning_budget_tokens,
-            prefill_tokens));
+    // matcher sampler — added first so it can force tokens before other samplers
+    {
+        llama_sampler * matcher = nullptr;
+
+        // reasoning budget SSM
+        if (params.reasoning_budget_tokens >= 0 && !params.reasoning_budget_forced.empty()) {
+            matcher = common_matcher_sampler_init_reasoning_budget(
+                vocab,
+                params.reasoning_budget_start,
+                params.reasoning_budget_end,
+                params.reasoning_budget_forced,
+                params.reasoning_budget_tokens,
+                prefill_tokens);
+        }
+
+        // tool call grammar SSM — when the grammar is tool-call type, all triggers
+        // are simple WORDs, and we have thinking tags, replace the lazy grammar with
+        // a non-lazy one inside the matcher sampler (more efficient, thinking-aware)
+        if (grmr != nullptr
+                && params.grammar.type == COMMON_GRAMMAR_TYPE_TOOL_CALLS
+                && params.grammar_lazy
+                && !params.reasoning_budget_end.empty()
+                && !params.grammar_triggers.empty()) {
+            bool all_word_triggers = true;
+            for (const auto & trigger : params.grammar_triggers) {
+                if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+                    all_word_triggers = false;
+                    break;
+                }
+            }
+
+            if (all_word_triggers) {
+                // Rebuild the grammar as non-lazy — trigger detection is handled by the matcher
+                llama_sampler_free(grmr);
+                grmr = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
+
+                // Prefill the non-lazy grammar with the generation prompt tokens
+                if (grmr && !prefill_tokens.empty()) {
+                    try {
+                        for (const auto & token : prefill_tokens) {
+                            llama_sampler_accept(grmr, token);
+                        }
+                    } catch (std::exception & e) {
+                        LOG_ERR("%s: error prefilling tool-call grammar: %s\n", __func__, e.what());
+                        throw;
+                    }
+                }
+
+                // Tokenize each trigger word into a token sequence
+                std::vector<std::vector<llama_token>> tool_call_start_seqs;
+                for (const auto & trigger : params.grammar_triggers) {
+                    tool_call_start_seqs.push_back(
+                        common_tokenize(vocab, trigger.value, false, true));
+                }
+
+                if (matcher) {
+                    common_matcher_sampler_add_tool_call_grammar(
+                        matcher,
+                        params.reasoning_budget_start,
+                        params.reasoning_budget_end,
+                        tool_call_start_seqs,
+                        grmr);
+                } else {
+                    matcher = common_matcher_sampler_init_tool_call_grammar(
+                        params.reasoning_budget_start,
+                        params.reasoning_budget_end,
+                        tool_call_start_seqs,
+                        grmr);
+                }
+                grmr = nullptr;  // ownership transferred to matcher
+            }
+        }
+
+        if (matcher) {
+            samplers.push_back(matcher);
+        }
     }
 
     if (params.has_logit_bias()) {
