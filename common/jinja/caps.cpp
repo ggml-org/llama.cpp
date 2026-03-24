@@ -75,6 +75,7 @@ std::map<std::string, bool> caps::to_map() const {
         {"supports_parallel_tool_calls", supports_parallel_tool_calls},
         {"supports_system_role", supports_system_role},
         {"supports_preserve_reasoning", supports_preserve_reasoning},
+        {"supports_object_arguments", supports_object_arguments},
     };
 }
 
@@ -158,9 +159,9 @@ caps caps_get(jinja::program & prog) {
         }
     );
 
-    JJ_DEBUG("%s\n", ">>> Running capability check: single tool support");
+    JJ_DEBUG("%s\n", ">>> Running capability check: single tool with object arguments support");
 
-    // case: tools support: single call
+    // case: tools support: single call with object arguments
     caps_try_execute(
         prog,
         [&]() {
@@ -226,9 +227,7 @@ caps caps_get(jinja::program & prog) {
         },
         [&](bool success, value & messages, value & tools) {
             if (!success) {
-                result.supports_tool_calls = false;
-                result.supports_tools = false;
-                return;
+                return; // Nothing can be inferred
             }
 
             auto & tool_name = tools->at(0)->at("function")->at("name");
@@ -242,9 +241,105 @@ caps caps_get(jinja::program & prog) {
             caps_print_stats(tool_calls, "messages[1].tool_calls");
             if (!tool_calls->stats.used) {
                 result.supports_tool_calls = false;
+                return;
+            }
+
+            auto & tool_arg = tool_calls->at(0)->at("function")->at("arguments")->at("arg");
+            caps_print_stats(tool_arg, "messages[1].tool_calls[0].function.arguments.arg");
+            if (tool_arg->stats.used) {
+                result.supports_object_arguments = true;
             }
         }
     );
+
+    if (!result.supports_object_arguments) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: single tool with string arguments support");
+
+        // case: tools support: single call with string arguments
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", "User message"},
+                    },
+                    {
+                        {"role", "assistant"},
+                        {"content", ""}, // Some templates expect content to be empty with tool calls
+                        {"tool_calls", json::array({
+                            {
+                                {"id", "call00001"},
+                                {"type", "function"},
+                                {"function", {
+                                    {"name", "tool1"},
+                                    {"arguments", R"({"arg": "value"})"}
+                                }}
+                            }
+                        })}
+                    },
+                    {
+                        {"role", "tool"},
+                        {"content", "Tool response"},
+                        {"tool_call_id", "call00001"}
+                    },
+                    {
+                        {"role", "assistant"},
+                        {"content", "The tool response was 'tool response'"}
+                    },
+                    {
+                        {"role", "user"},
+                        {"content", "User message"},
+                    },
+                });
+            },
+            [&]() {
+                // tools
+                return json::array({
+                    {
+                        {"name", "tool"},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", "tool1"},
+                            {"description", "Tool description"},
+                            {"parameters", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"arg", {
+                                        {"type", "string"},
+                                        {"description", "Arg description"},
+                                    }},
+                                }},
+                                {"required", json::array({ "arg" })},
+                            }},
+                        }},
+                    },
+                });
+            },
+            [&](bool success, value & messages, value & tools) {
+                if (!success) {
+                    result.supports_tool_calls = false;
+                    result.supports_tools = false;
+                    return;
+                }
+
+                auto & tool_name = tools->at(0)->at("function")->at("name");
+                caps_print_stats(tool_name, "tools[0].function.name");
+                caps_print_stats(tools, "tools");
+                if (!tool_name->stats.used) {
+                    result.supports_tools = false;
+                }
+
+                auto & tool_calls = messages->at(1)->at("tool_calls");
+                caps_print_stats(tool_calls, "messages[1].tool_calls");
+                if (!tool_calls->stats.used) {
+                    result.supports_tool_calls = false;
+                    return;
+                }
+            }
+        );
+    }
 
     JJ_DEBUG("%s\n", ">>> Running capability check: parallel tool support");
 
@@ -252,6 +347,11 @@ caps caps_get(jinja::program & prog) {
     caps_try_execute(
         prog,
         [&]() {
+            json args = json(R"({"arg": "value"})");
+            if (result.supports_object_arguments) {
+                args = json{{"arg", "value"}};
+            }
+
             // messages
             return json::array({
                 {
@@ -267,9 +367,7 @@ caps caps_get(jinja::program & prog) {
                             {"type", "function"},
                             {"function", {
                                 {"name", "tool1"},
-                                {"arguments", {
-                                    {"arg", "value"}
-                                }}
+                                {"arguments", args}
                             }}
                         },
                         {
@@ -277,9 +375,7 @@ caps caps_get(jinja::program & prog) {
                             {"type", "function"},
                             {"function", {
                                 {"name", "tool1"},
-                                {"arguments", {
-                                    {"arg", "value"}
-                                }}
+                                {"arguments", args}
                             }}
                         }
                     })}
@@ -328,7 +424,7 @@ caps caps_get(jinja::program & prog) {
                 return;
             }
 
-            auto & tool_calls = messages->at(1)->at("tool_calls");;
+            auto & tool_calls = messages->at(1)->at("tool_calls");
             caps_print_stats(tool_calls, "messages[1].tool_calls");
 
             // check for second tool call usage

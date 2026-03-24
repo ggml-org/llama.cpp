@@ -282,7 +282,7 @@ static void render_scenario(const common_chat_template & tmpl,
     LOG_ERR("Messages:\n%s\n", final_messages.dump(2).c_str());
 
     try {
-        autoparser::templates_params inputs;
+        autoparser::generation_params inputs;
         inputs.messages                         = final_messages;
         inputs.add_generation_prompt            = add_generation_prompt;
         inputs.extra_context["enable_thinking"] = enable_thinking;
@@ -395,7 +395,7 @@ int main(int argc, char ** argv) {
             analysis.analyze_template(chat_template);
 
             // Generate Parser
-            autoparser::templates_params params;
+            autoparser::generation_params params;
             params.messages = json::array({ build_user_message() });
             params.reasoning_format =
                 opts.enable_reasoning ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;

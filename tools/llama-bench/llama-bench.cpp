@@ -418,7 +418,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -m, --model <filename>                      (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
     printf("  -hf, -hfr, --hf-repo <user>/<model>[:quant] Hugging Face model repository; quant is optional, case-insensitive\n");
     printf("                                              default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n");
-    printf("                                              example: unsloth/phi-4-GGUF:Q4_K_M\n");
+    printf("                                              example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n");
     printf("                                              (default: unused)\n");
     printf("  -hff, --hf-file <file>                      Hugging Face model file. If specified, it will override the quant in --hf-repo\n");
     printf("                                              (default: unused)\n");
@@ -979,37 +979,20 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         for (size_t i = 0; i < params.hf_repo.size(); i++) {
             common_params_model model;
 
-            // step 1: no `-hff` provided, we auto-detect based on the `-hf` flag
             if (params.hf_file.empty() || params.hf_file[i].empty()) {
-                auto auto_detected = common_get_hf_file(params.hf_repo[i], params.hf_token, false);
-                if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                    exit(1);
-                }
-
-                model.name    = params.hf_repo[i];
-                model.hf_repo = auto_detected.repo;
-                model.hf_file = auto_detected.ggufFile;
+                model.hf_repo = params.hf_repo[i];
             } else {
+                model.hf_repo = params.hf_repo[i];
                 model.hf_file = params.hf_file[i];
             }
 
-            // step 2: construct the model cache path
-            std::string clean_fname = model.hf_repo + "_" + model.hf_file;
-            string_replace_all(clean_fname, "\\", "_");
-            string_replace_all(clean_fname, "/", "_");
-            model.path = fs_get_cache_file(clean_fname);
-
-            // step 3: download the model if not exists
-            std::string model_endpoint = get_model_endpoint();
-            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
-
-            bool ok = common_download_model(model, params.hf_token, false);
-            if (!ok) {
-                fprintf(stderr, "error: failed to download model from %s\n", model.url.c_str());
+            auto download_result = common_download_model(model, params.hf_token);
+            if (download_result.model_path.empty()) {
+                fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);
             }
 
-            params.model.push_back(model.path);
+            params.model.push_back(download_result.model_path);
         }
     }
 
