@@ -5113,7 +5113,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         #else
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
         #endif
-        
+
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->s));

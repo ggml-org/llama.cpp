@@ -243,7 +243,7 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         uchar sc0, m0, sc1, m1;
         get_scale_min_k4(j, scales0, &sc0, &m0);
         get_scale_min_k4(j, scales1, &sc1, &m1);
-        
+
         regS = (half2)(d_sb.s0  * sc0, d_sb.s1  * sc1);
         regM = (half2)(dm_sb.s0 * m0,  dm_sb.s1 * m1);
 
