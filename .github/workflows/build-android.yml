@@ -2,6 +2,7 @@ name: CI (android)
 
 on:
   workflow_dispatch: # allows manual triggering
+  workflow_call: # allows being called as a reusable workflow
   push:
     branches:
       - master
