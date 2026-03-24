@@ -29,6 +29,7 @@ on:
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-cmake-pkg.yml',
+      'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',

@@ -27,6 +27,7 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-self-hosted.yml',
+      'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
