@@ -896,14 +896,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // GGML_LOG_WARN("OpenVINO backend does not support ROPE with type %s\n", ggml_type_name(op->type));
             return true;
         }
-        float freq_scale;
-        float ext_factor;
-        memcpy(&freq_scale, op_params + 6, sizeof(float));
-        memcpy(&ext_factor, op_params + 7, sizeof(float));
-        if (ext_factor != 0.0f) {
-            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with ext_factor %f != 0.0f\n", ext_factor);
-            return true;
-        }
         if (op->src[0]->op == GGML_OP_VIEW) {
             if (op->src[0]->view_src->ne[1] != op->src[0]->ne[2]) {
                 // GGML_LOG_WARN(
