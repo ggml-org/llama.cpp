@@ -460,9 +460,9 @@ static gguf_split_info get_gguf_split_info(const std::string & path) {
     int count = 1;
 
     if (std::regex_match(prefix, m, re_split)) {
-        prefix = m[1].str();
         index = std::stoi(m[2].str());
         count = std::stoi(m[3].str());
+        prefix = m[1].str();
     }
 
     std::string tag;
