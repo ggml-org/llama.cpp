@@ -62,15 +62,15 @@ jobs:
 
   android-ndk:
     runs-on: ubuntu-latest
-    container:                                                                                                                                                                                                                                                               
+    container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
-    defaults:                                                                                                                                                                                                                                                                
-      run:                                                                                                                                                                                                                                                                   
-        shell: bash                                                                                                                                                                                                                                                          
-    permissions:                                                                                                                                                                                                                                                             
-      id-token: write                                                                                                                                                                                                                                                        
-      packages: read                                                                                                                                                                                                                                                         
-      contents: read     
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      id-token: write
+      packages: read
+      contents: read
     strategy:
       matrix:
         include:
@@ -87,19 +87,19 @@ jobs:
           fetch-depth: 0
           lfs: false
 
-      - name: Build Llama.CPP for Hexagon Android                                                                                                                                                                                                                            
-        id: build_llama_cpp_hexagon_android                                                                                                                                                                                                                                  
-        run: |                                                                                                                                                                                                                                                               
-          if [[ "${{ matrix.build }}" == "arm64-snapdragon" ]]; then                                                                                                                                                                                                                                
+      - name: Build Llama.CPP for Hexagon Android
+        id: build_llama_cpp_hexagon_android
+        run: |
+          if [[ "${{ matrix.build }}" == "arm64-snapdragon" ]]; then
             cp docs/backend/snapdragon/CMakeUserPresets.json .
-          fi                                                                                                                                                                                                               
+          fi
           cmake ${{ matrix.defines }} -B build
-          cmake --build build                                                                                                                                                                                                                                                        
-          cmake --install build --prefix pkg-adb/llama.cpp                                                                                                                                                                                                      
-      
-      - name: Upload Llama.CPP Hexagon Android Build Artifact                                                                                                                                                                                                                
-        if: ${{ always() && steps.build_llama_cpp_hexagon_android.outcome == 'success' }}                                                                                                                                                                                    
-        uses: actions/upload-artifact@v6                                                                                                                                                                                                                                    
-        with:                                                                                                                                                                                                                                                                
-          name: llama-cpp-android-${{ matrix.build }}                                                                                                                                                                                                                                   
-          path: pkg-adb/llama.cpp                                                                                                                                                                                                                                           
+          cmake --build build
+          cmake --install build --prefix pkg-adb/llama.cpp
+
+      - name: Upload Llama.CPP Hexagon Android Build Artifact
+        if: ${{ always() && steps.build_llama_cpp_hexagon_android.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-android-${{ matrix.build }}
+          path: pkg-adb/llama.cpp
