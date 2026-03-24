@@ -26,6 +26,7 @@
 
 	onMount(() => {
 		if (textareaElement) {
+			autoResizeTextarea(textareaElement);
 			textareaElement.focus();
 		}
 	});
