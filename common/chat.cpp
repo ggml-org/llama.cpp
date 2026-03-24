@@ -105,10 +105,16 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
         } else {
             auto & parts = jmsg["content"] = json::array();
             for (const auto & part : content_parts) {
-                parts.push_back({
+                json jpart = {
                     {"type", part.type},
                     {"text", part.text},
-                });
+                };
+                if (part.extra_fields.is_object()) {
+                    for (const auto & [k, v] : part.extra_fields.items()) {
+                        jpart[k] = v;
+                    }
+                }
+                parts.push_back(jpart);
             }
         }
     } else {
@@ -291,6 +297,11 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         common_chat_msg_content_part msg_part;
                         msg_part.type = type;
                         msg_part.text = part.at("text");
+                        for (const auto & [k, v] : part.items()) {
+                            if (k != "type" && k != "text") {
+                                msg_part.extra_fields[k] = v;
+                            }
+                        }
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
