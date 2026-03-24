@@ -63,12 +63,21 @@ layout (push_constant) uniform parameter
 #endif
     // N dimension for the B matrix can be >= p.N
     uint padded_N;
+    uint deltas_offset;
 } p;
 
 
+#ifdef A_TYPE_REPACKED
+struct block_q4_0_quants { uint16_t qs[8]; };
+layout (binding = 0) readonly buffer A {block_q4_0_quants data_a[];};
+layout (binding = 0) readonly buffer A_DELTAS {float16_t data_a_deltas[];};
+#else
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#endif
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+uint pos_a;
 
 #if QUANT_K > 1
 #define DECODEFUNCA , dequantFuncA
@@ -254,10 +263,10 @@ void main() {
 #endif
 
 #ifdef MUL_MAT_ID
-    uint pos_a = expert_idx * (p.batch_stride_a / QUANT_K);
+    pos_a = expert_idx * (p.batch_stride_a / QUANT_K);
     uint pos_b = 0;
 #else
-    uint pos_a = batch_idx_a * (p.batch_stride_a / QUANT_K);
+    pos_a = batch_idx_a * (p.batch_stride_a / QUANT_K);
     uint pos_b = batch_idx * p.batch_stride_b;
     uint pos_d = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
 #endif
