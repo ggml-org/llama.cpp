@@ -141,7 +141,7 @@
 					class="h-3 w-3 text-red-500 hover:text-red-600"
 					onclick={(e) => {
 						e?.stopPropagation();
-						modelsStore.unloadModel(option.model)
+						modelsStore.unloadModel(option.model);
 					}}
 				/>
 			</div>
