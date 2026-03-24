@@ -112,14 +112,16 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 
 // Internal implementation of hint(). Caller must hold mutex_.
 //
-// Routes through moe_expert_ensure_soa_cached() which uses the unified cache's
-// ensure_cached_layout() to upload expert weights with correct SOA layout.
-// This fixes a critical bug where raw memcpy copied AOS data to VRAM but MMVQ
-// kernels expect SOA layout — causing garbage output for quantized types.
+// Submits async DMA + AOS→SOA reorder via moe_expert_begin_soa_cache_async(),
+// which calls ensure_cached_layout(skip_fill_wait=true). Returns immediately
+// after DMA submission — does NOT block on DMA completion.
+//
+// The returned sycl::event is stored in inflight_ and waited on in await().
+// The cache entry remains IN_PROGRESS until await() finalizes it to READY.
 bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     expert_key key{ layer_idx, expert_idx };
 
-    // Already in-flight (legacy path) — skip.
+    // Already in-flight — skip.
     if (inflight_.count(key)) {
         return false;
     }
@@ -136,22 +138,38 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // Use SOA-correct caching via unified cache.
-    // This handles AOS→SOA layout conversion, VRAM allocation, and placement
-    // table update — all through the proven ensure_cached_layout() path.
-    // The call is synchronous (blocks until SOA conversion + H2D DMA complete),
-    // but this is acceptable: hint() is called from the CPU-fallback code path
-    // where the expert will be computed on CPU for the current token anyway.
-    // The ~1ms overhead per cache-miss expert is negligible vs ~2ms CPU compute.
-    void * device_ptr = moe_expert_ensure_soa_cached(layer_idx, expert_idx, device_id_);
-    if (device_ptr) {
+    // Submit async DMA + SOA reorder via the unified cache.
+    // This returns immediately — DMA runs on the cache's internal queue.
+    auto result = moe_expert_begin_soa_cache_async(layer_idx, expert_idx, device_id_);
+    if (!result.success) {
+        return false;
+    }
+
+    // Already cached (READY in unified cache) — no in-flight tracking needed.
+    if (result.already_cached) {
         completed_count_++;
-        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: SOA-cached via unified cache, dev=%d ptr=%p\n",
-                        layer_idx, expert_idx, device_id_, device_ptr);
+        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: already cached in unified cache, ptr=%p\n",
+                        layer_idx, expert_idx, result.device_ptr);
         return true;
     }
 
-    return false;
+    // DMA submitted — track in-flight for await() to finalize.
+    prefetch_request req;
+    req.key        = key;
+    req.event      = result.event;
+    req.device_ptr = result.device_ptr;
+    req.pool_slot  = -1;  // Unified cache manages storage, not our pool
+    req.completed  = false;
+    req.cache_key  = result.cache_key;
+    req.layout     = result.layout;
+    req.size       = result.size;
+    req.layer_id   = result.layer_id;
+    req.expert_id  = result.expert_id;
+
+    inflight_[key] = std::move(req);
+    GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: async DMA submitted, dev=%d ptr=%p\n",
+                    layer_idx, expert_idx, device_id_, result.device_ptr);
+    return true;
 }
 
 void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert_indices) {
@@ -262,7 +280,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         }
     }
 
-    // Phase 3: Re-acquire lock and update state.
+    // Phase 3: Re-acquire lock, finalize cache entry, and update state.
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = inflight_.find(key);
     if (it == inflight_.end()) {
@@ -272,8 +290,24 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
     if (!it->second.completed) {
         it->second.completed = true;
         completed_count_++;
-        // Cache already tracks the pointer via ensure_cached_layout.
-        // No separate placement table update needed.
+
+        // Finalize the unified cache entry from IN_PROGRESS → READY.
+        // After event.wait(), the DMA + reorder is complete and the device
+        // pointer holds valid SOA data. register_ready() marks the entry
+        // so that lookup() will find it on subsequent accesses.
+        if (it->second.cache_key.valid) {
+            unified_cache * cache = get_unified_cache_for_device(device_id_);
+            if (cache) {
+                cache->register_ready(it->second.cache_key,
+                                      it->second.device_ptr,
+                                      it->second.layout,
+                                      it->second.size,
+                                      cache_entry_type::MOE_EXPERT,
+                                      it->second.layer_id,
+                                      it->second.expert_id);
+            }
+        }
+
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
                         layer_idx, expert_idx, it->second.device_ptr);
     }
@@ -289,6 +323,17 @@ void ExpertPrefetcher::cancel_all() {
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Wait for all in-flight DMAs.
+    // First: wait on individual per-expert events (handles unified cache queue DMA).
+    for (auto & [key, req] : inflight_) {
+        if (!req.completed) {
+            try {
+                req.event.wait();
+            } catch (const sycl::exception &) {
+                // Best effort during shutdown.
+            }
+        }
+    }
+    // Also drain the prefetcher's own OOQ for any legacy DMA.
     if (dma_queue_) {
         try {
             dma_queue_->wait();
@@ -408,15 +453,16 @@ void ExpertPrefetcher::gc_completed() {
     auto it = inflight_.begin();
     while (it != inflight_.end()) {
         if (it->second.completed) {
-            // Transition to cached state: keep device_ptr valid, add to LRU map.
             int slot = it->second.pool_slot;
             expert_key key = it->second.key;
 
-            // Register in cached_slots_ so future hints find it as a cache hit.
-            cached_slots_[key] = slot;
-
-            // The placement table device_ptr was already set in await() — keep it.
-            // The vram_pool_ slot remains occupied (free=false) with valid data.
+            if (slot >= 0) {
+                // Private pool slot: register in cached_slots_ for LRU tracking.
+                cached_slots_[key] = slot;
+            }
+            // Unified cache entries (pool_slot == -1) are tracked by the cache
+            // itself — no cached_slots_ registration needed. Subsequent calls
+            // to hint_locked() will find them via cache->lookup() in the async path.
 
             it = inflight_.erase(it);
         } else {

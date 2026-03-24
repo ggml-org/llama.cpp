@@ -30,6 +30,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ggml.h"
+#include "ggml-sycl.h"
 #include "expert-key.hpp"
 
 namespace ggml_sycl {
@@ -42,18 +44,46 @@ namespace ggml_sycl {
 // Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
 void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id);
 
+// Result of an async SOA cache operation (non-blocking DMA submission).
+struct async_soa_cache_result {
+    void *             device_ptr    = nullptr;  // VRAM destination
+    sycl::event        event;                    // DMA + reorder completion event
+    ggml_sycl_cache_id cache_key     = {};       // Cache key for finalization
+    ggml_layout_mode   layout        = GGML_LAYOUT_AOS;
+    size_t             size          = 0;        // Allocation size
+    int                layer_id      = -1;
+    int                expert_id     = -1;
+    bool               already_cached = false;   // True if READY (no DMA needed)
+    bool               success        = false;   // True if DMA submitted or already cached
+};
+
+// Async variant of moe_expert_ensure_soa_cached.
+// Submits DMA + AOS→SOA reorder via ensure_cached_layout(skip_fill_wait=true)
+// and returns immediately. The returned event completes when DMA + reorder finish.
+// Caller must wait on event and finalize the cache entry (mark READY) before use.
+// Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
+async_soa_cache_result moe_expert_begin_soa_cache_async(int layer_idx, int expert_idx, int device_id);
+
 // Look up expert frequency from epoch counters (recorded during MoE warmup/re-ranking).
 // Maps hash-based layer_id → sequential index, then reads atomic epoch_counts.
 // Returns 0 if the expert has no recorded frequency (unknown layer or expert).
 uint32_t get_expert_frequency(int layer_hash, int expert_id);
 
-// Tracks a single in-flight DMA prefetch operation.
+// Tracks a single in-flight async DMA prefetch operation.
+// The event is from ensure_cached_layout(skip_fill_wait=true) and completes
+// when H2D DMA + AOS->SOA reorder finish on the cache's DMA queue.
 struct prefetch_request {
     expert_key  key;
-    sycl::event event;                 // DMA completion event from dma_queue_
-    void *      device_ptr = nullptr;  // VRAM destination of the H2D DMA
-    int         pool_slot  = -1;       // Index into vram_pool_ (-1 = no slot)
+    sycl::event event;                 // DMA completion event from cache DMA queue
+    void *      device_ptr = nullptr;  // VRAM destination (from allocate_slot)
+    int         pool_slot  = -1;       // Index into vram_pool_ (-1 = unified cache)
     bool        completed  = false;
+    // Unified cache tracking for async finalization in await().
+    ggml_sycl_cache_id cache_key = {};            // Cache key for register_ready
+    ggml_layout_mode   layout    = GGML_LAYOUT_AOS;  // Layout used for cache entry
+    size_t             size      = 0;             // Allocation size in bytes
+    int                layer_id  = -1;            // Layer ID for cache entry
+    int                expert_id = -1;            // Expert ID for cache entry
 };
 
 // Async DMA engine for prefetching MoE expert weights from host RAM to VRAM.
