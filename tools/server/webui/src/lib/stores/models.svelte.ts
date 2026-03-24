@@ -90,7 +90,11 @@ class ModelsStore {
 
 	get loadedModelIds(): string[] {
 		return this.routerModels
-			.filter((m) => m.status.value === ServerModelStatus.LOADED)
+			.filter(
+				(m) =>
+					m.status.value === ServerModelStatus.LOADED ||
+					m.status.value === ServerModelStatus.SLEEPING
+			)
 			.map((m) => m.id);
 	}
 
@@ -215,7 +219,11 @@ class ModelsStore {
 
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
-		return model?.status.value === ServerModelStatus.LOADED || false;
+		return (
+			model?.status.value === ServerModelStatus.LOADED ||
+			model?.status.value === ServerModelStatus.SLEEPING ||
+			false
+		);
 	}
 
 	isModelOperationInProgress(modelId: string): boolean {

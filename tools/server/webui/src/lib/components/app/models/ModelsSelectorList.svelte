@@ -53,7 +53,7 @@
 {/if}
 
 {#if groups.favourites.length > 0}
-	<p class={sectionHeaderClass}>Favourite models</p>
+	<p class={sectionHeaderClass}>Favorite models</p>
 	{#each groups.favourites as item (`fav-${item.option.id}`)}
 		{@render render(item, true)}
 	{/each}
