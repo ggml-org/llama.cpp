@@ -197,7 +197,7 @@ export GGML_OPENVINO_STATEFUL_EXECUTION=1
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
 # To run in chat mode:
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -c 1024
-# Run run llama-bench, -fa 1 is needed
+# To run llama-bench, -fa 1 is needed
 GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -fa 1
 
 # NPU: keep context small to avoid failures from very large model context windows.
