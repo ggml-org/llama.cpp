@@ -216,6 +216,9 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
                 ctx->cpu_dst = ggml_rms_norm(ctx->ggml_ctx, ctx->cpu_src0, eps);
             }
             break;
+        case GGML_OP_SQR:
+            ctx->cpu_dst = ggml_sqr(ctx->ggml_ctx, ctx->cpu_src0);
+            break;
         case GGML_OP_GLU:
             // Extract GLU parameters from op_params (split mode only)
             {

@@ -598,6 +598,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
         }
 
         switch (node->op) {
+            case GGML_OP_SQR:
+                ggml_et_op_sqr(dev_ctx, node);
+                break;
+
             case GGML_OP_MUL:
                 ggml_et_op_mul(dev_ctx, node);
                 break;
@@ -684,6 +688,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
 
     bool supported = false;
     switch (op->op) {
+        case GGML_OP_SQR:
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
         case GGML_OP_MUL:
         case GGML_OP_ADD:
         case GGML_OP_SUB:
