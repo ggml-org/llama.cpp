@@ -583,45 +583,89 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 
 // turbo3 dequant — full block dequantize with inverse rotation
 // Must process all 128 elements to apply WHT inverse rotation
-// Half-precision WHT for faster dequant. Centroids fit in fp16 (max |val| = 0.19).
-// The WHT butterfly add/sub preserves range within fp16 dynamic range.
-static void turbo_fwht_128_half(thread half * x) {
-    for (int h = 1; h < 128; h *= 2) {
-        for (int i = 0; i < 128; i += h * 2) {
-            for (int j = i; j < i + h; j++) {
-                half a = x[j];
-                half b = x[j + h];
-                x[j]     = a + b;
-                x[j + h] = a - b;
+// Half-precision vectorized WHT for faster dequant.
+// Uses half4 vectors for 4-wide SIMD throughput on Apple GPU.
+// Centroids fit in fp16 (max |val| = 0.19), butterfly stays in range.
+static void turbo_fwht_128_half4(thread half4 * v) {
+    // 32 half4 vectors = 128 elements
+    // Stage h=1: butterfly between elements 0,1 and 2,3 within each half4
+    for (int i = 0; i < 32; i++) {
+        half4 a = v[i];
+        v[i] = half4(a.x + a.y, a.x - a.y, a.z + a.w, a.z - a.w);
+    }
+    // Stage h=2: butterfly between elements 0,2 and 1,3 within each half4
+    for (int i = 0; i < 32; i++) {
+        half4 a = v[i];
+        v[i] = half4(a.x + a.z, a.y + a.w, a.x - a.z, a.y - a.w);
+    }
+    // Stages h=4,8,16,32,64: butterfly between half4 vectors
+    for (int h = 4; h < 128; h *= 2) {
+        int vec_stride = h / 4;  // distance in half4 units
+        for (int i = 0; i < 32; i++) {
+            int group_pos = i % (2 * vec_stride);
+            if (group_pos < vec_stride) {
+                int partner = i + vec_stride;
+                half4 a = v[i];
+                half4 b = v[partner];
+                v[i]       = a + b;
+                v[partner] = a - b;
             }
         }
     }
-    const half inv_sqrt_128 = half(0.08838834764831845f);
-    for (int i = 0; i < 128; i++) {
-        x[i] *= inv_sqrt_128;
+    // Normalize
+    const half4 inv_sqrt_128 = half4(0.08838834764831845h);
+    for (int i = 0; i < 32; i++) {
+        v[i] *= inv_sqrt_128;
     }
 }
 
 static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, thread float * cache) {
     const float norm = float(xb->norm);
 
-    // Unpack 3-bit indices → centroids in half precision
-    half recon[128];
-    for (int j = 0; j < QK_TURBO3; j++) {
-        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
-        uint8_t idx  = low2 | (hi1 << 2);
-        recon[j] = half(turbo_centroids_3bit[idx]);
+    // Unpack 3-bit indices → centroids in half4 vectors
+    // Each qs byte holds 4 x 2-bit values, signs byte holds 8 x 1-bit values
+    half4 recon4[32];  // 32 x half4 = 128 elements
+    for (int j = 0; j < 32; j++) {
+        uint8_t qs_byte = xb->qs[j];  // 4 x 2-bit values
+        uint8_t hi_byte = xb->signs[j / 2];  // 8 x 1-bit values
+        int hi_base = (j % 2) * 4;
+
+        half4 c;
+        for (int k = 0; k < 4; k++) {
+            uint8_t low2 = (qs_byte >> (k * 2)) & 0x3;
+            uint8_t hi1 = (hi_byte >> (hi_base + k)) & 0x1;
+            uint8_t idx = low2 | (hi1 << 2);
+            c[k] = half(turbo_centroids_3bit[idx]);
+        }
+        recon4[j] = c;
     }
 
-    // Inverse rotation in fp16: signs2 → FWHT → signs1
-    for (int i = 0; i < 128; i++) recon[i] *= half(turbo_wht_signs2[i]);
-    turbo_fwht_128_half(recon);
-    for (int i = 0; i < 128; i++) recon[i] *= half(turbo_wht_signs1[i]);
+    // Inverse rotation in fp16: signs2 → FWHT → signs1 (all vectorized)
+    // Apply signs2 as half4
+    for (int i = 0; i < 32; i++) {
+        int base = i * 4;
+        half4 s2 = half4(turbo_wht_signs2[base], turbo_wht_signs2[base+1],
+                         turbo_wht_signs2[base+2], turbo_wht_signs2[base+3]);
+        recon4[i] *= s2;
+    }
+
+    turbo_fwht_128_half4(recon4);
+
+    // Apply signs1 as half4
+    for (int i = 0; i < 32; i++) {
+        int base = i * 4;
+        half4 s1 = half4(turbo_wht_signs1[base], turbo_wht_signs1[base+1],
+                         turbo_wht_signs1[base+2], turbo_wht_signs1[base+3]);
+        recon4[i] *= s1;
+    }
 
     // Convert to fp32 and scale by norm
-    for (int j = 0; j < QK_TURBO3; j++) {
-        cache[j] = float(recon[j]) * norm;
+    for (int i = 0; i < 32; i++) {
+        float4 f = float4(recon4[i]) * norm;
+        cache[i*4 + 0] = f.x;
+        cache[i*4 + 1] = f.y;
+        cache[i*4 + 2] = f.z;
+        cache[i*4 + 3] = f.w;
     }
 }
 
