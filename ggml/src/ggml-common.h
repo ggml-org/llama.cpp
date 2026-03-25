@@ -283,7 +283,7 @@ static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 
 // Per block: norm(fp16) + 2-bit indices (8 bytes) + 1-bit extra (4 bytes) = 14 bytes per 32 values
 // = 3.5 bits/value → 4.6× compression vs fp16
 // The 3-bit index is split: lower 2 bits in qs[], upper 1 bit in signs[]
-#define QK_TURBO3 128  // BISECT: temporarily back to 128 to test if block size is the PPL issue
+#define QK_TURBO3 32   // Block size 32: matches q4_0 parallelism, graph handles WHT rotation
 #define QK_TURBO3_GROUP 128  // rotation group size = head_dim
 typedef struct {
     ggml_half  norm;                    //  2 bytes: vector L2 norm (for rescaling)
