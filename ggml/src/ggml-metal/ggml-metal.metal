@@ -678,11 +678,11 @@ static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, threa
         recon4[j] = c;
     }
 
-    // Inverse rotation in fp16: signs2 → FWHT → signs1
-    // Uses pre-packed half4 sign arrays (single read vs 4 float→half conversions)
-    for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs2_h4[i];
-    turbo_fwht_128_half4(recon4);
-    for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs1_h4[i];
+    // NO inverse rotation — pre-rotate-queries handles Q rotation,
+    // V un-rotation handled in graph (applied after RoPE at correct pipeline point)
+    // for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs2_h4[i];
+    // turbo_fwht_128_half4(recon4);
+    // for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs1_h4[i];
 
     // Convert to fp32 and scale by norm
     for (int i = 0; i < 32; i++) {
