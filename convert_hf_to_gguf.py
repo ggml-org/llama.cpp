@@ -1503,6 +1503,9 @@ class TextModel(ModelBase):
         if chkhsh == "e4d54df1ebc1f2b91acd986c5b51aa50837d5faf7c7398e73c1f9e9ee5d19869":
             # ref: https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601
             res = "kanana2"
+        if chkhsh == "862f827721df956049dff5ca81a57f29e575280bc622e290d3bf4e35eca29015":
+            # ref: https://huggingface.co/codefuse-ai/F2LLM-v2-4B
+            res = "f2llmv2"
 
         if res is None:
             logger.warning("\n")
