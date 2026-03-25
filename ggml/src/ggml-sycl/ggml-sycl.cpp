@@ -4508,6 +4508,8 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
     /* .graph_optimize          = */ NULL,
+    /* .prefetch_tensor_async   = */ NULL,
+    /* .prefetch_event_wait     = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {

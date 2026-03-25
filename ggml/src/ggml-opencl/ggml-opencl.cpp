@@ -4006,6 +4006,8 @@ static ggml_backend_i ggml_backend_opencl_i = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .graph_optimize          = */ NULL,
+    /* .prefetch_tensor_async   = */ NULL,
+    /* .prefetch_event_wait     = */ NULL,
 };
 
 ggml_backend_t ggml_backend_opencl_init(void) {

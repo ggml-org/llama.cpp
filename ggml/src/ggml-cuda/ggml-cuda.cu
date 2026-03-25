@@ -567,6 +567,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (prefetch_sync_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(prefetch_sync_event));
+    }
+    if (prefetch_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(prefetch_event));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -4153,7 +4159,47 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
 
+    // record event on compute stream so the copy stream can wait for compute to finish
+    // before starting prefetches that may reuse memory from this split's intermediates
+    if (cuda_ctx->prefetch_sync_event == nullptr) {
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->prefetch_sync_event, cudaEventDisableTiming));
+    }
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->prefetch_sync_event, cuda_ctx->stream()));
+
     return GGML_STATUS_SUCCESS;
+}
+
+static void ggml_backend_cuda_prefetch_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+
+    ggml_cuda_set_device(cuda_ctx->device);
+
+    // use stream 1 as dedicated copy stream for overlap with compute
+    cudaStream_t copy_stream = cuda_ctx->stream(cuda_ctx->device, 1);
+
+    // wait for previous compute to finish before writing to memory that may alias
+    // with the previous split's intermediate tensors
+    if (cuda_ctx->prefetch_sync_event != nullptr) {
+        CUDA_CHECK(cudaStreamWaitEvent(copy_stream, cuda_ctx->prefetch_sync_event, 0));
+    }
+
+    CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, copy_stream));
+
+    // record prefetch event so the scheduler can wait for it
+    if (cuda_ctx->prefetch_event == nullptr) {
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->prefetch_event, cudaEventDisableTiming));
+    }
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->prefetch_event, copy_stream));
+    cuda_ctx->prefetch_pending = true;
+}
+
+static void ggml_backend_cuda_prefetch_event_wait(ggml_backend_t backend) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+    if (cuda_ctx->prefetch_pending) {
+        // compute stream waits for copy stream (prefetched data is ready)
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), cuda_ctx->prefetch_event, 0));
+        cuda_ctx->prefetch_pending = false;
+    }
 }
 
 static void ggml_backend_cuda_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
@@ -4440,6 +4486,8 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
     /* .event_record            = */ ggml_backend_cuda_event_record,
     /* .event_wait              = */ ggml_backend_cuda_event_wait,
     /* .graph_optimize          = */ ggml_backend_cuda_graph_optimize,
+    /* .prefetch_tensor_async   = */ ggml_backend_cuda_prefetch_tensor_async,
+    /* .prefetch_event_wait     = */ ggml_backend_cuda_prefetch_event_wait,
 };
 
 static ggml_guid_t ggml_backend_cuda_guid() {

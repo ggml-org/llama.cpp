@@ -2586,6 +2586,8 @@ static ggml_backend_i ggml_backend_webgpu_i = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .graph_optimize          = */ NULL,
+    /* .prefetch_tensor_async   = */ NULL,
+    /* .prefetch_event_wait     = */ NULL,
 };
 
 /* End GGML Backend Interface */
