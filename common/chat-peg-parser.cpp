@@ -802,6 +802,16 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     return tool_choices;
 }
 
+common_peg_parser common_chat_peg_builder::prefix(const std::string & s, const std::string & delimiter) {
+    if (s.empty()) {
+        return eps();
+    }
+    if (delimiter.empty()) {
+        return literal(s);
+    }
+    return literal(s.substr(0, s.rfind(delimiter)));
+}
+
 common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        const std::string &              section_start,
                                                        const std::string &              section_end,

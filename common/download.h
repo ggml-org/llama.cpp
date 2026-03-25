@@ -17,54 +17,60 @@ struct common_remote_params {
 // get remote file content, returns <http_code, raw_response_body>
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);
 
-// split HF repo with tag into <repo, tag>
-// for example: "user/model:tag" -> <"user/model", "tag">
-// if tag is not present, default to "latest"
-// example: "user/model" -> <"user/model", "latest">
+// split HF repo with tag into <repo, tag>, for example:
+// - "ggml-org/models:F16" -> <"ggml-org/models", "F16">
+// tag is optional and can be empty
 std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag);
 
+// Result of common_list_cached_models
 struct common_cached_model_info {
-    std::string manifest_path;
-    std::string user;
-    std::string model;
+    std::string repo;
     std::string tag;
-    size_t      size = 0; // GGUF size in bytes
-    // return string representation like "user/model:tag"
-    // if tag is "latest", it will be omitted
     std::string to_string() const {
-        return user + "/" + model + (tag == "latest" ? "" : ":" + tag);
+        return repo + ":" + tag;
     }
 };
 
-struct common_hf_file_res {
-    std::string repo; // repo name with ":tag" removed
-    std::string ggufFile;
-    std::string mmprojFile;
+// Options for common_download_model
+struct common_download_model_opts {
+    bool download_mmproj = false;
+    bool offline         = false;
 };
 
-/**
- * Allow getting the HF file from the HF repo with tag (like ollama), for example:
- * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
- * - bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
- * - bartowski/Llama-3.2-3B-Instruct-GGUF:q5_k_s
- * Tag is optional, default to "latest" (meaning it checks for Q4_K_M first, then Q4, then if not found, return the first GGUF file in repo)
- *
- * Return pair of <repo, file> (with "repo" already having tag removed)
- *
- * Note: we use the Ollama-compatible HF API, but not using the blobId. Instead, we use the special "ggufFile" field which returns the value for "hf_file". This is done to be backward-compatible with existing cache files.
- */
-common_hf_file_res common_get_hf_file(
-    const std::string & hf_repo_with_tag,
-    const std::string & bearer_token,
-    bool offline,
-    const common_header_list & headers = {}
-);
+// Result of common_download_model
+struct common_download_model_result {
+    std::string model_path;
+    std::string mmproj_path;
+};
 
-// returns true if download succeeded
-bool common_download_model(
+// Download model from HuggingFace repo or URL
+//
+// input (via model struct):
+// - model.hf_repo: HF repo with optional tag, see common_download_split_repo_tag
+// - model.hf_file: specific file in the repo (requires hf_repo)
+// - model.url: simple download (used if hf_repo is empty)
+// - model.path: local file path
+//
+// tag matching (for HF repos without model.hf_file):
+// - if tag is specified, searches for GGUF matching that quantization
+// - if no tag, searches for Q4_K_M, then Q4_0, then first available GGUF
+//
+// split GGUF: multi-part files like "model-00001-of-00003.gguf" are automatically
+// detected and all parts are downloaded
+//
+// caching:
+// - HF repos: uses HuggingFace cache
+// - URLs: uses ETag-based caching
+//
+// when opts.offline=true, no network requests are made
+// when download_mmproj=true, searches for mmproj in same directory as model or any parent directory
+// then with the closest quantization bits
+//
+// returns result with model_path and mmproj_path (empty on failure)
+common_download_model_result common_download_model(
     const common_params_model & model,
     const std::string & bearer_token,
-    bool offline,
+    const common_download_model_opts & opts = {},
     const common_header_list & headers = {}
 );
 
@@ -73,11 +79,13 @@ std::vector<common_cached_model_info> common_list_cached_models();
 
 // download single file from url to local path
 // returns status code or -1 on error
+// skip_etag: if true, don't read/write .etag files (for HF cache where filename is the hash)
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const std::string & bearer_token,
                                 bool offline,
-                                const common_header_list & headers = {});
+                                const common_header_list & headers = {},
+                                bool skip_etag = false);
 
 // resolve and download model from Docker registry
 // return local path to downloaded model file

@@ -82,6 +82,10 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_VALUE, p)); }
 
+
+    // Return a parser that parses the prefix of a string, up to a given delimiter.
+    common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
+
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
     // name_key/args_key: JSON key names for function name and arguments
