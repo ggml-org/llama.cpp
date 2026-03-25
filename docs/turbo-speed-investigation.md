@@ -334,3 +334,32 @@ Next: implement block size 32 variant of turbo3.
 Challenge: rotation operates on head_dim=128, but blocks are 32.
 Solution: quantize 128 elements with rotation, store as 4×32 blocks.
 Dequant reads 32-element blocks without rotation (pre-rotate-queries).
+
+### 2026-03-25: BLOCK SIZE 32 — TARGET EXCEEDED 🎉
+
+| Model | q8_0 | turbo3 block32 | vs q8_0 | Compression |
+|-------|------|----------------|---------|-------------|
+| MoE prompt | 222.8 | **218.5** | **98%** | 4.6× |
+| MoE gen | 85.5 | **77.7** | **91%** | 4.6× |
+| Qwopus prompt | 83.1 | **89.5** | **108%** | 4.6× |
+| Qwopus gen | 17.6 | **17.0** | **97%** | 4.6× |
+
+Target was 75+ tok/s on MoE. Hit 77.7. Qwopus prompt is FASTER than q8_0.
+
+Codex post-commit review found 3 bugs (filed #29):
+- TURBO_D was QK_TURBO3 (broke turbo4 C code) — fixed
+- SET_ROWS kernel turbo3-specific but instantiated for turbo4 — tracked
+- Tail block drop for non-128 head dims — tracked
+
+### COMPLETE JOURNEY
+
+| Optimization | MoE gen | vs q8_0 |
+|-------------|---------|---------|
+| CPU fallback (bug) | 2.4 | 3% |
+| Real Metal | 10.7 | 13% |
+| Pre-rotate-queries | 51.4 | 60% |
+| MSE-only (drop QJL) | 62.2 | 73% |
+| **Block size 32** | **77.7** | **91%** |
+| q8_0 baseline | 85.5 | 100% |
+
+**32× total improvement. 4.6× compression at 91-97% speed.**
