@@ -1763,12 +1763,11 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     return nullptr;
 }
 
-async_soa_cache_result moe_expert_begin_soa_cache_async(int layer_idx, int expert_idx, int device_id) {
-    async_soa_cache_result result{};
-    result.layer_id  = layer_idx;
-    result.expert_id = expert_idx;
+bool moe_get_expert_stage_info(int layer_idx, int expert_idx, int device_id,
+                               expert_stage_info & out) {
+    out = {};
 
-    // Look up expert metadata (same as moe_expert_ensure_soa_cached)
+    // Look up expert metadata from the global registry.
     const moe_expert_meta * meta = nullptr;
     {
         std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
@@ -1779,96 +1778,60 @@ async_soa_cache_result moe_expert_begin_soa_cache_async(int layer_idx, int exper
             }
         }
     }
-    if (!meta) return result;
+    if (!meta) return false;
 
-    // Validate data pointer
+    // Validate data pointer (null or kernel-space addresses are invalid).
     const uintptr_t data_addr = reinterpret_cast<uintptr_t>(meta->data_ptr);
     if (data_addr == 0 || (data_addr >> 47) != 0) {
-        return result;
+        return false;
     }
 
-    // Get unified cache for target device
-    unified_cache * cache = get_unified_cache_for_device(device_id);
-    if (!cache) return result;
-
-    // Build cache key from expert tensor metadata
+    // Build cache key from expert tensor metadata.
     ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
         meta->tensor, meta->extra, meta->expert_idx);
-    if (!key.valid) return result;
+    if (!key.valid) return false;
 
-    result.cache_key = key;
-
-    // Compute layout for this expert
+    // Compute optimal layout and destination size.
     const layout_mode optimal_layout = moe_effective_expert_layout(
         meta->type, meta->ne0, device_id);
     const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
         meta->type, meta->ne0, meta->ne1, optimal_layout, device_id);
     const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
 
-    result.layout = optimal_layout;
-    result.size   = dst_bytes;
+    out.cache_key  = key;
+    out.src_ptr    = meta->data_ptr;
+    out.src_size   = meta->bytes;
+    out.dst_size   = dst_bytes;
+    out.layout     = optimal_layout;
+    out.type       = meta->type;
+    out.ncols      = meta->ne0;
+    out.nrows      = meta->ne1;
+    out.layer_id   = meta->layer_id;
+    out.expert_id  = meta->expert_idx;
+    out.valid      = true;
+    return true;
+}
 
-    // Check if already cached (fast path — no DMA needed)
-    void * cached = cache->lookup(key, optimal_layout);
-    if (cached) {
-        result.device_ptr     = cached;
-        result.already_cached = true;
-        result.success        = true;
-        return result;
-    }
-
-    // Build reorder context (must persist until fill_fn completes)
-    // Use heap allocation since the fill_fn captures ctx by pointer and
-    // executes asynchronously after this function returns.
-    auto * reorder_ctx = new ggml_sycl_reorder_fill_ctx{};
-    reorder_ctx->type          = meta->type;
-    reorder_ctx->ncols         = meta->ne0;
-    reorder_ctx->nrows         = meta->ne1;
-    reorder_ctx->nbytes        = meta->bytes;
-    reorder_ctx->dst_bytes     = dst_bytes;
-    reorder_ctx->layout        = optimal_layout;
-    reorder_ctx->src_is_device = false;
-    reorder_ctx->device_id     = device_id;
-
-    // Build cache layout request with skip_fill_wait for async DMA
-    cache_layout_request req{};
-    req.key              = key;
-    req.src_ptr          = meta->data_ptr;
-    req.src_size         = meta->bytes;
-    req.dst_size         = dst_bytes;
-    req.type             = cache_entry_type::MOE_EXPERT;
-    req.layer_id         = meta->layer_id;
-    req.expert_id        = meta->expert_idx;
-    req.layout           = optimal_layout;
-    req.validate_content = false;
-    req.skip_fill_wait   = true;  // <-- KEY: non-blocking DMA
-    req.fill_fn          = ggml_sycl_fill_reordered_host;
-    req.fill_ctx         = reorder_ctx;
-
-    try {
-        auto cache_result = cache->ensure_cached_layout(req, {});
-        // Heap-allocated reorder context is consumed by fill_fn during
-        // ensure_cached_layout (fill_fn captures ctx by pointer and reads
-        // it synchronously during kernel submission). Safe to delete now
-        // because the fill_fn only reads ctx during submission, not during
-        // async kernel execution.
-        delete reorder_ctx;
-
-        if (cache_result.device_ptr) {
-            result.device_ptr = cache_result.device_ptr;
-            result.event      = cache_result.event;
-            result.success    = true;
-            // READY means it was already cached (race with concurrent fill)
-            if (cache_result.status == cache_layout_status::READY) {
-                result.already_cached = true;
-            }
-        }
-    } catch (...) {
-        delete reorder_ctx;
-        // VRAM exhausted or SYCL error — caller falls back to sync path
-    }
-
-    return result;
+sycl::event fill_reordered_host(sycl::queue &                    queue,
+                                void *                           dst,
+                                size_t                           dst_size,
+                                const void *                     src,
+                                size_t                           src_size,
+                                const void *                     ctx_void,
+                                const std::vector<sycl::event> & deps) {
+    // Translate public reorder_fill_ctx -> internal ggml_sycl_reorder_fill_ctx.
+    const auto * ctx = static_cast<const reorder_fill_ctx *>(ctx_void);
+    ggml_sycl_reorder_fill_ctx internal_ctx{};
+    internal_ctx.type          = ctx->type;
+    internal_ctx.ncols         = ctx->ncols;
+    internal_ctx.nrows         = ctx->nrows;
+    internal_ctx.nbytes        = ctx->nbytes;
+    internal_ctx.dst_bytes     = ctx->dst_bytes;
+    internal_ctx.layout        = ctx->layout;
+    internal_ctx.src_is_device = ctx->src_is_device;
+    internal_ctx.device_id     = ctx->device_id;
+    return ggml_sycl_fill_reordered_host(queue, dst, dst_size, src, src_size,
+                                         &internal_ctx, deps);
 }
 
 uint32_t get_expert_frequency(int layer_hash, int expert_id) {

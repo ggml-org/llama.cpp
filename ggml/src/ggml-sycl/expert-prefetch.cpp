@@ -112,16 +112,16 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 
 // Internal implementation of hint(). Caller must hold mutex_.
 //
-// Submits async DMA + AOS→SOA reorder via moe_expert_begin_soa_cache_async(),
-// which calls ensure_cached_layout(skip_fill_wait=true). Returns immediately
-// after DMA submission — does NOT block on DMA completion.
+// Uses moe_get_expert_stage_info() to read metadata, then submits async DMA +
+// AOS->SOA reorder via ensure_cached_layout(skip_fill_wait=true). Returns
+// immediately after DMA submission -- does NOT block on DMA completion.
 //
 // The returned sycl::event is stored in inflight_ and waited on in await().
 // The cache entry remains IN_PROGRESS until await() finalizes it to READY.
 bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     expert_key key{ layer_idx, expert_idx };
 
-    // Already in-flight — skip.
+    // Already in-flight -- skip.
     if (inflight_.count(key)) {
         return false;
     }
@@ -129,7 +129,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     // Move completed in-flight entries to cached state (persistent LRU).
     gc_completed();
 
-    // Already cached in our LRU pool — touch LRU timestamp, no DMA needed.
+    // Already cached in our LRU pool -- touch LRU timestamp, no DMA needed.
     auto cached_it = cached_slots_.find(key);
     if (cached_it != cached_slots_.end()) {
         int slot = cached_it->second;
@@ -138,37 +138,87 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // Submit async DMA + SOA reorder via the unified cache.
-    // This returns immediately — DMA runs on the cache's internal queue.
-    auto result = moe_expert_begin_soa_cache_async(layer_idx, expert_idx, device_id_);
-    if (!result.success) {
+    // Step 1: Get expert metadata via read-only accessor.
+    expert_stage_info info;
+    if (!moe_get_expert_stage_info(layer_idx, expert_idx, device_id_, info)) {
         return false;
     }
 
-    // Already cached (READY in unified cache) — no in-flight tracking needed.
-    if (result.already_cached) {
+    // Step 2: Check unified cache -- may already be READY.
+    unified_cache * cache = get_unified_cache_for_device(device_id_);
+    if (!cache) {
+        return false;
+    }
+
+    void * cached_ptr = cache->lookup(info.cache_key, info.layout);
+    if (cached_ptr) {
         completed_count_++;
         GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: already cached in unified cache, ptr=%p\n",
-                        layer_idx, expert_idx, result.device_ptr);
+                        layer_idx, expert_idx, cached_ptr);
         return true;
     }
 
-    // DMA submitted — track in-flight for await() to finalize.
+    // Step 3: Build reorder context on the stack.
+    // fill_fn reads ctx synchronously during submission (before
+    // ensure_cached_layout returns), so stack allocation is safe.
+    reorder_fill_ctx rctx{};
+    rctx.type          = info.type;
+    rctx.ncols         = info.ncols;
+    rctx.nrows         = info.nrows;
+    rctx.nbytes        = info.src_size;
+    rctx.dst_bytes     = info.dst_size;
+    rctx.layout        = info.layout;
+    rctx.src_is_device = false;
+    rctx.device_id     = device_id_;
+
+    // Step 4: Submit async DMA via unified cache (skip_fill_wait=true).
+    cache_layout_request clr{};
+    clr.key              = info.cache_key;
+    clr.src_ptr          = info.src_ptr;
+    clr.src_size         = info.src_size;
+    clr.dst_size         = info.dst_size;
+    clr.type             = cache_entry_type::MOE_EXPERT;
+    clr.layer_id         = info.layer_id;
+    clr.expert_id        = info.expert_id;
+    clr.layout           = info.layout;
+    clr.validate_content = false;
+    clr.skip_fill_wait   = true;  // Non-blocking DMA
+    clr.fill_fn          = fill_reordered_host;
+    clr.fill_ctx         = &rctx;
+
+    cache_layout_result cr;
+    try {
+        cr = cache->ensure_cached_layout(clr, {});
+    } catch (...) {
+        return false;
+    }
+
+    if (!cr.device_ptr) {
+        return false;
+    }
+
+    // Already READY (race with concurrent fill) -- no in-flight tracking.
+    if (cr.status == cache_layout_status::READY) {
+        completed_count_++;
+        return true;
+    }
+
+    // DMA submitted -- track in-flight for await() to finalize.
     prefetch_request req;
     req.key        = key;
-    req.event      = result.event;
-    req.device_ptr = result.device_ptr;
+    req.event      = cr.event;
+    req.device_ptr = cr.device_ptr;
     req.pool_slot  = -1;  // Unified cache manages storage, not our pool
     req.completed  = false;
-    req.cache_key  = result.cache_key;
-    req.layout     = result.layout;
-    req.size       = result.size;
-    req.layer_id   = result.layer_id;
-    req.expert_id  = result.expert_id;
+    req.cache_key  = info.cache_key;
+    req.layout     = info.layout;
+    req.size       = info.dst_size;
+    req.layer_id   = info.layer_id;
+    req.expert_id  = info.expert_id;
 
     inflight_[key] = std::move(req);
     GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: async DMA submitted, dev=%d ptr=%p\n",
-                    layer_idx, expert_idx, device_id_, result.device_ptr);
+                    layer_idx, expert_idx, device_id_, cr.device_ptr);
     return true;
 }
 

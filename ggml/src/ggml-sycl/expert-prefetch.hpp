@@ -37,35 +37,61 @@
 namespace ggml_sycl {
 
 // SOA-correct expert caching via unified cache.
-// Looks up expert metadata, performs AOS→SOA layout conversion, and uploads
+// Looks up expert metadata, performs AOS->SOA layout conversion, and uploads
 // to VRAM on the specified device using ensure_cached_layout().
 // Returns device pointer if expert was successfully cached in SOA layout.
 // Returns nullptr if caching failed (no metadata, VRAM full, etc.).
 // Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
 void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id);
 
-// Result of an async SOA cache operation (non-blocking DMA submission).
-struct async_soa_cache_result {
-    void *             device_ptr    = nullptr;  // VRAM destination
-    sycl::event        event;                    // DMA + reorder completion event
-    ggml_sycl_cache_id cache_key     = {};       // Cache key for finalization
-    ggml_layout_mode   layout        = GGML_LAYOUT_AOS;
-    size_t             size          = 0;        // Allocation size
-    int                layer_id      = -1;
-    int                expert_id     = -1;
-    bool               already_cached = false;   // True if READY (no DMA needed)
-    bool               success        = false;   // True if DMA submitted or already cached
+// Metadata needed to stage an expert's weights asynchronously.
+// Returned by moe_get_expert_stage_info() -- read-only accessor into g_moe_expert_meta.
+struct expert_stage_info {
+    ggml_sycl_cache_id cache_key  = {};       // Stable cache key (model_id + tensor hash)
+    const void *       src_ptr    = nullptr;  // Host-accessible AOS weight data
+    size_t             src_size   = 0;        // AOS byte count
+    size_t             dst_size   = 0;        // SOA byte count (may differ due to reorder padding)
+    ggml_layout_mode   layout     = GGML_LAYOUT_AOS;  // Optimal layout for this expert
+    ggml_type          type       = GGML_TYPE_F32;     // Weight quantization type
+    int64_t            ncols      = 0;        // Weight columns (K dimension)
+    int64_t            nrows      = 0;        // Weight rows (N dimension)
+    int                layer_id   = -1;       // Hash-based layer ID
+    int                expert_id  = -1;       // Expert index within layer
+    bool               valid      = false;    // True if metadata was found
 };
 
-// Async variant of moe_expert_ensure_soa_cached.
-// Submits DMA + AOS→SOA reorder via ensure_cached_layout(skip_fill_wait=true)
-// and returns immediately. The returned event completes when DMA + reorder finish.
-// Caller must wait on event and finalize the cache entry (mark READY) before use.
-// Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
-async_soa_cache_result moe_expert_begin_soa_cache_async(int layer_idx, int expert_idx, int device_id);
+// Read-only metadata accessor for expert staging.
+// Looks up g_moe_expert_meta, computes cache key and optimal layout.
+// Does NOT allocate VRAM, submit DMA, or modify any state.
+// Thread-safe: acquires g_moe_expert_meta_mutex (shared lock).
+bool moe_get_expert_stage_info(int layer_idx, int expert_idx, int device_id,
+                               expert_stage_info & out);
+
+// Context for AOS->SOA reorder fill function (used with cache_layout_request::fill_ctx).
+struct reorder_fill_ctx {
+    ggml_type        type;
+    int64_t          ncols;
+    int64_t          nrows;
+    size_t           nbytes;
+    size_t           dst_bytes;
+    ggml_layout_mode layout;
+    bool             src_is_device;
+    int              device_id;
+};
+
+// CPU-side AOS->SOA reorder + H2D DMA as a cache_layout_fill_fn.
+// Performs the reorder on the host, then submits async memcpy to VRAM.
+// Compatible with cache_layout_request::fill_fn signature.
+sycl::event fill_reordered_host(sycl::queue &                    queue,
+                                void *                           dst,
+                                size_t                           dst_size,
+                                const void *                     src,
+                                size_t                           src_size,
+                                const void *                     ctx,
+                                const std::vector<sycl::event> & deps);
 
 // Look up expert frequency from epoch counters (recorded during MoE warmup/re-ranking).
-// Maps hash-based layer_id → sequential index, then reads atomic epoch_counts.
+// Maps hash-based layer_id -> sequential index, then reads atomic epoch_counts.
 // Returns 0 if the expert has no recorded frequency (unknown layer or expert).
 uint32_t get_expert_frequency(int layer_hash, int expert_id);
 
@@ -131,7 +157,7 @@ class ExpertPrefetcher {
 
     // Adaptive prefetch: schedules prefetch for first `threshold` experts at
     // full precision.  When n_miss_total > burst threshold AND mixed-precision
-    // mode is active, remaining experts are NOT prefetched — they will be
+    // mode is active, remaining experts are NOT prefetched -- they will be
     // dispatched to CPU compute via cpu_expert_mul_mat_int4() instead.
     // Returns the indices of experts that should use CPU compute (not prefetched).
     //
@@ -215,7 +241,7 @@ class ExpertPrefetcher {
     std::unordered_map<expert_key, int, expert_key_hash> cached_slots_;
 
     // Monotonic counter, incremented per hint/hint_batch/hint_batch_adaptive call.
-    // NOT a true token counter — multiple calls per inference token are expected
+    // NOT a true token counter -- multiple calls per inference token are expected
     // (one per predicted layer across lookahead depths). Used only for LRU ordering.
     // Atomic: incremented outside mutex_ in hint() to avoid locking on the fast
     // path when only the token counter needs bumping. LRU reads happen under mutex_.
