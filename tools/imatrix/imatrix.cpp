@@ -143,7 +143,7 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
 
     for (int i = 0; i < n_mat; ++i) {
         if (e.counts[i] == 0) {
-            LOG_WRN("%s: skipping tensor %s due to zero count at index %d\n", __func__, name.c_str(), i);
+            LOG_DBG("%s: skipping tensor %s due to zero count at index %d\n", __func__, name.c_str(), i);
             continue;
         }
         for (int j = 0; j < row_size; ++j) {
