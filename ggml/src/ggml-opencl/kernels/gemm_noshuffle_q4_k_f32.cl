@@ -8,13 +8,21 @@
 #define QK_K         256
 #define K_SCALE_SIZE 12
 
-inline void get_scale_min_k4(int j, global const uchar * q, uchar * d, uchar * m) {
+inline void get_scale_min_k4(
+    int j,
+    global const uchar * q,
+    uchar * d,
+    uchar * m,
+    uchar mask_d6,
+    uchar mask_d4,
+    uchar mask_hi2
+) {
     if (j < 4) {
-        *d = q[j]   & 63;
-        *m = q[j+4] & 63;
+        *d = q[j]   & mask_d6;
+        *m = q[j+4] & mask_d6;
     } else {
-        *d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
-        *m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
+        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
     }
 }
 
@@ -32,7 +40,10 @@ kernel void kernel_gemm_noshuffle_q4_k_f32(
     int m,
     int n,
     int k,
-    int n_no_padding
+    int n_no_padding,
+    uchar mask_d6,
+    uchar mask_d4,
+    uchar mask_hi2
 ) {
     dst = (global float *)((global char *)dst + offsetd);
     int n_4 = n >> 2;
@@ -63,10 +74,10 @@ kernel void kernel_gemm_noshuffle_q4_k_f32(
         global const uchar * sc3 = src0_s + (gx_2+3) * num_blocks_K * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
 
         uchar sv0, mn0, sv1, mn1, sv2, mn2, sv3, mn3;
-        get_scale_min_k4(sub_idx, sc0, &sv0, &mn0);
-        get_scale_min_k4(sub_idx, sc1, &sv1, &mn1);
-        get_scale_min_k4(sub_idx, sc2, &sv2, &mn2);
-        get_scale_min_k4(sub_idx, sc3, &sv3, &mn3);
+        get_scale_min_k4(sub_idx, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc2, &sv2, &mn2, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc3, &sv3, &mn3, mask_d6, mask_d4, mask_hi2);
 
         half4 scale = (half4)(d.s0*(half)sv0, d.s1*(half)sv1, d.s2*(half)sv2, d.s3*(half)sv3);
         half4 mval  = (half4)(dm.s0*(half)mn0, dm.s1*(half)mn1, dm.s2*(half)mn2, dm.s3*(half)mn3);

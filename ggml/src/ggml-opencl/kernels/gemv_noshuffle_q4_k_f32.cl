@@ -11,13 +11,21 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
-static void get_scale_min_k4(int j, global const uchar * q, uchar * d, uchar * m) {
+inline void get_scale_min_k4(
+    int j,
+    global const uchar * q,
+    uchar * d,
+    uchar * m,
+    uchar mask_d6,
+    uchar mask_d4,
+    uchar mask_hi2
+) {
     if (j < 4) {
-        *d = q[j]     & 63;
-        *m = q[j + 4] & 63;
+        *d = q[j]   & mask_d6;
+        *m = q[j+4] & mask_d6;
     } else {
-        *d = (q[j + 4] & 0x0F) | ((q[j - 4] >> 6) << 4);
-        *m = (q[j + 4] >>   4) | ((q[j - 0] >> 6) << 4);
+        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
+        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
     }
 }
 
@@ -210,7 +218,10 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         global float * dst,
         ulong offsetd,
         int ne00,
-        int ne01)
+        int ne01,
+        uchar mask_d6,
+        uchar mask_d4,
+        uchar mask_hi2)
 {
     uint groupId = get_local_id(1);
     uint gid     = get_global_id(0);
@@ -241,9 +252,9 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         global const uchar * scales1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
 
         uchar sc0, m0, sc1, m1;
-        get_scale_min_k4(j, scales0, &sc0, &m0);
-        get_scale_min_k4(j, scales1, &sc1, &m1);
-
+        get_scale_min_k4(j, scales0, &sc0, &m0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, scales1, &sc1, &m1, mask_d6, mask_d4, mask_hi2);
+        
         regS = (half2)(d_sb.s0  * sc0, d_sb.s1  * sc1);
         regM = (half2)(dm_sb.s0 * m0,  dm_sb.s1 * m1);
 
