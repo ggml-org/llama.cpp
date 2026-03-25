@@ -59,6 +59,11 @@ struct llama_memory_context_i {
 
     // get the status of the memory context - used for error handling and checking if any updates would be applied
     virtual llama_memory_status get_status() const = 0;
+
+    // TurboQuant: get rotation tensors for pre-rotate-queries optimization
+    // Returns null for non-turbo memory types. Override in KV cache contexts.
+    virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
+    virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;

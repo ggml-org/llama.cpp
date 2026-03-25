@@ -581,36 +581,48 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 // up to 32× per block (once per 4-element chunk). We cache the full
 // dequantized block per thread and only recompute when the block pointer changes.
 
-// turbo3 dequant — block size 32, same pattern as q4_0
-// Just 3-bit centroid lookup + norm scale. No rotation (pre-rotate-queries handles it).
-template <typename type4x4>
-void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type4x4 & reg) {
+// turbo3 dequant — full block dequantize with inverse rotation
+// Must process all 128 elements to apply WHT inverse rotation
+static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, thread float * cache) {
     const float norm = float(xb->norm);
-    // il selects which 16-element half (0 or 1) of the 32-element block
-    const int offset = il * 16;
 
-    float4x4 reg_f;
-    for (int i = 0; i < 16; i++) {
-        int j = offset + i;
+    // Unpack 3-bit indices → centroids (in rotated space)
+    float recon[128];
+    for (int j = 0; j < QK_TURBO3; j++) {
         uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
         uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
         uint8_t idx  = low2 | (hi1 << 2);
-        reg_f[i/4][i%4] = turbo_centroids_3bit[idx] * norm;
+        recon[j] = turbo_centroids_3bit[idx];
+    }
+
+    // Inverse WHT rotation: from rotated space back to original
+    turbo_rotate_inverse(recon, turbo_wht_signs1, turbo_wht_signs2);
+
+    // Scale by norm to get back to original magnitude
+    for (int j = 0; j < QK_TURBO3; j++) {
+        cache[j] = recon[j] * norm;
+    }
+}
+
+template <typename type4x4>
+void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type4x4 & reg) {
+    float cache[128];
+    turbo3_dequantize_full_block(xb, cache);
+    const int offset = il * 16;
+    float4x4 reg_f;
+    for (int i = 0; i < 16; i++) {
+        reg_f[i/4][i%4] = cache[offset + i];
     }
     reg = (type4x4) reg_f;
 }
 
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
-    const float norm = float(xb->norm);
+    float cache[128];
+    turbo3_dequantize_full_block(xb, cache);
     const int offset = il * 4;
-
     for (int i = 0; i < 4; i++) {
-        int j = offset + i;
-        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
-        uint8_t idx  = low2 | (hi1 << 2);
-        reg[i] = turbo_centroids_3bit[idx] * norm;
+        reg[i] = cache[offset + i];
     }
 }
 

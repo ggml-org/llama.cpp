@@ -2476,6 +2476,14 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
     return kv->get_turbo_rotation_inv();
 }
 
+ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
+    return kv->get_turbo_rotation();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
+    return kv->get_turbo_rotation_inv();
+}
+
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
