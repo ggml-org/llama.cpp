@@ -426,6 +426,44 @@ constant float turbo_wht_signs1[128] = {
 constant float turbo_wht_signs2[128] = {
     1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f};
 
+// --- Pre-packed half4 sign arrays for vectorized WHT (eliminates float→half conversion) ---
+constant half4 turbo_wht_signs1_h4[32] = {
+    half4(-1.0h, 1.0h, 1.0h, -1.0h), half4(-1.0h, 1.0h, -1.0h, 1.0h),
+    half4(-1.0h, -1.0h, 1.0h, 1.0h), half4(1.0h, 1.0h, 1.0h, 1.0h),
+    half4(1.0h, -1.0h, 1.0h, -1.0h), half4(1.0h, -1.0h, -1.0h, 1.0h),
+    half4(1.0h, 1.0h, -1.0h, 1.0h), half4(1.0h, -1.0h, -1.0h, -1.0h),
+    half4(-1.0h, 1.0h, 1.0h, -1.0h), half4(1.0h, 1.0h, -1.0h, 1.0h),
+    half4(-1.0h, 1.0h, 1.0h, -1.0h), half4(-1.0h, 1.0h, -1.0h, 1.0h),
+    half4(1.0h, 1.0h, 1.0h, -1.0h), half4(-1.0h, -1.0h, -1.0h, -1.0h),
+    half4(1.0h, -1.0h, 1.0h, 1.0h), half4(1.0h, 1.0h, -1.0h, 1.0h),
+    half4(-1.0h, -1.0h, 1.0h, -1.0h), half4(-1.0h, -1.0h, 1.0h, -1.0h),
+    half4(-1.0h, -1.0h, 1.0h, -1.0h), half4(-1.0h, -1.0h, 1.0h, 1.0h),
+    half4(1.0h, -1.0h, -1.0h, 1.0h), half4(1.0h, 1.0h, -1.0h, -1.0h),
+    half4(1.0h, 1.0h, -1.0h, 1.0h), half4(1.0h, -1.0h, 1.0h, -1.0h),
+    half4(-1.0h, 1.0h, 1.0h, -1.0h), half4(1.0h, -1.0h, 1.0h, -1.0h),
+    half4(1.0h, 1.0h, 1.0h, 1.0h), half4(-1.0h, 1.0h, -1.0h, 1.0h),
+    half4(1.0h, -1.0h, 1.0h, 1.0h), half4(-1.0h, -1.0h, -1.0h, -1.0h),
+    half4(-1.0h, 1.0h, 1.0h, -1.0h), half4(1.0h, 1.0h, -1.0h, 1.0h)
+};
+constant half4 turbo_wht_signs2_h4[32] = {
+    half4(1.0h, 1.0h, 1.0h, 1.0h), half4(-1.0h, 1.0h, 1.0h, -1.0h),
+    half4(1.0h, -1.0h, -1.0h, -1.0h), half4(1.0h, -1.0h, -1.0h, -1.0h),
+    half4(1.0h, 1.0h, -1.0h, -1.0h), half4(1.0h, -1.0h, 1.0h, -1.0h),
+    half4(1.0h, -1.0h, -1.0h, 1.0h), half4(-1.0h, 1.0h, 1.0h, 1.0h),
+    half4(1.0h, 1.0h, -1.0h, -1.0h), half4(-1.0h, 1.0h, -1.0h, -1.0h),
+    half4(-1.0h, -1.0h, -1.0h, -1.0h), half4(1.0h, 1.0h, 1.0h, -1.0h),
+    half4(1.0h, -1.0h, 1.0h, 1.0h), half4(1.0h, -1.0h, -1.0h, 1.0h),
+    half4(-1.0h, -1.0h, -1.0h, -1.0h), half4(-1.0h, -1.0h, 1.0h, 1.0h),
+    half4(1.0h, -1.0h, 1.0h, -1.0h), half4(-1.0h, -1.0h, -1.0h, 1.0h),
+    half4(-1.0h, 1.0h, -1.0h, 1.0h), half4(-1.0h, -1.0h, 1.0h, 1.0h),
+    half4(-1.0h, 1.0h, -1.0h, 1.0h), half4(1.0h, -1.0h, 1.0h, -1.0h),
+    half4(-1.0h, -1.0h, -1.0h, 1.0h), half4(-1.0h, -1.0h, 1.0h, -1.0h),
+    half4(1.0h, -1.0h, 1.0h, 1.0h), half4(1.0h, -1.0h, -1.0h, 1.0h),
+    half4(-1.0h, 1.0h, -1.0h, 1.0h), half4(1.0h, -1.0h, -1.0h, 1.0h),
+    half4(-1.0h, 1.0h, -1.0h, 1.0h), half4(1.0h, -1.0h, 1.0h, -1.0h),
+    half4(1.0h, -1.0h, -1.0h, -1.0h), half4(-1.0h, -1.0h, 1.0h, -1.0h)
+};
+
 // --- QJL sign arrays ---
 constant float turbo_qjl_wht_signs1[128] = {
     1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
@@ -640,24 +678,11 @@ static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, threa
         recon4[j] = c;
     }
 
-    // Inverse rotation in fp16: signs2 → FWHT → signs1 (all vectorized)
-    // Apply signs2 as half4
-    for (int i = 0; i < 32; i++) {
-        int base = i * 4;
-        half4 s2 = half4(turbo_wht_signs2[base], turbo_wht_signs2[base+1],
-                         turbo_wht_signs2[base+2], turbo_wht_signs2[base+3]);
-        recon4[i] *= s2;
-    }
-
+    // Inverse rotation in fp16: signs2 → FWHT → signs1
+    // Uses pre-packed half4 sign arrays (single read vs 4 float→half conversions)
+    for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs2_h4[i];
     turbo_fwht_128_half4(recon4);
-
-    // Apply signs1 as half4
-    for (int i = 0; i < 32; i++) {
-        int base = i * 4;
-        half4 s1 = half4(turbo_wht_signs1[base], turbo_wht_signs1[base+1],
-                         turbo_wht_signs1[base+2], turbo_wht_signs1[base+3]);
-        recon4[i] *= s1;
-    }
+    for (int i = 0; i < 32; i++) recon4[i] *= turbo_wht_signs1_h4[i];
 
     // Convert to fp32 and scale by norm
     for (int i = 0; i < 32; i++) {
@@ -700,9 +725,10 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
         val[li] = half(turbo_centroids_3bit[idx]);
     }
 
-    // Step 2: Apply signs2 in fp16
-    for (int li = 0; li < 4; li++) {
-        val[li] *= half(turbo_wht_signs2[base + li]);
+    // Step 2: Apply signs2 from pre-packed half4 array
+    {
+        half4 s2 = turbo_wht_signs2_h4[il];
+        val[0] *= s2.x; val[1] *= s2.y; val[2] *= s2.z; val[3] *= s2.w;
     }
 
     // Step 3: FWHT butterfly across SIMD lanes in fp16
@@ -732,10 +758,12 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
 
     // Step 4: signs1 + normalize + scale (convert to fp32 for output)
     const half inv_sqrt_128 = half(0.08838834764831845f);
+    half4 s1 = turbo_wht_signs1_h4[il];
     float out[4];
-    for (int li = 0; li < 4; li++) {
-        out[li] = float(val[li] * inv_sqrt_128 * half(turbo_wht_signs1[base + li])) * norm;
-    }
+    out[0] = float(val[0] * inv_sqrt_128 * s1.x) * norm;
+    out[1] = float(val[1] * inv_sqrt_128 * s1.y) * norm;
+    out[2] = float(val[2] * inv_sqrt_128 * s1.z) * norm;
+    out[3] = float(val[3] * inv_sqrt_128 * s1.w) * norm;
 
     reg = type4(out[0], out[1], out[2], out[3]);
 }
