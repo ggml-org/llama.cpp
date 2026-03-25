@@ -46,7 +46,7 @@ def parse_log_file(filepath):
                             break
                     continue
     except FileNotFoundError:
-        print(f"Error: File {filepath} not found", file=sys.stderr)
+        print(f"Error: File {filepath} not found", file=sys.stderr)  # noqa: NP100
         sys.exit(1)
 
     return functions
@@ -54,7 +54,7 @@ def parse_log_file(filepath):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./vgpr_check.py <log_file>", file=sys.stderr)
+        print("Usage: ./vgpr_check.py <log_file>", file=sys.stderr)  # noqa: NP100
         sys.exit(1)
 
     log_file = sys.argv[1]
