@@ -1,0 +1,46 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_tq3_0 data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const float tq3_centroids[4] = float[4](-1.510, -0.4528, 0.4528, 1.510);
+const int tq3_signs[32] = int[32](
+    1,-1,1,1,-1,-1,1,-1, 1,1,-1,1,-1,1,-1,-1,
+    1,-1,-1,1,1,-1,1,-1, -1,1,1,1,-1,-1,1,-1
+);
+
+void main() {
+    // Each workgroup processes 4 blocks (256 threads / 64 threads per block = 4 blocks)
+    // But TQ3_0 has QUANT_K=32, so each block needs only 1 thread for the WHT
+    // Use a simpler pattern: 1 thread per block, 256 blocks per workgroup
+    const uint ib = gl_WorkGroupID.x * 256 + gl_LocalInvocationID.x;
+    if (ib >= p.nel / 32) {
+        return;
+    }
+
+    const float d = float(data_a[ib].gamma);
+
+    // Decode centroids
+    float vals[32];
+    [[unroll]] for (uint j = 0; j < 32; j++) {
+        uint idx = (uint(data_a[ib].qs[j/4]) >> (2*(j%4))) & 0x03u;
+        vals[j] = d * tq3_centroids[idx];
+    }
+
+    // WHT inverse: butterflies first, then normalize+signs
+    [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u)
+        for (uint i = 0u; i < 32u; i += step * 2u)
+            for (uint j = i; j < i + step; j++) {
+                float a = vals[j], b = vals[j+step];
+                vals[j] = a + b; vals[j+step] = a - b;
+            }
+
+    const uint b_idx = ib * 32;
+    [[unroll]] for (uint j = 0; j < 32; j++) {
+        data_b[b_idx + j] = D_TYPE(vals[j] * 0.17677669529663688 * float(tq3_signs[j]));
+    }
+}

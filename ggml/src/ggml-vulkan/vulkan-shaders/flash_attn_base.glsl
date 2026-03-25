@@ -149,6 +149,60 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
 }
 #endif
 
+#if defined(DATA_A_TQ3_0)
+#define BLOCK_BYTE_SIZE 14
+const float tq3_centroids_fa[4] = float[4](-1.510, -0.4528, 0.4528, 1.510);
+const int tq3_signs_fa[32] = int[32](
+    1,-1,1,1,-1,-1,1,-1, 1,1,-1,1,-1,1,-1,-1,
+    1,-1,-1,1,1,-1,1,-1, -1,1,1,1,-1,-1,1,-1
+);
+
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    // Decode all 32 centroids from the block
+    float vals[32];
+    if (binding_idx == BINDING_IDX_K) {
+        [[unroll]] for (uint j = 0; j < 32; j++) {
+            uint byte_idx = j / 4;
+            uint bit_shift = 2 * (j % 4);
+            uint raw = uint(k_packed.k_data_packed16[a_offset + ib].qs[byte_idx / 2]);
+            // Extract the uint8 from the uint16
+            uint byte_val = (raw >> (8 * (byte_idx % 2))) & 0xFFu;
+            uint idx = (byte_val >> bit_shift) & 0x03u;
+            vals[j] = tq3_centroids_fa[idx];
+        }
+        // WHT inverse: butterflies first, then normalize+signs
+        [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u)
+            for (uint ii = 0u; ii < 32u; ii += step * 2u)
+                for (uint j = ii; j < ii + step; j++) {
+                    float a = vals[j], b = vals[j+step];
+                    vals[j] = a + b; vals[j+step] = a - b;
+                }
+        float d = FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].gamma);
+        [[unroll]] for (uint j = 0; j < 32; j++)
+            vals[j] *= 0.17677669529663688 * float(tq3_signs_fa[j]) * d;
+    } else {
+        [[unroll]] for (uint j = 0; j < 32; j++) {
+            uint byte_idx = j / 4;
+            uint bit_shift = 2 * (j % 4);
+            uint raw = uint(v_packed.v_data_packed16[a_offset + ib].qs[byte_idx / 2]);
+            uint byte_val = (raw >> (8 * (byte_idx % 2))) & 0xFFu;
+            uint idx = (byte_val >> bit_shift) & 0x03u;
+            vals[j] = tq3_centroids_fa[idx];
+        }
+        [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u)
+            for (uint ii = 0u; ii < 32u; ii += step * 2u)
+                for (uint j = ii; j < ii + step; j++) {
+                    float a = vals[j], b = vals[j+step];
+                    vals[j] = a + b; vals[j+step] = a - b;
+                }
+        float d = FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].gamma);
+        [[unroll]] for (uint j = 0; j < 32; j++)
+            vals[j] *= 0.17677669529663688 * float(tq3_signs_fa[j]) * d;
+    }
+    return FLOAT_TYPEV4(vals[iqs], vals[iqs+1], vals[iqs+2], vals[iqs+3]);
+}
+#endif
+
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
 

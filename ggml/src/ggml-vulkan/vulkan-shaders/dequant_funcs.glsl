@@ -433,6 +433,42 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ3_0)
+const float tq3_centroids_d[4] = float[4](-1.510, -0.4528, 0.4528, 1.510);
+const int tq3_signs_d[32] = int[32](
+    1,-1,1,1,-1,-1,1,-1, 1,1,-1,1,-1,1,-1,-1,
+    1,-1,-1,1,1,-1,1,-1, -1,1,1,1,-1,-1,1,-1
+);
+
+void tq3_dequant_block_unscaled(uint ib, uint a_offset, inout float vals[32]) {
+    [[unroll]] for (uint j = 0; j < 32; j++) {
+        uint idx = (uint(data_a[a_offset + ib].qs[j/4]) >> (2*(j%4))) & 0x03u;
+        vals[j] = tq3_centroids_d[idx];
+    }
+    // WHT inverse: butterflies first, then normalize+signs
+    [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u)
+        for (uint i = 0u; i < 32u; i += step * 2u)
+            for (uint j = i; j < i + step; j++) {
+                float a = vals[j], b = vals[j+step];
+                vals[j] = a + b; vals[j+step] = a - b;
+            }
+    [[unroll]] for (uint j = 0; j < 32; j++)
+        vals[j] *= 0.17677669529663688 * float(tq3_signs_d[j]);
+}
+
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    float vals[32];
+    tq3_dequant_block_unscaled(ib, a_offset, vals);
+    return vec2(vals[iqs], vals[iqs + 1]);
+}
+
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    float vals[32];
+    tq3_dequant_block_unscaled(ib, a_offset, vals);
+    return vec4(vals[iqs], vals[iqs+1], vals[iqs+2], vals[iqs+3]);
+}
+#endif
+
 #if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(0, 0);
@@ -451,6 +487,12 @@ vec2 get_dm(uint ib, uint a_offset) {
 #if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_TQ3_0)
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].gamma), 0);
 }
 #endif
 

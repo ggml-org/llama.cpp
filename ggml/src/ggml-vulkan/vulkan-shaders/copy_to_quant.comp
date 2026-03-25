@@ -184,6 +184,53 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
+#if defined(DATA_A_TQ3_0)
+const float tq3_centroids_q[4] = float[4](-1.510, -0.4528, 0.4528, 1.510);
+const int tq3_signs_q[32] = int[32](
+    1,-1,1,1,-1,-1,1,-1, 1,1,-1,1,-1,1,-1,-1,
+    1,-1,-1,1,1,-1,1,-1, -1,1,1,1,-1,-1,1,-1
+);
+
+void quantize(uint dst_idx, uint src_idx)
+{
+    float rotated[32];
+    // WHT forward: signs first, then butterflies, then normalize
+    [[unroll]] for (uint j = 0; j < 32; j++)
+        rotated[j] = float(data_s[src_idx + j]) * float(tq3_signs_q[j]);
+    [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u)
+        for (uint i = 0u; i < 32u; i += step * 2u)
+            for (uint j = i; j < i + step; j++) {
+                float a = rotated[j], b = rotated[j + step];
+                rotated[j] = a + b; rotated[j + step] = a - b;
+            }
+    float amax = 0.0;
+    [[unroll]] for (uint j = 0; j < 32; j++) {
+        rotated[j] *= 0.17677669529663688;
+        amax = max(amax, abs(rotated[j]));
+    }
+    float d = amax / 1.510;
+    float id = (d > 0.0) ? 1.0 / d : 0.0;
+
+    uint qs_packed[8] = uint[8](0,0,0,0,0,0,0,0);
+    uint qr_packed[4] = uint[4](0,0,0,0);
+    [[unroll]] for (uint j = 0; j < 32; j++) {
+        float xn = rotated[j] * id;
+        uint idx;
+        if      (xn < -0.9814) idx = 0u;
+        else if (xn < 0.0)     idx = 1u;
+        else if (xn < 0.9814)  idx = 2u;
+        else                    idx = 3u;
+        qs_packed[j / 4] |= (idx << (2u * (j % 4u)));
+        float residual = rotated[j] - d * tq3_centroids_q[idx];
+        if (residual >= 0.0)
+            qr_packed[j / 8] |= (1u << (j % 8u));
+    }
+    [[unroll]] for (uint j = 0; j < 8; j++) data_q[dst_idx].qs[j] = uint8_t(qs_packed[j]);
+    [[unroll]] for (uint j = 0; j < 4; j++) data_q[dst_idx].qr[j] = uint8_t(qr_packed[j]);
+    data_q[dst_idx].gamma = float16_t(d);
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 uint best_index(float x) {
     if (x <= kvalues_iq4nl[0]) return 0;
