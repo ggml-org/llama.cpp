@@ -90,7 +90,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=OFF \
             -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
           leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
 
       - name: Test
@@ -129,7 +129,7 @@ jobs:
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -171,7 +171,7 @@ jobs:
         run: |
           export CMAKE_PREFIX_PATH=dawn
           cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -238,7 +238,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -290,7 +290,7 @@ jobs:
             -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -324,7 +324,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake --build build -j $(nproc)
+          time cmake --build build -j $(nproc)
 
   ubuntu-24-webgpu:
     runs-on: ubuntu-24.04
@@ -391,7 +391,7 @@ jobs:
             -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_WEBGPU=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -434,7 +434,7 @@ jobs:
             -DLLAMA_OPENSSL=OFF \
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
-          cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
+          time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
 
   ubuntu-22-hip:
     runs-on: ubuntu-22.04
@@ -467,7 +467,7 @@ jobs:
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-musa:
     runs-on: ubuntu-22.04
@@ -498,7 +498,7 @@ jobs:
             -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_MUSA=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl:
     runs-on: ubuntu-22.04
@@ -549,7 +549,7 @@ jobs:
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl-fp16:
     runs-on: ubuntu-22.04
@@ -601,7 +601,7 @@ jobs:
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
             -DGGML_SYCL_F16=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-openvino:
       name: ubuntu-24-openvino-${{ matrix.openvino_device }}
@@ -671,7 +671,7 @@ jobs:
             cmake -B build/ReleaseOV -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_OPENVINO=ON
-            cmake --build build/ReleaseOV --config Release -j $(nproc)
+            time cmake --build build/ReleaseOV --config Release -j $(nproc)
 
         - name: Test
           id: cmake_test
@@ -839,7 +839,7 @@ jobs:
               -DGGML_NATIVE=OFF \
               -DGGML_CUDA=ON \
               -DGGML_CUDA_CUB_3DOT2=ON
-            cmake --build build
+            time cmake --build build
 
   windows-2022-cuda:
     runs-on: windows-2022
@@ -1063,7 +1063,7 @@ jobs:
             -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
             -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
 
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
