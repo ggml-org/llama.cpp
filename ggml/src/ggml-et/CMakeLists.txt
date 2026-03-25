@@ -38,6 +38,7 @@ set(KERNELS
     rope_f32
     unary_f32
     sqr_f32
+    sum_rows_f32
     norm_f32
     rms_norm_f32
     rms_norm_mul_f32
