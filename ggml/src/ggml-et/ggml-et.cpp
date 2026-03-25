@@ -742,7 +742,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
                        op->ne[0] % 16 == 0 && // cache-aligned
                        op->src[0]->ne[0] % 16 == 0 &&
-                       op->src[1]->ne[0] % 16 == 0 &&
+                       (op->src[1]->ne[0] % 16 == 0 || op->src[1]->ne[0] == 1) &&
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]) &&
                        ggml_is_contiguous(op->src[1]);

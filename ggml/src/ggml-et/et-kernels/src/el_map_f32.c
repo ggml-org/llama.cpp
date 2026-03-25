@@ -96,6 +96,52 @@ static inline void block_sub_cache_aligned(float* dst_block, const float* src0_b
 }
 
 
+// Broadcast variants: src1 is a single scalar, broadcast to all 8 lanes via fbc.ps
+static inline void block_mul_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
+    for (int32_t i = 0; i < elements; i += 8) {
+        __asm__ volatile(
+            "flw.ps f10, %[src0_vec]\n"
+            "fbc.ps f11, %[s]\n"
+            "fmul.ps f12, f10, f11\n"
+            "fsw.ps f12, %[dst_vec]\n"
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
+            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
+              [s] "m"(scalar)
+            : "f10", "f11", "f12"
+        );
+    }
+}
+
+static inline void block_add_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
+    for (int32_t i = 0; i < elements; i += 8) {
+        __asm__ volatile(
+            "flw.ps f10, %[src0_vec]\n"
+            "fbc.ps f11, %[s]\n"
+            "fadd.ps f12, f10, f11\n"
+            "fsw.ps f12, %[dst_vec]\n"
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
+            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
+              [s] "m"(scalar)
+            : "f10", "f11", "f12"
+        );
+    }
+}
+
+static inline void block_sub_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
+    for (int32_t i = 0; i < elements; i += 8) {
+        __asm__ volatile(
+            "flw.ps f10, %[src0_vec]\n"
+            "fbc.ps f11, %[s]\n"
+            "fsub.ps f12, f10, f11\n"
+            "fsw.ps f12, %[dst_vec]\n"
+            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
+            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
+              [s] "m"(scalar)
+            : "f10", "f11", "f12"
+        );
+    }
+}
+
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -177,26 +223,43 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
         const float* src0_ptr = (const float*)((const char*)src0_data + i03*nb03 + i02*nb02 + i01*nb01);
         const float* src1_ptr = (const float*)((const char*)src1_data + i13*nb13 + i12*nb12 + i11*nb11);
 
-        // Broadcasting in dimension 0: src1 repeats across src0
-        const int64_t nr0 = ne0 / ne10;  // How many times src1 is repeated in dimension 0
-
-        for (int64_t r = 0; r < nr0; r++) {
-            // Process ne10 elements at a time using block functions
-            const float* src0_block = src0_ptr + r * ne10;
-            float* dst_block = dst_ptr + r * ne10;
-
+        if (ne10 == 1) {
+            // Broadcast scalar: src1 has ne[0]=1, broadcast across entire row
+            float scalar = src1_ptr[0];
             switch (operation) {
                 case GGML_OP_MUL:
-                    block_mul_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                    block_mul_broadcast(dst_ptr, src0_ptr, scalar, (int)ne0);
                     break;
                 case GGML_OP_ADD:
-                    block_add_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                    block_add_broadcast(dst_ptr, src0_ptr, scalar, (int)ne0);
                     break;
                 case GGML_OP_SUB:
-                    block_sub_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                    block_sub_broadcast(dst_ptr, src0_ptr, scalar, (int)ne0);
                     break;
                 default:
                     return 1;
+            }
+        } else {
+            // Broadcasting in dimension 0: src1 repeats across src0
+            const int64_t nr0 = ne0 / ne10;
+
+            for (int64_t r = 0; r < nr0; r++) {
+                const float* src0_block = src0_ptr + r * ne10;
+                float* dst_block = dst_ptr + r * ne10;
+
+                switch (operation) {
+                    case GGML_OP_MUL:
+                        block_mul_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                        break;
+                    case GGML_OP_ADD:
+                        block_add_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                        break;
+                    case GGML_OP_SUB:
+                        block_sub_cache_aligned(dst_block, src0_block, src1_ptr, (int)ne10);
+                        break;
+                    default:
+                        return 1;
+                }
             }
         }
     }
