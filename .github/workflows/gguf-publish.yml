@@ -32,7 +32,7 @@ jobs:
     - name: Install dependencies
       run: |
         cd gguf-py
-        python -m pip install poetry
+        python -m pip install poetry==2.3.2
         poetry install
 
     - name: Build package
