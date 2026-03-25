@@ -126,3 +126,26 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 - Allocate extra threadgroup memory in FATTN_SMEM
 - One thread writes 128 floats to threadgroup, barrier, all threads read
 - This reduces to 1 dequant + 1 barrier per cc iteration instead of 128 broadcasts
+
+### 2026-03-25: threadgroup memory attempt
+- Replaced simd_broadcast with threadgroup memory + simdgroup_barrier
+- Thread 0 dequantizes into threadgroup, barrier, all threads read
+- **Result: still 2.4 tok/s**
+- Eliminating 31/32 redundant dequant calls had NO effect on speed
+- This means the dequant cost itself (even 1× per block) is NOT the bottleneck
+- Or the bottleneck is elsewhere entirely (SET_ROWS quantize? block size overhead?)
+
+### Hypothesis: block size 128 vs 32 causes structural overhead
+- q8_0 block size = 32, turbo block size = 128
+- The flash attention kernel processes DK4/NL elements per thread per cc iteration
+- For q8_0: DK4/NL = 32/8 = 4 iterations (inner ii loop runs 4×)
+- For turbo: DK4/NL = 32/32 = 1 iteration (inner ii loop runs 1×)
+- But NL = 32 for turbo vs NL = 4 for q8_0 (32/8=4, C=32, NE=1→NW/NE=32 for both)
+- Actually NL = NW/NE = 32/1 = 32 for both... so DK4/NL should be the same?
+- Wait: for q8_0, nl_k=8 (32 elements / 4 per t4 = 8 chunks). DK4 = 128/4 = 32. DK4/NL = 32/32 = 1.
+- So BOTH q8_0 and turbo have DK4/NL = 1 iteration in the inner loop.
+- The only difference is the dequant function itself.
+
+### Next: profile whether the bottleneck is in dequant or elsewhere
+- Test with a no-op dequant (return zeros) to measure the kernel overhead
+- If still slow → bottleneck is NOT dequant, it's structural
