@@ -228,3 +228,29 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 | **Inlined WHT (proper Metal)** | **10.7** | **THE FIX — #include caused CPU fallback** |
 
 Rule: NEVER use #include in ggml-metal.metal. Always inline.
+
+### 2026-03-25: Upstream competitive intelligence — GAME CHANGERS
+
+**Finding 1: QJL residual kills quality when naively re-added**
+Dejan.ai found cosine similarity drops to 0.69 with naive QJL add-back.
+Must use MSE-only for drop-in replacement, or fused kernel for QJL.
+
+**Finding 2: Pre-rotate queries, not keys (THE BIG WIN)**
+`<q, R^T * c[idx]> = <R*q, c[idx]>`
+Rotate query ONCE, then dequant is just a centroid table lookup.
+No rotation in the hot dequant path. Would make turbo3 as fast as q4_0.
+
+**Finding 3: WHT abandoned by everyone**
+Both Dejan.ai and mudler tried WHT, both switched to dense QR.
+But with pre-rotate-queries, rotation method doesn't matter.
+
+**Finding 4: unixsysdev gets -0.8% speed loss (CUDA, block=32)**
+Pure polar coordinate encoding, no random rotation, fused kernel.
+
+**Finding 5: We're the only Metal implementation**
+Everyone else is CPU-only or CUDA. Our Metal kernels are unique.
+
+### Immediate action items:
+- [ ] Test MSE-only (no QJL) — simplify dequant, may improve quality + speed
+- [ ] Implement pre-rotate-queries — eliminates rotation from dequant entirely
+- [ ] Consider block size 32 for better GPU parallelism
