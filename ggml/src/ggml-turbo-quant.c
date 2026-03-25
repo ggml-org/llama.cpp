@@ -19,7 +19,7 @@
 
 #define TURBO_SEED_ROTATION 42
 #define TURBO_SEED_QJL      1042
-#define TURBO_D             QK_TURBO3  /* 128 — block size = head_dim */
+#define TURBO_D             128  /* rotation group size = head_dim (independent of block size) */
 #define TURBO_QJL_CONST     1.2533141373155003f  /* sqrt(pi/2) */
 
 /* Optimal centroids from paper (scaled by 1/sqrt(d)) */
