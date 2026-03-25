@@ -206,29 +206,30 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        // Layer-adaptive: use higher precision for sensitive layers
+        // Layer-adaptive: use higher precision for quality-sensitive layers
         // Config: TURBO_LAYER_ADAPTIVE env var controls the strategy
         //   0 = uniform (default), 1 = q8_0 for first+last 4, 2 = q8_0 for last 8
         ggml_type layer_type_k = type_k;
         ggml_type layer_type_v = type_v;
         {
-            static int adaptive_mode = -1;
-            if (adaptive_mode == -1) {
+            // Thread-safe one-time init via C++ static local
+            static const int adaptive_mode = []() {
                 const char * env = getenv("TURBO_LAYER_ADAPTIVE");
-                adaptive_mode = env ? atoi(env) : 0;
-                if (adaptive_mode > 0) {
-                    LLAMA_LOG_INFO("%s: layer-adaptive mode %d enabled\n", __func__, adaptive_mode);
+                int mode = env ? atoi(env) : 0;
+                if (mode > 0) {
+                    LLAMA_LOG_INFO("llama_kv_cache: layer-adaptive mode %d enabled\n", mode);
                 }
-            }
-            if (adaptive_mode == 1 && (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0)) {
-                // q8_0 for first 4 and last 4 layers
-                if (il < 4 || il >= hparams.n_layer - 4) {
+                return mode;
+            }();
+            const bool is_turbo = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0);
+            const uint32_t n_layer = hparams.n_layer;
+            if (adaptive_mode == 1 && is_turbo && n_layer >= 8) {
+                if (il < 4 || il >= n_layer - 4) {
                     layer_type_k = GGML_TYPE_Q8_0;
                     layer_type_v = GGML_TYPE_Q8_0;
                 }
-            } else if (adaptive_mode == 2 && (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0)) {
-                // q8_0 for last 8 layers only
-                if (il >= hparams.n_layer - 8) {
+            } else if (adaptive_mode == 2 && is_turbo && n_layer >= 8) {
+                if (il >= n_layer - 8) {
                     layer_type_k = GGML_TYPE_Q8_0;
                     layer_type_v = GGML_TYPE_Q8_0;
                 }
