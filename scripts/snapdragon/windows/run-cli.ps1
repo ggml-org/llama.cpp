@@ -44,10 +44,14 @@ if ($null -ne $env:NDEV) {
     $env:GGML_HEXAGON_NDEV=$env:NDEV
 }
 
+if ($null -ne $env:HB) {
+    $env:GGML_HEXAGON_HOSTBUF=$env:HB
+}
+
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
 & "$basedir\bin\llama-cli.exe" `
     --no-mmap -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
-    --ctx-size 8192 --ubatch-size 128 -fa on `
+    --ctx-size 8192 --ubatch-size 256 -fa on `
     -ngl 99 --device $device $cli_opts
