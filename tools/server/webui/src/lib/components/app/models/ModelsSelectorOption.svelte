@@ -88,17 +88,17 @@
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={HeartOff}
-					tooltip="Remove from favourites"
+					tooltip="Remove from favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{:else}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={Heart}
-					tooltip="Add to favourites"
+					tooltip="Add to favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{/if}
 
