@@ -36967,8 +36967,11 @@ static void moe_prefetch_scan(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph 
                                ? ggml_sycl_info().total_gpu_count
                                : 1;
 
-    // Track which blk layers we've already predicted (gate/up/down share same layer).
-    std::unordered_set<int> seen_blk_layers;
+    // Collect all MUL_MAT_ID hash IDs grouped by sequential layer.
+    // Each MoE block has gate/up/down sub-ops sharing the same blk.N but
+    // with different FNV hashes.  We predict once per sequential layer but
+    // submit hints for ALL sub-op hashes so every weight tensor gets prefetched.
+    std::unordered_map<int, std::vector<int>> seq_to_hashes;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -36977,10 +36980,8 @@ static void moe_prefetch_scan(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph 
         const ggml_tensor * src0 = node->src[0];
         if (!src0 || !src0->name) continue;
 
-        // Deduplicate by blk layer (gate/up/down all have same blk.N).
         const int blk_id = parse_layer_id_from_name(src0->name);
         if (blk_id < 0) continue;
-        if (!seen_blk_layers.insert(blk_id).second) continue;
 
         // Compute the hash-based layer ID that hint() and placement table expect.
         const int hash_layer_id = moe_cache_layer_id(src0->name);
@@ -36988,24 +36989,27 @@ static void moe_prefetch_scan(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph 
         // Translate hash to sequential index for predictor.
         auto seq_it = seq_map.find(hash_layer_id);
         if (seq_it == seq_map.end()) continue;
-        const int seq_layer_id = seq_it->second;
 
-        // Heuristic prediction: uses last token's experts + frequency fill.
+        seq_to_hashes[seq_it->second].push_back(hash_layer_id);
+    }
+
+    // For each sequential layer, predict once and hint all sub-op hashes.
+    for (const auto & [seq_layer_id, hash_ids] : seq_to_hashes) {
         auto predicted = predictor.predict(seq_layer_id);
 
-        // Submit async hints to all relevant devices' prefetchers.
-        for (int eid : predicted) {
-            prefetcher.hint(hash_layer_id, eid);
-            // Also hint secondary GPUs' prefetchers.
-            for (int d = 1; d < n_gpu_hint && d < GGML_SYCL_MAX_DEVICES; d++) {
-                if (g_expert_prefetchers[d].is_initialized()) {
-                    g_expert_prefetchers[d].hint(hash_layer_id, eid);
+        for (int hash_layer_id : hash_ids) {
+            for (int eid : predicted) {
+                prefetcher.hint(hash_layer_id, eid);
+                for (int d = 1; d < n_gpu_hint && d < GGML_SYCL_MAX_DEVICES; d++) {
+                    if (g_expert_prefetchers[d].is_initialized()) {
+                        g_expert_prefetchers[d].hint(hash_layer_id, eid);
+                    }
                 }
             }
         }
     }
 
-    g_prefetch_scan_done = !seen_blk_layers.empty();
+    g_prefetch_scan_done = !seq_to_hashes.empty();
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
