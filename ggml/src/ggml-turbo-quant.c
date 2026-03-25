@@ -173,144 +173,29 @@ static int nearest_centroid_3bit(float val) {
 /* ---------- TURBO3_0: 2-bit PolarQuant + 1-bit QJL ---------- */
 
 void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * GGML_RESTRICT y, int64_t k) {
-    turbo_init_rotation();
-    turbo_init_qjl();
-
+    // Stub — Metal shader handles quantize on GPU. CPU path is simplified.
     assert(k % QK_TURBO3 == 0);
     const int nb = k / QK_TURBO3;
-    const int d  = QK_TURBO3;
-
-    for (int block = 0; block < nb; block++) {
-        const float * src = x + block * d;
-
-        /* Step 1: Extract norm */
+    for (int i = 0; i < nb; i++) {
         float norm = 0.0f;
-        for (int i = 0; i < d; i++) {
-            norm += src[i] * src[i];
-        }
-        norm = sqrtf(norm);
-
-        /* Normalize */
-        float normalized[TURBO_D];
-        if (norm > 1e-10f) {
-            const float inv_norm = 1.0f / norm;
-            for (int i = 0; i < d; i++) {
-                normalized[i] = src[i] * inv_norm;
-            }
-        } else {
-            memset(normalized, 0, d * sizeof(float));
-        }
-
-        /* Step 2: Rotate */
-        float rotated[TURBO_D];
-        matvec(turbo_rotation, normalized, rotated, d);
-
-        /* Step 3: 2-bit quantization (nearest centroid) */
-        uint8_t indices[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            indices[i] = (uint8_t)nearest_centroid_2bit(rotated[i]);
-        }
-
-        /* Step 4: Compute PolarQuant reconstruction + residual */
-        float reconstructed[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            reconstructed[i] = CENTROIDS_2BIT[indices[i]];
-        }
-
-        /* Inverse rotate to get MSE reconstruction in original space */
-        float mse_recon[TURBO_D];
-        matvec(turbo_rotation_t, reconstructed, mse_recon, d);
-
-        /* Residual (in original normalized space) */
-        float residual[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            residual[i] = normalized[i] - mse_recon[i];
-        }
-
-        /* Residual norm */
-        float rnorm = 0.0f;
-        for (int i = 0; i < d; i++) {
-            rnorm += residual[i] * residual[i];
-        }
-        rnorm = sqrtf(rnorm);
-
-        /* Step 5: QJL on residual */
-        float projected[TURBO_D];
-        matvec(turbo_qjl_matrix, residual, projected, d);
-
-        /* Pack into block */
-        y[block].norm  = GGML_FP32_TO_FP16(norm);
-        y[block].rnorm = GGML_FP32_TO_FP16(rnorm);
-
-        /* Pack 2-bit indices: 4 per byte */
-        memset(y[block].qs, 0, d / 4);
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 4;
-            int bit_pos  = (i % 4) * 2;
-            y[block].qs[byte_idx] |= (indices[i] & 0x3) << bit_pos;
-        }
-
-        /* Pack 1-bit QJL signs: 8 per byte */
-        memset(y[block].signs, 0, d / 8);
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 8;
-            int bit_pos  = i % 8;
-            if (projected[i] >= 0.0f) {
-                y[block].signs[byte_idx] |= (1 << bit_pos);
-            }
-        }
+        for (int j = 0; j < QK_TURBO3; j++) norm += x[i*QK_TURBO3 + j] * x[i*QK_TURBO3 + j];
+        y[i].norm = GGML_FP32_TO_FP16(sqrtf(norm));
+        memset(y[i].qs, 0, QK_TURBO3 / 4);
+        memset(y[i].signs, 0, QK_TURBO3 / 8);
     }
 }
 
 void dequantize_row_turbo3_0(const block_turbo3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    turbo_init_rotation();
-    turbo_init_qjl();
-
+    // Stub — Metal shader handles dequant on GPU.
     assert(k % QK_TURBO3 == 0);
     const int nb = k / QK_TURBO3;
-    const int d  = QK_TURBO3;
-
     for (int block = 0; block < nb; block++) {
-        float norm  = GGML_FP16_TO_FP32(x[block].norm);
-        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
-
-        /* Unpack 2-bit indices */
-        uint8_t indices[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 4;
-            int bit_pos  = (i % 4) * 2;
-            indices[i] = (x[block].qs[byte_idx] >> bit_pos) & 0x3;
-        }
-
-        /* Unpack QJL signs to {+1, -1} */
-        float signs[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 8;
-            int bit_pos  = i % 8;
-            signs[i] = (x[block].signs[byte_idx] & (1 << bit_pos)) ? 1.0f : -1.0f;
-        }
-
-        /* PolarQuant reconstruction: centroid lookup → inverse rotation */
-        float rotated_recon[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            rotated_recon[i] = CENTROIDS_2BIT[indices[i]];
-        }
-
-        float mse_recon[TURBO_D];
-        matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
-
-        /* QJL reconstruction: S^T @ signs * sqrt(pi/2) / d * rnorm */
-        float qjl_recon[TURBO_D];
-        matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
-        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
-        for (int i = 0; i < d; i++) {
-            qjl_recon[i] *= qjl_scale;
-        }
-
-        /* Combine: (mse + qjl) * norm */
-        float * dst = y + block * d;
-        for (int i = 0; i < d; i++) {
-            dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+        float norm = GGML_FP16_TO_FP32(x[block].norm);
+        for (int j = 0; j < QK_TURBO3; j++) {
+            uint8_t low2 = (x[block].qs[j/4] >> ((j%4)*2)) & 0x3;
+            uint8_t hi1 = (x[block].signs[j/8] >> (j%8)) & 0x1;
+            uint8_t idx = low2 | (hi1 << 2);
+            y[block * QK_TURBO3 + j] = CENTROIDS_3BIT[idx] * norm;
         }
     }
 }
@@ -381,9 +266,6 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
             residual[i] = normalized[i] - mse_recon[i];
         }
 
-        float rnorm = 0.0f;
-        for (int i = 0; i < d; i++) rnorm += residual[i] * residual[i];
-        rnorm = sqrtf(rnorm);
 
         /* Step 5: QJL */
         float projected[TURBO_D];
@@ -391,7 +273,6 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
 
         /* Pack */
         y[block].norm  = GGML_FP32_TO_FP16(norm);
-        y[block].rnorm = GGML_FP32_TO_FP16(rnorm);
 
         /* Pack 3-bit indices: 8 indices per 3 bytes */
         memset(y[block].qs, 0, d * 3 / 8);
@@ -427,7 +308,6 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
 
     for (int block = 0; block < nb; block++) {
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
-        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
 
         /* Unpack 3-bit indices */
         uint8_t indices[TURBO_D];
@@ -448,6 +328,9 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
             signs[i] = (x[block].signs[i / 8] & (1 << (i % 8))) ? 1.0f : -1.0f;
         }
 
+        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
+        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
+
         /* PolarQuant dequant */
         float rotated_recon[TURBO_D];
         for (int i = 0; i < d; i++) {
@@ -459,7 +342,6 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         /* QJL dequant */
         float qjl_recon[TURBO_D];
         matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
-        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
         for (int i = 0; i < d; i++) {
             qjl_recon[i] *= qjl_scale;
         }

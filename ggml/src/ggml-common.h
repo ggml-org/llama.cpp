@@ -277,18 +277,20 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
-// TurboQuant 3-bit: 2-bit PolarQuant indices + 1-bit QJL signs
-// Block size = 128 (matches typical head_dim for optimal rotation Gaussianization)
-// Per block: norm(fp16) + residual_norm(fp16) + 2-bit indices (32 bytes) + 1-bit signs (16 bytes)
-// = 52 bytes per 128 values = 3.25 bits/value → 4.9× compression vs fp16
-#define QK_TURBO3 128
+// TurboQuant 3-bit MSE-only: 3-bit PolarQuant indices (no QJL)
+// Storage block size = 32 (matches q4_0 for optimal GPU parallelism)
+// Transform group size = 128 (head_dim, for rotation Gaussianization)
+// Per block: norm(fp16) + 2-bit indices (8 bytes) + 1-bit extra (4 bytes) = 14 bytes per 32 values
+// = 3.5 bits/value → 4.6× compression vs fp16
+// The 3-bit index is split: lower 2 bits in qs[], upper 1 bit in signs[]
+#define QK_TURBO3 32
+#define QK_TURBO3_GROUP 128  // rotation group size = head_dim
 typedef struct {
     ggml_half  norm;                    //  2 bytes: vector L2 norm (for rescaling)
-    ggml_half  rnorm;                   //  2 bytes: QJL residual L2 norm
-    uint8_t    qs[QK_TURBO3 / 4];      // 32 bytes: 2-bit PolarQuant indices (4 per byte)
-    uint8_t    signs[QK_TURBO3 / 8];   // 16 bytes: 1-bit QJL signs (8 per byte)
-} block_turbo3_0;                       // 52 bytes total
-static_assert(sizeof(block_turbo3_0) == 2*sizeof(ggml_half) + QK_TURBO3/4 + QK_TURBO3/8, "wrong turbo3_0 block size/padding");
+    uint8_t    qs[QK_TURBO3 / 4];      //  8 bytes: lower 2-bit indices (4 per byte)
+    uint8_t    signs[QK_TURBO3 / 8];   //  4 bytes: upper 1-bit of 3-bit index (8 per byte)
+} block_turbo3_0;                       // 14 bytes total
+static_assert(sizeof(block_turbo3_0) == sizeof(ggml_half) + QK_TURBO3/4 + QK_TURBO3/8, "wrong turbo3_0 block size/padding");
 
 // TurboQuant 4-bit: 3-bit PolarQuant indices + 1-bit QJL signs
 // Per block: norm(fp16) + residual_norm(fp16) + 3-bit indices (48 bytes) + 1-bit signs (16 bytes)
