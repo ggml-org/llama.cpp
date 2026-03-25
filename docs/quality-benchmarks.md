@@ -254,3 +254,31 @@ Pre-rotate-queries never executed because:
 ### Current state
 - Inverse rotation restored in dequant (correct quality, slower speed ~10.7 tok/s)
 - Speed optimization (pre-rotate-queries) needs reimplementation for GQA + hybrid
+
+## Current State Summary (after quality fix)
+
+### What works:
+- turbo3 KV cache compression: 4.6× compression ratio
+- Perplexity: 6.194 (1.4% of q8_0) — QUALITY TARGET MET
+- MSE-only mode: 3-bit PolarQuant, no QJL — better quality than paper's Algorithm 2
+- WHT rotation in dequant: correct inverse rotation restoring original space
+- Block size 128: works on Metal for both MoE and Dense models
+- Works for MoE (hybrid memory), Dense, and ISWA models
+
+### Speed:
+- ~10.7 tok/s MoE gen (8× slower than q8_0 85.5)
+- Bottleneck: inverse WHT rotation in dequant (called per block per attention)
+
+### What doesn't work:
+- Pre-rotate-queries optimization: never executed because
+  1. Q tensor ne[0]=256 (GQA concatenated heads) vs rotation ne[0]=128
+  2. Need per-head reshape before rotation
+- Previous speed numbers (51-77 tok/s) were INVALID — measured garbage output speed
+
+### Lessons learned:
+1. ALWAYS run perplexity before claiming quality
+2. "Coherent text" is NOT quality validation
+3. dynamic_cast fails silently for MoE hybrid memory
+4. GQA models concatenate heads in ne[0] — can't apply per-head ops without reshape
+5. #include in ggml-metal.metal causes silent CPU fallback
+6. Block size matters for speed but NOT for quality (both 32 and 128 had same PPL)
