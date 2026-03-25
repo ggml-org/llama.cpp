@@ -264,3 +264,32 @@ Everyone else is CPU-only or CUDA. Our Metal kernels are unique.
   would get us from 10.7 → ~49 tok/s
 - Remaining gap (49 vs 85) is from block size 128 + QJL overhead
 - REVERTED change after measurement
+
+### 2026-03-25: PRE-ROTATE-QUERIES — THE WIN 🎉
+- Implemented: store R^T in KV cache, apply ggml_mul_mat(R_T, q) in build_attn_mha
+- Stripped turbo_rotate_inverse from Metal dequant
+- Codex caught: buffer_clear zeroing rotation after init (fixed)
+- **MoE gen: 10.7 → 51.4 tok/s (4.8× speedup, 60% of q8_0)**
+- **Qwopus gen: 5.3 → 14.6 tok/s (2.8× speedup, 83% of q8_0)**
+- Prompt: 67 → 160 tok/s (MoE), 30 → 68 tok/s (Qwopus)
+
+### FINAL SUMMARY
+
+| Stage | MoE tok/s | Qwopus tok/s | What happened |
+|-------|-----------|-------------|---------------|
+| First benchmark | 2.4 | 1.3 | CPU fallback (#include bug) |
+| Fixed #include | 10.7 | 5.3 | Real Metal, WHT rotation overhead |
+| Speed ceiling test | 49.1 | — | Confirmed rotation is the bottleneck |
+| **Pre-rotate-queries** | **51.4** | **14.6** | **Rotation moved from dequant to Q** |
+| q8_0 baseline | 85.5 | 17.6 | Target |
+
+**Total improvement: 21× from first benchmark to final (2.4 → 51.4 tok/s)**
+**Compression: 4.9× throughout**
+
+### Key lessons learned
+1. NEVER use #include in ggml-metal.metal — causes silent CPU fallback
+2. Always verify Metal library loads successfully before benchmarking
+3. The no-op test (set function to return zeros) is the fastest way to isolate bottlenecks
+4. Pre-rotate-queries (from Dejan.ai) is the right architectural approach
+5. Codex + roast reviews catch real bugs (buffer clear ordering, stale code, MSL limitations)
+6. The ggml_mul_mat approach for Q rotation is clean and correct
