@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
-import { findDescendantMessages, uuid } from '$lib/utils';
+import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
+import type { McpServerOverride } from '$lib/types/database';
 
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
@@ -362,6 +363,87 @@ export class DatabaseService {
 			}
 
 			return { imported: importedCount, skipped: skippedCount };
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Forking
+	 *
+	 *
+	 */
+
+	/**
+	 * Forks a conversation at a specific message, creating a new conversation
+	 * containing all messages from the root up to (and including) the target message.
+	 *
+	 * @param sourceConvId - The source conversation ID
+	 * @param atMessageId - The message ID to fork at (the new conversation ends here)
+	 * @param options - Fork options (name and whether to include attachments)
+	 * @returns The newly created conversation
+	 */
+	static async forkConversation(
+		sourceConvId: string,
+		atMessageId: string,
+		options: { name: string; includeAttachments: boolean }
+	): Promise<DatabaseConversation> {
+		return await db.transaction('rw', [db.conversations, db.messages], async () => {
+			const sourceConv = await db.conversations.get(sourceConvId);
+			if (!sourceConv) {
+				throw new Error(`Source conversation ${sourceConvId} not found`);
+			}
+
+			const allMessages = await db.messages.where('convId').equals(sourceConvId).toArray();
+
+			const pathMessages = filterByLeafNodeId(allMessages, atMessageId, true) as DatabaseMessage[];
+			if (pathMessages.length === 0) {
+				throw new Error(`Could not resolve message path to ${atMessageId}`);
+			}
+
+			const idMap = new Map<string, string>();
+
+			for (const msg of pathMessages) {
+				idMap.set(msg.id, uuid());
+			}
+
+			const newConvId = uuid();
+			const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
+				const newId = idMap.get(msg.id)!;
+				const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
+				const newChildren = msg.children
+					.filter((childId: string) => idMap.has(childId))
+					.map((childId: string) => idMap.get(childId)!);
+
+				return {
+					...msg,
+					id: newId,
+					convId: newConvId,
+					parent: newParent,
+					children: newChildren,
+					extra: options.includeAttachments ? msg.extra : undefined
+				};
+			});
+
+			const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
+			const newConv: DatabaseConversation = {
+				id: newConvId,
+				name: options.name,
+				lastModified: Date.now(),
+				currNode: lastClonedMessage.id,
+				forkedFromConversationId: sourceConvId,
+				mcpServerOverrides: sourceConv.mcpServerOverrides
+					? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({ serverId: o.serverId, enabled: o.enabled }))
+					: undefined
+			};
+
+			await db.conversations.add(newConv);
+
+			for (const msg of clonedMessages) {
+				await db.messages.add(msg);
+			}
+
+			return newConv;
 		});
 	}
 }

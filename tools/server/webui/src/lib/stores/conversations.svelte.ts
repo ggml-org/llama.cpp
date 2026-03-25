@@ -39,6 +39,12 @@ import {
 	MULTIPLE_UNDERSCORE_REGEX,
 	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+
+export interface ConversationTreeItem {
+	conversation: DatabaseConversation;
+	depth: number;
+}
 
 class ConversationsStore {
 	/**
@@ -656,6 +662,42 @@ class ConversationsStore {
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
 		this.saveMcpDefaults();
+	}
+
+	/**
+	 * Forks a conversation at a specific message, creating a new conversation
+	 * containing messages from root up to the target message, then navigates to it.
+	 *
+	 * @param messageId - The message ID to fork at
+	 * @param options - Fork options (name and whether to include attachments)
+	 * @returns The new conversation ID, or null if fork failed
+	 */
+	async forkConversation(
+		messageId: string,
+		options: { name: string; includeAttachments: boolean }
+	): Promise<string | null> {
+		if (!this.activeConversation) return null;
+
+		try {
+			const newConv = await DatabaseService.forkConversation(
+				this.activeConversation.id,
+				messageId,
+				options
+			);
+
+			this.conversations = [newConv, ...this.conversations];
+
+			await goto(`#/chat/${newConv.id}`);
+
+			toast.success('Conversation forked');
+
+			return newConv.id;
+		} catch (error) {
+			console.error('Failed to fork conversation:', error);
+			toast.error('Failed to fork conversation');
+
+			return null;
+		}
 	}
 
 	/**
