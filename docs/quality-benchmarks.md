@@ -207,3 +207,28 @@ The model produced grammatical text because:
 - Without V inverse rotation, the output is in rotated space which is orthogonal to
   the correct space — but each layer compounds the error
 - Short conversations look plausible but perplexity reveals the content is wrong
+
+### Bisect: block 128 → STILL PPL=165.6
+Block size is NOT the issue. PPL identical at block 128 and block 32.
+
+### Bisect: disable Q rotation → STILL PPL=165.6
+Pre-rotate-queries is NOT the issue. PPL identical with/without Q rotation.
+
+### Root cause #2 confirmed: dynamic_cast fails for MoE hybrid memory
+The Q rotation and V inverse rotation NEVER execute because mctx is
+llama_memory_hybrid (not llama_kv_cache). The kv_cache IS inside the
+hybrid object but we can't reach it.
+
+### What this means
+Without Q rotation and without V inverse rotation:
+- K cache is quantized in ROTATED space, dequanted in ROTATED space
+- Q is in ORIGINAL space (no pre-rotation)
+- <original_Q, rotated_K> = GARBAGE (cosine ≈ 0.02)
+- V cache similarly in rotated space, output never inverse-rotated
+
+The entire time, K/V values were in the wrong coordinate system.
+The "coherent text" was an illusion from the language model's resilience.
+
+### Fix approach
+Need to get rotation tensors through the hybrid memory hierarchy.
+Virtual methods on llama_memory_context_i are the cleanest path.
