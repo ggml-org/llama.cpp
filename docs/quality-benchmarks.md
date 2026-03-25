@@ -138,3 +138,72 @@ The block size 32 change + MSE-only + pre-rotate-queries may have introduced a b
 4. The non-vec flash attention instantiation might use wrong nl parameter
 
 MUST FIX before claiming any quality results.
+
+## Quality Bisection Log
+
+Goal: find which change broke perplexity (165.6 vs 6.1 baseline).
+
+Changes applied (in order):
+1. Pre-rotate-queries: rotation moved from dequant to Q in attention graph
+2. MSE-only: dropped QJL, 3-bit centroids (2-bit qs + 1-bit signs)
+3. Block size 32: storage blocks shrunk from 128 to 32 elements
+
+Bisection plan:
+- [ ] Test A: revert block 32 → 128, keep MSE-only + pre-rotate
+- [ ] Test B: revert MSE-only → 2bit+QJL, keep block 128 + pre-rotate
+- [ ] Test C: revert pre-rotate → rotation in dequant, keep block 128 + 2bit+QJL
+- [ ] If A/B/C all still bad: check the rotation matrix consistency
+
+## Bisection Results
+
+### Test A: Disable Q rotation → PPL 165.6 (STILL BAD)
+Pre-rotate-queries is NOT the problem. Q rotation has no effect on perplexity.
+
+### Root Cause Found: V CACHE IN ROTATED SPACE
+
+The bug: both K and V caches go through the same turbo3 quantize (which rotates)
+and dequant (which returns rotated values without inverse rotation).
+
+For K cache: this is correct because Q is also rotated → <R*q, R*k> = <q, k> ✓
+For V cache: this is WRONG because the attention output = attn_weights @ V
+needs to be in ORIGINAL space, not rotated space.
+
+The fix: V cache must NOT be rotated during quantize, or the attention output
+must be inverse-rotated after the V multiplication.
+
+Options:
+1. Skip rotation for V in quantize — only rotate K
+2. Add inverse rotation after attention output: out = R^T @ (attn @ R*V) = attn @ V ✓
+3. Use f16 for V cache (only compress K) — mixed types need support
+
+Option 1 is simplest: in the SET_ROWS kernel, check if this is K or V and
+skip rotation for V. The dequant already skips rotation.
+Problem: the SET_ROWS kernel doesn't know if it's writing K or V.
+
+Option 2 is cleanest: add R^T multiplication to attention output in the graph.
+This is one ggml_mul_mat per layer (same as Q rotation). Cost is negligible.
+
+### Root Cause #1: V cache dequant returns rotated-space values
+Python verified: cosine(input, dequant_output) = 0.02 (garbage)
+After inverse rotation: cosine = 0.987 (correct)
+
+### Root Cause #2: dynamic_cast to llama_kv_cache_context FAILS
+The Qwen 3.5 MoE uses llama_memory_hybrid_context (not llama_kv_cache_context).
+The dynamic_cast returns null, so the V inverse rotation never executes.
+This also means the Q pre-rotation never executed — explaining why the
+chat server seemed to work (no rotation applied = raw quantize/dequant, which
+happens to produce plausible-looking text at low context but garbage perplexity).
+
+### Fix needed
+1. Store turbo rotation tensors in llm_graph_context (not KV cache)
+   OR access them through the hybrid memory interface
+2. Apply V inverse rotation through a non-cast path
+3. Verify Q rotation also executes (it was also using the same cast)
+
+### The "coherent text" mystery explained
+The model produced grammatical text because:
+- Without Q rotation, attention scores are computed in wrong space but still produce
+  some attention pattern (just not the right one)
+- Without V inverse rotation, the output is in rotated space which is orthogonal to
+  the correct space — but each layer compounds the error
+- Short conversations look plausible but perplexity reveals the content is wrong

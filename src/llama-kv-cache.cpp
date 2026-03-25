@@ -224,11 +224,13 @@ llama_kv_cache::llama_kv_cache(
 
         layers.push_back({ il, k, v, k_stream, v_stream, });
 
-        // TurboQuant: create rotation matrix tensor (once, shared across layers)
+        // TurboQuant: create rotation matrix tensors (once, shared across layers)
         if (turbo_rotation == nullptr &&
             (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0)) {
             turbo_rotation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 128);
-            ggml_format_name(turbo_rotation, "turbo_rotation");
+            ggml_format_name(turbo_rotation, "turbo_rotation");  // R^T
+            turbo_rotation_inv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 128);
+            ggml_format_name(turbo_rotation_inv, "turbo_rotation_inv");  // R
         }
     }
 
@@ -275,11 +277,12 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_backend_buffer_clear(buf, 0);
 
-        // Fill turbo rotation matrix AFTER buffer clear (clear zeroes everything)
+        // Fill turbo rotation matrices AFTER buffer clear (clear zeroes everything)
         if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr && !model.hparams.no_alloc) {
             #include "turbo-rotation-data.h"
-            ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_MATRIX, 0, 128 * 128 * sizeof(float));
-            LLAMA_LOG_INFO("%s: TurboQuant rotation matrix initialized (128x128)\n", __func__);
+            ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
+            ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_R, 0, 128 * 128 * sizeof(float));
+            LLAMA_LOG_INFO("%s: TurboQuant rotation matrices initialized (128x128)\n", __func__);
         }
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
@@ -2467,6 +2470,10 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
     return kv->get_turbo_rotation();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
+    return kv->get_turbo_rotation_inv();
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
