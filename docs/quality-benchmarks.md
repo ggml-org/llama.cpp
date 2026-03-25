@@ -232,3 +232,25 @@ The "coherent text" was an illusion from the language model's resilience.
 ### Fix approach
 Need to get rotation tensors through the hybrid memory hierarchy.
 Virtual methods on llama_memory_context_i are the cleanest path.
+
+## FIX: Inverse rotation restored in dequant
+
+### Perplexity (wikitext-2, 512 context, 8 chunks)
+
+| Cache Type | Perplexity | vs f16 | vs q8_0 |
+|------------|------------|--------|---------|
+| f16 | 6.121 | baseline | — |
+| q8_0 | 6.111 | -0.16% | baseline |
+| q4_0 | 6.142 | +0.34% | +0.51% |
+| **turbo3** | **6.194** | **+1.19%** | **+1.36%** |
+
+**turbo3 within 1.4% of q8_0. Quality target MET.**
+
+### Root cause of previous failure
+Pre-rotate-queries never executed because:
+1. Q tensor ne[0]=256 (GQA concatenated heads) vs rotation ne[0]=128
+2. MoE hybrid memory context fails dynamic_cast to llama_kv_cache_context
+
+### Current state
+- Inverse rotation restored in dequant (correct quality, slower speed ~10.7 tok/s)
+- Speed optimization (pre-rotate-queries) needs reimplementation for GQA + hybrid
