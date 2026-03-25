@@ -314,3 +314,23 @@ Everyone else is CPU-only or CUDA. Our Metal kernels are unique.
 |-------|------|-----------------|-------|-------------|
 | MoE 35B | 85.5 tok/s | **62.2 tok/s** | **73%** | **4.9×** |
 | Qwopus 27B | 17.6 tok/s | **15.5 tok/s** | **88%** | **4.9×** |
+
+### 2026-03-25: Block size diagnostic — THE ANSWER
+
+| Cache | Block | Gen tok/s | vs q8_0 |
+|-------|-------|-----------|---------|
+| q8_0 | 32 | 84.1 | 1.00× |
+| q4_0 | 32 | 84.2 | 1.00× |
+| q4_1 | 32 | 84.6 | 1.01× |
+| q5_0 | 32 | 80.6 | 0.96× |
+| turbo3 | 128 | 62.5 | 0.74× |
+| turbo4 | 128 | 42.8 | 0.51× |
+
+CONCLUSION: q4_0 (block 32, 4-bit) runs at 100% of q8_0 speed.
+The 26% gap on turbo3 is ENTIRELY from block size 128.
+The quantization math (centroid lookup) adds zero overhead at block 32.
+
+Next: implement block size 32 variant of turbo3.
+Challenge: rotation operates on head_dim=128, but blocks are 32.
+Solution: quantize 128 elements with rotation, store as 4×32 blocks.
+Dequant reads 32-element blocks without rotation (pre-rotate-queries).
