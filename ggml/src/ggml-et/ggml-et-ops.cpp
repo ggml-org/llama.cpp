@@ -29,6 +29,14 @@ static ggml_et_cpu_compare_config norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config unary_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-4f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config sqr_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -224,6 +232,60 @@ bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     }
 
     ET_PERF_END("SQR", "sqr_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_unary(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for UNARY operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: UNARY operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: UNARY operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    const enum ggml_unary_op uop = ggml_get_unary_op(node);
+    const char* op_name = ggml_unary_op_name(uop);
+
+    ggml_et_unary_params params;
+    params.src0 = *node->src[0];  // F32 input tensor
+    params.dst = *node;           // F32 output tensor
+    params.unary_op = (int32_t)uop;
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (unary_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_UNARY)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for UNARY/%s operation\n", op_name);
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "unary_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &unary_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for UNARY/%s operation\n", op_name);
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("UNARY", "unary_f32", node, "op=%s", op_name);
     return kernel_result;
 }
 

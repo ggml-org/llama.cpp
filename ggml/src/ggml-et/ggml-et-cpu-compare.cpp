@@ -219,6 +219,12 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_SQR:
             ctx->cpu_dst = ggml_sqr(ctx->ggml_ctx, ctx->cpu_src0);
             break;
+        case GGML_OP_UNARY:
+            {
+                enum ggml_unary_op uop = (enum ggml_unary_op) ggml_get_op_params_i32(node, 0);
+                ctx->cpu_dst = ggml_unary(ctx->ggml_ctx, ctx->cpu_src0, uop);
+            }
+            break;
         case GGML_OP_GLU:
             // Extract GLU parameters from op_params (split mode only)
             {

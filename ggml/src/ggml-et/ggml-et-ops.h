@@ -136,6 +136,12 @@ struct ggml_et_sqr_params {
     ggml_tensor dst;      // F32 output tensor
 };
 
+struct ggml_et_unary_params {
+    ggml_tensor src0;     // F32 input tensor
+    ggml_tensor dst;      // F32 output tensor
+    int32_t unary_op;     // ggml_unary_op enum value
+};
+
 struct ggml_et_scale_params {
     ggml_tensor src0;     // F32 input tensor
     ggml_tensor dst;      // F32 output tensor
@@ -144,6 +150,7 @@ struct ggml_et_scale_params {
 };
 
 bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_unary(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_scale(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
