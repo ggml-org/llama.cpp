@@ -1,6 +1,9 @@
 # OpenVINO Backend for llama.cpp
-[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
-This document describes the [OpenVINO backend for llama.cpp](../../src/ggml-openvino), which enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**. The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
+
+> [!NOTE]
+> Performance and memory optimizations, accuracy validation, broader quantization coverage, broader operator and model support are work in progress.
+
+[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge. [OpenVINO backend for llama.cpp](../../src/ggml-openvino) enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**. The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
 
 The OpenVINO backend is implemented in `ggml/src/ggml-openvino` and provides a translation layer for core GGML operations. The OpenVINO backend replaces the standard GGML graph execution path with Intel's OpenVINO inference engine. This approach allows the same GGUF model file to run on Intel CPUs, Intel GPUs (integrated and discrete), and Intel NPUs without changes to the model or the rest of the llama.cpp stack. When a `ggml_cgraph` is dispatched to OpenVINO backend, it:
 
@@ -179,30 +182,72 @@ curl -L https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/L
 
 When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
 
+> [!NOTE]
+> Default context size is set to the model training context, which may be very large. For example, 131072 for Llama 3.2 1B, which may result in lower performance, especially on edge/laptop devices. Use `-c` to limit context size in supported llama.cpp tools for better performance. For example, `-c 512`.
+
 ```bash
 # If device is unset or unavailable, defaults to CPU.
 # If the system has multiple GPUs, use GPU.0 or GPU.1 to explicitly target a specific GPU.
 
 # Linux
 export GGML_OPENVINO_DEVICE=GPU
+# Enable stateful execution with GPU device to avoid known stateless execution failures.
+export GGML_OPENVINO_STATEFUL_EXECUTION=1
 # To run llama-simple:
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
 # To run in chat mode:
-./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -c 1024
+# To run llama-bench, -fa 1 is needed
+GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -fa 1
+
+# NPU: keep context small to avoid failures from very large model context windows.
+export GGML_OPENVINO_DEVICE=NPU
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -c 512
 
 # Windows Command Line
 set GGML_OPENVINO_DEVICE=GPU
+# Enable stateful execution with GPU device to avoid known stateless execution failures.
+set GGML_OPENVINO_STATEFUL_EXECUTION=1
 # Windows PowerShell
 $env:GGML_OPENVINO_DEVICE = "GPU"
+$env:GGML_OPENVINO_STATEFUL_EXECUTION = "1"
 
 # To run llama-simple
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -n 50 "The story of AI is "
 # To run in chat mode:
-build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf"
+build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -c 1024
+# To run llama-bench, -fa 1 is needed
+build\ReleaseOV\bin\llama-bench.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -fa 1
 
+# NPU: keep context small to avoid failures from very large model context windows.
+# Windows Command Line
+set GGML_OPENVINO_DEVICE=NPU
+# Windows PowerShell
+$env:GGML_OPENVINO_DEVICE = "NPU"
+build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -c 512
 ```
 > [!NOTE]
 > On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html) for more details.
+
+### Known Issues and Current Workarounds
+
+- GPU stateless execution is currently affected by a known issue.
+  - Workaround: set `GGML_OPENVINO_STATEFUL_EXECUTION=1` when using GPU device.
+- NPU failures can happen when context size is too large. Recent llama.cpp behavior may resolve context size to the model training context (for example, 131072 for Llama 3.2 1B), which is too large for current NPU usage and can also stress laptop CPU/GPU on larger models. To inspect the selected context size, run `llama-cli` or `llama-server` with `-lv 3`.
+  - Workaround: explicitly set context size, for ex. `-c 1024` for NPU runs. Performance will be better with lower context size.
+- Additional NPU limitations:
+  - Model caching is not yet supported.
+  - `llama-server -np > 1` (multiple parallel sequences) is not supported.
+  - `llama-perplexity` is only supported with `-b 512` or smaller.
+- `--context-shift` with `llama-cli` is currently not supported with OpenVINO backend across CPU, GPU, and NPU devices.
+- Encoder models (embedding, reranking) are not supported with the current OpenVINO backend implementation.
+- `-fa 1` is required when running llama-bench with the OpenVINO backend.
+  - `GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1`
+- `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
+- For Intel GPU, NPU detection in containers, GPU, NPU user-space drivers/libraries must be present inside the image. We will include in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile)
+
+> [!NOTE]
+> The OpenVINO backend is actively under development. Fixes are underway, and this document will continue to be updated as issues are resolved.
 
 
 ### Docker Build
@@ -229,30 +274,41 @@ docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_p
 Run llama.cpp with OpenVINO backend Docker container.
 Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
 
+> [!NOTE]
+> Intel GPU, NPU detection in containers will be included in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile).
+
 ```bash
 #  Run Docker container
-docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
+docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
 
 # With Intel GPU access (iGPU or dGPU)
 docker run --rm -it -v ~/models:/models \
 --device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
-llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
+--env=GGML_OPENVINO_DEVICE=GPU --env=GGML_OPENVINO_STATEFUL_EXECUTION=1 \
+llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
 
 # With Intel NPU access
-docker run --rm -it --env GGML_OPENVINO_DEVICE=NPU -v ~/models:/models \
+docker run --rm -it -v ~/models:/models \
 --device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
-llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
+--env=GGML_OPENVINO_DEVICE=NPU \
+llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
 ```
 
-Run Llama.cpp Server with OpenVINO Backend:
+Run Llama.cpp Server with OpenVINO Backend.
+> [!NOTE]
+> `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
+
 ```bash
 # Run the Server Docker container
-docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf
-
-# In a NEW terminal, test the server with curl
+docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_0.gguf -c 1024
+# Or Using llama-server executable
+./build/ReleaseOV/bin/llama-server -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf --port 8080 -c 1024
 
 # If you are behind a proxy, make sure to set NO_PROXY to avoid proxy for localhost
 export NO_PROXY=localhost,127.0.0.1
+
+# Option 1: Open your browser to http://localhost:8080 to access the web UI for the llama.cpp server.
+# Option 2: In a NEW terminal, test the server with curl
 
 # Test health endpoint
 curl -f http://localhost:8080/health
@@ -295,6 +351,7 @@ The OpenVINO backend can be configured using the following environment variables
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
 export GGML_OPENVINO_DEVICE=GPU
+export GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
 
@@ -302,38 +359,27 @@ export GGML_OPENVINO_DEVICE=GPU
 set GGML_OPENVINO_CACHE_DIR=C:\tmp\ov_cache
 set GGML_OPENVINO_PROFILING=1
 set GGML_OPENVINO_DEVICE=GPU
+set GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 # Windows PowerShell
 $env:GGML_OPENVINO_CACHE_DIR = "C:\tmp\ov_cache"
 $env:GGML_OPENVINO_PROFILING = "1"
 $env:GGML_OPENVINO_DEVICE = "GPU"
+$env:GGML_OPENVINO_STATEFUL_EXECUTION = "1"
 
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -n 50 "The story of AI is "
 
 ```
 
-#### llama-bench
-
-```bash
-# -fa 1 is required when running llama-bench with the OpenVINO backend.
-GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
-```
-
-### NPU Notes
-
-- Model caching is not yet supported
-- Does not support llama-server -np > 1 (multiple parallel sequences)
-- Only supports llama-perplexity -b 512 or smaller
-
 ## Llama.cpp Tools
 
 The following tools work with the OpenVINO backend on CPU, GPU, NPU:
-- llama-simple
-- llama-run
-- llama-cli
-- llama-server
 - llama-bench
+- llama-cli
+- llama-completion
 - llama-perplexity
+- llama-server
+- llama-simple
 
 ## Work in Progress
 
