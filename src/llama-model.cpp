@@ -370,6 +370,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out_impl, false);
+    ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
+    ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer);
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
@@ -2543,9 +2545,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         default: throw std::runtime_error("unsupported model architecture: " + arch_name());
     }
-
-    ml.get_key(LLM_KV_ATTENTION_CAUSAL, hparams.causal_attn, false);
-    ml.get_key(LLM_KV_POOLING_TYPE,     hparams.pooling_type, false);
 
     pimpl->n_bytes = ml.n_bytes;
 
