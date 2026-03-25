@@ -635,6 +635,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_rms_norm(dev_ctx, node);
                 break;
 
+            case GGML_OP_NORM:
+                ggml_et_op_norm(dev_ctx, node);
+                break;
+
             case GGML_OP_SCALE:
                 ggml_et_op_scale(dev_ctx, node);
                 break;
@@ -787,6 +791,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_RMS_NORM:
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
+        case GGML_OP_NORM:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->ne[0] % 16 == 0 &&
