@@ -112,3 +112,17 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 - Codex + roast reviewed WHT implementation: correct, no bugs
 
 ### Next: Start with Approach D (reduce per-call overhead)
+
+### 2026-03-25: simd_broadcast attempt
+- Added simd_broadcast fast path for K and V dequant (nl_k==32 && DK==128)
+- Thread 0 dequantizes, broadcasts 128 floats via simd_broadcast loop
+- **Result: still 2.4 tok/s** — the 128-iteration simd_broadcast loop per cc iteration
+  is itself expensive. 32 cc iterations × 128 broadcasts = 4096 simd_broadcast calls per block.
+- Codex review caught: DK>128 OOB bug (fixed), turbo4 using turbo3 dequant (fixed),
+  uninitialized turbo_buf on non-lane-0 (fixed with zero-init)
+- **Conclusion**: simd_broadcast is wrong tool. Need threadgroup memory instead.
+
+### Next: try threadgroup memory approach
+- Allocate extra threadgroup memory in FATTN_SMEM
+- One thread writes 128 floats to threadgroup, barrier, all threads read
+- This reduces to 1 dequant + 1 barrier per cc iteration instead of 128 broadcasts
