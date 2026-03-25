@@ -423,6 +423,9 @@ static bool parse_bool_value(const std::string & value) {
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
+    // setup log directly from params.verbosity: see tools/cli/cli.cpp
+    common_log_set_verbosity_thold(params.verbosity);
+
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
         for (const auto & arg : opt.args) {
@@ -630,8 +633,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
     }
-
-    common_log_set_verbosity_thold(params.verbosity);
 
     return true;
 }
@@ -3244,6 +3245,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
         [](common_params & params) {
             params.verbosity = INT_MAX;
+            common_log_set_verbosity_thold(INT_MAX);
         }
     ));
     add_opt(common_arg(
@@ -3264,6 +3266,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
+            common_log_set_verbosity_thold(value);
         }
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(
