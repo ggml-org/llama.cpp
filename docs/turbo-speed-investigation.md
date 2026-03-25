@@ -177,3 +177,31 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 - Each quantize does 3200 ops = 716,800 ops per token just for KV cache write
 
 ### Next: profile SET_ROWS path / try no-op quantize test
+
+### 2026-03-25: THE BUG — #include caused CPU fallback!!! 🎉
+- `#include "turbo-wht.h"` in ggml-metal.metal causes Metal JIT to fail
+- The model SILENTLY falls back to CPU for all operations
+- ALL previous benchmarks (2.4 tok/s) were measuring CPU, not Metal GPU
+- **After inlining turbo-wht.h:**
+  - MoE: 2.4 → 10.7 tok/s gen (4.5× improvement, now on Metal)
+  - Qwopus: 2.4 → 5.3 tok/s gen (2.2× improvement)
+  - Prompt speeds: 4× → 60-67 tok/s (MoE), 3.5 → 30 tok/s (Qwopus)
+- Remaining gap vs q8_0: 8× (MoE), 3.3× (Qwopus) — down from fake 35×
+- **Rule: NEVER use #include in ggml-metal.metal — always inline**
+- This is the same bug we hit with turbo-matrices.h earlier and forgot to apply to WHT
+
+### Real benchmarks (proper Metal GPU):
+
+| Model | Cache | Prompt | Gen | Compression | vs q8_0 |
+|-------|-------|--------|-----|-------------|---------|
+| MoE | q8_0 | 222.8 | 85.5 | 2.0× | 1.00× |
+| MoE | turbo3 | 67.3 | 10.7 | 4.9× | 0.13× |
+| Qwopus | q8_0 | 83.1 | 17.6 | 2.0× | 1.00× |
+| Qwopus | turbo3 | 29.8 | 5.3 | 4.9× | 0.30× |
+
+### Remaining optimization targets (ACTUAL, not fake):
+- 8× gap on MoE gen (85.5 vs 10.7)
+- 3.3× gap on Qwopus gen (17.6 vs 5.3)
+- WHT rotation is O(d log d) per block — already optimized
+- The per-chunk redundant call pattern still wastes ~8× on dequant
+- BUT: no-op dequant test was on CPU, need to redo on Metal
