@@ -174,8 +174,44 @@ export class DatabaseService {
 	 *
 	 * @param id - Conversation ID
 	 */
-	static async deleteConversation(id: string): Promise<void> {
+	static async deleteConversation(id: string, options?: { deleteWithForks?: boolean }): Promise<void> {
 		await db.transaction('rw', [db.conversations, db.messages], async () => {
+			if (options?.deleteWithForks) {
+				// Recursively collect all descendant IDs
+				const idsToDelete: string[] = [];
+				const queue = [id];
+
+				while (queue.length > 0) {
+					const parentId = queue.pop()!;
+					const children = await db.conversations
+						.filter((c) => c.forkedFromConversationId === parentId)
+						.toArray();
+
+					for (const child of children) {
+						idsToDelete.push(child.id);
+						queue.push(child.id);
+					}
+				}
+
+				for (const forkId of idsToDelete) {
+					await db.conversations.delete(forkId);
+					await db.messages.where('convId').equals(forkId).delete();
+				}
+			} else {
+				// Reparent direct children to deleted conv's parent
+				const conv = await db.conversations.get(id);
+				const newParent = conv?.forkedFromConversationId;
+				const directChildren = await db.conversations
+					.filter((c) => c.forkedFromConversationId === id)
+					.toArray();
+
+				for (const child of directChildren) {
+					await db.conversations.update(child.id, {
+						forkedFromConversationId: newParent ?? undefined
+					});
+				}
+			}
+
 			await db.conversations.delete(id);
 			await db.messages.where('convId').equals(id).delete();
 		});

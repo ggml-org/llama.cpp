@@ -306,15 +306,45 @@ class ConversationsStore {
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
-	async deleteConversation(convId: string): Promise<void> {
+	async deleteConversation(convId: string, options?: { deleteWithForks?: boolean }): Promise<void> {
 		try {
-			await DatabaseService.deleteConversation(convId);
+			await DatabaseService.deleteConversation(convId, options);
 
-			this.conversations = this.conversations.filter((c) => c.id !== convId);
+			if (options?.deleteWithForks) {
+				// Collect all descendants recursively
+				const idsToRemove = new Set([convId]);
+				const queue = [convId];
+				while (queue.length > 0) {
+					const parentId = queue.pop()!;
+					for (const c of this.conversations) {
+						if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+							idsToRemove.add(c.id);
+							queue.push(c.id);
+						}
+					}
+				}
+				this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
 
-			if (this.activeConversation?.id === convId) {
-				this.clearActiveConversation();
-				await goto(`?new_chat=true#/`);
+				if (this.activeConversation && idsToRemove.has(this.activeConversation.id)) {
+					this.clearActiveConversation();
+					await goto(`?new_chat=true#/`);
+				}
+			} else {
+				// Reparent direct children to deleted conv's parent (or promote to top-level)
+				const deletedConv = this.conversations.find((c) => c.id === convId);
+				const newParent = deletedConv?.forkedFromConversationId;
+				this.conversations = this.conversations
+					.filter((c) => c.id !== convId)
+					.map((c) =>
+						c.forkedFromConversationId === convId
+							? { ...c, forkedFromConversationId: newParent }
+							: c
+					);
+
+				if (this.activeConversation?.id === convId) {
+					this.clearActiveConversation();
+					await goto(`?new_chat=true#/`);
+				}
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);

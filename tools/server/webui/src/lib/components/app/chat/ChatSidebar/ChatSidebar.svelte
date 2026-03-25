@@ -1,16 +1,19 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2 } from '@lucide/svelte';
+	import { Trash2, Pencil } from '@lucide/svelte';
 	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import Label from '$lib/components/ui/label/label.svelte';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import Input from '$lib/components/ui/input/input.svelte';
-	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { conversationsStore, conversations, buildConversationTree } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
+	import DialogChatSettings from '../../dialogs/DialogChatSettings.svelte';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -18,6 +21,7 @@
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
 	let showDeleteDialog = $state(false);
+	let deleteWithForks = $state(false);
 	let showEditDialog = $state(false);
 	let selectedConversation = $state<DatabaseConversation | null>(null);
 	let editedName = $state('');
@@ -35,10 +39,26 @@
 		return conversations();
 	});
 
+	let conversationTree = $derived(buildConversationTree(filteredConversations));
+
+	let selectedConversationHasDescendants = $derived.by(() => {
+		if (!selectedConversation) return false;
+		const allConvs = conversations();
+		const queue = [selectedConversation.id];
+		while (queue.length > 0) {
+			const parentId = queue.pop()!;
+			for (const c of allConvs) {
+				if (c.forkedFromConversationId === parentId) return true;
+			}
+		}
+		return false;
+	});
+
 	async function handleDeleteConversation(id: string) {
 		const conversation = conversations().find((conv) => conv.id === id);
 		if (conversation) {
 			selectedConversation = conversation;
+			deleteWithForks = false;
 			showDeleteDialog = true;
 		}
 	}
@@ -179,35 +199,41 @@
 		showDeleteDialog = false;
 		selectedConversation = null;
 	}}
-/>
-
-<AlertDialog.Root bind:open={showEditDialog}>
-	<AlertDialog.Content>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
-			<AlertDialog.Description>
-				<Input
-					class="mt-4 text-foreground"
-					onkeydown={(e) => {
-						if (e.key === 'Enter') {
-							e.preventDefault();
-							handleConfirmEdit();
-						}
-					}}
-					placeholder="Enter a new name"
-					type="text"
-					bind:value={editedName}
-				/>
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel
-				onclick={() => {
-					showEditDialog = false;
-					selectedConversation = null;
-				}}>Cancel</AlertDialog.Cancel
+>
+	{#if selectedConversationHasDescendants}
+		<div class="flex items-center gap-2 py-2">
+			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
+			<Label for="delete-with-forks" class="text-sm"
+				>Also delete all forked conversations</Label
 			>
-			<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+		</div>
+	{/if}
+</DialogConfirmation>
+
+<DialogConfirmation
+	bind:open={showEditDialog}
+	title="Edit Conversation Name"
+	description=""
+	confirmText="Save"
+	cancelText="Cancel"
+	icon={Pencil}
+	onConfirm={handleConfirmEdit}
+	onCancel={() => {
+		showEditDialog = false;
+		selectedConversation = null;
+	}}
+	onKeydown={(e) => {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			handleConfirmEdit();
+		}
+	}}
+>
+	<Input
+		class="text-foreground"
+		placeholder="Enter a new name"
+		type="text"
+		bind:value={editedName}
+	/>
+</DialogConfirmation>
