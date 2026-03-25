@@ -68,7 +68,7 @@ set_target_properties(mtmd
     PROPERTIES
     PRIVATE_HEADER debug/mtmd-debug.h)
 
-install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
+install(TARGETS mtmd LIBRARY DESTINATION ${LLAMA_LIB_INSTALL_DIR} PUBLIC_HEADER)
 
 if (NOT MSVC)
     # for stb_image.h and miniaudio.h
