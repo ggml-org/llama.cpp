@@ -8576,12 +8576,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 576 }) {
+    for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
-            if (hsk == 320 && hsv != 256) continue; // MLA
+            if (hsk == 320 && hsv != 256) continue; // Mistral4 MLA
 
             for (bool mask : { true, false } ) {
                 for (bool sinks : { true, false } ) {
@@ -8590,7 +8590,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                         for (float logit_softcap : {0.0f, 10.0f}) {
                             if (hsk != 128 && logit_softcap != 0.0f) continue;
                             for (int nh : { 1, 4 }) {
-                                if (nh == 1 && hsk != 320 && hsk != 576) continue; // GLM 4.7 Flash
+                                if (nh == 1 && hsk != 320 && hsk != 576) continue;
                                 for (int nr3 : { 1, 3, }) {
                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
                                     for (int nr2 : { 1, 4, 12, 20, 32 }) {

@@ -590,6 +590,8 @@ void migrate_old_cache_to_hf_cache(const std::string & token, bool offline) {
         return; // -hf is not going to work
     }
 
+    bool warned = false;
+
     for (const auto & entry : fs::directory_iterator(old_cache)) {
         if (!entry.is_regular_file()) {
             continue;
@@ -599,6 +601,19 @@ void migrate_old_cache_to_hf_cache(const std::string & token, bool offline) {
 
         if (owner.empty() || repo.empty()) {
             continue;
+        }
+
+        if (!warned) {
+            warned = true;
+            LOG_WRN("================================================================================\n"
+                    "WARNING: Migrating cache to HuggingFace cache directory\n"
+                    "  Old cache: %s\n"
+                    "  New cache: %s\n"
+                    "This one-time migration moves models previously downloaded with -hf\n"
+                    "from the legacy llama.cpp cache to the standard HuggingFace cache.\n"
+                    "Models downloaded with --model-url are not affected.\n"
+                    "================================================================================\n",
+                    old_cache.string().c_str(), get_cache_directory().string().c_str());
         }
 
         auto repo_id = owner + "/" + repo;
