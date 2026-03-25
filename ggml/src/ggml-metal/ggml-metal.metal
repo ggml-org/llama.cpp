@@ -412,8 +412,19 @@ void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
     dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 
-// ----- TurboQuant quantize/dequantize (simplified: no rotation, scale+quantize) -----
-// TODO: add rotation matrix support via custom kernel for full TurboQuant quality
+// ----- TurboQuant quantize/dequantize with full rotation (arXiv 2504.19874) -----
+#include "turbo-matrices.h"  // Pre-computed rotation and QJL matrices (256KB constant memory)
+
+// Matrix-vector multiply helper: y = M[row_offset:row_offset+128, :] @ x
+// M is 128×128 row-major constant array
+static float turbo_matvec_element(constant float * M, thread float * x, int row) {
+    float sum = 0.0f;
+    constant float * row_ptr = M + row * 128;
+    for (int j = 0; j < 128; j++) {
+        sum += row_ptr[j] * x[j];
+    }
+    return sum;
+}
 
 // 2-bit centroids for d=128 (scaled by 1/sqrt(128))
 constant float turbo_centroids_2bit[4] = { -0.133462f, -0.039994f, 0.039994f, 0.133462f };
@@ -429,74 +440,96 @@ constant float turbo_mid_3bit[7] = { -0.154259f, -0.091775f, -0.043589f, 0.0f, 0
 
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
 #pragma METAL fp math_mode(safe)
-    // Step 1: compute norm
+    // Step 1: compute norm and normalize
     float norm_sq = 0.0f;
     for (int j = 0; j < QK_TURBO3; j++) {
         norm_sq += src[j] * src[j];
     }
     float norm = sqrt(norm_sq);
     float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
-
     dst.norm = half(norm);
 
-    // Step 2: normalize and quantize to 2-bit (nearest centroid)
-    // Without rotation, we do direct scale+quantize on normalized values
-    float residual_sq = 0.0f;
+    // Normalize to unit vector
+    float normalized[128];
+    for (int j = 0; j < 128; j++) {
+        normalized[j] = src[j] * inv_norm;
+    }
 
-    for (int j = 0; j < QK_TURBO3; j++) {
-        float val = src[j] * inv_norm;  // normalized value
+    // Step 2: rotate (y = Π @ normalized)
+    float rotated[128];
+    for (int i = 0; i < 128; i++) {
+        rotated[i] = turbo_matvec_element(turbo_rotation_mtl, normalized, i);
+    }
 
-        // Find nearest 2-bit centroid via midpoints
+    // Step 3: quantize rotated coordinates to 2-bit + compute residual
+    // Zero output arrays
+    for (int j = 0; j < QK_TURBO3 / 4; j++) dst.qs[j] = 0;
+    for (int j = 0; j < QK_TURBO3 / 8; j++) dst.signs[j] = 0;
+
+    uint8_t indices[128];
+    float reconstructed[128];
+    for (int j = 0; j < 128; j++) {
+        float val = rotated[j];
         uint8_t idx;
         if      (val < turbo_mid_2bit[0]) idx = 0;
         else if (val < turbo_mid_2bit[1]) idx = 1;
         else if (val < turbo_mid_2bit[2]) idx = 2;
         else                              idx = 3;
+        indices[j] = idx;
+        reconstructed[j] = turbo_centroids_2bit[idx];
 
-        // Compute residual for QJL
-        float recon = turbo_centroids_2bit[idx];
-        float res = val - recon;
-        residual_sq += res * res;
-
-        // Pack 2-bit index: 4 indices per byte
-        int byte_idx = j / 4;
-        int bit_pos  = (j % 4) * 2;
-        if (j % 4 == 0) dst.qs[byte_idx] = 0;
-        dst.qs[byte_idx] |= (idx & 0x3) << bit_pos;
-
-        // Pack QJL sign: positive residual → 1, negative → 0
-        int sign_byte = j / 8;
-        int sign_bit  = j % 8;
-        if (j % 8 == 0) dst.signs[sign_byte] = 0;
-        if (res >= 0.0f) {
-            dst.signs[sign_byte] |= (1 << sign_bit);
-        }
+        // Pack 2-bit index
+        dst.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
     }
 
-    dst.rnorm = half(sqrt(residual_sq));
+    // Step 4: inverse rotate reconstruction, compute residual in original space
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, reconstructed, i);
+    }
+
+    float residual[128];
+    float rnorm_sq = 0.0f;
+    for (int j = 0; j < 128; j++) {
+        residual[j] = normalized[j] - mse_recon[j];
+        rnorm_sq += residual[j] * residual[j];
+    }
+    dst.rnorm = half(sqrt(rnorm_sq));
+
+    // Step 5: QJL signs on residual (sign of S @ residual)
+    for (int i = 0; i < 128; i++) {
+        float projected = turbo_matvec_element(turbo_qjl_mtl, residual, i);
+        if (projected >= 0.0f) {
+            dst.signs[i / 8] |= (1 << (i % 8));
+        }
+    }
 }
 
 void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 #pragma METAL fp math_mode(safe)
+    // Step 1: norm + normalize
     float norm_sq = 0.0f;
-    for (int j = 0; j < QK_TURBO4; j++) {
-        norm_sq += src[j] * src[j];
-    }
+    for (int j = 0; j < 128; j++) norm_sq += src[j] * src[j];
     float norm = sqrt(norm_sq);
     float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
-
     dst.norm = half(norm);
 
-    // Zero output arrays
+    float normalized[128];
+    for (int j = 0; j < 128; j++) normalized[j] = src[j] * inv_norm;
+
+    // Step 2: rotate
+    float rotated[128];
+    for (int i = 0; i < 128; i++) {
+        rotated[i] = turbo_matvec_element(turbo_rotation_mtl, normalized, i);
+    }
+
+    // Step 3: 3-bit quantization
     for (int j = 0; j < QK_TURBO4 * 3 / 8; j++) dst.qs[j] = 0;
     for (int j = 0; j < QK_TURBO4 / 8; j++) dst.signs[j] = 0;
 
-    float residual_sq = 0.0f;
-
-    for (int j = 0; j < QK_TURBO4; j++) {
-        float val = src[j] * inv_norm;
-
-        // Find nearest 3-bit centroid
+    float reconstructed[128];
+    for (int j = 0; j < 128; j++) {
+        float val = rotated[j];
         uint8_t idx;
         if      (val < turbo_mid_3bit[0]) idx = 0;
         else if (val < turbo_mid_3bit[1]) idx = 1;
@@ -506,55 +539,77 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
         else if (val < turbo_mid_3bit[5]) idx = 5;
         else if (val < turbo_mid_3bit[6]) idx = 6;
         else                              idx = 7;
+        reconstructed[j] = turbo_centroids_3bit[idx];
 
-        float recon = turbo_centroids_3bit[idx];
-        float res = val - recon;
-        residual_sq += res * res;
-
-        // Pack 3-bit index (may span byte boundary)
+        // Pack 3-bit
         int bit_offset = j * 3;
-        int byte_idx   = bit_offset / 8;
-        int bit_pos    = bit_offset % 8;
+        int byte_idx = bit_offset / 8;
+        int bit_pos = bit_offset % 8;
         dst.qs[byte_idx] |= (uint8_t)((idx & 0x7) << bit_pos);
         if (bit_pos > 5 && byte_idx + 1 < QK_TURBO4 * 3 / 8) {
             dst.qs[byte_idx + 1] |= (uint8_t)((idx & 0x7) >> (8 - bit_pos));
         }
-
-        // QJL sign
-        if (res >= 0.0f) {
-            dst.signs[j / 8] |= (1 << (j % 8));
-        }
     }
 
-    dst.rnorm = half(sqrt(residual_sq));
+    // Step 4: inverse rotation + residual
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, reconstructed, i);
+    }
+    float residual[128];
+    float rnorm_sq = 0.0f;
+    for (int j = 0; j < 128; j++) {
+        residual[j] = normalized[j] - mse_recon[j];
+        rnorm_sq += residual[j] * residual[j];
+    }
+    dst.rnorm = half(sqrt(rnorm_sq));
+
+    // Step 5: QJL signs
+    for (int i = 0; i < 128; i++) {
+        float projected = turbo_matvec_element(turbo_qjl_mtl, residual, i);
+        if (projected >= 0.0f) {
+            dst.signs[i / 8] |= (1 << (i % 8));
+        }
+    }
 }
 
-// Dequantize turbo3: 2-bit indices + QJL signs → float
+// Dequantize turbo3: full rotation-based dequantization
+// Note: must reconstruct all 128 elements to apply inverse rotation,
+// then return requested chunk. This is 8× work per chunk but correct.
 template <typename type4x4>
 void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type4x4 & reg) {
     const float norm  = float(xb->norm);
     const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / float(QK_TURBO3) * rnorm;  // sqrt(pi/2) / d * rnorm
+    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
 
-    // il selects which 16-element chunk (0..7 for 128 elements / 16 per type4x4)
+    // Reconstruct rotated-space centroids (all 128)
+    float rotated_recon[128];
+    for (int j = 0; j < 128; j++) {
+        uint8_t idx = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        rotated_recon[j] = turbo_centroids_2bit[idx];
+    }
+
+    // Inverse rotation: Π^T @ rotated_recon → original space
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, rotated_recon, i);
+    }
+
+    // QJL correction: S^T @ signs * scale
+    float qjl_recon[128];
+    float signs_f[128];
+    for (int j = 0; j < 128; j++) {
+        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+    }
+    for (int i = 0; i < 128; i++) {
+        qjl_recon[i] = turbo_matvec_element(turbo_qjl_t_mtl, signs_f, i) * qjl_scale;
+    }
+
+    // Return requested 16-element chunk: (mse + qjl) * norm
     const int offset = il * 16;
-
     float4x4 reg_f;
     for (int i = 0; i < 16; i++) {
-        int j = offset + i;
-        // Unpack 2-bit index
-        int byte_idx = j / 4;
-        int bit_pos  = (j % 4) * 2;
-        uint8_t idx = (xb->qs[byte_idx] >> bit_pos) & 0x3;
-
-        // Unpack QJL sign
-        int sign_byte = j / 8;
-        int sign_bit  = j % 8;
-        float sign = (xb->signs[sign_byte] & (1 << sign_bit)) ? 1.0f : -1.0f;
-
-        // Reconstruct: (centroid + qjl_correction) * norm
-        float val = (turbo_centroids_2bit[idx] + sign * qjl_scale) * norm;
-        reg_f[i/4][i%4] = val;
+        reg_f[i/4][i%4] = (mse_recon[offset + i] + qjl_recon[offset + i]) * norm;
     }
     reg = (type4x4) reg_f;
 }
@@ -563,51 +618,76 @@ template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
     const float norm  = float(xb->norm);
     const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / float(QK_TURBO3) * rnorm;
+    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
+
+    // Full reconstruction (must do all 128 for rotation)
+    float rotated_recon[128];
+    for (int j = 0; j < 128; j++) {
+        uint8_t idx = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        rotated_recon[j] = turbo_centroids_2bit[idx];
+    }
+
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, rotated_recon, i);
+    }
+
+    float signs_f[128];
+    for (int j = 0; j < 128; j++) {
+        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+    }
+    float qjl_recon[128];
+    for (int i = 0; i < 128; i++) {
+        qjl_recon[i] = turbo_matvec_element(turbo_qjl_t_mtl, signs_f, i) * qjl_scale;
+    }
 
     const int offset = il * 4;
-
     for (int i = 0; i < 4; i++) {
-        int j = offset + i;
-        int byte_idx = j / 4;
-        int bit_pos  = (j % 4) * 2;
-        uint8_t idx = (xb->qs[byte_idx] >> bit_pos) & 0x3;
-
-        int sign_byte = j / 8;
-        int sign_bit  = j % 8;
-        float sign = (xb->signs[sign_byte] & (1 << sign_bit)) ? 1.0f : -1.0f;
-
-        reg[i] = (turbo_centroids_2bit[idx] + sign * qjl_scale) * norm;
+        reg[i] = (mse_recon[offset + i] + qjl_recon[offset + i]) * norm;
     }
 }
 
-// Dequantize turbo4: 3-bit indices + QJL signs → float
+// Dequantize turbo4: full rotation-based
 template <typename type4x4>
 void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type4x4 & reg) {
     const float norm  = float(xb->norm);
     const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / float(QK_TURBO4) * rnorm;
+    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
 
-    const int offset = il * 16;
-
-    float4x4 reg_f;
-    for (int i = 0; i < 16; i++) {
-        int j = offset + i;
-        // Unpack 3-bit index
+    // Unpack all 128 3-bit indices → centroids
+    float rotated_recon[128];
+    for (int j = 0; j < 128; j++) {
         int bit_offset = j * 3;
-        int byte_idx   = bit_offset / 8;
-        int bit_pos    = bit_offset % 8;
+        int byte_idx = bit_offset / 8;
+        int bit_pos = bit_offset % 8;
         uint16_t raw = (uint16_t)xb->qs[byte_idx];
         if (byte_idx + 1 < QK_TURBO4 * 3 / 8) {
             raw |= (uint16_t)xb->qs[byte_idx + 1] << 8;
         }
         uint8_t idx = (uint8_t)((raw >> bit_pos) & 0x7);
+        rotated_recon[j] = turbo_centroids_3bit[idx];
+    }
 
-        int sign_byte = j / 8;
-        int sign_bit  = j % 8;
-        float sign = (xb->signs[sign_byte] & (1 << sign_bit)) ? 1.0f : -1.0f;
+    // Inverse rotation
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, rotated_recon, i);
+    }
 
-        reg_f[i/4][i%4] = (turbo_centroids_3bit[idx] + sign * qjl_scale) * norm;
+    // QJL correction
+    float signs_f[128];
+    for (int j = 0; j < 128; j++) {
+        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+    }
+    float qjl_recon[128];
+    for (int i = 0; i < 128; i++) {
+        qjl_recon[i] = turbo_matvec_element(turbo_qjl_t_mtl, signs_f, i) * qjl_scale;
+    }
+
+    const int offset = il * 16;
+    float4x4 reg_f;
+    for (int i = 0; i < 16; i++) {
+        reg_f[i/4][i%4] = (mse_recon[offset + i] + qjl_recon[offset + i]) * norm;
     }
     reg = (type4x4) reg_f;
 }
@@ -616,26 +696,38 @@ template <typename type4>
 void dequantize_turbo4_0_t4(device const block_turbo4_0 * xb, short il, thread type4 & reg) {
     const float norm  = float(xb->norm);
     const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / float(QK_TURBO4) * rnorm;
+    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
 
-    const int offset = il * 4;
-
-    for (int i = 0; i < 4; i++) {
-        int j = offset + i;
+    float rotated_recon[128];
+    for (int j = 0; j < 128; j++) {
         int bit_offset = j * 3;
-        int byte_idx   = bit_offset / 8;
-        int bit_pos    = bit_offset % 8;
+        int byte_idx = bit_offset / 8;
+        int bit_pos = bit_offset % 8;
         uint16_t raw = (uint16_t)xb->qs[byte_idx];
         if (byte_idx + 1 < QK_TURBO4 * 3 / 8) {
             raw |= (uint16_t)xb->qs[byte_idx + 1] << 8;
         }
         uint8_t idx = (uint8_t)((raw >> bit_pos) & 0x7);
+        rotated_recon[j] = turbo_centroids_3bit[idx];
+    }
 
-        int sign_byte = j / 8;
-        int sign_bit  = j % 8;
-        float sign = (xb->signs[sign_byte] & (1 << sign_bit)) ? 1.0f : -1.0f;
+    float mse_recon[128];
+    for (int i = 0; i < 128; i++) {
+        mse_recon[i] = turbo_matvec_element(turbo_rotation_t_mtl, rotated_recon, i);
+    }
 
-        reg[i] = (turbo_centroids_3bit[idx] + sign * qjl_scale) * norm;
+    float signs_f[128];
+    for (int j = 0; j < 128; j++) {
+        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+    }
+    float qjl_recon[128];
+    for (int i = 0; i < 128; i++) {
+        qjl_recon[i] = turbo_matvec_element(turbo_qjl_t_mtl, signs_f, i) * qjl_scale;
+    }
+
+    const int offset = il * 4;
+    for (int i = 0; i < 4; i++) {
+        reg[i] = (mse_recon[offset + i] + qjl_recon[offset + i]) * norm;
     }
 }
 
