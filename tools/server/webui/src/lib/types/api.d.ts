@@ -54,7 +54,7 @@ export interface ApiChatMessageData {
  * Model status object from /models endpoint
  */
 export interface ApiModelStatus {
-	/** Status value: loaded, unloaded, loading, failed */
+	/** Status value: loaded, unloaded, loading, sleeping, failed */
 	value: ServerModelStatus;
 	/** Command line arguments used when loading (only for loaded models) */
 	args?: string[];

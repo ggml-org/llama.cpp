@@ -46,7 +46,10 @@
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
-	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
+	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
+	let isLoaded = $derived(
+		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
+	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 </script>
 
@@ -85,17 +88,17 @@
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={HeartOff}
-					tooltip="Remove from favourites"
+					tooltip="Remove from favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{:else}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={Heart}
-					tooltip="Add to favourites"
+					tooltip="Add to favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{/if}
 
@@ -126,6 +129,23 @@
 						tooltip="Retry loading model"
 						class="h-3 w-3 text-red-500 hover:text-foreground"
 						onclick={() => modelsStore.loadModel(option.model)}
+					/>
+				</div>
+			</div>
+		{:else if isSleeping}
+			<div class="flex w-4 items-center justify-center">
+				<span class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden"></span>
+
+				<div class="hidden group-hover:flex">
+					<ActionIcon
+						iconSize="h-2.5 w-2.5"
+						icon={PowerOff}
+						tooltip="Unload model"
+						class="h-3 w-3 text-red-500 hover:text-red-600"
+						onclick={(e) => {
+							e?.stopPropagation();
+							modelsStore.unloadModel(option.model);
+						}}
 					/>
 				</div>
 			</div>

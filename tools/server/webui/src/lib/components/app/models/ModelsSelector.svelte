@@ -77,7 +77,7 @@
 	let filteredOptions = $derived(filterModelOptions(options, searchTerm));
 
 	let groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favouriteModelIds, (m) =>
+		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
 			modelsStore.isModelLoaded(m)
 		)
 	);
@@ -353,7 +353,7 @@
 								{@const { option, flatIndex } = item}
 								{@const isSelected = currentModel === option.model || activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
-								{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
+								{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 								<ModelsSelectorOption
 									{option}
