@@ -583,24 +583,45 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 
 // turbo3 dequant — full block dequantize with inverse rotation
 // Must process all 128 elements to apply WHT inverse rotation
+// Half-precision WHT for faster dequant. Centroids fit in fp16 (max |val| = 0.19).
+// The WHT butterfly add/sub preserves range within fp16 dynamic range.
+static void turbo_fwht_128_half(thread half * x) {
+    for (int h = 1; h < 128; h *= 2) {
+        for (int i = 0; i < 128; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                half a = x[j];
+                half b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+    const half inv_sqrt_128 = half(0.08838834764831845f);
+    for (int i = 0; i < 128; i++) {
+        x[i] *= inv_sqrt_128;
+    }
+}
+
 static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, thread float * cache) {
     const float norm = float(xb->norm);
 
-    // Unpack 3-bit indices → centroids (in rotated space)
-    float recon[128];
+    // Unpack 3-bit indices → centroids in half precision
+    half recon[128];
     for (int j = 0; j < QK_TURBO3; j++) {
         uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
         uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
         uint8_t idx  = low2 | (hi1 << 2);
-        recon[j] = turbo_centroids_3bit[idx];
+        recon[j] = half(turbo_centroids_3bit[idx]);
     }
 
-    // Inverse WHT rotation: from rotated space back to original
-    turbo_rotate_inverse(recon, turbo_wht_signs1, turbo_wht_signs2);
+    // Inverse rotation in fp16: signs2 → FWHT → signs1
+    for (int i = 0; i < 128; i++) recon[i] *= half(turbo_wht_signs2[i]);
+    turbo_fwht_128_half(recon);
+    for (int i = 0; i < 128; i++) recon[i] *= half(turbo_wht_signs1[i]);
 
-    // Scale by norm to get back to original magnitude
+    // Convert to fp32 and scale by norm
     for (int j = 0; j < QK_TURBO3; j++) {
-        cache[j] = recon[j] * norm;
+        cache[j] = float(recon[j]) * norm;
     }
 }
 
@@ -616,14 +637,63 @@ void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type
     reg = (type4x4) reg_f;
 }
 
+// Cooperative SIMD dequant with fp16 WHT for flash attention vec kernel.
+// All 32 SIMD lanes access the same block. Lane `il` (0..31) gets elements [il*4, il*4+3].
+// Each lane unpacks only its 4 centroids, then the WHT butterfly runs across lanes
+// via simd_shuffle in half precision.
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
-    float cache[128];
-    turbo3_dequantize_full_block(xb, cache);
-    const int offset = il * 4;
-    for (int i = 0; i < 4; i++) {
-        reg[i] = cache[offset + i];
+    const float norm = float(xb->norm);
+    const int base = il * 4;
+
+    // Step 1: Each lane unpacks only its own 4 centroid values in fp16
+    half val[4];
+    for (int li = 0; li < 4; li++) {
+        int j = base + li;
+        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
+        uint8_t idx  = low2 | (hi1 << 2);
+        val[li] = half(turbo_centroids_3bit[idx]);
     }
+
+    // Step 2: Apply signs2 in fp16
+    for (int li = 0; li < 4; li++) {
+        val[li] *= half(turbo_wht_signs2[base + li]);
+    }
+
+    // Step 3: FWHT butterfly across SIMD lanes in fp16
+    // h=1,2: local
+    {
+        half a0 = val[0], a1 = val[1], a2 = val[2], a3 = val[3];
+        val[0] = a0 + a1; val[1] = a0 - a1;
+        val[2] = a2 + a3; val[3] = a2 - a3;
+    }
+    {
+        half a0 = val[0], a1 = val[1], a2 = val[2], a3 = val[3];
+        val[0] = a0 + a2; val[2] = a0 - a2;
+        val[1] = a1 + a3; val[3] = a1 - a3;
+    }
+
+    // h=4..64: SIMD shuffle between lanes
+    for (int k = 2; k < 7; k++) {
+        int thread_shift = 1 << (k - 2);
+        ushort partner = il ^ thread_shift;
+        bool is_upper = (il >> (k - 2)) & 1;
+
+        for (int li = 0; li < 4; li++) {
+            half partner_val = simd_shuffle(val[li], partner);
+            val[li] = is_upper ? (partner_val - val[li]) : (val[li] + partner_val);
+        }
+    }
+
+    // Step 4: signs1 + normalize + scale (convert to fp32 for output)
+    const half inv_sqrt_128 = half(0.08838834764831845f);
+    float out[4];
+    for (int li = 0; li < 4; li++) {
+        out[li] = float(val[li] * inv_sqrt_128 * half(turbo_wht_signs1[base + li])) * norm;
+    }
+
+    reg = type4(out[0], out[1], out[2], out[3]);
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----

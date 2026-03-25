@@ -165,9 +165,9 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
-    // TurboQuant: get rotation matrices
-    // turbo_rotation = R^T (for Q forward rotation via ggml_mul_mat)
-    // turbo_rotation_inv = R (for output inverse rotation via ggml_mul_mat)
+    // TurboQuant: get rotation matrices (stored as row-major C arrays)
+    // turbo_rotation = R (forward rotation, for Q pre-rotate-queries)
+    // turbo_rotation_inv = R^T = R^{-1} (inverse rotation, for V output un-rotation)
     ggml_tensor * get_turbo_rotation() const { return turbo_rotation; }
     ggml_tensor * get_turbo_rotation_inv() const { return turbo_rotation_inv; }
 
@@ -276,9 +276,9 @@ private:
 
     std::vector<kv_layer> layers;
 
-    // TurboQuant rotation matrices (128×128)
-    ggml_tensor * turbo_rotation = nullptr;      // R^T (for Q forward rotation)
-    ggml_tensor * turbo_rotation_inv = nullptr;   // R (for output inverse rotation)
+    // TurboQuant rotation matrices (128x128, row-major stored)
+    ggml_tensor * turbo_rotation = nullptr;      // R (forward rotation)
+    ggml_tensor * turbo_rotation_inv = nullptr;   // R^T = R^{-1} (inverse rotation)
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;

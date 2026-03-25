@@ -252,8 +252,36 @@ Pre-rotate-queries never executed because:
 2. MoE hybrid memory context fails dynamic_cast to llama_kv_cache_context
 
 ### Current state
-- Inverse rotation restored in dequant (correct quality, slower speed ~10.7 tok/s)
-- Speed optimization (pre-rotate-queries) needs reimplementation for GQA + hybrid
+- Inverse rotation restored in dequant with fp16 WHT butterfly (correct quality, faster)
+- Pre-rotate-queries abandoned: WHT and RoPE don't commute (Gemini 3 Pro insight)
+- Speed optimized via fp16 WHT + SIMD cooperative dequant
+
+## Top-of-Tree Quality and Speed (2026-03-25)
+
+Model: Qwen3.5-35B-A3B-Q8_0 | Hardware: Apple M5 Max 128GB | Flash Attention ON
+
+### Quality (wikitext-2, 512 context, 8 chunks)
+
+| Cache Type | Bits/val | Compression | Perplexity | vs q8_0 |
+|------------|----------|-------------|------------|---------|
+| f16 | 16 | 1.0x | 6.121 | -0.16% |
+| q8_0 | 8 | 2.0x | 6.111 | baseline |
+| q4_0 | 4 | 4.0x | 6.142 | +0.51% |
+| **turbo3** | **3.25** | **4.9x** | **6.195** | **+1.4%** |
+
+### Speed (wikitext-2, 512 context, 32 chunks prefill)
+
+| Cache Type | Prefill tok/s | vs q8_0 | Notes |
+|------------|--------------|---------|-------|
+| q8_0 | 2694 | 1.00x | baseline |
+| turbo3 (no rot) | 1577 | 0.59x | rotation stripped (wrong quality) |
+| turbo3 (fp32 WHT) | 739 | 0.27x | old, before fp16 optimization |
+| **turbo3 (fp16 WHT)** | **1074** | **0.40x** | **current top-of-tree** |
+
+### Summary
+- **4.9x compression, 1.4% quality loss, 40% of q8_0 prefill speed**
+- fp16 WHT gave 45% speedup over fp32 WHT
+- Remaining speed gap: 2.51x vs q8_0 (from redundant full-block dequant in non-vec FA path)
 
 ## Current State Summary (after quality fix)
 

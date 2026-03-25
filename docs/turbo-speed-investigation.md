@@ -363,3 +363,38 @@ Codex post-commit review found 3 bugs (filed #29):
 | q8_0 baseline | 85.5 | 100% |
 
 **32× total improvement. 4.6× compression at 91-97% speed.**
+
+## Pre-Rotate-Queries Investigation (2026-03-25)
+
+Attempted to move WHT inverse rotation from dequant to graph-level ops. Goal: eliminate per-block O(128) rotation, reclaiming speed from ~10.7 to ~77 tok/s.
+
+**Result: FAILED.** Graph-side rotation gives PPL 23.5 vs dequant-side 6.19. Root cause unknown despite extensive debugging. See `docs/pre-rotate-queries-investigation.md` for full test matrix.
+
+**Key findings:**
+- ggml_mul_mat(A, x) with row-major stored A gives A @ x (verified with 2x2 test)
+- Both Q rotation and V inverse work mechanically (verified via isolation tests)
+- Rotation matrices verified correct (R^T @ R = I, matches Metal WHT signs)
+- Model head_dim = 256 with 128-element rotation groups (2 groups per head)
+- Codex caught: `clear(true)` zeros rotation tensors without reinit (fixed)
+- Codex caught: header comments had wrong matrix orientation (fixed)
+
+**Current state:** Dequant inverse rotation restored. PPL = 6.194. Speed = ~10.7 tok/s.
+
+**Root cause found (Gemini 3 Pro):** WHT and RoPE don't commute. KV stores WHT(RoPE(K)) but graph rotation gives RoPE(WHT(Q)). Fix: apply WHT after RoPE inside attention layer, not in build_attn_mha.
+
+## FP16 WHT Optimization (2026-03-25)
+
+Switched WHT inverse rotation from fp32 to fp16 (Metal native half precision). Centroids fit in fp16 (max |val| = 0.19). Butterfly add/sub stays within fp16 range.
+
+Also implemented cooperative SIMD dequant for flash_attn_ext_vec (t4) path: each of 32 SIMD lanes unpacks only its 4 elements, then WHT butterfly runs across lanes via simd_shuffle.
+
+### Prefill Speed Results (Qwen3.5-35B-A3B, wikitext-2, 32 chunks)
+
+| Config | Prefill tok/s | vs q8_0 | PPL |
+|--------|-------------|---------|-----|
+| q8_0 baseline | 2694 | 1.00x | 5.41 |
+| turbo3 no rotation | 1577 | 0.59x | - |
+| turbo3 fp32 WHT (old) | 739 | 0.27x | 5.46 |
+| **turbo3 fp16 WHT** | **1074** | **0.40x** | **5.47** |
+
+**45% speedup from fp16 WHT.** Gap to q8_0 narrowed from 3.65x to 2.51x. PPL within 0.06 of baseline.
