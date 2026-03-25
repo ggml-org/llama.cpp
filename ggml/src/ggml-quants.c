@@ -2336,6 +2336,112 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ====================== TurboQuant 3.5-bit (WHT + codebook + QJL residual)
+
+static const float tq3_centroids[4] = { -1.510f, -0.4528f, +0.4528f, +1.510f };
+
+static const int8_t tq3_signs[32] = {
+    +1,-1,+1,+1,-1,-1,+1,-1, +1,+1,-1,+1,-1,+1,-1,-1,
+    +1,-1,-1,+1,+1,-1,+1,-1, -1,+1,+1,+1,-1,-1,+1,-1
+};
+
+static const float TQ3_INV_SQRT_32 = 0.17677669529663688f; // 1/sqrt(32)
+
+static void tq3_wht32_forward(float * x) {
+    // 1. Apply sign preconditioning
+    for (int j = 0; j < 32; j++) x[j] *= tq3_signs[j];
+    // 2. Five butterfly stages
+    for (int step = 1; step < 32; step <<= 1)
+        for (int i = 0; i < 32; i += step * 2)
+            for (int j = i; j < i + step; j++) {
+                float a = x[j], b = x[j + step];
+                x[j] = a + b; x[j + step] = a - b;
+            }
+    // 3. Normalize
+    for (int j = 0; j < 32; j++) x[j] *= TQ3_INV_SQRT_32;
+}
+
+static void tq3_wht32_inverse(float * x) {
+    // 1. Same butterfly stages (WHT is self-adjoint)
+    for (int step = 1; step < 32; step <<= 1)
+        for (int i = 0; i < 32; i += step * 2)
+            for (int j = i; j < i + step; j++) {
+                float a = x[j], b = x[j + step];
+                x[j] = a + b; x[j + step] = a - b;
+            }
+    // 2. Normalize AND undo signs (signs AFTER butterflies!)
+    for (int j = 0; j < 32; j++) x[j] *= TQ3_INV_SQRT_32 * tq3_signs[j];
+}
+
+void quantize_row_tq3_0_ref(const float * GGML_RESTRICT x, block_tq3_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int nb = k / QK_TQ3_0;
+
+    for (int i = 0; i < nb; i++) {
+        float rotated[32];
+        for (int j = 0; j < 32; j++) rotated[j] = x[i * 32 + j];
+
+        tq3_wht32_forward(rotated);
+
+        float amax = 0.0f;
+        for (int j = 0; j < 32; j++) {
+            float av = fabsf(rotated[j]);
+            if (av > amax) amax = av;
+        }
+
+        const float d = amax / 1.510f;
+        y[i].gamma = GGML_FP32_TO_FP16(d);
+
+        memset(y[i].qs, 0, 8);
+        memset(y[i].qr, 0, 4);
+
+        const float id = (d > 0.0f) ? 1.0f / d : 0.0f;
+
+        for (int j = 0; j < 32; j++) {
+            float xn = rotated[j] * id;
+
+            uint8_t idx;
+            if      (xn < -0.9814f) idx = 0;
+            else if (xn < 0.0f)     idx = 1;
+            else if (xn < 0.9814f)  idx = 2;
+            else                     idx = 3;
+
+            y[i].qs[j / 4] |= (idx << (2 * (j % 4)));
+
+            float residual = rotated[j] - d * tq3_centroids[idx];
+            if (residual >= 0.0f) {
+                y[i].qr[j / 8] |= (1 << (j % 8));
+            }
+        }
+    }
+}
+
+size_t quantize_tq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_0, n_per_row);
+    quantize_row_tq3_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+void dequantize_row_tq3_0(const block_tq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int nb = k / QK_TQ3_0;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].gamma);
+
+        float rotated[32];
+        for (int j = 0; j < 32; j++) {
+            uint8_t idx = (x[i].qs[j / 4] >> (2 * (j % 4))) & 0x03;
+            rotated[j] = d * tq3_centroids[idx];
+        }
+
+        tq3_wht32_inverse(rotated);
+
+        for (int j = 0; j < 32; j++) y[i * 32 + j] = rotated[j];
+    }
+}
+
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
