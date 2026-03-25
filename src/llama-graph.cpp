@@ -1950,6 +1950,20 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
+    // TurboQuant pre-rotate-queries: rotate Q after reshape so ne[0]=head_dim=128
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+        auto * kv_ctx = dynamic_cast<const llama_kv_cache_context *>(mctx);
+        if (kv_ctx) {
+            ggml_tensor * turbo_rot = kv_ctx->get_turbo_rotation();
+            if (turbo_rot != nullptr) {
+                // q shape after permute: (head_dim=128, n_tokens, n_head, n_stream)
+                // turbo_rot shape: (128, 128) — stored as R^T
+                // ggml_mul_mat(R_T, q) = R_T^T @ q = R @ q (forward rotation)
+                q = ggml_mul_mat(ctx0, turbo_rot, q);
+            }
+        }
+    }
+
     ggml_tensor * cur;
 
     const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
@@ -2218,6 +2232,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    // TurboQuant: pass rotation matrix to build_attn_mha for pre-rotate-queries
+    // Can't rotate here because q shape is (n_embd_k_gqa, n_tokens) — heads concatenated
+    // The rotation needs to happen inside build_attn_mha after reshape to per-head layout
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);

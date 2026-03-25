@@ -223,6 +223,13 @@ llama_kv_cache::llama_kv_cache(
         map_layer_ids[il] = layers.size();
 
         layers.push_back({ il, k, v, k_stream, v_stream, });
+
+        // TurboQuant: create rotation matrix tensor (once, shared across layers)
+        if (turbo_rotation == nullptr &&
+            (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0)) {
+            turbo_rotation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 128);
+            ggml_format_name(turbo_rotation, "turbo_rotation");
+        }
     }
 
     if (reuse) {
@@ -267,6 +274,13 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
         ggml_backend_buffer_clear(buf, 0);
+
+        // Fill turbo rotation matrix AFTER buffer clear (clear zeroes everything)
+        if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr && !model.hparams.no_alloc) {
+            #include "turbo-rotation-data.h"
+            ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_MATRIX, 0, 128 * 128 * sizeof(float));
+            LLAMA_LOG_INFO("%s: TurboQuant rotation matrix initialized (128x128)\n", __func__);
+        }
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -2449,6 +2463,10 @@ ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) cons
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
     return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
+    return kv->get_turbo_rotation();
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
