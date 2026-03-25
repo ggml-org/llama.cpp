@@ -149,3 +149,31 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 ### Next: profile whether the bottleneck is in dequant or elsewhere
 - Test with a no-op dequant (return zeros) to measure the kernel overhead
 - If still slow → bottleneck is NOT dequant, it's structural
+
+### 2026-03-25: NO-OP DEQUANT TEST — CRITICAL FINDING
+- Made dequantize_turbo3_0 and dequantize_turbo3_0_t4 return all zeros (no-op)
+- **Result: STILL 2.4 tok/s**
+- **The dequant function is NOT the bottleneck.**
+- Even with zero-cost dequant, turbo3 is 35× slower than q8_0.
+- The bottleneck is ELSEWHERE:
+  1. SET_ROWS (quantize) path — 128×128 WHT per block during KV cache write
+  2. Kernel dispatch overhead for 128-element blocks
+  3. Memory layout/alignment issues with the larger block structure
+  4. The quantize kernel (kernel_set_rows_turbo) doing full WHT per KV write
+
+### New investigation target: SET_ROWS (quantize path)
+- The quantize_turbo3_0 function in the Metal shader does:
+  1. Normalize (128 ops)
+  2. Copy to working buffer (128 ops)  
+  3. Forward WHT rotation (896 ops)
+  4. Centroid lookup + pack (128 ops)
+  5. Inverse WHT rotation (896 ops)
+  6. Residual (128 ops)
+  7. Forward QJL WHT rotation (896 ops)
+  8. Sign pack (128 ops)
+  Total: ~3200 ops per block in the QUANTIZE path
+- This runs for every token at every layer at every head
+- For Qwen 3.5 MoE: 28 layers × 8 heads = 224 quantize calls per generated token
+- Each quantize does 3200 ops = 716,800 ops per token just for KV cache write
+
+### Next: profile SET_ROWS path / try no-op quantize test
