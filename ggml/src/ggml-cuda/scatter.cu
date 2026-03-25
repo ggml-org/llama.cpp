@@ -1,7 +1,9 @@
 #include "scatter.cuh"
+#include "convert.cuh"
 
+template <typename T>
 static __global__ void scatter_kernel(
-        const int32_t * src0, float * dst, const float c,
+        const int32_t * src0, T * dst, const T c,
         int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
         size_t nb1, size_t nb2, size_t nb3,
         size_t nb01, size_t nb02, size_t nb03
@@ -15,7 +17,7 @@ static __global__ void scatter_kernel(
         const int64_t i2 = (block_idx / ne01) % ne02;
         const int64_t i3 = block_idx / (ne01 * ne02);
 
-        float * dst_row = (float *)((char *)dst + i1*nb1 + i2*nb2 + i3*nb3);
+        T * dst_row = (T *)((char *)dst + i1*nb1 + i2*nb2 + i3*nb3);
         const int * src0_row = (const int *)((const char *)src0 + i1*nb01 + i2*nb02 + i3*nb03);
 
         for (int64_t i0 = threadIdx.x; i0 < ne00; i0 += blockDim.x) {
@@ -35,11 +37,9 @@ void ggml_cuda_op_scatter(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(src0));
     GGML_ASSERT(ggml_is_contiguous(src1));
 
-    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == src0->type);
     GGML_ASSERT(src1->type == GGML_TYPE_I32);
 
-    GGML_ASSERT(nb00 == sizeof(float));
     GGML_ASSERT(nb10 == sizeof(int32_t));
 
     GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(dst));
@@ -58,17 +58,31 @@ void ggml_cuda_op_scatter(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     // step 2 - set elements in dst indicated by ids to c
     const int32_t * src1_d = (const int32_t *) src1->data;
-    float * dst_d = (float *) dst->data;
+    void * dst_d = dst->data;
 
     int threads = std::min((int) ne10, 512); // ids
 
     int64_t total_blocks = ne11 * ne12 * ne13;
     int blocks = (int) std::min((int64_t) 65535, total_blocks);
 
-    scatter_kernel<<<blocks, threads, 0, ctx.stream()>>>(
-        src1_d, dst_d, c,
-        ne10, ne11, ne12, ne13,
-        nb1, nb2, nb3,
-        nb11, nb12, nb13
-    );
+    switch (dst->type) {
+        case GGML_TYPE_F32:
+            scatter_kernel<<<blocks, threads, 0, ctx.stream()>>>(
+                src1_d, (float *) dst_d, c,
+                ne10, ne11, ne12, ne13,
+                nb1, nb2, nb3,
+                nb11, nb12, nb13
+            );
+            break;
+        case GGML_TYPE_F16:
+            scatter_kernel<<<blocks, threads, 0, ctx.stream()>>>(
+                src1_d, (half *) dst_d, ggml_cuda_cast<half>(c),
+                ne10, ne11, ne12, ne13,
+                nb1, nb2, nb3,
+                nb11, nb12, nb13
+            );
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
 }

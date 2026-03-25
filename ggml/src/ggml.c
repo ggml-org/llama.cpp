@@ -6212,7 +6212,7 @@ static struct ggml_tensor * ggml_scatter_impl(
         float                 c,
         bool                  inplace) {
 
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
     GGML_ASSERT(a->ne[1] == ids->ne[1]);
 
