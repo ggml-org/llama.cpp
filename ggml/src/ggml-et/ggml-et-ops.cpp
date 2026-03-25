@@ -37,6 +37,14 @@ static ggml_et_cpu_compare_config unary_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config sum_rows_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config sqr_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -232,6 +240,56 @@ bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     }
 
     ET_PERF_END("SQR", "sqr_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_sum_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SUM_ROWS operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: SUM_ROWS operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: SUM_ROWS operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    ggml_et_sum_rows_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+
+    // Phase 1: Initialize CPU comparison context
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (sum_rows_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_SUM_ROWS)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for SUM_ROWS operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "sum_rows_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &sum_rows_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for SUM_ROWS operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("SUM_ROWS", "sum_rows_f32", node);
     return kernel_result;
 }
 

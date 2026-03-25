@@ -225,6 +225,9 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
                 ctx->cpu_dst = ggml_unary(ctx->ggml_ctx, ctx->cpu_src0, uop);
             }
             break;
+        case GGML_OP_SUM_ROWS:
+            ctx->cpu_dst = ggml_sum_rows(ctx->ggml_ctx, ctx->cpu_src0);
+            break;
         case GGML_OP_GLU:
             // Extract GLU parameters from op_params (split mode only)
             {
