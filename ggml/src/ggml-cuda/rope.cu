@@ -134,6 +134,7 @@ static __global__ void rope_neox(const T *            x,
                                  const float *        freq_factors,
                                  const int64_t *      row_indices,
                                  const int            set_rows_stride) {
+    GGML_CUDA_PDL_LC(); // ROPE_NEOX try 1; on maxq
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
@@ -149,6 +150,7 @@ static __global__ void rope_neox(const T *            x,
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
     GGML_CUDA_PDL_SYNC(); // guards x, dst, pos, freq_factors, row_indices data access
+    // GGML_CUDA_PDL_LC(); // ROPE_NEOX try 2; on maxq
 
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in row_indices.

@@ -133,6 +133,7 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
                                   const uint3   ne02,
                                   const uint3   ne11_fd,
                                   const uint3   ne12_fd) {
+    // GGML_CUDA_PDL_LC(); // SET_ROWS try 1; on maxq
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
 
     if (i >= ne_total) {
@@ -160,6 +161,7 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
 
     GGML_CUDA_PDL_SYNC();
     const int64_t dst_row = *(src1 + i10*s10 + i11*s11 + i12*s12);
+    GGML_CUDA_PDL_LC(); // SET_ROWS try 2; on maxq
 
     const src_t * src0_row = src0 + i01*s01 + i02*s02 + i03*s03;
     dst_t * dst_row_ptr    = dst + dst_row*s1 + i02*s2 + i03*s3;

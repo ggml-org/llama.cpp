@@ -55,6 +55,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
                                    const int              s12,
                                    const int              s13,
                                    src1_ptrs... src1s) {
+    GGML_CUDA_PDL_LC(); // BINBCAST try 1; 352.28, 352.62, 352.17, 351.96 on maxq
     const uint32_t i0s = blockDim.x * blockIdx.x + threadIdx.x;
     const uint32_t i1  = (blockDim.y * blockIdx.y + threadIdx.y);
     const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3);
@@ -76,6 +77,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
+    // GGML_CUDA_PDL_LC(); // BINBCAST try 2; 352.44 352.42, 352.05 on maxq
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 

@@ -97,6 +97,7 @@ static __global__ void rms_norm_f32(const float * x,
                                     const uint3   add_nrows_packed     = make_uint3(0, 0, 0),
                                     const uint3   add_nchannels_packed = make_uint3(0, 0, 0),
                                     const uint3   add_nsamples_packed  = make_uint3(0, 0, 0)) {
+    GGML_CUDA_PDL_LC(); // RMS_NORM try 1; on maxq
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -131,6 +132,7 @@ static __global__ void rms_norm_f32(const float * x,
         const float xi = x[col];
         tmp += xi * xi;
     }
+    // GGML_CUDA_PDL_LC(); // RMS_NORM try 2; on maxq
 
     // sum up partial sums
     extern __shared__ float s_sum[];

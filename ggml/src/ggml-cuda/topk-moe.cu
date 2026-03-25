@@ -86,6 +86,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
                                                                   const float           clamp_val,
                                                                   const float           scale_val,
                                                                   const topk_moe_config config) {
+    // GGML_CUDA_PDL_LC(); // TOPK_MOE try 1; on maxq
     const int row = blockIdx.x * blockDim.y + threadIdx.y;
     if (row >= n_rows) {
         return;
@@ -159,6 +160,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         output_weights[i] = 0.f;
     }
 
+    GGML_CUDA_PDL_LC(); // TOPK_MOE try 2; on maxq
     for (int k = 0; k < n_expert_used; k++) {
         float max_val    = wt[0];
         int   max_expert = threadIdx.x;
@@ -228,6 +230,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         }
     }
 
+    // GGML_CUDA_PDL_LC(); // TOPK_MOE try 3; on maxq
     if (config.with_norm) {
         wt_sum              = warp_reduce_sum(wt_sum);
         wt_sum              = max(wt_sum, clamp_val);
