@@ -1406,6 +1406,13 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
             repack_q8_0_q8x4x2(tensor, data, size);
             break;
 
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            // IQ4_NL has identical block layout to Q4_0 (ggml_half d + uint8_t qs[16])
+            repack_q4_0_q4x4x2(tensor, data, size);
+            break;
+
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -1440,6 +1447,12 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8x4x2_q8_0(data, tensor, size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4x4x2_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
@@ -1819,6 +1832,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if (src0->ne[0] % 32) {
                 return false;
@@ -1868,6 +1882,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if ((src0->ne[0] % 32)) {
                 return false;
@@ -3363,6 +3378,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_Q8_0 == (unsigned int) GGML_TYPE_Q8_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_MXFP4 == (unsigned int) GGML_TYPE_MXFP4,
+                  "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                   "please update hexagon_type to match ggml_type");
 
     const char * str_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL");
