@@ -482,59 +482,48 @@ constant float turbo_mid_3bit[7] = { -0.154259f, -0.091775f, -0.043589f, 0.0f, 0
 
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
 #pragma METAL fp math_mode(safe)
+    // MSE-only mode: all 3 bits to PolarQuant, no QJL
     // Step 1: compute norm and normalize
     float norm_sq = 0.0f;
-    for (int j = 0; j < QK_TURBO3; j++) {
-        norm_sq += src[j] * src[j];
-    }
+    for (int j = 0; j < QK_TURBO3; j++) norm_sq += src[j] * src[j];
     float norm = sqrt(norm_sq);
     float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
     dst.norm = half(norm);
+    dst.rnorm = half(0.0f);  // unused in MSE-only mode
 
-    // Normalize to unit vector (reuse as working buffer)
+    // Normalize and rotate
     float x[128];
-    for (int j = 0; j < 128; j++) {
-        x[j] = src[j] * inv_norm;
-    }
-
-    // Save normalized copy for residual computation
-    float normalized[128];
-    for (int j = 0; j < 128; j++) normalized[j] = x[j];
-
-    // Step 2: rotate in-place using WHT (O(d log d) instead of O(d²))
+    for (int j = 0; j < 128; j++) x[j] = src[j] * inv_norm;
     turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
 
-    // Step 3: quantize rotated coordinates to 2-bit
+    // Quantize to 3-bit centroids (8 levels, stored in qs as packed 3-bit)
+    // Reuse the existing qs field — 3-bit packing already supported
+    // But block_turbo3_0 has qs[QK_TURBO3/4] = 32 bytes for 2-bit indices
+    // For 3-bit we need 48 bytes — doesn't fit in current struct!
+    // WORKAROUND: use 2-bit qs field + signs field (16 bytes) for the extra bit
+    // Total: 32 bytes (2-bit) + 16 bytes (extra bit) = 3 bits per element
+
+    // Pack lower 2 bits in qs, upper bit in signs
     for (int j = 0; j < QK_TURBO3 / 4; j++) dst.qs[j] = 0;
     for (int j = 0; j < QK_TURBO3 / 8; j++) dst.signs[j] = 0;
 
-    float recon[128]; // reconstructed rotated-space values
     for (int j = 0; j < 128; j++) {
         float val = x[j];
         uint8_t idx;
-        if      (val < turbo_mid_2bit[0]) idx = 0;
-        else if (val < turbo_mid_2bit[1]) idx = 1;
-        else if (val < turbo_mid_2bit[2]) idx = 2;
-        else                              idx = 3;
-        recon[j] = turbo_centroids_2bit[idx];
+        if      (val < turbo_mid_3bit[0]) idx = 0;
+        else if (val < turbo_mid_3bit[1]) idx = 1;
+        else if (val < turbo_mid_3bit[2]) idx = 2;
+        else if (val < turbo_mid_3bit[3]) idx = 3;
+        else if (val < turbo_mid_3bit[4]) idx = 4;
+        else if (val < turbo_mid_3bit[5]) idx = 5;
+        else if (val < turbo_mid_3bit[6]) idx = 6;
+        else                              idx = 7;
+
+        // Lower 2 bits in qs (4 per byte)
         dst.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
-    }
-
-    // Step 4: inverse rotate reconstruction in-place, compute residual
-    // turbo_rotate_inverse REMOVED — pre-rotate-queries handles this
-
-    float rnorm_sq = 0.0f;
-    for (int j = 0; j < 128; j++) {
-        x[j] = normalized[j] - recon[j]; // residual, reuse x buffer
-        rnorm_sq += x[j] * x[j];
-    }
-    dst.rnorm = half(sqrt(rnorm_sq));
-
-    // Step 5: QJL signs — rotate residual with QJL WHT, take signs
-    turbo_rotate_forward(x, turbo_qjl_wht_signs1, turbo_qjl_wht_signs2);
-    for (int i = 0; i < 128; i++) {
-        if (x[i] >= 0.0f) {
-            dst.signs[i / 8] |= (1 << (i % 8));
+        // Upper bit in signs (8 per byte)
+        if (idx & 0x4) {
+            dst.signs[j / 8] |= (1 << (j % 8));
         }
     }
 }
@@ -607,29 +596,17 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 // dequantized block per thread and only recompute when the block pointer changes.
 
 static void turbo3_dequantize_full_block(device const block_turbo3_0 * xb, thread float * cache) {
-    const float norm  = float(xb->norm);
-    const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
+    const float norm = float(xb->norm);
 
-    // Unpack 2-bit indices → centroid values, then inverse WHT rotate in-place
-    float recon[128];
+    // MSE-only: unpack 3-bit indices (lower 2 in qs, upper 1 in signs) → centroids
     for (int j = 0; j < 128; j++) {
-        uint8_t idx = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        recon[j] = turbo_centroids_2bit[idx];
+        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
+        uint8_t idx  = low2 | (hi1 << 2);  // 3-bit index
+        cache[j] = turbo_centroids_3bit[idx] * norm;
     }
-    // turbo_rotate_inverse REMOVED — pre-rotate-queries handles this
-
-    // QJL correction: unpack signs, inverse WHT rotate, scale
-    float signs_f[128];
-    for (int j = 0; j < 128; j++) {
-        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
-    }
-    // turbo_rotate_inverse(QJL) REMOVED — pre-rotate-queries handles this
-
-    // Combine: (mse_recon + qjl_correction) * norm
-    for (int i = 0; i < 128; i++) {
-        cache[i] = (recon[i] + signs_f[i] * qjl_scale) * norm;
-    }
+    // No rotation (pre-rotate-queries handles it)
+    // No QJL (MSE-only mode — all 3 bits to PolarQuant)
 }
 
 template <typename type4x4>
