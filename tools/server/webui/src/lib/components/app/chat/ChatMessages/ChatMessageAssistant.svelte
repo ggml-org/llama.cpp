@@ -41,6 +41,7 @@
 		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
@@ -60,6 +61,7 @@
 		onCopy,
 		onDelete,
 		onEdit,
+		onForkConversation,
 		onNavigateToSibling,
 		onRegenerate,
 		onShowDeleteDialogChange,
@@ -355,6 +357,7 @@
 			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
 				? onContinue
 				: undefined}
+			{onForkConversation}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}

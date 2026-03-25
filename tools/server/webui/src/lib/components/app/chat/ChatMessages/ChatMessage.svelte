@@ -180,6 +180,10 @@
 		chatActions.continueAssistantMessage(message);
 	}
 
+	function handleForkConversation(options: { name: string; includeAttachments: boolean }) {
+		chatActions.forkConversation(message, options);
+	}
+
 	function handleNavigateToSibling(siblingId: string) {
 		chatActions.navigateToSibling(siblingId);
 	}
@@ -285,6 +289,7 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
+		onForkConversation={handleForkConversation}
 		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
@@ -303,6 +308,7 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
+		onForkConversation={handleForkConversation}
 		onNavigateToSibling={handleNavigateToSibling}
 		onRegenerate={handleRegenerate}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}

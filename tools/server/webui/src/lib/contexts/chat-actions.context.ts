@@ -21,6 +21,10 @@ export interface ChatActionsContext {
 	) => void;
 	regenerateWithBranching: (message: DatabaseMessage, modelOverride?: string) => void;
 	continueAssistantMessage: (message: DatabaseMessage) => void;
+	forkConversation: (
+		message: DatabaseMessage,
+		options: { name: string; includeAttachments: boolean }
+	) => void;
 }
 
 const CHAT_ACTIONS_KEY = Symbol.for('chat-actions');

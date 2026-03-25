@@ -872,3 +872,53 @@ export const conversations = () => conversationsStore.conversations;
 export const activeConversation = () => conversationsStore.activeConversation;
 export const activeMessages = () => conversationsStore.activeMessages;
 export const isConversationsInitialized = () => conversationsStore.isInitialized;
+
+/**
+ * Builds a flat tree of conversations with depth levels for nested forks.
+ * Accepts a pre-filtered list so search filtering stays in the component.
+ */
+export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
+	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
+	const forkIds = new SvelteSet<string>();
+
+	for (const conv of convs) {
+		if (conv.forkedFromConversationId) {
+			forkIds.add(conv.id);
+
+			const siblings = childrenByParent.get(conv.forkedFromConversationId) || [];
+
+			siblings.push(conv);
+			childrenByParent.set(conv.forkedFromConversationId, siblings);
+		}
+	}
+
+	const result: ConversationTreeItem[] = [];
+	const visited = new SvelteSet<string>();
+
+	function walk(conv: DatabaseConversation, depth: number) {
+		visited.add(conv.id);
+		result.push({ conversation: conv, depth });
+
+		const children = childrenByParent.get(conv.id);
+		if (children) {
+			children.sort((a, b) => b.lastModified - a.lastModified);
+
+			for (const child of children) {
+				walk(child, depth + 1);
+			}
+		}
+	}
+
+	const roots = convs.filter((c) => !forkIds.has(c.id));
+	for (const root of roots) {
+		walk(root, 0);
+	}
+
+	for (const conv of convs) {
+		if (!visited.has(conv.id)) {
+			walk(conv, 1);
+		}
+	}
+
+	return result;
+}

@@ -118,7 +118,7 @@
 		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 	</Sidebar.Header>
 
-	<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
+	<Sidebar.Group class="mt-2 space-y-2 p-0 px-4">
 		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 			<Sidebar.GroupLabel>
 				{isSearchModeActive ? 'Search results' : 'Conversations'}
@@ -127,15 +127,17 @@
 
 		<Sidebar.GroupContent>
 			<Sidebar.Menu>
-				{#each filteredConversations as conversation (conversation.id)}
-					<Sidebar.MenuItem class="mb-1">
-						<ChatSidebarConversationItem
-							conversation={{
-								id: conversation.id,
-								name: conversation.name,
-								lastModified: conversation.lastModified,
-								currNode: conversation.currNode
-							}}
+			{#each conversationTree as { conversation, depth } (conversation.id)}
+				<Sidebar.MenuItem class="mb-1 p-0">
+					<ChatSidebarConversationItem
+						conversation={{
+							id: conversation.id,
+							name: conversation.name,
+							lastModified: conversation.lastModified,
+							currNode: conversation.currNode,
+							forkedFromConversationId: conversation.forkedFromConversationId
+						}}
+						{depth}
 							{handleMobileSidebarItemClick}
 							isActive={currentChatId === conversation.id}
 							onSelect={selectConversation}
@@ -146,7 +148,7 @@
 					</Sidebar.MenuItem>
 				{/each}
 
-				{#if filteredConversations.length === 0}
+				{#if conversationTree.length === 0}
 					<div class="px-2 py-4 text-center">
 						<p class="mb-4 p-4 text-sm text-muted-foreground">
 							{searchQuery.length > 0
