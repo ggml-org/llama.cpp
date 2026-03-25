@@ -456,7 +456,7 @@ jobs:
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
-          time cmake --build build --config Release -j $(nproc)
+          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-musa:
     runs-on: ubuntu-22.04
@@ -824,7 +824,7 @@ jobs:
               -DGGML_NATIVE=OFF \
               -DGGML_CUDA=ON \
               -DGGML_CUDA_CUB_3DOT2=ON
-            time cmake --build build
+            cmake --build build
 
   windows-2022-cuda:
     runs-on: windows-2022
