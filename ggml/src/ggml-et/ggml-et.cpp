@@ -602,6 +602,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_sqr(dev_ctx, node);
                 break;
 
+            case GGML_OP_UNARY:
+                ggml_et_op_unary(dev_ctx, node);
+                break;
+
             case GGML_OP_MUL:
                 ggml_et_op_mul(dev_ctx, node);
                 break;
@@ -694,6 +698,41 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]);
+            break;
+        case GGML_OP_UNARY:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->ne[0] % 16 == 0 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0])) {
+                switch (ggml_get_unary_op(op)) {
+                    case GGML_UNARY_OP_ABS:
+                    case GGML_UNARY_OP_SGN:
+                    case GGML_UNARY_OP_NEG:
+                    case GGML_UNARY_OP_STEP:
+                    case GGML_UNARY_OP_TANH:
+                    case GGML_UNARY_OP_ELU:
+                    case GGML_UNARY_OP_RELU:
+                    case GGML_UNARY_OP_SIGMOID:
+                    case GGML_UNARY_OP_GELU:
+                    case GGML_UNARY_OP_GELU_QUICK:
+                    case GGML_UNARY_OP_SILU:
+                    case GGML_UNARY_OP_HARDSWISH:
+                    case GGML_UNARY_OP_HARDSIGMOID:
+                    case GGML_UNARY_OP_EXP:
+                    case GGML_UNARY_OP_EXPM1:
+                    case GGML_UNARY_OP_SOFTPLUS:
+                    case GGML_UNARY_OP_GELU_ERF:
+                    case GGML_UNARY_OP_FLOOR:
+                    case GGML_UNARY_OP_CEIL:
+                    case GGML_UNARY_OP_ROUND:
+                    case GGML_UNARY_OP_TRUNC:
+                        supported = true;
+                        break;
+                    default:
+                        break;
+                }
+            }
             break;
         case GGML_OP_MUL:
         case GGML_OP_ADD:

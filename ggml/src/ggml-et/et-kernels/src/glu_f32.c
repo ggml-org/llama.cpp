@@ -17,15 +17,6 @@ struct ggml_et_glu_params {
     int32_t swapped;             // Whether gate and value are swapped
 };
 
-// GLU operation types (from ggml.h)
-enum ggml_glu_op {
-    GGML_GLU_OP_REGLU = 0,
-    GGML_GLU_OP_GEGLU = 1,
-    GGML_GLU_OP_SWIGLU = 2,
-    GGML_GLU_OP_GEGLU_ERF = 3,
-    GGML_GLU_OP_GEGLU_QUICK = 4
-};
-
 // SiLU activation function: silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
 static inline float silu_f32(float x) {
     // For numerical stability, use the mathematically equivalent form:
