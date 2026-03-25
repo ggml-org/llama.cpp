@@ -29,6 +29,14 @@ static ggml_et_cpu_compare_config norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config l2_norm_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config unary_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -102,6 +110,22 @@ static ggml_et_cpu_compare_config get_rows_cpu_compare_config = {
 };
 
 static ggml_et_cpu_compare_config cont_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
+static ggml_et_cpu_compare_config concat_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
+static ggml_et_cpu_compare_config repeat_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
     /* .log_differences = */ true,
@@ -903,6 +927,66 @@ bool ggml_et_op_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
     return kernel_result;
 }
 
+bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for L2_NORM operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: L2_NORM operation missing required input\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_F32) {
+
+        kernel_name = "l2_norm_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: L2_NORM operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, node->op_params, sizeof(float));
+
+    ggml_et_l2_norm_params params;
+    params.src0 = *node->src[0];  // F32 input tensor
+    params.dst = *node;           // F32 output tensor
+    params.eps = eps;             // Epsilon parameter for numerical stability
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (l2_norm_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_L2_NORM)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for L2_NORM operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &l2_norm_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for L2_NORM operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("L2_NORM", kernel_name, node, "eps=%.6f", (double)eps);
+    return kernel_result;
+}
+
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 
@@ -1169,6 +1253,125 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
     }
 
     ET_PERF_END("CONT", kernel_name, node);
+    return kernel_result;
+}
+
+bool ggml_et_op_concat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for CONCAT operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: CONCAT operation missing required inputs\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_F32 &&
+        node->src[1]->type == GGML_TYPE_F32) {
+
+        kernel_name = "concat_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: CONCAT operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    int32_t dim;
+    memcpy(&dim, node->op_params, sizeof(int32_t));
+
+    ggml_et_concat_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.dst  = *node;
+    params.dim  = dim;
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (concat_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_CONCAT)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for CONCAT operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &concat_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for CONCAT operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("CONCAT", kernel_name, node, "dim=%d", dim);
+    return kernel_result;
+}
+
+bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for REPEAT operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: REPEAT operation missing required input\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_F32) {
+
+        kernel_name = "repeat_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: REPEAT operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    ggml_et_repeat_params params;
+    params.src0 = *node->src[0];
+    params.dst  = *node;
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (repeat_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_REPEAT)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for REPEAT operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &repeat_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for REPEAT operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("REPEAT", kernel_name, node);
     return kernel_result;
 }
 

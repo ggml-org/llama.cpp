@@ -40,10 +40,13 @@ set(KERNELS
     sqr_f32
     sum_rows_f32
     norm_f32
+    l2_norm_f32
     rms_norm_f32
     rms_norm_mul_f32
     softmax_f32
     get_rows_f32
+    concat_f32
+    repeat_f32
     cont_f32
     cont_f16
     set_rows_f32

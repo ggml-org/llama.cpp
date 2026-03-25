@@ -83,6 +83,12 @@ struct ggml_et_norm_params {
     float eps;         // Epsilon parameter for numerical stability
 };
 
+struct ggml_et_l2_norm_params {
+    ggml_tensor src0;  // F32 input tensor
+    ggml_tensor dst;   // F32 output tensor
+    float eps;         // Epsilon parameter for numerical stability
+};
+
 struct ggml_et_glu_params {
     ggml_tensor src0;     // F32 input tensor A (or combined tensor if src1 is null)
     ggml_tensor src1;     // F32 input tensor B (null for single tensor mode)
@@ -109,6 +115,18 @@ struct ggml_et_get_rows_params {
 struct ggml_et_cont_params {
     ggml_tensor src0;     // F32 input tensor (non-contiguous)
     ggml_tensor dst;      // F32 output tensor (contiguous)
+};
+
+struct ggml_et_concat_params {
+    ggml_tensor src0;     // F32 input tensor 0
+    ggml_tensor src1;     // F32 input tensor 1
+    ggml_tensor dst;      // F32 output tensor
+    int32_t dim;          // Concatenation dimension
+};
+
+struct ggml_et_repeat_params {
+    ggml_tensor src0;     // F32 input tensor (tile)
+    ggml_tensor dst;      // F32 output tensor (tiled result)
 };
 
 struct ggml_et_set_rows_params {
@@ -166,11 +184,14 @@ bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_t
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_concat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,

@@ -651,6 +651,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_norm(dev_ctx, node);
                 break;
 
+            case GGML_OP_L2_NORM:
+                ggml_et_op_l2_norm(dev_ctx, node);
+                break;
+
             case GGML_OP_SCALE:
                 ggml_et_op_scale(dev_ctx, node);
                 break;
@@ -669,6 +673,14 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_CONT:
                 ggml_et_op_cont(dev_ctx, node);
+                break;
+
+            case GGML_OP_CONCAT:
+                ggml_et_op_concat(dev_ctx, node);
+                break;
+
+            case GGML_OP_REPEAT:
+                ggml_et_op_repeat(dev_ctx, node);
                 break;
 
             case GGML_OP_SET_ROWS:
@@ -865,6 +877,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]);
             break;
+        case GGML_OP_L2_NORM:
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
         case GGML_OP_SCALE:
             // F32 contiguous, total elements must be cache line aligned (16 floats)
             supported = op->type == GGML_TYPE_F32 &&
@@ -942,6 +961,40 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 } else {
                     supported = true;
                 }
+            } else {
+                supported = false;
+            }
+            break;
+        case GGML_OP_CONCAT:
+            // F32 contiguous, ne[0] cacheline-aligned (16 floats = 64 bytes)
+            // For dim==0, both src ne[0] must also be cacheline-aligned
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->ne[0] % 16 == 0 &&
+                op->src[0]->ne[0] % 16 == 0 &&
+                op->src[1]->ne[0] % 16 == 0 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                supported = true;
+            } else {
+                supported = false;
+            }
+            break;
+        case GGML_OP_REPEAT:
+            // F32 contiguous, src0 ne[0] cacheline-aligned (tile unit)
+            // dst.ne[i] must be divisible by src0.ne[i] for all dims
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[0]->ne[0] % 16 == 0 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                op->ne[0] % op->src[0]->ne[0] == 0 &&
+                op->ne[1] % op->src[0]->ne[1] == 0 &&
+                op->ne[2] % op->src[0]->ne[2] == 0 &&
+                op->ne[3] % op->src[0]->ne[3] == 0) {
+                supported = true;
             } else {
                 supported = false;
             }
