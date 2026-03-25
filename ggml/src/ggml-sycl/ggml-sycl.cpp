@@ -553,6 +553,18 @@ struct moe_warmup_state {
     std::atomic<bool>     reranking_enabled{false};
     int                   rerank_interval = 100;  // tokens between re-ranks
 
+    // EMA-based expert frequency tracking.
+    // Smooths popularity over time instead of hard-resetting every epoch.
+    // ema[l][e] converges to the fraction of tokens that activate expert e
+    // in layer l, with exponential decay weighting recent tokens more heavily.
+    static constexpr float ema_alpha          = 0.1f;   // per-activation update weight
+    static constexpr int   ema_decay_interval = 10;     // tokens between passive decay sweeps
+    static constexpr float ema_hot_threshold  = 0.5f;   // EMA above this = "hot"
+    static constexpr float ema_cold_threshold = 0.1f;   // EMA below this = "cold"
+
+    float                 ema_counts[MOE_MAX_LAYERS][MOE_MAX_EXPERTS] = {};
+    std::atomic<int>      ema_decay_ticker{0};  // counts tokens since last passive decay
+
     void init(int nl, int ne) {
         n_layers  = std::min(nl, MOE_MAX_LAYERS);
         n_experts = std::min(ne, MOE_MAX_EXPERTS);
@@ -581,6 +593,11 @@ struct moe_warmup_state {
                 int eid = expert_ids[i];
                 if (eid >= 0 && eid < n_experts) {
                     epoch_counts[layer_id][eid].fetch_add(1, std::memory_order_relaxed);
+                    // EMA update: blend toward 1.0 for activated experts.
+                    // Not thread-safe for concurrent writers to the same [l][e],
+                    // but MoE dispatch is sequential per layer so this is fine.
+                    ema_counts[layer_id][eid] =
+                        ema_alpha * 1.0f + (1.0f - ema_alpha) * ema_counts[layer_id][eid];
                 }
             }
             return;  // Warmup counters frozen after initial warmup
@@ -606,6 +623,37 @@ struct moe_warmup_state {
         return false;
     }
 
+    // Passive EMA decay: called every ema_decay_interval tokens.
+    // Multiplies ALL expert EMAs by (1 - alpha)^interval, causing non-activated
+    // experts to smoothly fade toward zero. Activated experts are pulled back
+    // up by the alpha blend in record(), so their EMAs reflect recent usage.
+    //
+    // Not called from record() to avoid per-activation O(layers*experts) sweep.
+    // Instead, ticked from the token-level control loop.
+    void decay_ema() {
+        // Decay factor: (1 - alpha)^decay_interval.
+        // For alpha=0.1, interval=10: factor = 0.9^10 ~= 0.349
+        const float factor = std::pow(1.0f - ema_alpha, static_cast<float>(ema_decay_interval));
+        for (int l = 0; l < n_layers; l++) {
+            for (int e = 0; e < n_experts; e++) {
+                ema_counts[l][e] *= factor;
+            }
+        }
+    }
+
+    // Tick the EMA decay counter. Called once per token after warmup.
+    // Returns true when decay was applied (for logging).
+    bool tick_ema_decay() {
+        if (!reranking_enabled.load(std::memory_order_acquire)) return false;
+        int t = ema_decay_ticker.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (t >= ema_decay_interval) {
+            ema_decay_ticker.store(0, std::memory_order_relaxed);
+            decay_ema();
+            return true;
+        }
+        return false;
+    }
+
     // Called once per token after warmup.  Returns true when a re-rank epoch completes.
     // Uses aggressive initial re-ranking: first 5 epochs use interval/10 (min 10)
     // to fill VRAM cache 10x faster during warmup, then settles to normal interval.
@@ -615,6 +663,9 @@ struct moe_warmup_state {
         if (!reranking_enabled.load(std::memory_order_acquire)) return false;
         if (rerank_interval <= 0) return false;
         int t = epoch_token_count.fetch_add(1, std::memory_order_relaxed) + 1;
+
+        // Tick EMA passive decay (independent of epoch boundary)
+        tick_ema_decay();
 
         int effective_interval = rerank_interval;
         if (epoch_number.load(std::memory_order_relaxed) < 5) {
@@ -632,13 +683,15 @@ struct moe_warmup_state {
     // Enable periodic re-ranking (called after initial warmup + prestage completes)
     void enable_reranking() {
         if (rerank_interval <= 0) return;
-        // Zero out epoch counters for fresh accumulation
+        // Zero out epoch counters and EMA for fresh accumulation
         for (int l = 0; l < n_layers; l++) {
             for (int e = 0; e < n_experts; e++) {
                 epoch_counts[l][e].store(0, std::memory_order_relaxed);
+                ema_counts[l][e] = 0.0f;
             }
         }
         epoch_token_count.store(0, std::memory_order_relaxed);
+        ema_decay_ticker.store(0, std::memory_order_relaxed);
         reranking_enabled.store(true, std::memory_order_release);
     }
 };
@@ -1841,7 +1894,10 @@ uint32_t get_expert_frequency(int layer_hash, int expert_id) {
     int seq_layer = it->second;
     if (seq_layer < 0 || seq_layer >= g_moe_warmup.n_layers) return 0;
     if (expert_id < 0 || expert_id >= g_moe_warmup.n_experts) return 0;
-    return g_moe_warmup.epoch_counts[seq_layer][expert_id].load(std::memory_order_relaxed);
+    // Return EMA scaled to uint32_t (0.0-1.0 -> 0-1000) for backward compat.
+    // Callers that compare frequencies get smooth, history-aware values
+    // instead of raw counts that reset every epoch.
+    return static_cast<uint32_t>(g_moe_warmup.ema_counts[seq_layer][expert_id] * 1000.0f);
 }
 
 }  // namespace ggml_sycl
@@ -1870,12 +1926,12 @@ static void moe_periodic_rerank() {
         if (it == seq_to_hash.end()) continue;
         int hash_layer_id = it->second;
 
-        // Collect epoch counts and sort descending
-        std::vector<std::pair<uint32_t, int>> sorted_experts;
+        // Sort by EMA (smooth, history-aware) instead of raw epoch counts.
+        // EMA values are floats in [0, 1]; use pair<float, int> for sort.
+        std::vector<std::pair<float, int>> sorted_experts;
         sorted_experts.reserve(ne);
         for (int e = 0; e < ne; e++) {
-            uint32_t c = g_moe_warmup.epoch_counts[l][e].load(std::memory_order_relaxed);
-            sorted_experts.push_back({c, e});
+            sorted_experts.push_back({g_moe_warmup.ema_counts[l][e], e});
         }
         std::sort(sorted_experts.begin(), sorted_experts.end(),
                   [](const auto & a, const auto & b) { return a.first > b.first; });
@@ -1890,7 +1946,9 @@ static void moe_periodic_rerank() {
             ggml_sycl::set_expert_popularity_rank(hash_layer_id, eid, rank);
         }
 
-        // Reset epoch counters for this layer for the next epoch
+        // Reset raw epoch counters (kept for backward compatibility with
+        // any code that still reads epoch_counts directly). EMA is NOT
+        // reset — it decays smoothly via tick_ema_decay().
         for (int e = 0; e < ne; e++) {
             g_moe_warmup.epoch_counts[l][e].store(0, std::memory_order_relaxed);
         }
@@ -2021,9 +2079,11 @@ private:
             int hash_layer_id = it->second;
 
             for (int e = 0; e < ne; e++) {
-                uint32_t count = g_moe_warmup.epoch_counts[l][e].load(
-                    std::memory_order_relaxed);
-                if (count < hit_threshold) continue;
+                // Use EMA for promotion decisions: smoother than raw epoch counts.
+                // Scale EMA (0.0-1.0) to uint32_t (0-1000) for sort compatibility.
+                float    ema   = g_moe_warmup.ema_counts[l][e];
+                uint32_t score = static_cast<uint32_t>(ema * 1000.0f);
+                if (score < hit_threshold) continue;
 
                 // Check if expert is already in VRAM via the cache
                 int64_t ekey = (int64_t(hash_layer_id) << 32) | int64_t(uint32_t(e));
@@ -2032,8 +2092,8 @@ private:
                     continue;
                 }
 
-                // CPU-resident expert with high hit count -- candidate for promotion
-                candidates.push_back({ l, hash_layer_id, e, count });
+                // CPU-resident expert with high EMA -- candidate for promotion
+                candidates.push_back({ l, hash_layer_id, e, score });
             }
         }
 
