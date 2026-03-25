@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "traits.h"
+#include "../tq/tq_quants.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
@@ -392,6 +393,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
+    },
+    [GGML_TYPE_TQ4_0] = {
+        .from_float               = quantize_row_tq4_0,
+        .vec_dot                  = vec_dot_tq4_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
     },
 };
 

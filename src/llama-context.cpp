@@ -1,5 +1,9 @@
 #include "llama-context.h"
 
+extern "C" {
+#include "tq/tq_quants.h"
+}
+
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
@@ -268,6 +272,13 @@ llama_context::llama_context(
                     ggml_backend_buffer_name    (buf_output.get()),
                     ggml_backend_buffer_get_size(buf_output.get()) / 1024.0 / 1024.0);
         }
+    }
+
+    // TurboQuant: init rotation matrix if TQ4_0 KV cache requested
+    if (params.type_k == GGML_TYPE_TQ4_0 || params.type_v == GGML_TYPE_TQ4_0) {
+        const uint32_t head_dim = hparams.n_embd_head_k();
+        tq_init(head_dim, 42);
+        LLAMA_LOG_INFO("%s: TurboQuant initialized (head_dim=%u)\n", __func__, head_dim);
     }
 
     // init the memory module

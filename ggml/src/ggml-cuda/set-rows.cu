@@ -1,6 +1,9 @@
 #include "set-rows.cuh"
 #include "cpy-utils.cuh"
 
+// TurboQuant pre-rotation (defined in tq4-rotate.cu)
+extern "C" void tq_cuda_rotate_before_set_rows(float * data, int n_elements, void * stream);
+
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
 // Generic quantized set_rows kernel template
@@ -310,6 +313,7 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
             stream
         );
     } else {
+        // TQ4_0 SET_ROWS handled by CPU backend (rotation needs full head_dim context)
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }
 }
