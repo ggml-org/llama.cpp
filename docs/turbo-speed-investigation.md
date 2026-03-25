@@ -205,3 +205,26 @@ Target: D → 5-8 tok/s, then A/B → 20-40 tok/s.
 - WHT rotation is O(d log d) per block — already optimized
 - The per-chunk redundant call pattern still wastes ~8× on dequant
 - BUT: no-op dequant test was on CPU, need to redo on Metal
+
+### 2026-03-25: Upstream research findings
+- TurboQuant feature request exists upstream: ggml-org/llama.cpp#20977
+- mudler has experimental fork — should compare notes
+- New quant type contribution guidelines require perplexity + KL divergence data
+- The CPU fallback pattern is known: MXFP4 hit the same issue (PR #20609)
+- Metal Tensor API optimization (PR #20962) could give us another ~26% on mul_mat
+- Our current 8× gap on MoE / 3.3× on Dense is REAL Metal overhead, not a bug
+- The WHT rotation cost per block is the genuine bottleneck now
+
+### Summary of investigation
+| Test | Gen tok/s | What we learned |
+|------|-----------|-----------------|
+| q8_0 baseline | 85.5 | Target speed |
+| Dense matvec rotation | 2.4 | Was actually CPU fallback |
+| WHT rotation | 2.4 | Still CPU fallback |
+| simd_broadcast opt | 2.4 | Still CPU fallback |
+| threadgroup opt | 2.4 | Still CPU fallback |
+| No-op dequant | 2.4 | Still CPU fallback |
+| No-op quantize | 2.4 | Still CPU fallback |
+| **Inlined WHT (proper Metal)** | **10.7** | **THE FIX — #include caused CPU fallback** |
+
+Rule: NEVER use #include in ggml-metal.metal. Always inline.
