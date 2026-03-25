@@ -2,6 +2,7 @@
 #include "ggml-et-kernels.h"
 #include "ggml-et-cpu-compare.h"
 #include "ggml-impl.h"
+#include <stdio.h>
 
 // CPU comparison configuration - can be enabled for debugging
 static ggml_et_cpu_compare_config rope_cpu_compare_config = {
@@ -334,7 +335,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
                 node->src[1]->type == GGML_TYPE_F32 &&
                 node->src[0]->ne[0] % 16 == 0 &&
                 node->src[0]->ne[1] % 16 == 0 &&
-                node->src[1]->ne[0] != 0) { // GEMV is faster with the generic path
+                node->src[1]->ne[0] != 1) { // GEMV is faster with the generic path
 
         kernel_name = "mul_mat_f32_matrix_engine";
         src0_type_name = "F32";
@@ -344,8 +345,6 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 
         kernel_name = "mul_mat_f32";
         src0_type_name = "F32";
-
-
     } else {
         GGML_LOG_ERROR("ET: MUL_MAT operation with unsupported types: dst=%s src0=%s src1=%s\n",
                        ggml_type_name(node->type),
