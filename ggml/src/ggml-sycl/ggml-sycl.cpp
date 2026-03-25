@@ -1034,6 +1034,15 @@ static layout_mode moe_effective_expert_layout(ggml_type type, int64_t ncols, in
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
 // ---------------------------------------------------------------------------
 static void moe_prestage_popular_experts() {
+    // Guard: prestaging is expensive (~10s for 120B) and only needs to run ONCE.
+    // Multiple call sites (PP→TG transition, tick_token warmup, first-PP-pass,
+    // gate-norm warmup, periodic rerank) can all trigger this function.
+    // After the first successful completion, skip all subsequent calls.
+    static std::atomic<bool> g_prestage_completed{false};
+    if (g_prestage_completed.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
     std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
@@ -1356,6 +1365,25 @@ static void moe_prestage_popular_experts() {
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular expert tensors to GPU0 VRAM "
                   "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
                   prestaged, skipped, down_deferred, n_layers, avail);
+
+    // --- Post-prestage verification: count resident expert groups ---
+    if (cache) {
+        int n_resident = 0, n_total = 0;
+        std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
+        for (const auto & [gkey, grp] : g_expert_groups) {
+            n_total++;
+            grp_lock.unlock();
+            if (is_expert_resident(static_cast<int>(gkey >> 16),
+                                   static_cast<int>(gkey & 0xFFFF), device)) {
+                n_resident++;
+            }
+            grp_lock.lock();
+        }
+        GGML_LOG_INFO("[MOE-PRESTAGE] Verification: %d/%d expert groups resident "
+                      "on device %d (cache entries=%zu)\n",
+                      n_resident, n_total, device,
+                      cache->entry_count());
+    }
 
     ggml_sycl_watchdog_heartbeat();
 
@@ -1732,6 +1760,10 @@ static void moe_prestage_popular_experts() {
         }
     }
     ggml_sycl_watchdog_heartbeat();
+
+    // Mark prestaging as done — all subsequent calls will return immediately.
+    g_prestage_completed.store(true, std::memory_order_release);
+    GGML_LOG_INFO("[MOE-PRESTAGE] Prestaging complete — subsequent calls will be skipped\n");
 }
 
 // ---------------------------------------------------------------------------

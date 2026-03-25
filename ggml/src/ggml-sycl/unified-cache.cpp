@@ -3897,12 +3897,30 @@ bool unified_cache::stage_expert_group(int                          block_id,
         }
         dq.wait();  // Ensure all fills complete before registering
 
-        // 3. Register all as READY
+        // 3. Register all as READY and pin them to prevent eviction by
+        //    subsequent stage_expert_group calls during bulk prestaging.
+        //    Without pinning, the next group's allocate_slot can evict
+        //    entries that were just registered, causing cache thrashing
+        //    where all 13824 expert tensors "stage" successfully but only
+        //    the last few hundred survive (the rest were evicted).
         for (auto & s : slots) {
             if (s.was_existing) continue;
             register_ready(*s.key, s.ptr, layout, s.data->dst_size,
                            cache_entry_type::MOE_EXPERT,
                            s.data->layer_id, s.data->expert_id);
+        }
+
+        // Pin all slots (new and existing) to protect from eviction
+        {
+            std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+            for (auto & s : slots) {
+                unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key,
+                                        s.data->layer_id, s.data->expert_id };
+                auto it = entries_.find(ckey);
+                if (it != entries_.end()) {
+                    it->second.pinned = true;
+                }
+            }
         }
 
         return true;
@@ -3979,6 +3997,19 @@ bool unified_cache::stage_expert_group(int                          block_id,
                        cache_entry_type::MOE_EXPERT,
                        s.data->layer_id, s.data->expert_id,
                        s.data->src_ptr);
+    }
+
+    // Pin all slots to prevent eviction during bulk prestaging
+    {
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+        for (auto & s : slots) {
+            unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key,
+                                    s.data->layer_id, s.data->expert_id };
+            auto it = entries_.find(ckey);
+            if (it != entries_.end()) {
+                it->second.pinned = true;
+            }
+        }
     }
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "

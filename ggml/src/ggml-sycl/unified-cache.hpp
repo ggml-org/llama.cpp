@@ -833,6 +833,12 @@ class unified_cache {
     // Bytes currently occupied by cached weights
     size_t weight_bytes() const { return used_.load(); }
 
+    // Diagnostic: number of entries in the cache
+    size_t entry_count() const {
+        std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+        return entries_.size();
+    }
+
     // Available VRAM for non-weight allocations (KV, compute, staging).
     // This is the budget headroom after weights + current runtime reservations.
     // Higher-level code uses this to size KV cache and compute buffers.
