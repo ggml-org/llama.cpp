@@ -3288,7 +3288,7 @@ static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
 
 // Watchdog thread: detects stuck L0 driver calls and forces cleanup + exit.
 // Call ggml_sycl_watchdog_heartbeat() at progress points (atomic increment, ~1ns).
-// Controlled by GGML_SYCL_WATCHDOG_TIMEOUT env var (seconds, default 300, 0 disables).
+// Controlled by GGML_SYCL_WATCHDOG_TIMEOUT env var (seconds, default 60, 0 disables).
 void ggml_sycl_watchdog_start();
 void ggml_sycl_watchdog_stop();
 void ggml_sycl_watchdog_heartbeat();

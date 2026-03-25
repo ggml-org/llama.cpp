@@ -2628,16 +2628,13 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     uint64_t   new_hash = can_hash ? compute_content_hash(request.src_ptr, request.src_size) : 0;
 
     auto try_host_fallback = [&](const char * reason) -> bool {
-        // Skip host fallback for GPU-specific layout requests (SOA, COALESCED).
-        // These layouts are only useful on GPU — CPU reads AOS directly from
-        // the original host-pinned buffer.  Attempting to create SOA/COALESCED
-        // copies on host wastes memory AND the fill functions may corrupt the
-        // heap when targeting host buffers (the reorder kernels expect device
-        // VRAM targets and can overflow host allocations).
-        if (request.layout == GGML_LAYOUT_SOA || request.layout == GGML_LAYOUT_COALESCED) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping host fallback for %s layout "
-                            "(CPU reads AOS directly): %s\n",
-                            request.layout == GGML_LAYOUT_SOA ? "SOA" : "COALESCED", reason);
+        // Skip host fallback for SOA layout requests — SOA is only useful on GPU.
+        // CPU reads AOS directly from the original host-pinned buffer.
+        // Without this check, falling back to host creates SOA copies of ALL
+        // experts in pinned memory (~100 GB for 120B), wasting memory and time.
+        if (request.layout == GGML_LAYOUT_SOA) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping host fallback for SOA layout "
+                            "(CPU reads AOS directly): %s\n", reason);
             return false;
         }
         host_cache * hcache = get_host_cache(queue_);
@@ -3900,30 +3897,12 @@ bool unified_cache::stage_expert_group(int                          block_id,
         }
         dq.wait();  // Ensure all fills complete before registering
 
-        // 3. Register all as READY and pin them to prevent eviction by
-        //    subsequent stage_expert_group calls during bulk prestaging.
-        //    Without pinning, the next group's allocate_slot can evict
-        //    entries that were just registered, causing cache thrashing
-        //    where all 13824 expert tensors "stage" successfully but only
-        //    the last few hundred survive (the rest were evicted).
+        // 3. Register all as READY
         for (auto & s : slots) {
             if (s.was_existing) continue;
             register_ready(*s.key, s.ptr, layout, s.data->dst_size,
                            cache_entry_type::MOE_EXPERT,
                            s.data->layer_id, s.data->expert_id);
-        }
-
-        // Pin all slots (new and existing) to protect from eviction
-        {
-            std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-            for (auto & s : slots) {
-                unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key,
-                                        s.data->layer_id, s.data->expert_id };
-                auto it = entries_.find(ckey);
-                if (it != entries_.end()) {
-                    it->second.pinned = true;
-                }
-            }
         }
 
         return true;
@@ -4000,19 +3979,6 @@ bool unified_cache::stage_expert_group(int                          block_id,
                        cache_entry_type::MOE_EXPERT,
                        s.data->layer_id, s.data->expert_id,
                        s.data->src_ptr);
-    }
-
-    // Pin all slots to prevent eviction during bulk prestaging
-    {
-        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-        for (auto & s : slots) {
-            unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key,
-                                    s.data->layer_id, s.data->expert_id };
-            auto it = entries_.find(ckey);
-            if (it != entries_.end()) {
-                it->second.pinned = true;
-            }
-        }
     }
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
@@ -4754,7 +4720,7 @@ static int eviction_tier(const unified_cache_entry & entry) {
     // -1: host-resident (already slow, evict first to reclaim tracking)
     //  0: MoE experts (cold), 1: MoE experts (hot), 2: dense (cold), 3: dense (hot)
     if (entry.host_resident) {
-        return -1;
+        return -1;  // Host-resident entries evict first (they're already slow)
     }
     const int base = (entry.type == cache_entry_type::DENSE_WEIGHT) ? 2 : 0;
     return base + (entry.hot ? 1 : 0);
@@ -5129,29 +5095,6 @@ void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
     if (layout_pool_ && layout_pool_->owns(ptr)) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping deferred free for pool-owned ptr=%p size=%zu\n", ptr, size);
         return;
-    }
-
-    // During per-op dispatch (NOT graph recording), free immediately.
-    // Deferring via submit_barrier_all() on the compute queue causes a livelock:
-    // the barrier depends on previously submitted compute work, but the eviction
-    // loop cannot make progress (used_ never decreases) until the barrier completes.
-    // Skip queue_.wait() — sycl::free on Level Zero uses reference counting, so the
-    // actual deallocation is deferred until all pending operations on the memory complete.
-    // This avoids blocking the compute queue which can stall for minutes on 120B models
-    // (S1-PRELOAD DMA + weight conversion kernels pending on the queue).
-    if (!ggml_sycl_graph_recording_active()) {
-        bool immediate_ok = false;
-        try {
-            sycl::free(ptr, queue_);
-            immediate_ok = true;
-        } catch (...) {
-            // Fall through to deferred path below.
-        }
-        if (immediate_ok) {
-            saturating_sub_used(size);
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] immediate free: ptr=%p size=%zu\n", ptr, size);
-            return;
-        }
     }
 
     deferred_free_entry entry{};

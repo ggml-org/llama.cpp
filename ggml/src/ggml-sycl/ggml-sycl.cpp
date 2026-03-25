@@ -498,10 +498,6 @@ static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
 
-// Thread-local flag: set to true when moe_prefetch_scan() has submitted hints
-// for the current graph. Checked at dispatch time to skip redundant hint() calls.
-static thread_local bool g_prefetch_scan_done = false;
-
 // ---------------------------------------------------------------------------
 // Staging buffer pool for SOA weight conversion in fill_reordered_host.
 // Reuses pinned host allocations instead of malloc_host/free per conversion.
@@ -553,18 +549,6 @@ struct moe_warmup_state {
     std::atomic<bool>     reranking_enabled{false};
     int                   rerank_interval = 100;  // tokens between re-ranks
 
-    // EMA-based expert frequency tracking.
-    // Smooths popularity over time instead of hard-resetting every epoch.
-    // ema[l][e] converges to the fraction of tokens that activate expert e
-    // in layer l, with exponential decay weighting recent tokens more heavily.
-    static constexpr float ema_alpha          = 0.1f;   // per-activation update weight
-    static constexpr int   ema_decay_interval = 10;     // tokens between passive decay sweeps
-    static constexpr float ema_hot_threshold  = 0.5f;   // EMA above this = "hot"
-    static constexpr float ema_cold_threshold = 0.1f;   // EMA below this = "cold"
-
-    float                 ema_counts[MOE_MAX_LAYERS][MOE_MAX_EXPERTS] = {};
-    std::atomic<int>      ema_decay_ticker{0};  // counts tokens since last passive decay
-
     void init(int nl, int ne) {
         n_layers  = std::min(nl, MOE_MAX_LAYERS);
         n_experts = std::min(ne, MOE_MAX_EXPERTS);
@@ -593,11 +577,6 @@ struct moe_warmup_state {
                 int eid = expert_ids[i];
                 if (eid >= 0 && eid < n_experts) {
                     epoch_counts[layer_id][eid].fetch_add(1, std::memory_order_relaxed);
-                    // EMA update: blend toward 1.0 for activated experts.
-                    // Not thread-safe for concurrent writers to the same [l][e],
-                    // but MoE dispatch is sequential per layer so this is fine.
-                    ema_counts[layer_id][eid] =
-                        ema_alpha * 1.0f + (1.0f - ema_alpha) * ema_counts[layer_id][eid];
                 }
             }
             return;  // Warmup counters frozen after initial warmup
@@ -623,37 +602,6 @@ struct moe_warmup_state {
         return false;
     }
 
-    // Passive EMA decay: called every ema_decay_interval tokens.
-    // Multiplies ALL expert EMAs by (1 - alpha)^interval, causing non-activated
-    // experts to smoothly fade toward zero. Activated experts are pulled back
-    // up by the alpha blend in record(), so their EMAs reflect recent usage.
-    //
-    // Not called from record() to avoid per-activation O(layers*experts) sweep.
-    // Instead, ticked from the token-level control loop.
-    void decay_ema() {
-        // Decay factor: (1 - alpha)^decay_interval.
-        // For alpha=0.1, interval=10: factor = 0.9^10 ~= 0.349
-        const float factor = std::pow(1.0f - ema_alpha, static_cast<float>(ema_decay_interval));
-        for (int l = 0; l < n_layers; l++) {
-            for (int e = 0; e < n_experts; e++) {
-                ema_counts[l][e] *= factor;
-            }
-        }
-    }
-
-    // Tick the EMA decay counter. Called once per token after warmup.
-    // Returns true when decay was applied (for logging).
-    bool tick_ema_decay() {
-        if (!reranking_enabled.load(std::memory_order_acquire)) return false;
-        int t = ema_decay_ticker.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (t >= ema_decay_interval) {
-            ema_decay_ticker.store(0, std::memory_order_relaxed);
-            decay_ema();
-            return true;
-        }
-        return false;
-    }
-
     // Called once per token after warmup.  Returns true when a re-rank epoch completes.
     // Uses aggressive initial re-ranking: first 5 epochs use interval/10 (min 10)
     // to fill VRAM cache 10x faster during warmup, then settles to normal interval.
@@ -663,9 +611,6 @@ struct moe_warmup_state {
         if (!reranking_enabled.load(std::memory_order_acquire)) return false;
         if (rerank_interval <= 0) return false;
         int t = epoch_token_count.fetch_add(1, std::memory_order_relaxed) + 1;
-
-        // Tick EMA passive decay (independent of epoch boundary)
-        tick_ema_decay();
 
         int effective_interval = rerank_interval;
         if (epoch_number.load(std::memory_order_relaxed) < 5) {
@@ -683,15 +628,13 @@ struct moe_warmup_state {
     // Enable periodic re-ranking (called after initial warmup + prestage completes)
     void enable_reranking() {
         if (rerank_interval <= 0) return;
-        // Zero out epoch counters and EMA for fresh accumulation
+        // Zero out epoch counters for fresh accumulation
         for (int l = 0; l < n_layers; l++) {
             for (int e = 0; e < n_experts; e++) {
                 epoch_counts[l][e].store(0, std::memory_order_relaxed);
-                ema_counts[l][e] = 0.0f;
             }
         }
         epoch_token_count.store(0, std::memory_order_relaxed);
-        ema_decay_ticker.store(0, std::memory_order_relaxed);
         reranking_enabled.store(true, std::memory_order_release);
     }
 };
@@ -1005,44 +948,11 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue & queue, void * dst,
                                                  const std::vector<sycl::event> & deps);
 static bool ggml_sycl_gpu_reorder_disabled();
 
-// Determine the effective layout for an expert tensor, given its quant type and
-// column count.  layout_policy::get_optimal() returns the preferred layout for
-// the type (e.g. COALESCED for MXFP4), but COALESCED requires
-// (ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0.  If the expert
-// dimensions don't meet this constraint, fall back to SOA.
-static layout_mode moe_effective_expert_layout(ggml_type type, int64_t ncols, int device) {
-    const layout_mode optimal = layout_policy::get_optimal(type, tensor_usage::MOE_EXPERT_WEIGHT, device);
-    if (optimal == GGML_LAYOUT_COALESCED) {
-        int block_size = 0;
-        switch (type) {
-            case GGML_TYPE_Q4_0:   block_size = QK4_0;   break;
-            case GGML_TYPE_Q8_0:   block_size = QK8_0;   break;
-            case GGML_TYPE_Q6_K:   block_size = QK_K;    break;
-            case GGML_TYPE_MXFP4:  block_size = QK_MXFP4; break;
-            default: break;
-        }
-        if (block_size > 0 && ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS) != 0) {
-            // Dimensions don't support coalesced tiling — fall back to SOA
-            return GGML_LAYOUT_SOA;
-        }
-    }
-    return optimal;
-}
-
 // ---------------------------------------------------------------------------
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
 // ---------------------------------------------------------------------------
 static void moe_prestage_popular_experts() {
-    // Guard: prestaging is expensive (~10s for 120B) and only needs to run ONCE.
-    // Multiple call sites (PP→TG transition, tick_token warmup, first-PP-pass,
-    // gate-norm warmup, periodic rerank) can all trigger this function.
-    // After the first successful completion, skip all subsequent calls.
-    static std::atomic<bool> g_prestage_completed{false};
-    if (g_prestage_completed.load(std::memory_order_acquire)) {
-        return;
-    }
-
     if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
     std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
@@ -1189,11 +1099,7 @@ static void moe_prestage_popular_experts() {
 
         auto t0 = std::chrono::high_resolution_clock::now();
 
-        // Helper: build staging data + cache_layout_request for one tensor.
-        // Uses layout_policy::get_optimal() to determine the correct layout
-        // for the tensor's quant type (e.g. COALESCED for MXFP4, SOA for Q4_0).
-        // GPU reorder only supports AOS->SOA; for other layouts, fall back to
-        // CPU reorder via ggml_sycl_fill_reordered_host.
+        // Helper: build staging data + cache_layout_request for one tensor
         auto build_tensor_data = [&](const moe_expert_meta *           meta,
                                      ggml_sycl::staging_tensor_data &  sd,
                                      ggml_sycl::cache_layout_request & req,
@@ -1205,12 +1111,9 @@ static void moe_prestage_popular_experts() {
                 meta->tensor, meta->extra, meta->expert_idx);
             if (!ckey.valid) return false;
 
-            // Determine optimal layout for this expert's type and dimensions
-            const layout_mode optimal_layout = moe_effective_expert_layout(
-                meta->type, meta->ne0, device);
-            const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
-                meta->type, meta->ne0, meta->ne1, optimal_layout, device);
-            const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
+            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device);
+            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
             sd.src_ptr   = meta->data_ptr;
             sd.src_size  = meta->bytes;
@@ -1225,13 +1128,11 @@ static void moe_prestage_popular_experts() {
             req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
             req.layer_id         = meta->layer_id;
             req.expert_id        = meta->expert_idx;
-            req.layout           = optimal_layout;
+            req.layout           = GGML_LAYOUT_SOA;
             req.validate_content = false;
             req.skip_fill_wait   = true;
 
-            // GPU reorder only supports AOS->SOA transform; for other layouts
-            // (COALESCED, XMX_TILED, AOS) use CPU reorder path which handles all.
-            if (use_gpu_reorder && optimal_layout == GGML_LAYOUT_SOA) {
+            if (use_gpu_reorder) {
                 gpu_fctx.type              = meta->type;
                 gpu_fctx.ncols             = meta->ne0;
                 gpu_fctx.nrows             = meta->ne1;
@@ -1250,7 +1151,7 @@ static void moe_prestage_popular_experts() {
                 host_fctx.nrows         = meta->ne1;
                 host_fctx.nbytes        = meta->bytes;
                 host_fctx.dst_bytes     = dst_bytes;
-                host_fctx.layout        = optimal_layout;
+                host_fctx.layout        = GGML_LAYOUT_SOA;
                 host_fctx.src_is_device = false;
                 host_fctx.device_id     = device;
 
@@ -1298,18 +1199,11 @@ static void moe_prestage_popular_experts() {
 
             if (!gate_ok && !up_ok && !down_ok) continue;
 
-            // Determine the optimal layout from the first available tensor's type
-            // and dimensions.  All tensors in an expert group share the same quant type.
-            const moe_expert_meta * rep_meta = mg.gate ? mg.gate : (mg.up ? mg.up : mg.down);
-            const layout_mode group_layout = rep_meta
-                ? moe_effective_expert_layout(rep_meta->type, rep_meta->ne0, device)
-                : GGML_LAYOUT_SOA;
-
             // Stage all 3 tensors atomically
             bool ok = cache->stage_expert_group(
                 mg.block_num, mg.expert_idx, grp,
                 gate_sd, up_sd, down_sd,
-                group_layout,
+                GGML_LAYOUT_SOA,
                 gate_ok ? &gate_req : nullptr,
                 up_ok   ? &up_req   : nullptr,
                 down_ok ? &down_req : nullptr);
@@ -1324,10 +1218,9 @@ static void moe_prestage_popular_experts() {
                 break;
             }
 
-            // Periodic flush every 50 expert groups to prevent >20s accumulated queue
-            // work that triggers L0 DirectSubmission timeout false-positive hang,
-            // and to keep the watchdog heartbeat alive during 409+ group prestaging.
-            if (expert_groups_staged > 0 && expert_groups_staged % 50 == 0) {
+            // Periodic flush every 100 expert groups to prevent >20s accumulated queue
+            // work that triggers L0 DirectSubmission timeout false-positive hang.
+            if (expert_groups_staged > 0 && expert_groups_staged % 100 == 0) {
                 try {
                     cache->get_queue().wait();
                 } catch (...) {
@@ -1365,25 +1258,6 @@ static void moe_prestage_popular_experts() {
     GGML_LOG_INFO("[MOE-PRESTAGE] Pre-staged %d popular expert tensors to GPU0 VRAM "
                   "(%d already cached, %d down_exps deferred, %d layers, avail=%zu)\n",
                   prestaged, skipped, down_deferred, n_layers, avail);
-
-    // --- Post-prestage verification: count resident expert groups ---
-    if (cache) {
-        int n_resident = 0, n_total = 0;
-        std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
-        for (const auto & [gkey, grp] : g_expert_groups) {
-            n_total++;
-            grp_lock.unlock();
-            if (is_expert_resident(static_cast<int>(gkey >> 16),
-                                   static_cast<int>(gkey & 0xFFFF), device)) {
-                n_resident++;
-            }
-            grp_lock.lock();
-        }
-        GGML_LOG_INFO("[MOE-PRESTAGE] Verification: %d/%d expert groups resident "
-                      "on device %d (cache entries=%zu)\n",
-                      n_resident, n_total, device,
-                      cache->entry_count());
-    }
 
     ggml_sycl_watchdog_heartbeat();
 
@@ -1443,7 +1317,6 @@ static void moe_prestage_popular_experts() {
                 ggml_sycl_cache_id           key;
                 size_t                       dst_bytes;
                 int                          budget_idx;  // index into sec_budgets
-                layout_mode                  optimal_layout;  // layout for this expert type
             };
             std::vector<sec_work_item> sec_work;
 
@@ -1468,12 +1341,9 @@ static void moe_prestage_popular_experts() {
                     continue;
                 }
 
-                // Determine optimal layout for this expert's type and dimensions (same as Phase 1)
-                const layout_mode sec_optimal_layout = moe_effective_expert_layout(
-                    meta->type, meta->ne0, 0);
-                const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
-                    meta->type, meta->ne0, meta->ne1, sec_optimal_layout, 0);
-                const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
+                const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                    meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, 0);
+                const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
                 int    best_idx   = -1;
                 size_t best_space = 0;
@@ -1510,7 +1380,7 @@ static void moe_prestage_popular_experts() {
                 // remains accurate for subsequent experts.
                 budget.bytes_remaining -= std::min(dst_bytes, budget.bytes_remaining);
 
-                sec_work.push_back({ meta, key, dst_bytes, best_idx, sec_optimal_layout });
+                sec_work.push_back({ meta, key, dst_bytes, best_idx });
             }
 
             const bool sec_use_gpu = !ggml_sycl_gpu_reorder_disabled();
@@ -1519,22 +1389,29 @@ static void moe_prestage_popular_experts() {
                 // --- Phase 2b (GPU path): GPU reorder for secondary devices ---
                 // Per-device fallback temp buffer tracking for deferred free
                 // (only used when pre-allocated buffer is unavailable).
-                // GPU reorder only supports SOA; for other layouts (COALESCED etc.)
-                // fall back to host reorder within this same loop.
                 std::unordered_map<int, std::vector<void *>> sec_temp_bufs;
                 std::vector<ggml_sycl_gpu_reorder_fill_ctx> sec_fill_ctxs(sec_work.size());
-                std::vector<ggml_sycl_reorder_fill_ctx>     sec_host_fill_ctxs(sec_work.size());
 
                 auto t0 = std::chrono::high_resolution_clock::now();
 
                 for (size_t i = 0; i < sec_work.size(); i++) {
-                    // Heartbeat every 50 experts during Phase 2 secondary GPU staging.
-                    if (i > 0 && i % 50 == 0) {
-                        ggml_sycl_watchdog_heartbeat();
-                    }
-
                     auto & item = sec_work[i];
                     auto & budget = sec_budgets[item.budget_idx];
+                    auto & fctx = sec_fill_ctxs[i];
+
+                    // Get pre-allocated reorder temp buffer for this secondary device
+                    void * sec_prealloc      = budget.cache ? budget.cache->get_reorder_temp_buffer() : nullptr;
+                    size_t sec_prealloc_size = budget.cache ? budget.cache->get_reorder_temp_size()   : 0;
+
+                    fctx.type              = item.meta->type;
+                    fctx.ncols             = item.meta->ne0;
+                    fctx.nrows             = item.meta->ne1;
+                    fctx.src_bytes         = item.meta->bytes;
+                    fctx.dst_bytes         = item.dst_bytes;
+                    fctx.temp_bufs         = sec_prealloc ? nullptr : &sec_temp_bufs[budget.dev];
+                    fctx.owner_queue       = nullptr;
+                    fctx.prealloc_temp      = sec_prealloc;
+                    fctx.prealloc_temp_size = sec_prealloc_size;
 
                     ggml_sycl::cache_layout_request req{};
                     req.key              = item.key;
@@ -1544,44 +1421,11 @@ static void moe_prestage_popular_experts() {
                     req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
                     req.layer_id         = item.meta->layer_id;
                     req.expert_id        = item.meta->expert_idx;
-                    req.layout           = item.optimal_layout;
+                    req.layout           = GGML_LAYOUT_SOA;
                     req.validate_content = false;
                     req.skip_fill_wait   = true;
-
-                    // GPU reorder only supports AOS->SOA; use host reorder for other layouts
-                    if (item.optimal_layout == GGML_LAYOUT_SOA) {
-                        auto & fctx = sec_fill_ctxs[i];
-
-                        // Get pre-allocated reorder temp buffer for this secondary device
-                        void * sec_prealloc      = budget.cache ? budget.cache->get_reorder_temp_buffer() : nullptr;
-                        size_t sec_prealloc_size = budget.cache ? budget.cache->get_reorder_temp_size()   : 0;
-
-                        fctx.type              = item.meta->type;
-                        fctx.ncols             = item.meta->ne0;
-                        fctx.nrows             = item.meta->ne1;
-                        fctx.src_bytes         = item.meta->bytes;
-                        fctx.dst_bytes         = item.dst_bytes;
-                        fctx.temp_bufs         = sec_prealloc ? nullptr : &sec_temp_bufs[budget.dev];
-                        fctx.owner_queue       = nullptr;
-                        fctx.prealloc_temp      = sec_prealloc;
-                        fctx.prealloc_temp_size = sec_prealloc_size;
-
-                        req.fill_fn  = ggml_sycl_fill_reordered_gpu;
-                        req.fill_ctx = &fctx;
-                    } else {
-                        auto & hctx = sec_host_fill_ctxs[i];
-                        hctx.type          = item.meta->type;
-                        hctx.ncols         = item.meta->ne0;
-                        hctx.nrows         = item.meta->ne1;
-                        hctx.nbytes        = item.meta->bytes;
-                        hctx.dst_bytes     = item.dst_bytes;
-                        hctx.layout        = item.optimal_layout;
-                        hctx.src_is_device = false;
-                        hctx.device_id     = budget.dev;
-
-                        req.fill_fn  = ggml_sycl_fill_reordered_host;
-                        req.fill_ctx = &hctx;
-                    }
+                    req.fill_fn          = ggml_sycl_fill_reordered_gpu;
+                    req.fill_ctx         = &fctx;
 
                     try {
                         auto result = budget.cache->ensure_cached_layout(req, {});
@@ -1642,7 +1486,7 @@ static void moe_prestage_popular_experts() {
                     ci.reorder_ctx.nrows         = item.meta->ne1;
                     ci.reorder_ctx.nbytes        = item.meta->bytes;
                     ci.reorder_ctx.dst_bytes     = item.dst_bytes;
-                    ci.reorder_ctx.layout        = item.optimal_layout;
+                    ci.reorder_ctx.layout        = GGML_LAYOUT_SOA;
                     ci.reorder_ctx.src_is_device = false;
                     ci.reorder_ctx.device_id     = budget.dev;
 
@@ -1712,7 +1556,7 @@ static void moe_prestage_popular_experts() {
                     req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
                     req.layer_id         = ci.meta->layer_id;
                     req.expert_id        = ci.meta->expert_idx;
-                    req.layout           = ci.reorder_ctx.layout;
+                    req.layout           = GGML_LAYOUT_SOA;
                     req.validate_content = false;
                     req.skip_fill_wait   = true;
                     req.fill_fn          = nullptr;
@@ -1760,10 +1604,6 @@ static void moe_prestage_popular_experts() {
         }
     }
     ggml_sycl_watchdog_heartbeat();
-
-    // Mark prestaging as done — all subsequent calls will return immediately.
-    g_prestage_completed.store(true, std::memory_order_release);
-    GGML_LOG_INFO("[MOE-PRESTAGE] Prestaging complete — subsequent calls will be skipped\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1801,21 +1641,19 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
         meta->tensor, meta->extra, meta->expert_idx);
     if (!key.valid) return nullptr;
 
-    // Compute layout byte count for this expert's dimensions using optimal layout
-    const layout_mode optimal_layout = moe_effective_expert_layout(
-        meta->type, meta->ne0, device_id);
-    const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
-        meta->type, meta->ne0, meta->ne1, optimal_layout, device_id);
-    const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
+    // Compute SOA byte count for this expert's dimensions
+    const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+        meta->type, meta->ne0, meta->ne1, GGML_LAYOUT_SOA, device_id);
+    const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : meta->bytes;
 
-    // Build AOS → optimal layout reorder context
+    // Build AOS→SOA reorder context
     ggml_sycl_reorder_fill_ctx reorder_ctx{};
     reorder_ctx.type          = meta->type;
     reorder_ctx.ncols         = meta->ne0;
     reorder_ctx.nrows         = meta->ne1;
     reorder_ctx.nbytes        = meta->bytes;
     reorder_ctx.dst_bytes     = dst_bytes;
-    reorder_ctx.layout        = optimal_layout;
+    reorder_ctx.layout        = GGML_LAYOUT_SOA;
     reorder_ctx.src_is_device = false;
     reorder_ctx.device_id     = device_id;
 
@@ -1828,7 +1666,7 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     req.type             = cache_entry_type::MOE_EXPERT;
     req.layer_id         = meta->layer_id;
     req.expert_id        = meta->expert_idx;
-    req.layout           = optimal_layout;
+    req.layout           = GGML_LAYOUT_SOA;
     req.validate_content = false;
     req.fill_fn          = ggml_sycl_fill_reordered_host;
     req.fill_ctx         = &reorder_ctx;
@@ -1848,77 +1686,6 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     return nullptr;
 }
 
-bool moe_get_expert_stage_info(int layer_idx, int expert_idx, int device_id,
-                               expert_stage_info & out) {
-    out = {};
-
-    // Look up expert metadata from the global registry.
-    const moe_expert_meta * meta = nullptr;
-    {
-        std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
-        for (const auto & m : g_moe_expert_meta) {
-            if (m.layer_id == layer_idx && m.expert_idx == expert_idx) {
-                meta = &m;
-                break;
-            }
-        }
-    }
-    if (!meta) return false;
-
-    // Validate data pointer (null or kernel-space addresses are invalid).
-    const uintptr_t data_addr = reinterpret_cast<uintptr_t>(meta->data_ptr);
-    if (data_addr == 0 || (data_addr >> 47) != 0) {
-        return false;
-    }
-
-    // Build cache key from expert tensor metadata.
-    ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
-        meta->tensor, meta->extra, meta->expert_idx);
-    if (!key.valid) return false;
-
-    // Compute optimal layout and destination size.
-    const layout_mode optimal_layout = moe_effective_expert_layout(
-        meta->type, meta->ne0, device_id);
-    const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
-        meta->type, meta->ne0, meta->ne1, optimal_layout, device_id);
-    const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
-
-    out.cache_key  = key;
-    out.src_ptr    = meta->data_ptr;
-    out.src_size   = meta->bytes;
-    out.dst_size   = dst_bytes;
-    out.layout     = optimal_layout;
-    out.type       = meta->type;
-    out.ncols      = meta->ne0;
-    out.nrows      = meta->ne1;
-    out.layer_id   = meta->layer_id;
-    out.expert_id  = meta->expert_idx;
-    out.valid      = true;
-    return true;
-}
-
-sycl::event fill_reordered_host(sycl::queue &                    queue,
-                                void *                           dst,
-                                size_t                           dst_size,
-                                const void *                     src,
-                                size_t                           src_size,
-                                const void *                     ctx_void,
-                                const std::vector<sycl::event> & deps) {
-    // Translate public reorder_fill_ctx -> internal ggml_sycl_reorder_fill_ctx.
-    const auto * ctx = static_cast<const reorder_fill_ctx *>(ctx_void);
-    ggml_sycl_reorder_fill_ctx internal_ctx{};
-    internal_ctx.type          = ctx->type;
-    internal_ctx.ncols         = ctx->ncols;
-    internal_ctx.nrows         = ctx->nrows;
-    internal_ctx.nbytes        = ctx->nbytes;
-    internal_ctx.dst_bytes     = ctx->dst_bytes;
-    internal_ctx.layout        = ctx->layout;
-    internal_ctx.src_is_device = ctx->src_is_device;
-    internal_ctx.device_id     = ctx->device_id;
-    return ggml_sycl_fill_reordered_host(queue, dst, dst_size, src, src_size,
-                                         &internal_ctx, deps);
-}
-
 uint32_t get_expert_frequency(int layer_hash, int expert_id) {
     auto & seq_map = g_moe_layer_seq[0];
     auto it = seq_map.find(layer_hash);
@@ -1926,10 +1693,7 @@ uint32_t get_expert_frequency(int layer_hash, int expert_id) {
     int seq_layer = it->second;
     if (seq_layer < 0 || seq_layer >= g_moe_warmup.n_layers) return 0;
     if (expert_id < 0 || expert_id >= g_moe_warmup.n_experts) return 0;
-    // Return EMA scaled to uint32_t (0.0-1.0 -> 0-1000) for backward compat.
-    // Callers that compare frequencies get smooth, history-aware values
-    // instead of raw counts that reset every epoch.
-    return static_cast<uint32_t>(g_moe_warmup.ema_counts[seq_layer][expert_id] * 1000.0f);
+    return g_moe_warmup.epoch_counts[seq_layer][expert_id].load(std::memory_order_relaxed);
 }
 
 }  // namespace ggml_sycl
@@ -1958,12 +1722,12 @@ static void moe_periodic_rerank() {
         if (it == seq_to_hash.end()) continue;
         int hash_layer_id = it->second;
 
-        // Sort by EMA (smooth, history-aware) instead of raw epoch counts.
-        // EMA values are floats in [0, 1]; use pair<float, int> for sort.
-        std::vector<std::pair<float, int>> sorted_experts;
+        // Collect epoch counts and sort descending
+        std::vector<std::pair<uint32_t, int>> sorted_experts;
         sorted_experts.reserve(ne);
         for (int e = 0; e < ne; e++) {
-            sorted_experts.push_back({g_moe_warmup.ema_counts[l][e], e});
+            uint32_t c = g_moe_warmup.epoch_counts[l][e].load(std::memory_order_relaxed);
+            sorted_experts.push_back({c, e});
         }
         std::sort(sorted_experts.begin(), sorted_experts.end(),
                   [](const auto & a, const auto & b) { return a.first > b.first; });
@@ -1978,9 +1742,7 @@ static void moe_periodic_rerank() {
             ggml_sycl::set_expert_popularity_rank(hash_layer_id, eid, rank);
         }
 
-        // Reset raw epoch counters (kept for backward compatibility with
-        // any code that still reads epoch_counts directly). EMA is NOT
-        // reset — it decays smoothly via tick_ema_decay().
+        // Reset epoch counters for this layer for the next epoch
         for (int e = 0; e < ne; e++) {
             g_moe_warmup.epoch_counts[l][e].store(0, std::memory_order_relaxed);
         }
@@ -2111,11 +1873,9 @@ private:
             int hash_layer_id = it->second;
 
             for (int e = 0; e < ne; e++) {
-                // Use EMA for promotion decisions: smoother than raw epoch counts.
-                // Scale EMA (0.0-1.0) to uint32_t (0-1000) for sort compatibility.
-                float    ema   = g_moe_warmup.ema_counts[l][e];
-                uint32_t score = static_cast<uint32_t>(ema * 1000.0f);
-                if (score < hit_threshold) continue;
+                uint32_t count = g_moe_warmup.epoch_counts[l][e].load(
+                    std::memory_order_relaxed);
+                if (count < hit_threshold) continue;
 
                 // Check if expert is already in VRAM via the cache
                 int64_t ekey = (int64_t(hash_layer_id) << 32) | int64_t(uint32_t(e));
@@ -2124,8 +1884,8 @@ private:
                     continue;
                 }
 
-                // CPU-resident expert with high EMA -- candidate for promotion
-                candidates.push_back({ l, hash_layer_id, e, score });
+                // CPU-resident expert with high hit count -- candidate for promotion
+                candidates.push_back({ l, hash_layer_id, e, count });
             }
         }
 
@@ -2654,10 +2414,6 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
     }
 
-    // Heartbeat after expert list scan — iterating 13K+ experts can take
-    // several seconds on 120B models, enough to approach the watchdog timeout.
-    ggml_sycl_watchdog_heartbeat();
-
     if (n_moe_layers == 0) {
         GGML_LOG_INFO("[MOE-HYBRID] No MUL_MAT_ID nodes found, MoE hybrid disabled\n");
         return;
@@ -3053,15 +2809,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     continue;
                 }
 
-                // Compute optimal layout size for this expert type
+                // Compute SOA layout size for this expert type
                 const int64_t ncols       = info.tensor->ne[0];
                 const int64_t nrows       = info.tensor->ne[1];
                 auto &        budget      = budgets[best_idx];
-                const layout_mode adaptive_layout = moe_effective_expert_layout(
-                    info.tensor->type, ncols, budget.dev);
-                const size_t  layout_bytes = ggml_sycl_layout_bytes_for_dims(
-                    info.tensor->type, ncols, nrows, adaptive_layout, budget.dev);
-                const size_t  dst_bytes   = (layout_bytes > 0) ? layout_bytes : info.bytes;
+                const size_t  soa_bytes   = ggml_sycl_layout_bytes_for_dims(
+                    info.tensor->type, ncols, nrows, GGML_LAYOUT_SOA, budget.dev);
+                const size_t  dst_bytes   = (soa_bytes > 0) ? soa_bytes : info.bytes;
 
                 // Budget guard: stop uploading to this device if the SOA-expanded
                 // expert size would exceed the remaining VRAM.  Without this check,
@@ -3107,14 +2861,14 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     }
                 }
 
-                // Set up reorder context for AOS → optimal layout conversion
+                // Set up reorder context for AOS→SOA conversion
                 reorder_ctx             = {};
                 reorder_ctx.type        = info.tensor->type;
                 reorder_ctx.ncols       = ncols;
                 reorder_ctx.nrows       = nrows;
                 reorder_ctx.nbytes      = info.bytes;
                 reorder_ctx.dst_bytes   = dst_bytes;
-                reorder_ctx.layout      = adaptive_layout;
+                reorder_ctx.layout      = GGML_LAYOUT_SOA;
                 reorder_ctx.src_is_device = false;  // upload_src is always host-accessible
                 reorder_ctx.device_id   = budget.dev;
 
@@ -3126,7 +2880,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 req.type             = cache_entry_type::MOE_EXPERT;
                 req.layer_id         = info.layer_id;
                 req.expert_id        = info.expert_idx;
-                req.layout           = adaptive_layout;
+                req.layout           = GGML_LAYOUT_SOA;
                 req.validate_content = false;
                 req.fill_fn          = ggml_sycl_fill_reordered_host;
                 req.fill_ctx         = &reorder_ctx;
@@ -8453,7 +8207,6 @@ static void ggml_sycl_init_layout_info(ggml_tensor_extra_gpu * extra,
 }
 
 static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) try {
-    ggml_sycl_watchdog_heartbeat();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
@@ -10327,16 +10080,9 @@ static void ggml_sycl_preload_model_weights() {
             // handles allocation + fill + registration atomically)
 
             // Submit all H2D copies for this device without waiting
-            size_t preload_count = 0;
             for (size_t idx : indices) {
                 const auto & item   = items[idx];
                 const auto * tensor = item.tensor;
-
-                // Heartbeat every 50 weights to prevent watchdog timeout
-                // during bulk upload of 291+ dense/MoE weights.
-                if (++preload_count % 50 == 0) {
-                    ggml_sycl_watchdog_heartbeat();
-                }
 
                 if (item.is_moe) {
                     // MoE: submit all expert copies with skip_fill_wait
@@ -25396,7 +25142,6 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
     ctx.graph_pinned_entries.reserve(target_layouts.size());
     size_t loaded = 0;
     for (const auto & entry : target_layouts) {
-        ggml_sycl_watchdog_heartbeat();
         const ggml_sycl_cache_id & cache_key  = entry.first;
         const ggml_tensor *        weight     = entry.second.tensor;
         const layout_mode          target     = entry.second.layout;
@@ -31520,7 +31265,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FIRST_SAVED;
-                    ggml_sycl_watchdog_heartbeat();
 
                     static std::atomic<int> flog_first{ 0 };
                     if (flog_first.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31671,7 +31415,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FUSED_READY;
-                    ggml_sycl_watchdog_heartbeat();
 
                     static std::atomic<int> flog_fuse{ 0 };
                     if (flog_fuse.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31722,7 +31465,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     {
-                        ggml_sycl_watchdog_heartbeat();
                         static std::atomic<int> fused_route_log{0};
                         if (fused_route_log.fetch_add(1, std::memory_order_relaxed) < 3) {
                             GGML_LOG_INFO("[MOE-P4] layer=%d: gpu0=%zu cpu=%zu sec=%zu\n",
@@ -33909,14 +33651,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
-                // Also run heuristic prediction for current layer as a fallback.
-                // Skip if the pre-attention scan already submitted these hints —
-                // hint() is idempotent (already-cached experts return immediately)
-                // but skipping saves the predict + hint overhead per MoE layer.
-                if (!g_prefetch_scan_done) {
-                    auto predicted = predictor.predict(seq_layer_id);
-                    route_hint_to_device(layer_id, predicted);
-                }
+                // Also run heuristic prediction for current layer as a fallback
+                auto predicted = predictor.predict(seq_layer_id);
+                route_hint_to_device(layer_id, predicted);
             }
 
             // Await any in-flight prefetches for this layer before dispatch.
@@ -35167,7 +34904,6 @@ static inline bool should_force_gpu_dispatch(const ggml_tensor * dst) {
 }
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
-    ggml_sycl_watchdog_heartbeat();
     if (!g_sycl_loaded) {
         return false;
     }
@@ -35782,7 +35518,6 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
                                                const void *   data,
                                                size_t         offset,
                                                size_t         size) try {
-    ggml_sycl_watchdog_heartbeat();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
@@ -36994,79 +36729,6 @@ static offload_plan_stats summarize_offload_plan(const ggml_cgraph *         cgr
     return stats;
 }
 
-// Pre-attention expert prefetch scan: walk the graph BEFORE compute begins,
-// predict experts for each MoE layer using heuristic prediction (last token's
-// experts + frequency fill), and submit async DMA hints.  By the time the first
-// MoE layer executes (after ~5-8ms of attention compute), the predicted experts
-// should already be resident in VRAM.
-static void moe_prefetch_scan(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
-    g_prefetch_scan_done = false;
-
-    const int device = sycl_ctx->device;
-    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) return;
-
-    auto & predictor  = g_expert_predictors[device];
-    auto & prefetcher = g_expert_prefetchers[device];
-
-    // Both predictor and prefetcher must be active.
-    if (!predictor.is_active() || !prefetcher.is_active()) return;
-    if (predictor.is_prefetch_disabled()) return;
-
-    // Skip if warmup hasn't completed — no prediction history yet.
-    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) return;
-
-    auto & seq_map = g_moe_layer_seq[device];
-    if (seq_map.empty()) return;
-
-    const int n_gpu_hint = g_moe_multi_gpu_active.load(std::memory_order_acquire)
-                               ? ggml_sycl_info().total_gpu_count
-                               : 1;
-
-    // Collect all MUL_MAT_ID hash IDs grouped by sequential layer.
-    // Each MoE block has gate/up/down sub-ops sharing the same blk.N but
-    // with different FNV hashes.  We predict once per sequential layer but
-    // submit hints for ALL sub-op hashes so every weight tensor gets prefetched.
-    std::unordered_map<int, std::vector<int>> seq_to_hashes;
-
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_tensor * node = cgraph->nodes[i];
-        if (!node || node->op != GGML_OP_MUL_MAT_ID) continue;
-
-        const ggml_tensor * src0 = node->src[0];
-        if (!src0 || !src0->name) continue;
-
-        const int blk_id = parse_layer_id_from_name(src0->name);
-        if (blk_id < 0) continue;
-
-        // Compute the hash-based layer ID that hint() and placement table expect.
-        const int hash_layer_id = moe_cache_layer_id(src0->name);
-
-        // Translate hash to sequential index for predictor.
-        auto seq_it = seq_map.find(hash_layer_id);
-        if (seq_it == seq_map.end()) continue;
-
-        seq_to_hashes[seq_it->second].push_back(hash_layer_id);
-    }
-
-    // For each sequential layer, predict once and hint all sub-op hashes.
-    for (const auto & [seq_layer_id, hash_ids] : seq_to_hashes) {
-        auto predicted = predictor.predict(seq_layer_id);
-
-        for (int hash_layer_id : hash_ids) {
-            for (int eid : predicted) {
-                prefetcher.hint(hash_layer_id, eid);
-                for (int d = 1; d < n_gpu_hint && d < GGML_SYCL_MAX_DEVICES; d++) {
-                    if (g_expert_prefetchers[d].is_initialized()) {
-                        g_expert_prefetchers[d].hint(hash_layer_id, eid);
-                    }
-                }
-            }
-        }
-    }
-
-    g_prefetch_scan_done = !seq_to_hashes.empty();
-}
-
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     // Re-entrancy guard: Prevent nested calls to compute_impl
     static thread_local bool g_in_compute_impl = false;
@@ -37282,12 +36944,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
     }
-    // Pre-attention expert prefetch: submit DMA hints for all MoE layers
-    // BEFORE any compute begins.  The DMA engine processes hints in submission
-    // order; by the time the first MoE layer executes (after ~5-8ms of attention),
-    // the predicted experts should already be resident in VRAM.
-    moe_prefetch_scan(sycl_ctx, cgraph);
-
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         ggml_sycl_tp_new_pass();
@@ -37571,9 +37227,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
 #endif  // GGML_SYCL_DNNL
 
-    ggml_sycl_watchdog_heartbeat();
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_sycl_watchdog_heartbeat();
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
         g_preclassified_node_idx = i;
         ggml_tensor * node       = cgraph->nodes[i];
@@ -44903,7 +44557,6 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 GGML_LOG_ERROR("[SYCL] pre-finalize sync failed: %s\n", e.what());
             }
         }
-        ggml_sycl_watchdog_heartbeat();
         finalize_layouts(*sycl_ctx, cgraph);
         GGML_SYCL_DEBUG("[DEBUG] finalize_layouts returned, now checking graph compatibility\n");
         if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
@@ -45315,7 +44968,6 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         return GGML_STATUS_SUCCESS;
     }
 normal_dispatch:
-    ggml_sycl_watchdog_heartbeat();
     // Leaving persistent TG path (e.g. PP phase): drop cached decode plans.
     if (sycl_ctx->unified_kernel && sycl_ctx->unified_kernel->has_cached_plan()) {
         sycl_ctx->unified_kernel->invalidate_plan_cache();
@@ -45712,7 +45364,6 @@ normal_dispatch:
         }
         // Pre-load and pin all dense weights before graph recording (weight streaming mode).
         // This ensures stable cache slot pointers during graph execution.
-        ggml_sycl_watchdog_heartbeat();
         if (!sycl_ctx->exec_graph && !sycl_ctx->weight_streaming_graphs_disabled) {
             if (!graph_preload_weights(*sycl_ctx, cgraph, cached_is_decode)) {
                 GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");

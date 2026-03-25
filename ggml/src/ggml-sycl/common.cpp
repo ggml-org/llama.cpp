@@ -491,7 +491,7 @@ static void ggml_sycl_signal_handler(int sig) {
 // (atomic increment, ~1ns overhead).  If no heartbeat for TIMEOUT seconds,
 // the watchdog fires cleanup + _Exit(1).
 //
-// Controlled by GGML_SYCL_WATCHDOG_TIMEOUT (seconds, default 300, 0 disables).
+// Controlled by GGML_SYCL_WATCHDOG_TIMEOUT (seconds, default 60, 0 disables).
 // ============================================================================
 
 static std::atomic<uint64_t> g_watchdog_heartbeat{0};
