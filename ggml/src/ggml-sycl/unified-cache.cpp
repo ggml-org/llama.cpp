@@ -2628,13 +2628,16 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     uint64_t   new_hash = can_hash ? compute_content_hash(request.src_ptr, request.src_size) : 0;
 
     auto try_host_fallback = [&](const char * reason) -> bool {
-        // Skip host fallback for SOA layout requests — SOA is only useful on GPU.
-        // CPU reads AOS directly from the original host-pinned buffer.
-        // Without this check, falling back to host creates SOA copies of ALL
-        // experts in pinned memory (~100 GB for 120B), wasting memory and time.
-        if (request.layout == GGML_LAYOUT_SOA) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping host fallback for SOA layout "
-                            "(CPU reads AOS directly): %s\n", reason);
+        // Skip host fallback for GPU-specific layout requests (SOA, COALESCED).
+        // These layouts are only useful on GPU — CPU reads AOS directly from
+        // the original host-pinned buffer.  Attempting to create SOA/COALESCED
+        // copies on host wastes memory AND the fill functions may corrupt the
+        // heap when targeting host buffers (the reorder kernels expect device
+        // VRAM targets and can overflow host allocations).
+        if (request.layout == GGML_LAYOUT_SOA || request.layout == GGML_LAYOUT_COALESCED) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping host fallback for %s layout "
+                            "(CPU reads AOS directly): %s\n",
+                            request.layout == GGML_LAYOUT_SOA ? "SOA" : "COALESCED", reason);
             return false;
         }
         host_cache * hcache = get_host_cache(queue_);
