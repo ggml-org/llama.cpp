@@ -29,7 +29,6 @@ on:
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-cmake-pkg.yml',
-      'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -81,8 +80,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
@@ -121,8 +118,6 @@ jobs:
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
           # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
           cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
@@ -214,7 +209,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             python3 python3-pip python3-dev \
             libjpeg-dev build-essential libssl-dev \
-            git-lfs ninja-build
+            git-lfs
 
       - name: Python Dependencies
         id: python_depends
@@ -234,8 +229,6 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
           time cmake --build build --config Release -j $(nproc)
@@ -347,7 +340,7 @@ jobs:
           sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
           sudo apt-get install -y build-essential mesa-vulkan-drivers \
-            libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev ninja-build
+            libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
 
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
@@ -388,8 +381,6 @@ jobs:
         run: |
           export Dawn_DIR=dawn/lib64/cmake/Dawn
           cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_WEBGPU=ON
           time cmake --build build --config Release -j $(nproc)
 
@@ -449,7 +440,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev ninja-build
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -462,8 +453,6 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
@@ -482,7 +471,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libssl-dev ninja-build
+          apt-get install -y build-essential git cmake libssl-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -495,8 +484,6 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_MUSA=ON
           time cmake --build build --config Release -j $(nproc)
 
@@ -521,7 +508,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev ninja-build
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev
 
       - name: install oneAPI MKL library
         shell: bash
@@ -544,8 +531,6 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx
@@ -702,7 +687,7 @@ jobs:
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
+            defines: '-DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'llvm-arm64'
             arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
@@ -1000,7 +985,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs ninja-build
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1051,7 +1036,6 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
@@ -1103,12 +1087,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ninja-build
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
     runs-on: ubuntu-22.04-arm
@@ -1129,12 +1113,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ninja-build
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
     runs-on: ubuntu-22.04
@@ -1155,12 +1139,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ninja-build
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
     runs-on: ubuntu-22.04-arm
@@ -1181,12 +1165,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ninja-build
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf-sve:
     runs-on: ubuntu-22.04-arm
@@ -1207,12 +1191,12 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ninja-build
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai:
      runs-on: ubuntu-22.04-arm
@@ -1233,12 +1217,12 @@ jobs:
          id: depends
          run: |
            sudo apt-get update
-           sudo apt-get install -y build-essential ninja-build
+           sudo apt-get install -y build-essential
 
        - name: Test
          id: ggml-ci
          run: |
-           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 GG_BUILD_NINJA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai-graviton4:
      runs-on: ah-ubuntu_22_04-c8g_8x
@@ -1256,7 +1240,6 @@ jobs:
            sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
            apt-get install -y \
             build-essential \
-            ninja-build \
             python3-venv \
             gpg \
             wget \
@@ -1287,5 +1270,4 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 \
            GG_BUILD_EXTRA_TESTS_0=1 \
-           GG_BUILD_NINJA=1 \
            bash ./ci/run.sh ./tmp/results ./tmp/mnt
