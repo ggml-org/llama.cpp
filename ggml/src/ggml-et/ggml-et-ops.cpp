@@ -29,6 +29,14 @@ static ggml_et_cpu_compare_config norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config sqr_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config elmap_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -166,6 +174,56 @@ bool ggml_et_op_scale(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, "scale_f32", &params, sizeof(params), 0xFFFFFFFF);
 
     ET_PERF_END_EXT("SCALE", "scale_f32", node, "scale=%.6f|bias=%.6f", (double)scale, (double)bias);
+    return kernel_result;
+}
+
+bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SQR operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: SQR operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: SQR operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    ggml_et_sqr_params params;
+    params.src0 = *node->src[0];  // F32 input tensor
+    params.dst = *node;           // F32 output tensor
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (sqr_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_SQR)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for SQR operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "sqr_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &sqr_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for SQR operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("SQR", "sqr_f32", node);
     return kernel_result;
 }
 
