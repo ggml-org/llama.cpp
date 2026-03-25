@@ -266,6 +266,15 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant 3.5 bpw (WHT + 4-level codebook + 1-bit QJL residual)
+#define QK_TQ3_0 32
+typedef struct {
+    uint8_t   qs[QK_TQ3_0 / 4];  // 8 bytes: 32 x 2-bit codebook indices
+    uint8_t   qr[QK_TQ3_0 / 8];  // 4 bytes: 32 x 1-bit QJL residual signs
+    ggml_half gamma;              // 2 bytes: per-block scale (amax / 1.510)
+} block_tq3_0;
+static_assert(sizeof(block_tq3_0) == 14, "wrong tq3_0 block size");
+
 //
 // Super-block quantization structures
 //
