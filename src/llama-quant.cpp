@@ -344,7 +344,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
     // do not quantize specific multimodal tensors
-    quantize &= name.find(".position_embd.") == std::string::npos;
+    quantize &= name.find(".position_embd") == std::string::npos;
+    quantize &= name.find("sam.patch_embd") == std::string::npos;
+    quantize &= name.find("sam.pos_embd")   == std::string::npos;
+    quantize &= name.find(".rel_pos")       == std::string::npos;
 
     return quantize;
 }

@@ -88,6 +88,7 @@ add_test_vision "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 add_test_vision "ggml-org/LFM2-VL-450M-GGUF:Q8_0"
 add_test_vision "ggml-org/granite-docling-258M-GGUF:Q8_0"
 add_test_vision "ggml-org/LightOnOCR-1B-1025-GGUF:Q8_0"
+add_test_vision "ggml-org/DeepSeek-OCR-GGUF:Q8_0" -p "Free OCR." --chat-template deepseek-ocr
 
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
@@ -108,6 +109,7 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
     # add_test_vision "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M" # does not work on my mac M3 Ultra
     # add_test_vision "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF:Q4_K_M" # not always working
+    add_test_vision "ggml-org/GLM-4.6V-Flash-GGUF:Q4_K_M" -p "extract all texts from this image"
 
     add_test_audio  "ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF:Q4_K_M"
     add_test_audio  "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"

@@ -31,6 +31,13 @@ llama-server -m gemma-3-4b-it-Q4_K_M.gguf --mmproj mmproj-gemma-3-4b-it-Q4_K_M.g
 llama-server -hf ggml-org/gemma-3-4b-it-GGUF --no-mmproj-offload
 ```
 
+> [!IMPORTANT]
+>
+> OCR models are trained with specific prompt and input structure, please refer to these discussions for more info:
+> - PaddleOCR-VL: https://github.com/ggml-org/llama.cpp/pull/18825
+> - GLM-OCR: https://github.com/ggml-org/llama.cpp/pull/19677
+> - Deepseek-OCR: https://github.com/ggml-org/llama.cpp/pull/17400
+
 ## Pre-quantized models
 
 These are ready-to-use models, most of them come with `Q4_K_M` quantization by default. They can be found at the Hugging Face page of the ggml-org: https://huggingface.co/collections/ggml-org/multimodal-ggufs-68244e01ff1f39e5bebeeedc
