@@ -254,3 +254,13 @@ Everyone else is CPU-only or CUDA. Our Metal kernels are unique.
 - [ ] Test MSE-only (no QJL) — simplify dequant, may improve quality + speed
 - [ ] Implement pre-rotate-queries — eliminates rotation from dequant entirely
 - [ ] Consider block size 32 for better GPU parallelism
+
+### 2026-03-25: Speed ceiling test — no rotation in dequant (proper Metal)
+- Removed turbo_rotate_inverse from dequant (quality broken but measures ceiling)
+- **Result: 49.1 tok/s gen (4.6× improvement over 10.7)**
+- Prompt: 162.6 tok/s (2.4× improvement over 67.3)
+- This is 57% of q8_0 speed (85.5 tok/s)
+- Confirms: removing rotation from dequant via pre-rotate-queries
+  would get us from 10.7 → ~49 tok/s
+- Remaining gap (49 vs 85) is from block size 128 + QJL overhead
+- REVERTED change after measurement
