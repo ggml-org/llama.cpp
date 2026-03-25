@@ -573,6 +573,7 @@ private:
     int slots_debug = 0;
     int n_empty_consecutive = 0;
 
+    bool kv_keep_only_active = false;
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
@@ -864,6 +865,21 @@ private:
 
         metrics.init();
 
+        // LLAMA_KV_KEEP_ONLY_ACTIVE: clear idle slots' KV from VRAM before each decode batch
+        {
+            const char * env = getenv("LLAMA_KV_KEEP_ONLY_ACTIVE");
+            if (env && atoi(env)) {
+                if (!params_base.kv_unified) {
+                    SRV_WRN("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE requires unified KV cache, ignoring");
+                } else if (params_base.cache_ram_mib == 0) {
+                    SRV_WRN("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE requires --cache-ram, ignoring");
+                } else {
+                    kv_keep_only_active = true;
+                    SRV_INF("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE: idle slots' KV will be cleared from VRAM before each decode");
+                }
+            }
+        }
+
         // populate webui settings
         {
             if (!params_base.webui_config_json.empty()) {
@@ -1010,15 +1026,15 @@ private:
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
-            // don't update the cache if the slot's context is empty
-            update_cache = update_cache && tokens.size() > 0;
-
             if (update_cache) {
                 SRV_WRN("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
-                ret->prompt_save(*prompt_cache);
+                // don't save the slot's state if its context is empty
+                if (tokens.size() > 0) {
+                    ret->prompt_save(*prompt_cache);
+                }
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear(false);
@@ -2687,6 +2703,34 @@ private:
             }
         } else {
             n_empty_consecutive = 0;
+        }
+
+        if (kv_keep_only_active && batch.n_tokens > 0) { // LLAMA_KV_KEEP_ONLY_ACTIVE: clear idle slots' KV
+            int kv_used = 0;
+            int n_cleared = 0;
+
+            for (auto & slot : slots) {
+                const int n_tokens = slot.prompt.n_tokens();
+                if (n_tokens == 0) {
+                    continue;
+                }
+                if (slot.is_processing()) {
+                    kv_used += n_tokens;
+                    continue;
+                }
+
+                slot.prompt_save(*prompt_cache);
+                slot.prompt_clear(false);
+                ++n_cleared;
+
+                SLT_DBG(slot, "kv_keep_only_active: cleared idle slot with %d tokens\n", n_tokens);
+            }
+
+            if (n_cleared > 0) {
+                prompt_cache->update();
+
+                SRV_INF("kv_keep_only_active: cleared %d slot(s), kv: %d/%d\n", n_cleared, kv_used, n_ctx);
+            }
         }
 
         int32_t i_next = 0;
