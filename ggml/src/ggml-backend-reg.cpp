@@ -185,6 +185,12 @@ struct ggml_backend_registry {
     }
 
     void register_device(ggml_backend_dev_t device) {
+        if (device == nullptr) {
+#ifndef NDEBUG
+        GGML_LOG_DEBUG("%s: skipping null device registration\n", __func__);
+#endif
+            return;
+        }
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered device %s (%s)\n", __func__, ggml_backend_dev_name(device), ggml_backend_dev_description(device));
 #endif
