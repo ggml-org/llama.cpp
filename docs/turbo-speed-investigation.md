@@ -293,3 +293,24 @@ Everyone else is CPU-only or CUDA. Our Metal kernels are unique.
 4. Pre-rotate-queries (from Dejan.ai) is the right architectural approach
 5. Codex + roast reviews catch real bugs (buffer clear ordering, stale code, MSL limitations)
 6. The ggml_mul_mat approach for Q rotation is clean and correct
+
+### 2026-03-25: CHANGE 1 — Drop QJL (MSE-only) ✅
+- Python validation: cosine 0.9508 → 0.9831, better on 99.3% of real KV vectors
+- MoE gen: 51.4 → 62.2 tok/s (73% of q8_0)
+- Qwopus gen: 14.6 → 15.5 tok/s (88% of q8_0)
+- Qwopus prompt: 83.1 tok/s = 100% of q8_0!
+
+### 2026-03-25: CHANGE 2 — WHT for Q rotation — NOT NEEDED
+- Speed ceiling test: removing Q rotation entirely gives 61.3 tok/s (vs 62.2 with it)
+- The dense 128×128 ggml_mul_mat adds <1% overhead — negligible on Metal
+- The remaining gap (62.2 vs 85.5 on MoE) is structural:
+  - Block size 128 (4 blocks per head) vs q8_0 block 32 (4 blocks per head too, but simpler dequant)
+  - 128 centroid lookups (3-bit unpack + table) vs 32 byte * scale (q8_0)
+  - This is the irreducible cost of the algorithm
+  
+### FINAL PERFORMANCE
+
+| Model | q8_0 | turbo3 MSE-only | Speed | Compression |
+|-------|------|-----------------|-------|-------------|
+| MoE 35B | 85.5 tok/s | **62.2 tok/s** | **73%** | **4.9×** |
+| Qwopus 27B | 17.6 tok/s | **15.5 tok/s** | **88%** | **4.9×** |
