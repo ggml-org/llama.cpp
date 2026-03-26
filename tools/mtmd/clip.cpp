@@ -854,6 +854,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_paddleocr>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_FALCON_OCR:
+            {
+                builder = std::make_unique<clip_graph_falcon_ocr>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_KIMIK25:
             {
                 builder = std::make_unique<clip_graph_kimik25>(ctx, img);
@@ -1341,6 +1345,13 @@ struct clip_model_loader {
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
 
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_FALCON_OCR:
+                    {
+                        hparams.n_merge = 1;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_DEEPSEEKOCR:
                     {
@@ -1840,6 +1851,10 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM, false);
                     model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"), false);
+                } break;
+            case PROJECTOR_TYPE_FALCON_OCR:
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
@@ -2483,6 +2498,8 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->nx / params.patch_size) / 2;
+        case PROJECTOR_TYPE_FALCON_OCR:
+            return img->nx / params.patch_size;
         default:
             break;
     }
@@ -2500,6 +2517,8 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->ny / params.patch_size) / 2;
+        case PROJECTOR_TYPE_FALCON_OCR:
+            return img->ny / params.patch_size;
         default:
             break;
     }
@@ -2602,6 +2621,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 int n_merge = ctx->model.hparams.n_merge;
                 int stride = n_merge * n_merge;
                 n_patches = CLIP_ALIGN(n_patches, stride) / stride;
+            } break;
+        case PROJECTOR_TYPE_FALCON_OCR:
+            {
+                // n_merge=1, no patch merging
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
@@ -3059,6 +3082,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_COGVLM:
+        case PROJECTOR_TYPE_FALCON_OCR:
             {
                 // do nothing
             } break;
@@ -3236,6 +3260,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_FALCON_OCR:
+            return ctx->model.mm_0_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }

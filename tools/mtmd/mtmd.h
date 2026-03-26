@@ -119,6 +119,14 @@ MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
 // whether the current model use M-RoPE for llama_decode
 MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
 
+// whether the current model uses spatial 3D RoPE (temporal + 2D continuous spatial positions)
+MTMD_API bool mtmd_decode_use_spatial_3d_rope(mtmd_context * ctx);
+
+// whether the current model needs inter-chunk coordination where prefix text
+// embeddings (e.g. cls+regs) are merged with image patch embeddings into a
+// single non-causal batch, rather than processing chunks independently
+MTMD_API bool mtmd_decode_use_interchunk_merge(mtmd_context * ctx);
+
 // whether the current model supports vision input
 MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
 

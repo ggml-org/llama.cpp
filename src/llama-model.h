@@ -526,6 +526,8 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
+    struct ggml_tensor * rope_freqs_golden = nullptr;
+
     // gemma3n altup
     struct ggml_tensor * tok_embd_per_layer   = nullptr;
     struct ggml_tensor * altup_proj           = nullptr;

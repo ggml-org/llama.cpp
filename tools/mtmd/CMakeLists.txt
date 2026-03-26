@@ -16,6 +16,7 @@ add_library(mtmd
             clip-graph.h
             models/models.h
             models/cogvlm.cpp
+            models/falcon_ocr.cpp
             models/conformer.cpp
             models/glm4v.cpp
             models/internvl.cpp
@@ -46,6 +47,7 @@ target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
+target_include_directories(mtmd PRIVATE ../../src)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 

@@ -37,6 +37,7 @@ struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
     bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
+    bool use_spatial_3d_pos = false; // spatial 3D RoPE: all patches share one temporal position (n_pos = 1)
     uint32_t n_tokens() const { return nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
@@ -46,6 +47,7 @@ struct mtmd_image_tokens {
             nx,
             ny,
             use_mrope_pos,
+            use_spatial_3d_pos,
             batch_f32.clone(),
             id
         };
@@ -399,6 +401,12 @@ struct mtmd_context {
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_FALCON_OCR:
+                {
+                    img_beg = "<|image_cls|><|image_reg_1|><|image_reg_2|><|image_reg_3|><|image_reg_4|>";
+                    img_end = "<|end_of_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_falcon_ocr>(ctx_v);
+                } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
         }
@@ -731,6 +739,10 @@ struct mtmd_tokenizer {
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->use_mrope_pos = true;
+                } else if (mtmd_decode_use_spatial_3d_rope(ctx)) {
+                    image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
+                    image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
+                    image_tokens->use_spatial_3d_pos = true;
                 } else {
                     // other models, we only need the total number of tokens
                     image_tokens->nx = n_tokens;
@@ -965,6 +977,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
     switch (ctx->proj_type_v()) {
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_FALCON_OCR:
             return true;
         default:
             return false;
@@ -978,6 +991,24 @@ bool mtmd_decode_use_mrope(mtmd_context * ctx) {
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool mtmd_decode_use_spatial_3d_rope(mtmd_context * ctx) {
+    switch (ctx->proj_type_v()) {
+        case PROJECTOR_TYPE_FALCON_OCR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool mtmd_decode_use_interchunk_merge(mtmd_context * ctx) {
+    switch (ctx->proj_type_v()) {
+        case PROJECTOR_TYPE_FALCON_OCR:
             return true;
         default:
             return false;
@@ -1194,6 +1225,10 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
         // for M-RoPE, temporal dimension = max(t,h,w)
         // t is omitted as we don't support video input
         return std::max(image_tokens->nx, image_tokens->ny);
+    }
+    if (image_tokens->use_spatial_3d_pos) {
+        // spatial 3D RoPE: all patches share a single temporal position
+        return 1;
     }
     return image_tokens->n_tokens();
 }

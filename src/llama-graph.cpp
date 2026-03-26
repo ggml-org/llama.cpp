@@ -1134,8 +1134,9 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2 || arch == LLM_ARCH_FALCON_OCR) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
+            // Falcon-OCR's ReLU² activation produces values > 65504 (FP16 max), causing overflow.
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }

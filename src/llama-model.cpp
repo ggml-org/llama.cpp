@@ -2563,6 +2563,23 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_FALCON_OCR:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                hparams.rope_3d = true; // 3D RoPE: 1D temporal + 2D golden spatial
+
+                // Expand KV cache to n_head (K is expanded before golden RoPE).
+                // Preserve original count for weight tensor sizing.
+                hparams.n_head_kv_orig = hparams.n_head_kv_arr[0];
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.n_head_kv_arr[il] = hparams.n_head_arr[il];
+                }
+
+                switch (hparams.n_layer) {
+                    case 22: type = LLM_TYPE_SMALL; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         default: throw std::runtime_error("unsupported model architecture: " + arch_name());
     }
 
@@ -7505,6 +7522,35 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
                 } break;
+            case LLM_ARCH_FALCON_OCR:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    rope_freqs_golden = create_tensor(tn(LLM_TENSOR_ROPE_FREQS_GOLDEN, "weight"),
+                            {2, n_embd_head_k/4, n_head}, TENSOR_NOT_REQUIRED);
+
+                    // K/V weight dimensions use original (unexpanded) kv head count
+                    const int64_t n_embd_k_orig  = n_embd_head_k * hparams.n_head_kv_orig;
+                    const int64_t n_embd_v_orig  = n_embd_head_v * hparams.n_head_kv_orig;
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_orig}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_orig}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, i), {n_head}, TENSOR_NOT_REQUIRED);
+
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -8785,6 +8831,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_step35_iswa>(*this, params);
             } break;
+        case LLM_ARCH_FALCON_OCR:
+            {
+                llm = std::make_unique<llm_build_falcon_ocr>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -8879,6 +8929,20 @@ int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
 
+bool llama_model_token_to_embd(const llama_model * model, llama_token token, float * output) {
+    if (!model->tok_embd) {
+        return false;
+    }
+    const int64_t n_embd  = model->tok_embd->ne[0];
+    const int64_t n_vocab = model->tok_embd->ne[1];
+    if (token < 0 || token >= n_vocab) {
+        return false;
+    }
+    ggml_backend_tensor_get(model->tok_embd, output,
+        (size_t)token * n_embd * sizeof(float), n_embd * sizeof(float));
+    return true;
+}
+
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
 }
@@ -8971,6 +9035,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_FALCON_OCR:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
