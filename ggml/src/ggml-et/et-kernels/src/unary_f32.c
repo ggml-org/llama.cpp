@@ -493,7 +493,7 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
         return -1;
     }
 
-    // Both src and dst are contiguous F32 — treat as flat arrays.
+    // Both src and dst are contiguous F32 are treat as flat arrays.
     // Distribute work by cache lines (16 floats = 64 bytes) across threads.
     const int64_t total_elements = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
     const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes per float
