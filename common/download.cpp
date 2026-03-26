@@ -548,6 +548,20 @@ static hf_cache::hf_file find_best_mmproj(const hf_cache::hf_files & files,
     return best;
 }
 
+static bool gguf_filename_is_model(const std::string & filepath) {
+    if (!string_ends_with(filepath, ".gguf")) {
+        return false;
+    }
+
+    std::string filename = filepath;
+    if (auto pos = filename.rfind('/'); pos != std::string::npos) {
+        filename = filename.substr(pos + 1);
+    }
+
+    return filename.find("mmproj")  == std::string::npos &&
+           filename.find("imatrix") == std::string::npos;
+}
+
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
                                          const std::string        & tag) {
     std::vector<std::string> tags;
@@ -561,8 +575,7 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     for (const auto & t : tags) {
         std::regex pattern(t + "[.-]", std::regex::icase);
         for (const auto & f : files) {
-            if (string_ends_with(f.path, ".gguf") &&
-                f.path.find("mmproj") == std::string::npos &&
+            if (gguf_filename_is_model(f.path) &&
                 std::regex_search(f.path, pattern)) {
                 return f;
             }
@@ -570,8 +583,7 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     }
 
     for (const auto & f : files) {
-        if (string_ends_with(f.path, ".gguf") &&
-            f.path.find("mmproj") == std::string::npos) {
+        if (gguf_filename_is_model(f.path)) {
             return f;
         }
     }
