@@ -688,21 +688,26 @@ void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type
     reg = (type4x4) reg_f;
 }
 
+// Half-precision centroid LUT for vec path — reduces constant cache pressure at long context
+constant half turbo_centroids_3bit_h[8] = {
+    -0.190685h, -0.117832h, -0.065717h, -0.021460h,
+     0.021460h,  0.065717h,  0.117832h,  0.190685h
+};
+
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
-    const float norm = float(xb->norm);
-    // Codex-verified indexing: qbyte = qs[il], sbyte = signs[il>>1], sbase = (il&1)<<2
+    const half nh = xb->norm;
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    reg = type4(
-        turbo_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)] * norm,
-        turbo_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)] * norm,
-        turbo_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)] * norm,
-        turbo_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)] * norm
-    );
+    reg = type4(float4(half4(
+        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)] * nh,
+        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)] * nh,
+        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)] * nh,
+        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)] * nh
+    )));
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
