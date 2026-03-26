@@ -688,14 +688,23 @@ void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type
     reg = (type4x4) reg_f;
 }
 
-// Half-precision centroid LUT for vec path — reduces constant cache pressure at long context
-constant half turbo_centroids_3bit_h[8] = {
-    -0.190685h, -0.117832h, -0.065717h, -0.021460h,
+// Two 4-entry half LUTs (one per sign) instead of one 8-entry LUT.
+// Halves constant cache divergent lookups (4 possible addresses vs 8).
+// Fixes catastrophic decode slowdown on M1/M2 where constant cache serializes
+// 8-way divergent access from 32 threads in a simdgroup.
+//
+// Quantize stores: qs = (sorted_8_idx & 0x3), sign = (sorted_8_idx >> 2)
+//   sign=0: qs indexes into negative half (sorted most→least negative)
+//   sign=1: qs indexes into positive half (sorted least→most positive)
+constant half turbo_neg_3bit_h[4] = {  // sign=0: qs 0,1,2,3
+    -0.190685h, -0.117832h, -0.065717h, -0.021460h
+};
+constant half turbo_pos_3bit_h[4] = {  // sign=1: qs 0,1,2,3
      0.021460h,  0.065717h,  0.117832h,  0.190685h
 };
 
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
-// Half LUT (2 bytes/entry, less cache pressure) + float norm broadcast (1 mul vs 4)
+// Split LUT (4 entries per sign) + float norm broadcast
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
     const float norm = float(xb->norm);
@@ -703,13 +712,25 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    float4 centroids = float4(half4(
-        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)]
-    ));
-    reg = type4(centroids * norm);
+    // Extract 2-bit qs indices and 1-bit sign bits
+    const uint8_t q0 = (qb      ) & 0x03;
+    const uint8_t q1 = (qb >> 2) & 0x03;
+    const uint8_t q2 = (qb >> 4) & 0x03;
+    const uint8_t q3 = (qb >> 6) & 0x03;
+    const uint8_t s0 = (sb >> (sshift + 0)) & 1;
+    const uint8_t s1 = (sb >> (sshift + 1)) & 1;
+    const uint8_t s2 = (sb >> (sshift + 2)) & 1;
+    const uint8_t s3 = (sb >> (sshift + 3)) & 1;
+
+    // Each thread reads from ONE of the two 4-entry LUTs based on sign.
+    // Only 4 possible constant addresses per lookup (vs 8 before).
+    float4 vals = float4(
+        float(s0 ? turbo_pos_3bit_h[q0] : turbo_neg_3bit_h[q0]),
+        float(s1 ? turbo_pos_3bit_h[q1] : turbo_neg_3bit_h[q1]),
+        float(s2 ? turbo_pos_3bit_h[q2] : turbo_neg_3bit_h[q2]),
+        float(s3 ? turbo_pos_3bit_h[q3] : turbo_neg_3bit_h[q3])
+    );
+    reg = type4(vals * norm);
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
