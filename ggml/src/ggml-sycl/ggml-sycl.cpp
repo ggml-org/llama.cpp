@@ -331,6 +331,7 @@ struct pp_pipeline_entry {
     to_fp16_sycl_t    dequant_fn     = nullptr;  // Dequant function for this weight type
     int64_t           n_elems        = 0;         // N * K elements to dequant
     size_t            weight_bytes   = 0;         // n_elems * sizeof(half)
+    layout_mode       layout         = GGML_LAYOUT_AOS;
 };
 
 struct pp_pipeline_state {
@@ -26967,9 +26968,13 @@ static bool ggml_sycl_mul_mat_tensor_split(
         if (!resolved_split_pri || resolved_split_pri.layout != src0_layout) return false;
         const char * src0_primary = (const char *) resolved_split_pri.ptr;
 
-        // AOS device pointer on primary GPU (source for D2H copies to secondary/CPU)
-        const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(
-            src0, device, GGML_LAYOUT_AOS);
+        // AOS device pointer on primary GPU (source for D2H copies to secondary/CPU).
+        // Only AOS supports direct byte-offset row extraction; COALESCED/SOA rearrange
+        // bytes within tiles so row-offset arithmetic gives wrong data.
+        const char * src0_aos = nullptr;
+        if (resolved_split_pri.layout == GGML_LAYOUT_AOS) {
+            src0_aos = (const char *) resolved_split_pri.ptr;
+        }
         if (!src0_aos && (N_second > 0 || N_cpu > 0)) return false;
 
         // Secondary GPU: load via unified cache (D2H → cache → H2D + SOA reorder)
@@ -27237,8 +27242,16 @@ static bool ggml_sycl_mul_mat_tensor_split(
         return false;
     }
 
-    // Get AOS device pointer for weight data (needed for D2H copy of CPU rows)
-    const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
+    // Get AOS device pointer for weight data (needed for D2H copy of CPU rows).
+    // Only AOS supports direct byte-offset row extraction; COALESCED/SOA rearrange
+    // bytes within tiles so row-offset arithmetic gives wrong data.
+    const char * src0_aos = nullptr;
+    {
+        auto resolved = ggml_sycl_resolve_weight(src0, device);
+        if (resolved && resolved.layout == GGML_LAYOUT_AOS && resolved.on_device) {
+            src0_aos = (const char *) resolved.ptr;
+        }
+    }
     if (!src0_aos) {
         return false;  // no AOS device data available
     }
@@ -37301,17 +37314,16 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             if (!ggml_is_quantized(src0->type) || !ggml_is_contiguous(src0)) {
                 continue;
             }
-            // Check if dequant function exists for this type.
-            // Pass full_tensor=false to get the AOS (non-reorder) dequant kernel,
-            // matching the AOS layout pointer resolved for the PP path.
-            const to_fp16_sycl_t dequant_fn = ggml_get_to_fp16_sycl(
-                src0->type, const_cast<ggml_tensor *>(node), /*full_tensor=*/false);
-            if (!dequant_fn) {
+            // Resolve weight pointer and layout
+            auto resolved = ggml_sycl_resolve_weight(src0, sycl_ctx->device);
+            if (!resolved) {
                 continue;
             }
-            // Resolve the weight data pointer (host-pinned for large models)
-            const void * src0_data = ggml_sycl_get_layout_ptr_for(src0, sycl_ctx->device, GGML_LAYOUT_AOS);
-            if (!src0_data) {
+            // Select dequant function based on resolved layout
+            const bool is_reordered = (resolved.layout != GGML_LAYOUT_AOS);
+            const to_fp16_sycl_t dequant_fn = ggml_get_to_fp16_sycl(
+                src0->type, const_cast<ggml_tensor *>(node), is_reordered);
+            if (!dequant_fn) {
                 continue;
             }
             const int64_t N         = src0->ne[1];
@@ -37320,10 +37332,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             const size_t  wt_bytes  = static_cast<size_t>(n_elems) * sizeof(sycl::half);
 
             pp_pipeline_entry entry;
-            entry.src0_data    = src0_data;
+            entry.src0_data    = resolved.ptr;
             entry.dequant_fn   = dequant_fn;
             entry.n_elems      = n_elems;
             entry.weight_bytes = wt_bytes;
+            entry.layout       = resolved.layout;
             pipe.schedule.push_back(entry);
         }
 
@@ -39904,8 +39917,16 @@ static const void * resolve_split_weight_ptr(
     void * cached = ggml_sycl::unified_cache_get_split_weight_ptr(weight_tensor->name, device);
     if (cached) return cached;
 
-    // Not cached yet — load via D2H from primary AOS + unified cache H2D + SOA reorder
-    const void * src_aos = ggml_sycl_get_layout_ptr_for(weight_tensor, primary_device, GGML_LAYOUT_AOS);
+    // Not cached yet — load via D2H from primary AOS + unified cache H2D + SOA reorder.
+    // Only AOS supports direct byte-offset row extraction; COALESCED/SOA rearrange
+    // bytes within tiles so row-offset arithmetic gives wrong data.
+    const void * src_aos = nullptr;
+    {
+        auto resolved = ggml_sycl_resolve_weight(weight_tensor, primary_device);
+        if (resolved && resolved.layout == GGML_LAYOUT_AOS && resolved.on_device) {
+            src_aos = resolved.ptr;
+        }
+    }
     if (!src_aos) return nullptr;
 
     const size_t row_bytes   = ggml_row_size(weight_tensor->type, weight_tensor->ne[0]);
