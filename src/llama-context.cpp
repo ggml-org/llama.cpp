@@ -2953,6 +2953,12 @@ llama_context * llama_init_from_model(
         }
     }
 
+    // TQ3_0 K cache has no flash attention kernel support - force off
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && params.type_k == GGML_TYPE_TQ3_0) {
+        LLAMA_LOG_WARN("%s: flash_attn is not supported with TQ3_0 K cache - forcing off\n", __func__);
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
+
     if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
