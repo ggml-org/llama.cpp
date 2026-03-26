@@ -342,13 +342,16 @@ static bool try_fused_ffn_gate_up_swiglu(
     const int ncols_in = gate_weight->ne[0];
     const int nrows_out = gate_weight->ne[1];
 
-    // Get device pointers (AOS only)
+    // Get device pointers — fused FFN only supports AOS layout
     const int device = ctx.device;
-    const void * gate_data = ggml_sycl_get_layout_ptr_for(gate_weight, device, GGML_LAYOUT_AOS);
-    const void * up_data   = ggml_sycl_get_layout_ptr_for(up_weight, device, GGML_LAYOUT_AOS);
-    if (!gate_data || !up_data) {
+    auto gate_resolved = ggml_sycl_resolve_weight(gate_weight, device);
+    auto up_resolved   = ggml_sycl_resolve_weight(up_weight, device);
+    if (!gate_resolved || gate_resolved.layout != GGML_LAYOUT_AOS ||
+        !up_resolved   || up_resolved.layout   != GGML_LAYOUT_AOS) {
         return false;
     }
+    const void * gate_data = gate_resolved.ptr;
+    const void * up_data   = up_resolved.ptr;
     float * dst_data = (float *) ggml_sycl_get_data_ptr(dst, device);
 
     // Use multi-row kernel by default (better GPU utilization via SLM caching)

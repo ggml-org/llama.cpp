@@ -27429,10 +27429,16 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             }
         }
         if (!src0_data) {
-            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
-            GGML_SYCL_DEBUG("[MXFP4-DIRECT] fallback get_layout_ptr_for -> %p\n", src0_data);
-            // Fallback pointer is always AOS
-            data_layout = ggml_sycl_unified::LayoutMode::AOS;
+            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+            if (resolved) {
+                src0_data = resolved.ptr;
+                switch (resolved.layout) {
+                    case GGML_LAYOUT_SOA:       data_layout = ggml_sycl_unified::LayoutMode::SOA; break;
+                    case GGML_LAYOUT_COALESCED: data_layout = ggml_sycl_unified::LayoutMode::COALESCED; break;
+                    default:                    data_layout = ggml_sycl_unified::LayoutMode::AOS; break;
+                }
+            }
+            GGML_SYCL_DEBUG("[MXFP4-DIRECT] fallback resolve_weight -> %p layout=%d\n", src0_data, (int)data_layout);
         }
         if (src0_data) {
             // Drain any pending merge before dispatch
@@ -36157,9 +36163,11 @@ static bool execute_ffn_fusion(ggml_backend_sycl_context & ctx,
     if (K != K_padded) {
         stream->memset(input_q8, 0, q8_size);
     }
-    // Resolve AOS weights for fused kernel
-    const void * W_gate_data = ggml_sycl_get_layout_ptr_for(W_gate, device, GGML_LAYOUT_AOS);
-    const void * W_up_data   = ggml_sycl_get_layout_ptr_for(W_up, device, GGML_LAYOUT_AOS);
+    // Resolve weights — fused FFN only supports AOS layout
+    auto gate_resolved = ggml_sycl_resolve_weight(W_gate, device);
+    auto up_resolved   = ggml_sycl_resolve_weight(W_up, device);
+    const void * W_gate_data = (gate_resolved && gate_resolved.layout == GGML_LAYOUT_AOS) ? gate_resolved.ptr : nullptr;
+    const void * W_up_data   = (up_resolved   && up_resolved.layout   == GGML_LAYOUT_AOS) ? up_resolved.ptr   : nullptr;
 
     if (!W_gate_data || !W_up_data) {
         GGML_SYCL_DEBUG("[FFN FUSION] AOS layout unavailable for %s/%s\n", W_gate->name ? W_gate->name : "gate",
