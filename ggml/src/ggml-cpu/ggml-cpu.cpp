@@ -448,7 +448,11 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
         case GGML_OP_MUL_MAT:
-            return src1->type == GGML_TYPE_F32 || src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
+            {
+                const auto * traits = ggml_get_type_traits_cpu(src0->type);
+                return traits->vec_dot != NULL &&
+                    (src1->type == GGML_TYPE_F32 || src1->type == traits->vec_dot_type);
+            }
         case GGML_OP_SOFT_MAX_BACK: {
             if (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32) {
                 return false;
@@ -466,6 +470,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         case GGML_OP_OUT_PROD:
             return (src0->type == GGML_TYPE_F32 || (ggml_is_quantized(src0->type) && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3])) &&
                 src1->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_FLASH_ATTN_EXT:
+            // K type must have vec_dot for CPU flash attention
+            return ggml_get_type_traits_cpu(src1->type)->vec_dot != NULL;
         default:
             return true;
     }

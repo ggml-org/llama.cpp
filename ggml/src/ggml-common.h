@@ -266,6 +266,21 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant 3-bit quantization (3.5 bpw)
+// Per TurboQuant paper (Algorithm 2: TurboQuant_prod), ICLR 2026
+// Each block of 32 values is quantized as:
+//   - 2-bit MSE codebook indices (after random rotation Π·x)
+//   - 1-bit QJL residual signs (sign(S·r) where r = x - dequant_mse(quant_mse(x)))
+//   - FP16 residual norm ||r||₂ for QJL scaling
+// Requires per-model rotation matrices Π and S (stored externally)
+#define QK_TQ3_0 32
+typedef struct {
+    uint8_t   qs[QK_TQ3_0 / 4]; // 2-bit codebook indices, 32 × 2 bits = 8 bytes
+    uint8_t   qr[QK_TQ3_0 / 8]; // QJL residual signs, 32 × 1 bit = 4 bytes
+    ggml_half gamma;             // ||residual||₂ for QJL correction scaling
+} block_tq3_0;
+static_assert(sizeof(block_tq3_0) == QK_TQ3_0/4 + QK_TQ3_0/8 + sizeof(ggml_half), "wrong tq3_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

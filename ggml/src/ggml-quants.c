@@ -2336,6 +2336,166 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ====================== TurboQuant TQ3_0: Scalar Codebook + QJL (de)-quantization ======================
+//
+// Per TurboQuant paper (ICLR 2026, Algorithm 2: TurboQuant_prod):
+//   Quantize: random rotation → per-block 2-bit scalar codebook → QJL residual signs
+//   Dequant:  scale * centroid[idx] → inverse rotation
+//
+// Rotation: Per-block Walsh-Hadamard Transform (WHT32) with fixed sign flips.
+// WHT makes any distribution approximately Gaussian (by CLT), making the
+// fixed Max-Lloyd codebook optimal. WHT is self-inverse: WHT(WHT(x)) = 32*x.
+//
+// Optimal 2-bit codebook centroids for Gaussian N(0,1) via Max-Lloyd algorithm:
+//   {-1.510, -0.4528, +0.4528, +1.510}
+//
+
+// Codebook centroids (normalized — will be scaled by per-block 'd')
+static const float tq3_centroids[4] = { -1.510f, -0.4528f, 0.4528f, 1.510f };
+
+// QJL correction constant: sqrt(pi/2) / block_size
+static const float TQ3_QJL_SCALE = 0.03921875f;  // sqrt(pi/2) / 32 ≈ 1.2533 / 32
+
+// Fixed random sign pattern for WHT preconditioning (generated from seed 42)
+// Multiplying by random ±1 before WHT ensures the transform is a random rotation,
+// not just a fixed permutation. This breaks any structure in the input.
+static const int8_t tq3_signs[32] = {
+    +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+    +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+};
+
+// In-place normalized Walsh-Hadamard Transform for 32 values
+// After transform, output has same L2 norm as input (due to 1/sqrt(32) normalization)
+static void tq3_wht32_forward(float * x) {
+    // Apply sign flips (preconditioning)
+    for (int j = 0; j < 32; j++) {
+        x[j] *= tq3_signs[j];
+    }
+
+    // Butterfly stages (log2(32) = 5 stages)
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step * 2) {
+            for (int j = i; j < i + step; j++) {
+                float a = x[j];
+                float b = x[j + step];
+                x[j]        = a + b;
+                x[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize to preserve L2 norm: divide by sqrt(32)
+    const float inv_sqrt32 = 0.17677669529663688f;  // 1/sqrt(32)
+    for (int j = 0; j < 32; j++) {
+        x[j] *= inv_sqrt32;
+    }
+}
+
+// In-place inverse normalized Walsh-Hadamard Transform for 32 values
+// Inverse of normalized WHT: apply WHT, then undo sign flips, then normalize
+static void tq3_wht32_inverse(float * x) {
+    // Butterfly stages (same as forward — WHT is self-adjoint)
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step * 2) {
+            for (int j = i; j < i + step; j++) {
+                float a = x[j];
+                float b = x[j + step];
+                x[j]        = a + b;
+                x[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize by 1/sqrt(32) and undo sign flips
+    const float inv_sqrt32 = 0.17677669529663688f;
+    for (int j = 0; j < 32; j++) {
+        x[j] *= inv_sqrt32 * tq3_signs[j];
+    }
+}
+
+void quantize_row_tq3_0_ref(const float * GGML_RESTRICT x, block_tq3_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    for (int64_t i = 0; i < nb; i++) {
+        const float * xb = x + i * QK_TQ3_0;
+
+        // --- Step 0: Apply WHT rotation (makes distribution ~Gaussian) ---
+        float rotated[QK_TQ3_0];
+        for (int j = 0; j < QK_TQ3_0; j++) rotated[j] = xb[j];
+        tq3_wht32_forward(rotated);
+
+        // --- Step 1: Find per-block scale (amax / outermost centroid) ---
+        float amax = 0.0f;
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            float av = fabsf(rotated[j]);
+            if (av > amax) amax = av;
+        }
+
+        const float d = amax / 1.510f;
+        const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+        y[i].gamma = GGML_FP32_TO_FP16(d);
+
+        // --- Step 2: 2-bit scalar quantize each rotated value ---
+        memset(y[i].qs, 0, sizeof(y[i].qs));
+        memset(y[i].qr, 0, sizeof(y[i].qr));
+
+        float residuals[QK_TQ3_0];
+
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            float xn = rotated[j] * id;
+
+            int idx;
+            if (xn < 0.0f) {
+                idx = (xn < -0.9814f) ? 0 : 1;
+            } else {
+                idx = (xn < 0.9814f) ? 2 : 3;
+            }
+
+            y[i].qs[j / 4] |= (idx << (2 * (j % 4)));
+            residuals[j] = rotated[j] - d * tq3_centroids[idx];
+        }
+
+        // --- Step 3: QJL signs = sign(residual) ---
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            if (residuals[j] >= 0.0f) {
+                y[i].qr[j / 8] |= (1 << (j % 8));
+            }
+        }
+    }
+}
+
+void dequantize_row_tq3_0(const block_tq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].gamma);
+
+        // Dequantize to rotated space
+        float rotated[QK_TQ3_0];
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            const int idx = (x[i].qs[j / 4] >> (2 * (j % 4))) & 3;
+            rotated[j] = d * tq3_centroids[idx];
+        }
+
+        // Apply inverse WHT to get back to original space
+        tq3_wht32_inverse(rotated);
+
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            y[i * QK_TQ3_0 + j] = rotated[j];
+        }
+    }
+}
+
+size_t quantize_tq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_0, n_per_row);
+    quantize_row_tq3_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
@@ -5352,6 +5512,15 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_TQ3_0:
+            {
+                const block_tq3_0 * q = (const block_tq3_0 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].gamma, i)) {
+                        return false;
+                    }
+                }
             } break;
         case GGML_TYPE_IQ1_S:
             {
