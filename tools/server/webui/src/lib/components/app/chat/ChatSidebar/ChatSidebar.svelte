@@ -45,14 +45,18 @@
 
 	let selectedConversationHasDescendants = $derived.by(() => {
 		if (!selectedConversation) return false;
+
 		const allConvs = conversations();
 		const queue = [selectedConversation.id];
+
 		while (queue.length > 0) {
 			const parentId = queue.pop()!;
+
 			for (const c of allConvs) {
 				if (c.forkedFromConversationId === parentId) return true;
 			}
 		}
+
 		return false;
 	});
 
