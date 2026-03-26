@@ -1118,17 +1118,14 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
     // Other types fall back to HVX.
     {
         uint32_t wtype = req->src0.type;
-        if (wtype != HTP_TYPE_F16   &&
-            wtype != HTP_TYPE_Q4_0  &&
-            wtype != HTP_TYPE_Q8_0  &&
-            wtype != HTP_TYPE_IQ4_NL &&
+        if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL &&
             wtype != HTP_TYPE_MXFP4) {
             proc_matmul_req(ctx, req, bufs, n_bufs);
             return;
         }
         // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
         // F16 HMX path requires K aligned to 32 (tile width).
-        if (wtype != HTP_TYPE_F16 && (req->src0.ne[0] % 256 != 0)) {
+        if (wtype != HTP_TYPE_F16 && req->src0.ne[0] % 256 != 0) {
             proc_matmul_req(ctx, req, bufs, n_bufs);
             return;
         }

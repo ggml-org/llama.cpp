@@ -2611,8 +2611,26 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     delete backend;
 }
 
+// Map weight type to its activation quantization family.
+// Types in the same family produce identical Q8 formats in VTCM and can
+// safely share quantized activation data via SKIP_QUANTIZE.
+// When adding a new quantized type, assign it the correct family here.
+static inline int act_quant_family(enum ggml_type wtype) {
+    switch (wtype) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+            return 1;  // Q8x4x2
+        default:
+            return 0;  // unknown / not quantized
+    }
+}
+
 static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type));
+    return (op0 && op0->src[1] == op1->src[1] &&
+            act_quant_family(op0->src[0]->type) == act_quant_family(op1->src[0]->type) &&
+            act_quant_family(op0->src[0]->type) != 0);
 }
 
 static inline bool is_compute_op(ggml_tensor *node)
