@@ -661,34 +661,48 @@ static void turbo_fwht_128_half4(thread half4 * v) {
 // With QK_TURBO3=32: nl=2 for non-vec FA (32/16), nl=8 for vec FA (32/4).
 // Much less redundant work than block-128.
 
+// Optimized turbo3 dequant: batch byte reads, unrolled index extraction.
+// Non-vec: 16 elements per call (il ∈ {0,1}), returns type4x4
 template <typename type4x4>
 void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type4x4 & reg) {
     const float norm = float(xb->norm);
-    const int offset = il * 16;  // il ∈ {0,1} for block-32
+    // il=0 → elements 0-15 (qs bytes 0-3, signs bytes 0-1)
+    // il=1 → elements 16-31 (qs bytes 4-7, signs bytes 2-3)
+    const int qs_off = il * 4;
     float4x4 reg_f;
-    for (int i = 0; i < 16; i++) {
-        int j = offset + i;
-        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
-        uint8_t idx  = low2 | (hi1 << 2);
-        reg_f[i/4][i%4] = turbo_centroids_3bit[idx] * norm;
+    for (int g = 0; g < 4; g++) {
+        // g iterates over 4 groups of 4 elements within our 16
+        // element index within block: il*16 + g*4 + k, k=0..3
+        const uint8_t qb = xb->qs[qs_off + g];
+        // signs byte index: (il*16 + g*4) / 8 = il*2 + g/2
+        const uint8_t sb = xb->signs[il * 2 + g / 2];
+        const int sshift = (g & 1) * 4;
+
+        reg_f[g] = float4(
+            turbo_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)] * norm,
+            turbo_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)] * norm,
+            turbo_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)] * norm,
+            turbo_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)] * norm
+        );
     }
     reg = (type4x4) reg_f;
 }
 
+// Vec: 4 elements per call (il ∈ {0..7}), returns type4
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
     const float norm = float(xb->norm);
-    const int base = il * 4;  // il ∈ {0..7} for block-32
-    float out[4];
-    for (int li = 0; li < 4; li++) {
-        int j = base + li;
-        uint8_t low2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1  = (xb->signs[j / 8] >> (j % 8)) & 0x1;
-        uint8_t idx  = low2 | (hi1 << 2);
-        out[li] = turbo_centroids_3bit[idx] * norm;
-    }
-    reg = type4(out[0], out[1], out[2], out[3]);
+    // Codex-verified indexing: qbyte = qs[il], sbyte = signs[il>>1], sbase = (il&1)<<2
+    const uint8_t qb = xb->qs[il];
+    const uint8_t sb = xb->signs[il >> 1];
+    const int sshift = (il & 1) << 2;
+
+    reg = type4(
+        turbo_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)] * norm,
+        turbo_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)] * norm,
+        turbo_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)] * norm,
+        turbo_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)] * norm
+    );
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
