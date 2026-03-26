@@ -588,6 +588,18 @@ class unified_cache {
 
     // === Primary API ===
 
+    // Result of a layout-agnostic weight pointer lookup.
+    struct weight_ptr_result {
+        void *           ptr       = nullptr;
+        ggml_layout_mode layout    = GGML_LAYOUT_AOS;
+        bool             on_device = false;
+        explicit operator bool() const { return ptr != nullptr; }
+    };
+
+    // Fast O(1) weight lookup.  Tries the entry for this key regardless of layout.
+    // Returns the first READY entry found.  Does NOT create entries or call ensure_cached_layout.
+    weight_ptr_result get_weight_ptr(const ggml_sycl_cache_id & key);
+
     // --- Decomposed cache operations (no queue ops during inference) ---
 
     // Allocate a VRAM slot for a cache entry. May evict LRU entries.

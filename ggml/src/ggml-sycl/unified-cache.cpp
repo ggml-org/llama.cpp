@@ -4122,6 +4122,34 @@ void * unified_cache::lookup(const ggml_sycl_cache_id & key, ggml_layout_mode la
     return try_get_cached_fast(key, layout);
 }
 
+unified_cache::weight_ptr_result unified_cache::get_weight_ptr(const ggml_sycl_cache_id & key) {
+    weight_ptr_result result{};
+    if (!key.valid) {
+        return result;
+    }
+    // Try layouts in priority order: COALESCED > SOA > AOS.
+    // This ensures the best available layout is returned, not whatever
+    // id_to_key_ happens to point at (which can be ONEDNN_PACKED from PP).
+    static const ggml_layout_mode try_layouts[] = {
+        GGML_LAYOUT_COALESCED, GGML_LAYOUT_SOA, GGML_LAYOUT_AOS
+    };
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    for (auto layout : try_layouts) {
+        // Build the full cache key with this layout
+        unified_cache_key ckey{ cache_entry_type::DENSE_WEIGHT, key, -1, -1 };
+        auto entry_it = entries_.find(ckey);
+        if (entry_it == entries_.end()) continue;
+        const auto & entry = entry_it->second;
+        if (entry.state != cache_entry_state::READY) continue;
+        if (!entry.device_ptr) continue;
+        result.ptr       = entry.device_ptr;
+        result.layout    = entry.layout;
+        result.on_device = !entry.host_resident;
+        return result;
+    }
+    return result;
+}
+
 sycl::queue & unified_cache::get_dma_queue() {
     // Return dedicated DMA queue if available, otherwise fall back to compute queue
     if (dma_queue_) {

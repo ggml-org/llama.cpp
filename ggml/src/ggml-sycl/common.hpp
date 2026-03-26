@@ -2041,22 +2041,12 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
                 // Try requested layout first, then COALESCED (S1-PRELOAD default),
                 // then SOA. The dispatch may request SOA but S1-PRELOAD stored COALESCED.
                 void * fast_ptr = cache->lookup(key, target);
-                if (!fast_ptr && target != GGML_LAYOUT_COALESCED) {
+                if (!fast_ptr && target != GGML_LAYOUT_COALESCED &&
+                    ggml_sycl_layout_supports_coalesced(tensor)) {
                     fast_ptr = cache->lookup(key, GGML_LAYOUT_COALESCED);
                 }
                 if (!fast_ptr && target != GGML_LAYOUT_SOA) {
                     fast_ptr = cache->lookup(key, GGML_LAYOUT_SOA);
-                }
-                {
-                    static std::atomic<int> fl{0};
-                    bool is_attn_w = tensor->name && strstr(tensor->name, "attn_q.weight");
-                    if (is_attn_w && fl.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[FAST-TOP] %s: target=%d found=%p model=%llu hash=0x%llx entries=%zu\n",
-                                      tensor->name, (int)target, fast_ptr,
-                                      (unsigned long long)key.model_id,
-                                      (unsigned long long)key.name_hash,
-                                      cache->entry_count());
-                    }
                 }
                 if (fast_ptr) {
                     return fast_ptr;
@@ -2089,15 +2079,6 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
             if (key.valid) {
                 void * fast_ptr = cache->lookup(key, target);
-                {
-                    static std::atomic<int> fast_log{0};
-                    // Only log for attention weight tensors (attn_q, attn_k, etc.)
-                    bool is_attn = tensor->name && strstr(tensor->name, "attn_q.weight");
-                    if (is_attn && fast_log.fetch_add(1, std::memory_order_relaxed) < 5) {
-                        GGML_LOG_INFO("[FAST-CACHE] %s: target=%d found=%p key_valid=%d\n",
-                                      tensor->name, (int)target, fast_ptr, key.valid ? 1 : 0);
-                    }
-                }
                 if (fast_ptr) {
                     if (host_weights) {
                         ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_TARGET_HIT);
@@ -2181,6 +2162,65 @@ inline bool ggml_sycl_unified_dispatch_env_enabled() {
 inline bool ggml_sycl_should_use_unified_type(ggml_type type) {
     // Mirror ggml_sycl::should_use_unified() without pulling in dispatch.hpp
     return type == GGML_TYPE_Q4_0 || type == GGML_TYPE_MXFP4;
+}
+
+// Single unified weight pointer resolution.  Returns the best available
+// pointer from the unified cache (VRAM preferred).  Falls back to host.
+// Does NOT call ensure_cached_layout -- O(1) cache lookup only.
+inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
+    const ggml_tensor * tensor, int device) {
+    ggml_sycl::unified_cache::weight_ptr_result result{};
+    if (!tensor) {
+        return result;
+    }
+
+    // Non-weight tensors: use raw data pointer
+    if (!ggml_sycl_tensor_is_weight(tensor)) {
+        result.ptr = ggml_sycl_get_data_ptr(tensor, device);
+        result.layout = GGML_LAYOUT_AOS;
+        if (result.ptr) {
+            result.on_device = (ggml_sycl_get_alloc_type(result.ptr) == sycl::usm::alloc::device);
+        }
+        return result;
+    }
+
+    // Weight tensor: try unified cache first
+    if (ggml_sycl::unified_cache_enabled()) {
+        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+        if (cache) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            if (key.valid) {
+                result = cache->get_weight_ptr(key);
+                if (result) {
+                    // Validate that the returned layout is compatible with this
+                    // tensor's dimensions. COALESCED requires specific alignment
+                    // ((ncols/block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0).
+                    // If not compatible, downgrade to SOA or AOS.
+                    if (result.layout == GGML_LAYOUT_COALESCED &&
+                        !ggml_sycl_layout_supports_coalesced(tensor)) {
+                        // COALESCED not safe — try SOA
+                        auto soa_ptr = cache->lookup(key, GGML_LAYOUT_SOA);
+                        if (soa_ptr) {
+                            result.ptr = soa_ptr;
+                            result.layout = GGML_LAYOUT_SOA;
+                        } else {
+                            // No compatible layout in cache — fall through to host
+                            result = {};
+                        }
+                    }
+                    if (result) return result;
+                }
+            }
+        }
+    }
+
+    // Fallback: host/device pointer from tensor
+    result.ptr = ggml_sycl_get_data_ptr(tensor, device);
+    result.layout = GGML_LAYOUT_AOS;
+    if (result.ptr) {
+        result.on_device = (ggml_sycl_get_alloc_type(result.ptr) == sycl::usm::alloc::device);
+    }
+    return result;
 }
 
 inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,

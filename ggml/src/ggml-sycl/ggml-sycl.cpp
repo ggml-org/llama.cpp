@@ -9218,7 +9218,12 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     const bool ok = ggml_sycl_reorder_weight_cpu(reorder_buf, reorder_src, *ctx);
 
     if (!ok) {
-        GGML_LOG_ERROR("[UNIFIED-CACHE] reorder failed for layout=%d type=%d\n", (int) ctx->layout, (int) ctx->type);
+        GGML_LOG_WARN("[UNIFIED-CACHE] reorder failed for layout=%d type=%d — storing AOS instead\n",
+                      (int) ctx->layout, (int) ctx->type);
+        // Fall back to AOS: copy raw data without reordering.
+        // The cache entry layout will be incorrect (labeled as ctx->layout but
+        // containing AOS data). To prevent MMVQ from treating AOS as COALESCED,
+        // store only dst_size=src_size worth of AOS data.
         std::memcpy(reorder_buf, reorder_src, std::min(dst_size, src_size));
     }
     if (dst_size > src_size) {
@@ -10277,7 +10282,8 @@ static void ggml_sycl_preload_model_weights() {
                     // Non-quantized types (f32, f16) get AOS (norm/embedding weights).
                     const bool use_coalesced =
                         ggml_is_quantized(tensor->type) && is_coalesced_supported(tensor->type) &&
-                        ggml_sycl_supports_reorder_mmvq(tensor->type);
+                        ggml_sycl_supports_reorder_mmvq(tensor->type) &&
+                        ggml_sycl_layout_supports_coalesced(tensor);
                     const bool use_soa =
                         !use_coalesced && ggml_is_quantized(tensor->type) &&
                         ggml_sycl_supports_reorder_mmvq(tensor->type);
@@ -17807,17 +17813,18 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                 GGML_SYCL_DEBUG("[MUL_MAT] TP buffer src0 device=%d ptr=%p (tensor=%s)\n", i, (void *) dev[i].src0_dd,
                                 src0->name);
             } else {
-                dev[i].src0_ptr_origin = "layout_ptr";
-                {
-                    static std::atomic<int> opm_log{0};
-                    bool is_aw = src0->name && strstr(src0->name, "attn_q.weight");
-                    if (is_aw && opm_log.fetch_add(1, std::memory_order_relaxed) < 3) {
-                        GGML_LOG_INFO("[OP-MUL-MAT] %s: requesting layout=%d from get_layout_ptr_for\n",
-                                      src0->name, (int)src0_layout);
-                    }
+                // Fast O(1) path: try unified cache resolve first
+                auto resolved = ggml_sycl_resolve_weight(src0, i);
+                if (resolved && resolved.layout == src0_layout) {
+                    dev[i].src0_dd                = (char *) resolved.ptr;
+                    dev[i].src0_ptr_origin        = "resolve_weight";
+                    dev[i].src0_layout_ptr_source = "unified_cache_resolve";
+                } else {
+                    // Fallback: full resolution chain (layout registry, ensure_cached, etc.)
+                    dev[i].src0_ptr_origin = "layout_ptr";
+                    dev[i].src0_dd =
+                        (char *) ggml_sycl_get_layout_ptr_for(src0, i, src0_layout, &dev[i].src0_layout_ptr_source);
                 }
-                dev[i].src0_dd =
-                    (char *) ggml_sycl_get_layout_ptr_for(src0, i, src0_layout, &dev[i].src0_layout_ptr_source);
 
                 exc_ctx.dev[i].src0_dd                = dev[i].src0_dd;
                 exc_ctx.dev[i].src0_ptr_origin        = dev[i].src0_ptr_origin;
@@ -27722,58 +27729,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             // Ensure weight is on device before checking layout
             ggml_sycl_ensure_weight_on_device(src0, ctx.device);
 
+            // Resolve weight via unified cache -- single O(1) lookup
+            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
             ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
             const bool              has_soa_reorder =
                 extra && extra->optimized_feature.is_reordered() && ggml_sycl_supports_reorder_mmvq(src0->type);
             const layout_mode effective_layout = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
+            const bool has_reorder = resolved.on_device &&
+                resolved.layout != GGML_LAYOUT_AOS &&
+                ggml_sycl_supports_reorder_mmvq(src0->type);
 
-            // In S1 mode, the tensor extra may not reflect the cache's reordered copy.
-            // Query the unified cache directly (bypasses layout choice registry which
-            // only has the PP layout).  S1-PRELOAD stores COALESCED for supported types
-            // (Q4_0, Q8_0, Q6_K, MXFP4), so check COALESCED first, then SOA fallback.
-            void *      reorder_ptr     = nullptr;
-            layout_mode cache_layout    = GGML_LAYOUT_AOS;
-            bool        cache_has_reorder = false;
-            // In S1 mode, always check the cache — tensor extra's is_reordered() flag
-            // reflects the host-side AOS pointer, not the VRAM COALESCED copy from S1-PRELOAD.
-            // Without this, has_soa_reorder=true skips the cache and uses the host pointer.
-            const bool s1_mode = ggml_backend_sycl_all_weights_host();
-            if ((s1_mode || !has_soa_reorder) &&
-                ggml_sycl_supports_reorder_mmvq(src0->type)) {
-                // Prefer COALESCED (S1-PRELOAD default for supported types)
-                if (is_coalesced_supported(src0->type)) {
-                    reorder_ptr = ggml_sycl_get_weight_layout_ptr(src0, ctx.device, GGML_LAYOUT_COALESCED);
-                    if (reorder_ptr) {
-                        cache_layout      = GGML_LAYOUT_COALESCED;
-                        cache_has_reorder = true;
-                    }
-                }
-                // Fallback to SOA if COALESCED not cached
-                if (!cache_has_reorder) {
-                    reorder_ptr = ggml_sycl_get_weight_layout_ptr(src0, ctx.device, GGML_LAYOUT_SOA);
-                    if (reorder_ptr) {
-                        cache_layout      = GGML_LAYOUT_SOA;
-                        cache_has_reorder = true;
-                    }
-                }
-            }
-
-            {
-                static std::atomic<int> tg_path_log{0};
-                if (tg_path_log.fetch_add(1, std::memory_order_relaxed) < 5) {
-                    GGML_LOG_INFO("[TG-PATH] %s: has_soa=%d cache_has=%d cache_layout=%d type=%d s1=%d\n",
-                                  src0->name, has_soa_reorder ? 1 : 0, cache_has_reorder ? 1 : 0,
-                                  (int)cache_layout, (int)src0->type,
-                                  ggml_backend_sycl_all_weights_host() ? 1 : 0);
-                }
-            }
-            if (has_soa_reorder || cache_has_reorder) {
-                // Prefer cache_layout when the cache found a VRAM-resident copy.
-                // has_soa_reorder's effective_layout reflects the host-side AOS
-                // pointer — in S1 mode the VRAM COALESCED copy from S1-PRELOAD
-                // is the correct layout for TG dispatch.
-                const layout_mode soa_layout = cache_has_reorder ? cache_layout
-                                             : (has_soa_reorder ? effective_layout : cache_layout);
+            if (has_soa_reorder || has_reorder) {
+                const layout_mode soa_layout = has_reorder ? resolved.layout
+                                             : (has_soa_reorder ? effective_layout : GGML_LAYOUT_AOS);
                 // Tensor split: cooperative multi-device MUL_MAT
                 split_config_init(ctx.stream());
                 if (g_split_config.enabled) {
@@ -27791,7 +27759,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 // MMVQ with reordered layout (COALESCED or SOA) -- matches master's fast path
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+reorder for %s (type=%d layout=%d%s)\n",
                                 src0->name ? src0->name : "?", src0->type, static_cast<int>(soa_layout),
-                                cache_has_reorder ? " cache" : "");
+                                has_reorder ? " cache" : "");
                 ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
                                                                     soa_layout);
                 return;
