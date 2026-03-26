@@ -18,12 +18,13 @@ export HIP_VISIBLE_DEVICES=0
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${BUILD_DIR:-$repo_dir/build-mi50}"
 model_path="${MODEL_PATH:-/home/stefan/.lmstudio/models/mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_S.gguf}"
+ngl="${NGL:-99}"
 
 "$build_dir/bin/llama-bench" \
   -m "$model_path" \
-  -ngl 999 \
+  -ngl "$ngl" \
   -fa 0 \
   -ctk f16,tq3_0 \
-  -ctv f16,q8_0 \
+  -ctv f16 \
   -p 512,4096,16384 \
   -n 128,512

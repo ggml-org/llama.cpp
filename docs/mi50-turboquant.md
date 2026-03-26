@@ -38,9 +38,9 @@ cmake --build build-mi50 --config Release -j"$(nproc)"
 Baseline:
 
 ```bash
-./build-mi50/bin/llama-cli \
+./build-mi50/bin/llama-completion \
   -m /home/stefan/.lmstudio/models/mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_S.gguf \
-  -ngl 999 \
+  -ngl 99 \
   --flash-attn off \
   --cache-type-k f16 \
   --cache-type-v f16 \
@@ -51,25 +51,25 @@ Baseline:
 TurboQuant:
 
 ```bash
-./build-mi50/bin/llama-cli \
+./build-mi50/bin/llama-completion \
   -m /home/stefan/.lmstudio/models/mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_S.gguf \
-  -ngl 999 \
+  -ngl 99 \
   --flash-attn off \
   --cache-type-k tq3_0 \
-  --cache-type-v q8_0 \
+  --cache-type-v f16 \
   -c 4096 -n 64 \
   -p "Write one paragraph about TurboQuant."
 ```
 
-Fallback V cache:
+Optional V-cache experiment:
 
 ```bash
-./build-mi50/bin/llama-cli \
+./build-mi50/bin/llama-completion \
   -m /home/stefan/.lmstudio/models/mradermacher/Huihui-Qwen3.5-27B-abliterated-GGUF/Huihui-Qwen3.5-27B-abliterated.Q4_K_S.gguf \
-  -ngl 999 \
-  --flash-attn off \
+  -ngl 99 \
+  --flash-attn on \
   --cache-type-k tq3_0 \
-  --cache-type-v f16 \
+  --cache-type-v q8_0 \
   -c 4096 -n 64 \
   -p "Write one paragraph about TurboQuant."
 ```
@@ -78,4 +78,6 @@ Fallback V cache:
 
 - `GGML_OP_SOLVE_TRI` is intentionally not offloaded on `gfx906`.
 - FlashAttention is intentionally disabled when `K=tq3_0`.
+- With the current runtime rules, `V=q8_0` is rejected when FlashAttention is off, so the conservative milestone-1 path is `K=tq3_0`, `V=f16`.
+- On this host, both this tree and `/home/stefan/llama.mi50.cpp` currently hit a HIP allocation failure on GPU 0 before model execution. Investigate that allocator issue before treating runtime failure as a TurboQuant regression.
 - Start at `4k`, then move to `16k`, then raise context only after a clean run.
