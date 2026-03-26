@@ -722,8 +722,8 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     const uint8_t s2 = (sb >> (sshift + 2)) & 1;
     const uint8_t s3 = (sb >> (sshift + 3)) & 1;
 
-    // Each thread reads from ONE of the two 4-entry LUTs based on sign.
-    // Only 4 possible constant addresses per lookup (vs 8 before).
+    // Each element reads from one of two 4-entry LUTs based on its sign bit.
+    // Max 4 possible constant addresses per lookup (vs 8 before).
     float4 vals = float4(
         float(s0 ? turbo_pos_3bit_h[q0] : turbo_neg_3bit_h[q0]),
         float(s1 ? turbo_pos_3bit_h[q1] : turbo_neg_3bit_h[q1]),

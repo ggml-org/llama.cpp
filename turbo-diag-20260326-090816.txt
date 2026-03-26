@@ -1,0 +1,71 @@
+TURBO_DIAG_VERSION=3
+TURBO_DIAG_TIMESTAMP=2026-03-26T14:08:16Z
+TURBO_DIAG_MODEL=Qwen3.5-35B-A3B-Q8_0.gguf
+TURBO_DIAG_MODEL_SIZE=34G
+
+================================================================
+  1. HARDWARE INVENTORY (no PII)
+================================================================
+
+[HW] os=Darwin os_version=25.3.0 arch=arm64
+[HW] kernel=26.3.1
+[HW] cpu_brand=Apple M5 Max
+[HW] cpu_cores_physical=18
+[HW] cpu_cores_logical=18
+[HW] cpu_freq_max=
+[HW] ram_total_bytes=137438953472
+[HW] ram_total_gb=128
+
+--- GPU Details ---
+[HW_GPU] Chipset Model: Apple M5 Max
+[HW_GPU] Total Number of Cores: 40
+[HW_GPU] Metal Support: Metal 4
+[HW] apple_silicon=true
+[HW] chip_model=Apple M5 Max
+[HW] page_size=16384
+[HW] l1_dcache=65536
+[HW] l2_cache=8388608
+
+--- Power State ---
+[HW_POWER] Now drawing from 'AC Power'
+[HW_POWER]  -InternalBattery-0 (id=25690211)	100%; charged; 0:00 remaining present: true
+[HW_POWER] cpu_speed_limit=unknown
+
+================================================================
+  2. SYSTEM LOAD (pre-benchmark baseline)
+================================================================
+
+Capturing system state BEFORE benchmarks to detect interference.
+
+[LOAD_SNAPSHOT] label=pre_benchmark timestamp=2026-03-26T14:08:16Z
+[LOAD_SNAPSHOT] load_avg=4.56 4.78 4.21
+[LOAD_SNAPSHOT] page_ins=57051695 page_outs=361396 swap_used=6491.06M
+[LOAD_SNAPSHOT] approx_free_ram=12705 MB
+[LOAD_SNAPSHOT] memory_pressure=System-wide memory free percentage: 73%
+[LOAD_SNAPSHOT] thermal=no thermal data
+[LOAD_SNAPSHOT] gpu_ioreg=no GPU metrics
+[LOAD_SNAPSHOT] process_count=1093
+
+--- Top CPU consumers (command name only) ---
+[LOAD_TOP]  39.4 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+[LOAD_TOP]  25.3 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/146.0.7680.154/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+[LOAD_TOP]  24.0 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/146.0.7680.154/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+[LOAD_TOP]  22.5 claude
+[LOAD_TOP]  16.9 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService
+[LOAD_TOP]  10.3 /usr/libexec/opendirectoryd
+[LOAD_TOP]  10.1 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/146.0.7680.154/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+[LOAD_TOP]   6.0 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/146.0.7680.154/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+[LOAD_TOP]   5.7 /usr/sbin/coreaudiod
+[LOAD_TOP]   5.7 /System/Library/Audio/Plug-Ins/usbaudio.bundle/Contents/MacOS/usbaudiod
+
+--- Disk I/O ---
+[LOAD_IO]               disk0              disk21       cpu    load average
+[LOAD_IO]     KB/t  tps  MB/s     KB/t  tps  MB/s  us sy id   1m   5m   15m
+[LOAD_IO]    38.29  118  4.40    27.53    0  0.01   7  5 88  4.56 4.78 4.21
+
+================================================================
+  3. MODEL INFO
+================================================================
+
+Extracting model metadata from GGUF file...
+
