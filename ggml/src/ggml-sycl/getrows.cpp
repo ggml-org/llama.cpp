@@ -1719,14 +1719,13 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         layout = mode;
     }
     const void *            layout_base = nullptr;
-    if (layout != GGML_LAYOUT_AOS) {
-        layout_base = ggml_sycl_get_layout_ptr_for(storage, device, layout);
-        if (!layout_base) {
-            layout = GGML_LAYOUT_AOS;
-        }
-    }
-    if (layout == GGML_LAYOUT_AOS) {
-        aos_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_AOS);
+    auto resolved = ggml_sycl_resolve_weight(storage, device);
+    if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
+        layout      = resolved.layout;
+        layout_base = resolved.ptr;
+    } else {
+        layout = GGML_LAYOUT_AOS;
+        aos_base = resolved ? resolved.ptr : nullptr;
         if (!aos_base) {
             if (ggml_backend_sycl_weights_evictable() && storage->buffer &&
                 ggml_backend_buffer_is_host(storage->buffer)) {
@@ -2213,40 +2212,21 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q4_0:
             {
-                // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra  =
-                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
-                bool                    is_soa = ggml_sycl_layout_is_soa(extra);
-
-                if (is_soa) {
+                if (layout == GGML_LAYOUT_SOA && layout_base) {
                     // SoA layout: all qs first, then all d
                     // d_offset = total qs bytes = storage_rows * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
                     const int64_t ne00     = src0->ne[0];
                     const int64_t d_offset = storage_rows * ne00 / 2;
-                    const void *  soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
-                    if (soa_base == nullptr) {
-                        get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
-                                                                     (const float *) src0_d, src1_i32, dst_d,
-                                                                     ctx.stream());
-                    } else {
-                        get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
-                            ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset, d_offset,
-                            ctx.stream());
-                    }
-                } else if (ggml_sycl_layout_is_coalesced(extra)) {
+                    get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                        ctx, src0, dst->src[1], dst, layout_base, src1_i32, dst_d, row_offset, d_offset,
+                        ctx.stream());
+                } else if (layout == GGML_LAYOUT_COALESCED && layout_base) {
                     // Coalesced layout: word-major within tiles
                     // d_offset = total qs bytes = storage_rows * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
                     const int64_t ne00     = src0->ne[0];
                     const int64_t d_offset = storage_rows * ne00 / 2;
-                    const void *  coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
-                    if (coa_base == nullptr) {
-                        get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
-                                                                     (const float *) src0_d, src1_i32, dst_d,
-                                                                     ctx.stream());
-                    } else {
-                        get_rows_q4_0_coalesced_sycl(ctx, src0, dst->src[1], dst, coa_base, src1_i32, dst_d,
-                                                     row_offset, d_offset, ctx.stream());
-                    }
+                    get_rows_q4_0_coalesced_sycl(ctx, src0, dst->src[1], dst, layout_base, src1_i32, dst_d,
+                                                 row_offset, d_offset, ctx.stream());
                 } else {
                     // AoS (original) layout
                     get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
@@ -2268,38 +2248,21 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q8_0:
             {
-                // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra =
-                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
-                if (ggml_sycl_layout_is_soa(extra)) {
+                if (layout == GGML_LAYOUT_SOA && layout_base) {
                     // SoA layout: all qs first, then all d
                     // d_offset = total qs bytes = storage_rows * ne00 (for Q8_0: 32 bytes qs per 32 values)
                     const int64_t ne00     = src0->ne[0];
                     const int64_t d_offset = storage_rows * ne00;
-                    const void *  soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
-                    if (soa_base == nullptr) {
-                        get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
-                                                                     (const float *) src0_d, src1_i32, dst_d,
-                                                                     ctx.stream());
-                    } else {
-                        get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
-                            ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset, d_offset,
-                            ctx.stream());
-                    }
-                } else if (ggml_sycl_layout_is_coalesced(extra)) {
+                    get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
+                        ctx, src0, dst->src[1], dst, layout_base, src1_i32, dst_d, row_offset, d_offset,
+                        ctx.stream());
+                } else if (layout == GGML_LAYOUT_COALESCED && layout_base) {
                     // Coalesced layout: word-major within tiles
                     // d_offset = total qs bytes = storage_rows * ne00 (for Q8_0: 32 bytes qs per 32 values)
                     const int64_t ne00     = src0->ne[0];
                     const int64_t d_offset = storage_rows * ne00;
-                    const void *  coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
-                    if (coa_base == nullptr) {
-                        get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
-                                                                     (const float *) src0_d, src1_i32, dst_d,
-                                                                     ctx.stream());
-                    } else {
-                        get_rows_q8_0_coalesced_sycl(ctx, src0, dst->src[1], dst, coa_base, src1_i32, dst_d,
-                                                     row_offset, d_offset, ctx.stream());
-                    }
+                    get_rows_q8_0_coalesced_sycl(ctx, src0, dst->src[1], dst, layout_base, src1_i32, dst_d,
+                                                 row_offset, d_offset, ctx.stream());
                 } else {
                     // AoS (original) layout
                     get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
@@ -2309,29 +2272,15 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q6_K:
             {
-                // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra =
-                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
-                if (ggml_sycl_layout_is_coalesced(extra)) {
+                if (layout == GGML_LAYOUT_COALESCED && layout_base) {
                     // Coalesced layout: variable tile decomposition with word-major ordering
-                    // Uses new variable tile kernel that computes row_quants_bytes correctly
                     GGML_SYCL_DEBUG("Calling get_rows_q6_k_coalesced_variable_sycl\n");
-                    const void * coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
-                    if (coa_base == nullptr) {
-                        get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
-                    } else {
-                        get_rows_q6_k_coalesced_variable_sycl<float>(ctx, src0, dst->src[1], dst, coa_base, src1_i32,
-                                                                     dst_d, row_offset, storage_rows, ctx.stream());
-                    }
-                } else if (ggml_sycl_layout_is_soa(extra)) {
+                    get_rows_q6_k_coalesced_variable_sycl<float>(ctx, src0, dst->src[1], dst, layout_base, src1_i32,
+                                                                 dst_d, row_offset, storage_rows, ctx.stream());
+                } else if (layout == GGML_LAYOUT_SOA && layout_base) {
                     // Standard SoA layout: [all ql (n*128)][all qh (n*64)][all scales (n*16)][all d (n*2)]
-                    const void * soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
-                    if (soa_base == nullptr) {
-                        get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
-                    } else {
-                        get_rows_q6_k_soa_sycl(ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset,
-                                               storage_rows, ctx.stream());
-                    }
+                    get_rows_q6_k_soa_sycl(ctx, src0, dst->src[1], dst, layout_base, src1_i32, dst_d, row_offset,
+                                           storage_rows, ctx.stream());
                 } else {
                     // AoS (original) layout - uses specialized kernel due to Q6_K block complexity
                     get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());

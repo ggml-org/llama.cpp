@@ -5073,45 +5073,10 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
 
     // Unified weight resolution: single O(1) cache lookup
     auto resolved = ggml_sycl_resolve_weight(src0, device_id);
-    if (resolved && resolved.on_device) {
-        switch (resolved.layout) {
-            case GGML_LAYOUT_COALESCED:
-                mmvq_mode   = reorder_mode::COALESCED;
-                layout_base = resolved.ptr;
-                layout      = GGML_LAYOUT_COALESCED;
-                break;
-            case GGML_LAYOUT_SOA:
-                mmvq_mode   = reorder_mode::SOA;
-                layout_base = resolved.ptr;
-                layout      = GGML_LAYOUT_SOA;
-                break;
-            default:
-                break;
-        }
-    }
-
-    // Slow path: host-pinned pointer or cache miss -- try layout registry + old resolution
-    if (mmvq_mode == reorder_mode::NONE) {
-        const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-        layout_mode  chosen     = GGML_LAYOUT_AOS;
-        if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
-            layout = chosen;
-        } else {
-            layout = get_effective_layout_mode(src0_extra);
-        }
-        switch (layout) {
-            case GGML_LAYOUT_SOA:
-                mmvq_mode   = reorder_mode::SOA;
-                layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
-                break;
-            case GGML_LAYOUT_COALESCED:
-                mmvq_mode   = reorder_mode::COALESCED;
-                layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
-                break;
-            default:
-                mmvq_mode = reorder_mode::NONE;
-                break;
-        }
+    if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
+        layout      = resolved.layout;
+        layout_base = resolved.ptr;
+        mmvq_mode   = (layout == GGML_LAYOUT_SOA) ? reorder_mode::SOA : reorder_mode::COALESCED;
     }
 
     if (mmvq_mode != reorder_mode::NONE && !layout_base) {

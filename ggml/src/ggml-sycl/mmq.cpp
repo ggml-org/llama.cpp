@@ -6938,38 +6938,22 @@ void ggml_sycl_op_mul_mat_q(
 
     if (layout != GGML_LAYOUT_AOS) {
         storage = get_storage_tensor(src0);
-        layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
-        if (!layout_base) {
-            if (forced_coalesced) {
-                layout = preferred_layout;
-                mode = (layout == GGML_LAYOUT_SOA) ? reorder_mode::SOA : reorder_mode::NONE;
-                forced_coalesced = false;
-                if (layout != GGML_LAYOUT_AOS) {
-                    storage = get_storage_tensor(src0);
-                    layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
-                }
-            }
-
-            if (!layout_base) {
-                GGML_SYCL_DEBUG("[MMQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
-                                src0->name ? src0->name : "?", (int) layout);
-                layout = GGML_LAYOUT_AOS;
-                mode = reorder_mode::NONE;
-            } else {
-                layout_rows = storage->ne[1];
-                if (src0->view_src != nullptr) {
-                    layout_row_low = row_low + src0->view_offs / src0->nb[1];
-                } else {
-                    layout_row_low = row_low;
-                }
-            }
-        } else {
+        auto resolved = ggml_sycl_resolve_weight(storage, device_id);
+        if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
+            layout      = resolved.layout;
+            layout_base = resolved.ptr;
+            mode        = (layout == GGML_LAYOUT_SOA) ? reorder_mode::SOA : reorder_mode::COALESCED;
             layout_rows = storage->ne[1];
             if (src0->view_src != nullptr) {
                 layout_row_low = row_low + src0->view_offs / src0->nb[1];
             } else {
                 layout_row_low = row_low;
             }
+        } else {
+            GGML_SYCL_DEBUG("[MMQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                            src0->name ? src0->name : "?", (int) layout);
+            layout = GGML_LAYOUT_AOS;
+            mode = reorder_mode::NONE;
         }
     }
 

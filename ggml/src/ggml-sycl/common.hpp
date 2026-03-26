@@ -2109,21 +2109,6 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
                 }
             }
         }
-        // Slow path: ensure_cached_layout (creates entry if missing)
-        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
-        if (cached) {
-            if (host_weights) {
-                ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_TARGET_HIT);
-            }
-            return cached;
-        }
-        if (host_weights && target != GGML_LAYOUT_AOS) {
-            cached = ggml_sycl_get_weight_layout_ptr(tensor, device, GGML_LAYOUT_AOS);
-            if (cached) {
-                ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_AOS_HIT);
-                return cached;
-            }
-        }
         if (host_weights) {
             // Check layer stream manager first
             if (ggml_sycl::layer_streaming_active(device) && tensor->name) {
@@ -2408,7 +2393,13 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
           (target != GGML_LAYOUT_AOS || ggml_backend_sycl_weights_evictable())));
 
     if (cache_weights) {
-        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
+        void * cached = nullptr;
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            if (key.valid) {
+                cached = cache->lookup(key, target);
+            }
+        }
         if (cached) {
             if (target != GGML_LAYOUT_AOS && ggml_sycl_tensor_is_weight(tensor)) {
                 const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(cached);

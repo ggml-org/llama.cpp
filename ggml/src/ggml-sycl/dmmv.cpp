@@ -3617,20 +3617,20 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const bool allow_layout = allow_reordered &&
                               (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K);
     if (allow_layout && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
-        layout = mode;
         storage = get_storage_tensor(src0);
-        layout_rows = ggml_nrows(storage);
-        layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
-        if (!layout_base) {
-            GGML_SYCL_DEBUG("[DMMV] Missing layout pointer for %s layout=%d, falling back to AoS\n",
-                            src0->name ? src0->name : "?", (int)layout);
-            layout = GGML_LAYOUT_AOS;
-        } else {
+        auto resolved = ggml_sycl_resolve_weight(storage, device_id);
+        if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
+            layout = resolved.layout;
+            layout_rows = ggml_nrows(storage);
+            layout_base = resolved.ptr;
             int64_t view_row_offset = 0;
             if (src0->view_src != nullptr) {
                 view_row_offset = src0->view_offs / src0->nb[1];
             }
             layout_row_low = row_low + view_row_offset;
+        } else {
+            GGML_SYCL_DEBUG("[DMMV] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                            src0->name ? src0->name : "?", (int)mode);
         }
     }
 

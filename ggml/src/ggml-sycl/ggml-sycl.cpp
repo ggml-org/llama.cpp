@@ -17792,12 +17792,14 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                 GGML_SYCL_DEBUG("[MUL_MAT] TP buffer src0 device=%d ptr=%p (tensor=%s)\n", i, (void *) dev[i].src0_dd,
                                 src0->name);
             } else {
-                // Fast O(1) path: try unified cache resolve first
+                // Fast O(1) path: unified cache resolve
                 auto resolved = ggml_sycl_resolve_weight(src0, i);
-                if (resolved && resolved.layout == src0_layout) {
+                if (resolved && resolved.on_device) {
                     dev[i].src0_dd                = (char *) resolved.ptr;
                     dev[i].src0_ptr_origin        = "resolve_weight";
                     dev[i].src0_layout_ptr_source = "unified_cache_resolve";
+                    src0_layout                   = resolved.layout;
+                    exc_ctx.src0_layout           = resolved.layout;
                 } else {
                     // Fallback: full resolution chain (layout registry, ensure_cached, etc.)
                     dev[i].src0_ptr_origin = "layout_ptr";
