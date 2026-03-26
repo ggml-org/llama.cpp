@@ -215,6 +215,7 @@
 	{#if selectedConversationHasDescendants}
 		<div class="flex items-center gap-2 py-2">
 			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
+
 			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
 		</div>
 	{/if}
