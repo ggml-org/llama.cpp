@@ -39,6 +39,9 @@ jobs:
           echo "Updating manifest..."
           komac update --version ${{ steps.find_latest_release.outputs.VERSION }} \
             --urls "${{ steps.find_latest_release.outputs.ASSETURL }}" \
-            --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
+            --token ${WINGET_GITHUB_TOKEN} \
             --submit \
             ggml.llamacpp
+
+        env:
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
