@@ -92,7 +92,7 @@ int entry_point(struct ggml_et_repeat_params* params, void* env) {
         float* dst_row = (float*)((char*)dst_data + i1*dnb1 + i2*dnb2 + i3*dnb3);
 
         if (nr0 == 1) {
-            // No tiling along dim 0 — single cacheline-aligned row copy
+            // No tiling along dim 0 - single cacheline-aligned row copy
             copy_row_aligned(dst_row, src_row, (int32_t)ne00);
         } else {
             // Tile ne00-sized chunks across dim 0

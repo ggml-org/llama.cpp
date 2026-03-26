@@ -687,6 +687,14 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_set_rows(dev_ctx, node);
                 break;
 
+            case GGML_OP_RWKV_WKV6:
+                ggml_et_op_rwkv_wkv6(dev_ctx, node);
+                break;
+
+            case GGML_OP_RWKV_WKV7:
+                ggml_et_op_rwkv_wkv7(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -795,10 +803,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
                 bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
 
-                // Check destination stride ordering
-                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
-                                            op->nb[1] <= op->nb[2] &&
-                                            op->nb[2] <= op->nb[3]);
+                // Check destination stride ordering (only for dimensions with ne > 1)
+                bool dst_properly_ordered = true;
+                for (int d = 0; d < 3; d++) {
+                    if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
+                        dst_properly_ordered = false;
+                    }
+                }
 
                 supported = src0_first_dim_contiguous &&
                            src1_first_dim_contiguous &&
@@ -825,10 +836,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool src2_first_dim_contiguous = (op->src[2]->nb[0] == ggml_type_size(op->src[2]->type));
                 bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
 
-                // Check destination stride ordering (matching CPU backend)
-                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
-                                            op->nb[1] <= op->nb[2] &&
-                                            op->nb[2] <= op->nb[3]);
+                // Check destination stride ordering (only for dimensions with ne > 1)
+                bool dst_properly_ordered = true;
+                for (int d = 0; d < 3; d++) {
+                    if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
+                        dst_properly_ordered = false;
+                    }
+                }
 
                 // Validate tensor dimension constraints from GGML definition
                 bool dims_valid = (op->src[0]->ne[3] == 1) &&  // as is 3d (one matrix per expert)
@@ -999,6 +1013,51 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_RWKV_WKV6:
+            // F32 contiguous, head_size must be multiple of 8 for vectorization
+            // 6 sources: k, v, r, tf, td, state
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_F32 &&
+                op->src[3] && op->src[3]->type == GGML_TYPE_F32 &&
+                op->src[4] && op->src[4]->type == GGML_TYPE_F32 &&
+                op->src[5] && op->src[5]->type == GGML_TYPE_F32 &&
+                op->src[0]->ne[0] % 8 == 0 &&  // head_size multiple of 8
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
+                ggml_is_contiguous(op->src[2]) &&
+                ggml_is_contiguous(op->src[3]) &&
+                ggml_is_contiguous(op->src[4]) &&
+                ggml_is_contiguous(op->src[5])) {
+                supported = true;
+            } else {
+                supported = false;
+            }
+            break;
+        case GGML_OP_RWKV_WKV7:
+            // F32 contiguous, head_size must be multiple of 8 for vectorization
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_F32 &&
+                op->src[3] && op->src[3]->type == GGML_TYPE_F32 &&
+                op->src[4] && op->src[4]->type == GGML_TYPE_F32 &&
+                op->src[5] && op->src[5]->type == GGML_TYPE_F32 &&
+                op->src[6] && op->src[6]->type == GGML_TYPE_F32 &&
+                op->src[2]->ne[0] % 8 == 0 &&  // head_size multiple of 8
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
+                ggml_is_contiguous(op->src[2]) &&
+                ggml_is_contiguous(op->src[3]) &&
+                ggml_is_contiguous(op->src[4]) &&
+                ggml_is_contiguous(op->src[5]) &&
+                ggml_is_contiguous(op->src[6])) {
+                supported = true;
+            } else {
+                supported = false;
+            }
+            break;
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
@@ -1035,9 +1094,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    if(!supported) {
-        ggml_et_dump_operator_metadata(op);
-    }
+    // if(!supported) {
+    //     ggml_et_dump_operator_metadata(op);
+    // }
     return supported;
 }
 
