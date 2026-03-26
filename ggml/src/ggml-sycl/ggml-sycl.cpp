@@ -24354,10 +24354,16 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     bool       host_weights = ggml_sycl_is_host_resident_weight(src0, stream);
     void *     direct_base  = nullptr;
     if (layout == GGML_LAYOUT_AOS) {
-        // Try to find the whole-tensor AOS entry in the unified cache (VRAM).
-        // S1-PRELOAD caches entire MoE tensors as AOS — using the device pointer
+        // Try to find the whole-tensor entry in the unified cache (VRAM).
+        // S1-PRELOAD caches entire MoE tensors — using the device pointer
         // lets us compute per-expert offsets without individual cache entries.
-        direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
+        // Only AOS layout supports direct byte-offset arithmetic; COALESCED/SOA
+        // rearrange bytes within tiles so offset math gives wrong data.
+        auto whole_tensor_resolved = ggml_sycl_resolve_weight(src0, device);
+        if (whole_tensor_resolved && whole_tensor_resolved.layout == GGML_LAYOUT_AOS
+            && whole_tensor_resolved.on_device) {
+            direct_base = whole_tensor_resolved.ptr;
+        }
         if (!direct_base && src0_is_usm_accessible) {
             // OPT-FUSED: USM-accessible (host-pinned or shared) memory can be read
             // directly by GPU kernels via PCIe zero-copy. This is the fast fallback
@@ -32964,30 +32970,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         (int) route_layout);
         route_layout = GGML_LAYOUT_AOS;
     }
-    if (!has_override) {
-        ggml_sycl_cache_id layout_key    = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-        layout_mode        chosen_layout = GGML_LAYOUT_AOS;
-        if (layout_key.valid && ggml_sycl_get_layout_choice(layout_key, ctx.device, &chosen_layout)) {
-            const layout_mode adjusted = ggml_sycl_adjust_layout_for_tensor(src0, chosen_layout, ctx.device);
-            if (adjusted != chosen_layout) {
-                GGML_SYCL_DEBUG("[MoE] Ignoring invalid chosen layout for %s: chosen=%s adjusted=%s\n",
-                                src0->name ? src0->name : "?", ggml_sycl_layout_mode_name(chosen_layout),
-                                ggml_sycl_layout_mode_name(adjusted));
-            } else if (chosen_layout != route_layout) {
-                GGML_SYCL_DEBUG("[MoE] Aligning route layout for %s: requested=%s chosen=%s\n",
-                                src0->name ? src0->name : "?", ggml_sycl_layout_mode_name(route_layout),
-                                ggml_sycl_layout_mode_name(chosen_layout));
-                route_layout = chosen_layout;
-            }
-        }
-    }
+    // resolve_weight returns the best available layout from the cache,
+    // superseding any layout choice registry adjustments.
     const void * src0_layout_base = nullptr;
     if (!use_expert_cache) {
-        if (route_layout != src0_layout) {
-            auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+        auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+        if (resolved) {
             src0_layout_ptr = resolved.ptr;
             src0_layout     = resolved.layout;
             src0_layout_aos = (src0_layout == GGML_LAYOUT_AOS);
+            route_layout    = resolved.layout;
         }
         src0_layout_base = src0_layout_ptr;
     }
