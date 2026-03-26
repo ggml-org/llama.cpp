@@ -27726,7 +27726,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             void *      reorder_ptr     = nullptr;
             layout_mode cache_layout    = GGML_LAYOUT_AOS;
             bool        cache_has_reorder = false;
-            if (!has_soa_reorder && ggml_backend_sycl_all_weights_host() &&
+            // In S1 mode, always check the cache — tensor extra's is_reordered() flag
+            // reflects the host-side AOS pointer, not the VRAM COALESCED copy from S1-PRELOAD.
+            // Without this, has_soa_reorder=true skips the cache and uses the host pointer.
+            const bool s1_mode = ggml_backend_sycl_all_weights_host();
+            if ((s1_mode || !has_soa_reorder) &&
                 ggml_sycl_supports_reorder_mmvq(src0->type)) {
                 // Prefer COALESCED (S1-PRELOAD default for supported types)
                 if (is_coalesced_supported(src0->type)) {
@@ -27746,6 +27750,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 }
             }
 
+            {
+                static std::atomic<int> tg_path_log{0};
+                if (tg_path_log.fetch_add(1, std::memory_order_relaxed) < 5) {
+                    GGML_LOG_INFO("[TG-PATH] %s: has_soa=%d cache_has=%d cache_layout=%d type=%d s1=%d\n",
+                                  src0->name, has_soa_reorder ? 1 : 0, cache_has_reorder ? 1 : 0,
+                                  (int)cache_layout, (int)src0->type,
+                                  ggml_backend_sycl_all_weights_host() ? 1 : 0);
+                }
+            }
             if (has_soa_reorder || cache_has_reorder) {
                 const layout_mode soa_layout = has_soa_reorder ? effective_layout : cache_layout;
                 // Tensor split: cooperative multi-device MUL_MAT
