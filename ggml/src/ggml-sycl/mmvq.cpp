@@ -5070,26 +5070,56 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
     const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     layout_mode   layout     = GGML_LAYOUT_AOS;
     layout_mode   chosen     = GGML_LAYOUT_AOS;
-    if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
-        layout = chosen;
-    } else {
-        layout = get_effective_layout_mode(src0_extra);
+    reorder_mode  mmvq_mode  = reorder_mode::NONE;
+    const void *  layout_base = nullptr;
+
+    // Fast path: if src0_dd_i is a device pointer (VRAM, not host-pinned), the
+    // caller (op_mul_mat) already resolved it from the unified cache with the
+    // correct layout.  Use it directly — no re-lookup needed.
+    // This eliminates the triple-lookup bottleneck for S1 mode where
+    // get_layout_ptr_for → ensure_cached_layout was called 3x per MUL_MAT.
+    const sycl::usm::alloc src0_alloc = ggml_sycl_get_alloc_type(src0_dd_i);
+    if (src0_alloc == sycl::usm::alloc::device) {
+        // The caller resolved a VRAM pointer — determine layout from cache.
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device_id)) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, device_id);
+            if (key.valid) {
+                if (cache->lookup(key, GGML_LAYOUT_COALESCED)) {
+                    layout      = GGML_LAYOUT_COALESCED;
+                    mmvq_mode   = reorder_mode::COALESCED;
+                    layout_base = src0_dd_i;
+                } else if (cache->lookup(key, GGML_LAYOUT_SOA)) {
+                    layout      = GGML_LAYOUT_SOA;
+                    mmvq_mode   = reorder_mode::SOA;
+                    layout_base = src0_dd_i;
+                }
+            }
+        }
     }
-    reorder_mode mmvq_mode = reorder_mode::NONE;
-    const void *      layout_base = nullptr;
-    switch (layout) {
-        case GGML_LAYOUT_SOA:
-            mmvq_mode   = reorder_mode::SOA;
-            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
-            break;
-        case GGML_LAYOUT_COALESCED:
-            mmvq_mode   = reorder_mode::COALESCED;
-            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
-            break;
-        default:
-            mmvq_mode = reorder_mode::NONE;
-            break;
+
+    // Slow path: src0_dd_i is host-pinned or fast path didn't match.
+    // Resolve layout via registry + cache lookup.
+    if (mmvq_mode == reorder_mode::NONE) {
+        if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
+            layout = chosen;
+        } else {
+            layout = get_effective_layout_mode(src0_extra);
+        }
+        switch (layout) {
+            case GGML_LAYOUT_SOA:
+                mmvq_mode   = reorder_mode::SOA;
+                layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
+                break;
+            case GGML_LAYOUT_COALESCED:
+                mmvq_mode   = reorder_mode::COALESCED;
+                layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
+                break;
+            default:
+                mmvq_mode = reorder_mode::NONE;
+                break;
+        }
     }
+
     if (mmvq_mode != reorder_mode::NONE && !layout_base) {
         GGML_SYCL_DEBUG("[MMVQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
                         src0->name ? src0->name : "?", (int) layout);
