@@ -17808,6 +17808,14 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                                 src0->name);
             } else {
                 dev[i].src0_ptr_origin = "layout_ptr";
+                {
+                    static std::atomic<int> opm_log{0};
+                    bool is_aw = src0->name && strstr(src0->name, "attn_q.weight");
+                    if (is_aw && opm_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        GGML_LOG_INFO("[OP-MUL-MAT] %s: requesting layout=%d from get_layout_ptr_for\n",
+                                      src0->name, (int)src0_layout);
+                    }
+                }
                 dev[i].src0_dd =
                     (char *) ggml_sycl_get_layout_ptr_for(src0, i, src0_layout, &dev[i].src0_layout_ptr_source);
 

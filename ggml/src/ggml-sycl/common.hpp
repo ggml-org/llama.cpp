@@ -2029,12 +2029,46 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
     }
 
     layout_mode target = GGML_LAYOUT_AOS;
+    // Fast path (before ANY registry/extra checks): direct cache lookup with
+    // the caller's requested layout. S1-PRELOAD populates the cache with
+    // COALESCED entries — this O(1) lookup finds them immediately without
+    // going through the layout choice registry (which may downgrade to AOS).
+    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled() &&
+        target != GGML_LAYOUT_AOS) {
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            if (key.valid) {
+                // Try requested layout first, then COALESCED (S1-PRELOAD default),
+                // then SOA. The dispatch may request SOA but S1-PRELOAD stored COALESCED.
+                void * fast_ptr = cache->lookup(key, target);
+                if (!fast_ptr && target != GGML_LAYOUT_COALESCED) {
+                    fast_ptr = cache->lookup(key, GGML_LAYOUT_COALESCED);
+                }
+                if (!fast_ptr && target != GGML_LAYOUT_SOA) {
+                    fast_ptr = cache->lookup(key, GGML_LAYOUT_SOA);
+                }
+                {
+                    static std::atomic<int> fl{0};
+                    bool is_attn_w = tensor->name && strstr(tensor->name, "attn_q.weight");
+                    if (is_attn_w && fl.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        GGML_LOG_INFO("[FAST-TOP] %s: target=%d found=%p model=%llu hash=0x%llx entries=%zu\n",
+                                      tensor->name, (int)target, fast_ptr,
+                                      (unsigned long long)key.model_id,
+                                      (unsigned long long)key.name_hash,
+                                      cache->entry_count());
+                    }
+                }
+                if (fast_ptr) {
+                    return fast_ptr;
+                }
+            }
+        }
+    }
+
     if (ggml_sycl_tensor_is_weight(tensor)) {
-        // Use get_layout_choice_for_tensor which has fallback registration logic.
-        // This handles weight tensors that may not have been visited during finalize_layouts,
-        // such as norm scale weights accessed via fused operations (RMS_NORM+MUL).
+        // Layout choice registry may override the requested target.
+        // This handles weight tensors that may not have been visited during finalize_layouts.
         if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &target)) {
-            // If no layout choice can be determined, fall back to AOS.
             target = GGML_LAYOUT_AOS;
         }
     }
@@ -2055,6 +2089,15 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
             if (key.valid) {
                 void * fast_ptr = cache->lookup(key, target);
+                {
+                    static std::atomic<int> fast_log{0};
+                    // Only log for attention weight tensors (attn_q, attn_k, etc.)
+                    bool is_attn = tensor->name && strstr(tensor->name, "attn_q.weight");
+                    if (is_attn && fast_log.fetch_add(1, std::memory_order_relaxed) < 5) {
+                        GGML_LOG_INFO("[FAST-CACHE] %s: target=%d found=%p key_valid=%d\n",
+                                      tensor->name, (int)target, fast_ptr, key.valid ? 1 : 0);
+                    }
+                }
                 if (fast_ptr) {
                     if (host_weights) {
                         ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_TARGET_HIT);
