@@ -83,9 +83,6 @@
 			const convId = selectedConversation.id;
 			const withForks = deleteWithForks;
 			showDeleteDialog = false;
-			const withForks = deleteWithForks;
-
-			showDeleteDialog = false;
 
 			setTimeout(() => {
 				conversationsStore.deleteConversation(convId, {

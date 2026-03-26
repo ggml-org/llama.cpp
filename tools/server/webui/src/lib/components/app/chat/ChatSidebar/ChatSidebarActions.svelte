@@ -3,8 +3,9 @@
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { DialogChatSettings, McpLogo } from '$lib/components/app';
+	import { McpLogo } from '$lib/components/app';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
+	import { getChatSettingsDialogContext } from '$lib/contexts';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -20,7 +21,7 @@
 
 	let searchInput: HTMLInputElement | null = $state(null);
 
-	let showChatSettingsDialogWithMcpSection = $state(false);
+	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -87,7 +88,7 @@
 		<Button
 			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			onclick={() => {
-				showChatSettingsDialogWithMcpSection = true;
+				chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP);
 			}}
 			variant="ghost"
 		>
@@ -99,9 +100,3 @@
 		</Button>
 	{/if}
 </div>
-
-<DialogChatSettings
-	open={showChatSettingsDialogWithMcpSection}
-	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
-	initialSection={SETTINGS_SECTION_TITLES.MCP}
-/>

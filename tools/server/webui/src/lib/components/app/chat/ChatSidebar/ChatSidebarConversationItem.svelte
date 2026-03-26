@@ -10,6 +10,7 @@
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { onMount } from 'svelte';
@@ -35,8 +36,6 @@
 		isActive = false,
 		depth = 0
 	}: Props = $props();
-
-	const FORK_TREE_DEPTH_PADDING = 8;
 
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
