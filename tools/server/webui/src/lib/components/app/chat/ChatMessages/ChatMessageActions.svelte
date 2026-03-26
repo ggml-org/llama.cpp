@@ -70,6 +70,7 @@
 
 	function handleOpenForkDialog() {
 		const conv = activeConversation();
+
 		forkName = `Fork of ${conv?.name ?? 'Conversation'}`;
 		forkIncludeAttachments = true;
 		showForkDialog = true;
