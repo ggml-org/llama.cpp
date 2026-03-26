@@ -25119,13 +25119,14 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
             }
             layout_mode target = GGML_LAYOUT_AOS;
             if (ggml_backend_sycl_all_weights_host()) {
-                // S1: PP uses AOS (already cached by S1-PRELOAD), TG uses SOA.
-                // The unified dispatch accepts whatever layout is cached and the
-                // dequant kernel handles both AOS and SOA for PP (SOA→FP16 works).
-                // graph_preload converts AOS→SOA on first TG decode graph.
-                if (is_decode && ggml_is_quantized(src->type) &&
-                    ggml_sycl_supports_reorder_mmvq(src->type)) {
-                    target = ggml_sycl_adjust_layout_for_tensor(src, GGML_LAYOUT_SOA, ctx.device);
+                // S1: TG decode uses COALESCED/SOA (matching S1-PRELOAD), PP uses AOS (oneDNN).
+                // is_cached_any check below doesn't use target, but the preload loop does.
+                if (is_decode && ggml_is_quantized(src->type) && ggml_sycl_supports_reorder_mmvq(src->type)) {
+                    if (is_coalesced_supported(src->type) && ggml_sycl_layout_supports_coalesced(src)) {
+                        target = GGML_LAYOUT_COALESCED;
+                    } else {
+                        target = GGML_LAYOUT_SOA;
+                    }
                 } else {
                     target = GGML_LAYOUT_AOS;
                 }
@@ -25181,7 +25182,7 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
 
         const layout_mode target    = entry.second.layout;
         const size_t      layout_sz = ggml_sycl_estimate_layout_bytes(weight, target, ctx.device);
-        if (cache_key.valid && cache->is_cached(cache_key, target)) {
+        if (cache_key.valid && cache->is_cached_any(cache_key)) {
             cached_bytes += layout_sz;
             cached_count++;
         } else {
