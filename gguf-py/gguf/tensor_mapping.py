@@ -63,6 +63,7 @@ class TensorNameMap:
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
+            "model.embed_positions",           # rugpt3xl
         ),
 
         # Output

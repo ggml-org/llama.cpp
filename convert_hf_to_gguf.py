@@ -1311,6 +1311,9 @@ class TextModel(ModelBase):
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"
+        if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
+            # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
+            res = "gpt-2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -5098,6 +5101,47 @@ class GPT2Model(TextModel):
         new_name = self.map_tensor_name(name)
 
         yield from super().modify_tensors(data_torch, new_name, bid)
+
+
+@ModelBase.register("RuGPT3XLForCausalLM")
+class RuGPT3XLModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.GPT2
+
+    _qkv_parts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Fuse separate Q, K, V projections into a single QKV tensor
+        if ".self_attn.q_proj." in name or ".self_attn.k_proj." in name or ".self_attn.v_proj." in name:
+            suffix = "weight" if name.endswith(".weight") else "bias"
+            part = "q" if ".q_proj." in name else ("k" if ".k_proj." in name else "v")
+            key = f"{part}.{suffix}"
+
+            assert bid is not None
+            if self._qkv_parts is None:
+                self._qkv_parts = [{} for _ in range(self.block_count)]
+            self._qkv_parts[bid][key] = data_torch
+
+            q_key, k_key, v_key = f"q.{suffix}", f"k.{suffix}", f"v.{suffix}"
+            if all(k in self._qkv_parts[bid] for k in [q_key, k_key, v_key]):
+                q = self._qkv_parts[bid].pop(q_key)
+                k = self._qkv_parts[bid].pop(k_key)
+                v = self._qkv_parts[bid].pop(v_key)
+                data_torch = torch.cat([q, k, v], dim=0)
+                name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid, f".{suffix}")
+                logger.debug(f"Fused Q/K/V {suffix} for layer {bid} -> {name}")
+            else:
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._qkv_parts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            parts = [f"({i}){k}" for i, d in enumerate(self._qkv_parts) for k in d.keys()]
+            if len(parts) > 0:
+                raise ValueError(f"Unprocessed Q/K/V parts: {parts}")
 
 
 @ModelBase.register("PhiForCausalLM")
