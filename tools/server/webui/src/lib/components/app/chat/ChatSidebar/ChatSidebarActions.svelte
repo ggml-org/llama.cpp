@@ -3,8 +3,7 @@
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import McpLogo from '../../mcp/McpLogo.svelte';
-	import DialogChatSettings from '../../dialogs/DialogChatSettings.svelte';
+	import { DialogChatSettings, McpLogo } from '$lib/components/app';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 
 	interface Props {
