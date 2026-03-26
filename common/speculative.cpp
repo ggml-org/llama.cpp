@@ -1353,8 +1353,7 @@ struct common_speculative_session::impl {
                 spec_ckpt_n_denials++;
                 if (ids.size() > 1u + static_cast<std::size_t>(params_spec.n_min) && spec_ckpt_n_denials == 1) {
                     // we will do the batch again but with the shortened draft
-                    //return common_speculative_accept_response(std::move(ids), n_draft, true);
-                    LOG_DBG("%s: partial draft disabled\n", __func__);
+                    return common_speculative_accept_response(std::move(ids), n_draft, true);
                 }
 
                 LOG_DBG("%s: don't accept partial draft, n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
