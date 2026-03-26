@@ -245,18 +245,18 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         uint sb = k / 8;
         uint j  = k % 8;
 
-        half2 d_sb   = src0_d[gid + sb * LINE_STRIDE_A];
-        half2 dm_sb  = src0_m[gid + sb * LINE_STRIDE_A];
+        half2 d   = src0_d[gid + sb * LINE_STRIDE_A];
+        half2 dm  = src0_m[gid + sb * LINE_STRIDE_A];
 
-        global const uchar * scales0 = src0_s + 2 * gid * scales_per_row + sb * 12;
-        global const uchar * scales1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
+        global const uchar * sc0 = src0_s + 2 * gid * scales_per_row + sb * 12;
+        global const uchar * sc1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
 
-        uchar sc0, m0, sc1, m1;
-        get_scale_min_k4(j, scales0, &sc0, &m0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, scales1, &sc1, &m1, mask_d6, mask_d4, mask_hi2);
+        uchar sv0, mn0, sv1, mn1;
+        get_scale_min_k4(j, scales0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, scales1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
         
-        regS = (half2)(d_sb.s0  * sc0, d_sb.s1  * sc1);
-        regM = (half2)(dm_sb.s0 * m0,  dm_sb.s1 * m1);
+        regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)sv0, sv1));
+        regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)mn0, mn1));
 
         if (slid < 4) {
             regB.s0123 = read_imagef(src1, (slid * 2 + k * 8));
