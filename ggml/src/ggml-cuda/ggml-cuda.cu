@@ -5058,8 +5058,17 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
         case GGML_OP_DIAG:
-        case GGML_OP_SOLVE_TRI:
             return true;
+        case GGML_OP_SOLVE_TRI: {
+            const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
+#if defined(GGML_USE_HIP)
+            // MI50/gfx906 can reach an invalid-device-function path here with Qwen3.5.
+            if (cc == GGML_CUDA_CC_VEGA20) {
+                return false;
+            }
+#endif // defined(GGML_USE_HIP)
+            return true;
+        }
 
         default:
             return false;
