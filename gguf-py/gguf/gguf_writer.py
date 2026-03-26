@@ -822,8 +822,11 @@ class GGUFWriter:
     def add_final_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.FINAL_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
-    def add_expert_count(self, count: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
+    def add_expert_count(self, count: int | Sequence[int]) -> None:
+        if isinstance(count, int):
+            self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
+        else:
+            self.add_array(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
     def add_expert_used_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
@@ -933,8 +936,11 @@ class GGUFWriter:
     def add_relative_attn_buckets_count(self, value: int) -> None:
         self.add_uint32(Keys.Attention.REL_BUCKETS_COUNT.format(arch=self.arch), value)
 
-    def add_sliding_window(self, value: int) -> None:
-        self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+    def add_sliding_window(self, value: int | Sequence[int]) -> None:
+        if isinstance(value, int):
+            self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+        else:
+            self.add_array(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)

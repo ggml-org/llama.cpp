@@ -46,6 +46,7 @@ struct llama_hparams {
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_expert_arr = {};
     uint32_t n_rel_attn_bkts = 0;
 
     // different head size for full_attention and SWA layers
@@ -131,6 +132,7 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_swa_arr = {};
     // if swa_layers[il] == 1, then layer il is SWA
     // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
@@ -252,6 +254,9 @@ struct llama_hparams {
     uint32_t n_head_kv(uint32_t il = 0) const;
 
     uint32_t n_ff(uint32_t il = 0) const;
+
+    uint32_t n_expert_layer(uint32_t il) const;
+    uint32_t n_swa_layer(uint32_t il) const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
 

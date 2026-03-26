@@ -109,6 +109,7 @@ add_library(llama
             models/olmo2.cpp
             models/olmoe.cpp
             models/openai-moe-iswa.cpp
+            models/openai-moe-puzzle.cpp
             models/openelm.cpp
             models/orion.cpp
             models/paddleocr.cpp

@@ -465,6 +465,10 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
     llm_build_openai_moe_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_openai_moe_puzzle_iswa : public llm_graph_context {
+    llm_build_openai_moe_puzzle_iswa(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_openelm : public llm_graph_context {
     llm_build_openelm(const llama_model & model, const llm_graph_params & params);
 };

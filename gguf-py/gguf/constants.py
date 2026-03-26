@@ -472,6 +472,7 @@ class MODEL_ARCH(IntEnum):
     HUNYUAN_DENSE    = auto()
     SMOLLM3          = auto()
     GPT_OSS          = auto()
+    GPT_OSS_PUZZLE   = auto()
     LFM2             = auto()
     LFM2MOE          = auto()
     DREAM            = auto()
@@ -936,6 +937,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.HUNYUAN_DENSE:    "hunyuan-dense",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
+    MODEL_ARCH.GPT_OSS_PUZZLE:   "gpt-oss-puzzle",
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.LFM2MOE:          "lfm2moe",
     MODEL_ARCH.DREAM:            "dream",
@@ -3413,6 +3415,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.GPT_OSS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.GPT_OSS_PUZZLE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
