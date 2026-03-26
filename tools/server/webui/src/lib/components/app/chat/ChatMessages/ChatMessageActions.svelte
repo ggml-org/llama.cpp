@@ -157,6 +157,7 @@
 	<div class="flex flex-col gap-4 py-2">
 		<div class="flex flex-col gap-2">
 			<Label for="fork-name">Title</Label>
+
 			<Input
 				id="fork-name"
 				class="text-foreground"
@@ -165,6 +166,7 @@
 				bind:value={forkName}
 			/>
 		</div>
+
 		<div class="flex items-center gap-2">
 			<Checkbox
 				id="fork-attachments"
@@ -173,6 +175,7 @@
 					forkIncludeAttachments = checked === true;
 				}}
 			/>
+
 			<Label for="fork-attachments" class="cursor-pointer text-sm font-normal">
 				Include all attachments
 			</Label>
