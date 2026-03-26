@@ -9767,11 +9767,15 @@ kernel void kernel_set_rows_turbo(
 
         // Split into 4 blocks of 32 elements each
         // All blocks store the SAME group norm — centroids are in normalized space
+        // Norm correction (ported from @spiritbuun's CUDA implementation):
+        // Accumulate ||centroid_vector||^2 across all 128 elements, then store
+        // grp_norm / ||centroid_vector|| instead of raw grp_norm. This makes
+        // dequantized vectors have the exact original L2 norm at zero decode cost.
+        float recon_norm_sq = 0.0f;
+
         for (int b = 0; b < blocks_per_group; b++) {
             device block_q & blk = dst_row[grp * blocks_per_group + b];
             const int off = b * QK;
-
-            blk.norm = half(grp_norm);  // store full 128-element group norm
 
             for (int j = 0; j < QK / 4; j++) blk.qs[j] = 0;
             for (int j = 0; j < QK / 8; j++) blk.signs[j] = 0;
@@ -9791,7 +9795,19 @@ kernel void kernel_set_rows_turbo(
 
                 blk.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
                 if (idx & 0x4) blk.signs[j / 8] |= (1 << (j % 8));
+
+                // Accumulate centroid reconstruction norm for norm correction
+                float c = turbo_centroids_3bit[idx];
+                recon_norm_sq += c * c;
             }
+        }
+
+        // Norm correction: store corrected norm so dequant(x) has exact original L2 norm.
+        // Zero decode cost — dequant already multiplies by stored norm.
+        float recon_norm = sqrt(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            dst_row[grp * blocks_per_group + b].norm = half(corrected_norm);
         }
     }
 }
