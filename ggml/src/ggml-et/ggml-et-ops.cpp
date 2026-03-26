@@ -1117,6 +1117,103 @@ bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     return kernel_result;
 }
 
+bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for FLASH_ATTN_EXT operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1] || !node->src[2]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT operation missing required inputs\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32 ||
+        node->src[2]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT operation with unsupported types: dst=%s q=%s k=%s v=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type),
+                       ggml_type_name(node->src[2]->type));
+        return false;
+    }
+
+    if (node->src[3] != nullptr || node->src[4] != nullptr) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel does not support mask or sinks\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous_rows(node) ||
+        !ggml_is_contiguous_rows(node->src[0]) ||
+        !ggml_is_contiguous_rows(node->src[1]) ||
+        !ggml_is_contiguous_rows(node->src[2])) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires row-contiguous tensors\n");
+        return false;
+    }
+
+    if (node->nb[0] != sizeof(float) ||
+        node->src[0]->nb[0] != sizeof(float) ||
+        node->src[1]->nb[0] != sizeof(float) ||
+        node->src[2]->nb[0] != sizeof(float)) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires contiguous rows in dim 0\n");
+        return false;
+    }
+
+    float scale = 1.0f;
+    float max_bias = 0.0f;
+    float logit_softcap = 0.0f;
+    memcpy(&scale,         (const float *) node->op_params + 0, sizeof(scale));
+    memcpy(&max_bias,      (const float *) node->op_params + 1, sizeof(max_bias));
+    memcpy(&logit_softcap, (const float *) node->op_params + 2, sizeof(logit_softcap));
+
+    if (max_bias != 0.0f || logit_softcap != 0.0f) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel does not support max_bias or logit_softcap\n");
+        return false;
+    }
+
+    const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(node);
+    if (prec != GGML_PREC_F32 && prec != GGML_PREC_DEFAULT) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel only supports F32 precision\n");
+        return false;
+    }
+
+    if (node->src[0]->ne[0] != 16 ||
+        node->src[1]->ne[0] != 16 ||
+        node->src[2]->ne[0] != 16 ||
+        node->ne[0] != 16) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel currently requires DK=DV=16\n");
+        return false;
+    }
+
+    if (node->src[0]->ne[1] != node->ne[2] ||
+        node->src[0]->ne[2] != node->ne[1] ||
+        node->src[0]->ne[3] != node->ne[3] ||
+        node->src[1]->ne[1] != node->src[2]->ne[1] ||
+        node->src[1]->ne[2] != node->src[2]->ne[2] ||
+        node->src[1]->ne[3] != node->src[2]->ne[3] ||
+        node->src[0]->ne[2] != node->src[1]->ne[2] ||
+        node->src[0]->ne[3] != node->src[1]->ne[3]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires matching non-GQA tensor shapes\n");
+        return false;
+    }
+
+    ggml_et_flash_attn_ext_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.src2 = *node->src[2];
+    params.dst  = *node;
+    params.scale = scale;
+
+    const bool kernel_result = ggml_et_launch_kernel(dev_ctx, "flash_attn_ext_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END_EXT("FLASH_ATTN_EXT", "flash_attn_ext_f32", node, "scale=%.6f", (double) scale);
+    return kernel_result;
+}
+
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 

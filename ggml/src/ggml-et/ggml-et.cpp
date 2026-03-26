@@ -667,6 +667,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_softmax(dev_ctx, node);
                 break;
 
+            case GGML_OP_FLASH_ATTN_EXT:
+                ggml_et_op_flash_attn_ext(dev_ctx, node);
+                break;
+
             case GGML_OP_GET_ROWS:
                 ggml_et_op_get_rows(dev_ctx, node);
                 break;
@@ -943,6 +947,48 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 } else {
                     supported = true;
                 }
+            } else {
+                supported = false;
+            }
+            break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_F32 &&
+                op->src[3] == nullptr &&
+                op->src[4] == nullptr &&
+                ggml_is_contiguous_rows(op) &&
+                ggml_is_contiguous_rows(op->src[0]) &&
+                ggml_is_contiguous_rows(op->src[1]) &&
+                ggml_is_contiguous_rows(op->src[2])) {
+                float max_bias = 0.0f;
+                float logit_softcap = 0.0f;
+                memcpy(&max_bias,      (const float *) op->op_params + 1, sizeof(max_bias));
+                memcpy(&logit_softcap, (const float *) op->op_params + 2, sizeof(logit_softcap));
+
+                const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(op);
+
+                supported =
+                    (prec == GGML_PREC_F32 || prec == GGML_PREC_DEFAULT) &&
+                    max_bias == 0.0f &&
+                    logit_softcap == 0.0f &&
+                    op->src[0]->nb[0] == sizeof(float) &&
+                    op->src[1]->nb[0] == sizeof(float) &&
+                    op->src[2]->nb[0] == sizeof(float) &&
+                    op->nb[0] == sizeof(float) &&
+                    op->src[0]->ne[0] == 16 &&
+                    op->src[1]->ne[0] == 16 &&
+                    op->src[2]->ne[0] == 16 &&
+                    op->ne[0] == 16 &&
+                    op->src[0]->ne[1] == op->ne[2] &&
+                    op->src[0]->ne[2] == op->ne[1] &&
+                    op->src[0]->ne[3] == op->ne[3] &&
+                    op->src[1]->ne[1] == op->src[2]->ne[1] &&
+                    op->src[1]->ne[2] == op->src[2]->ne[2] &&
+                    op->src[1]->ne[3] == op->src[2]->ne[3] &&
+                    op->src[0]->ne[2] == op->src[1]->ne[2] &&
+                    op->src[0]->ne[3] == op->src[1]->ne[3];
             } else {
                 supported = false;
             }
