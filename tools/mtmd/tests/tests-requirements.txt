@@ -1,0 +1,5 @@
+sentence-transformers
+transformers
+tokenizers
+torch
+torchvision

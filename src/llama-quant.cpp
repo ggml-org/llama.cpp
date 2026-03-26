@@ -344,7 +344,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
     // do not quantize specific multimodal tensors
-    quantize &= name.find(".position_embd.") == std::string::npos;
+    quantize &= name.find(".position_embd") == std::string::npos;
+    quantize &= name.find("sam.patch_embd") == std::string::npos;
+    quantize &= name.find("sam.pos_embd")   == std::string::npos;
+    quantize &= name.find(".rel_pos")       == std::string::npos;
 
     return quantize;
 }
@@ -859,7 +862,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     std::vector<std::string> splits = {};
     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
-        fname_inp, splits, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
+        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     llama_model model(llama_model_default_params());

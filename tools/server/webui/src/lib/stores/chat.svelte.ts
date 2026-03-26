@@ -1207,7 +1207,6 @@ class ChatStore {
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
 				await DatabaseService.updateMessage(msg.id, { content: newContent });
-				await conversationsStore.updateCurrentNode(msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: newContent });
 			}
 
