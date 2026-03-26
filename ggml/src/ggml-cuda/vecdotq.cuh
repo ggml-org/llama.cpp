@@ -1267,3 +1267,59 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
+
+// TurboQuant TQ3_0: Fused MMVQ with per-block WHT on query
+// K is stored in WHT-rotated space. We apply WHT to Q inside the kernel.
+// Since WHT is orthogonal: dot(q, k) = dot(WHT(q), WHT(k))
+// Both 1/sqrt(32) normalizations combine to 1/32.
+#define VDR_TQ3_0_Q8_1_MMVQ 8
+#define VDR_TQ3_0_Q8_1_MMQ  8
+
+static __device__ __forceinline__ float vec_dot_tq3_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const float centroids[4] = { -1.510f, -0.4528f, 0.4528f, 1.510f };
+    const int8_t signs[32] = {
+        +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+        +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+    };
+
+    if (iqs != 0) {
+        return 0.0f;
+    }
+
+    const block_tq3_0 * btq = (const block_tq3_0 *) vbq + kbx;
+    const float d = __half2float(btq->gamma);
+
+    // Step 1: Apply WHT to Q8_1 int8 values (sign flip + butterfly in int32)
+    int32_t sq[32];
+    #pragma unroll
+    for (int j = 0; j < 32; j++) {
+        sq[j] = (int32_t)bq8_1[0].qs[j] * signs[j];
+    }
+
+    // 5-stage butterfly transform
+    #pragma unroll
+    for (int step = 1; step < 32; step <<= 1) {
+        #pragma unroll
+        for (int i = 0; i < 32; i += step * 2) {
+            #pragma unroll
+            for (int j = i; j < i + step; j++) {
+                int32_t a = sq[j], b = sq[j + step];
+                sq[j] = a + b; sq[j + step] = a - b;
+            }
+        }
+    }
+
+    // Step 2: Dot product in rotated space
+    float sumf = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < 32; j++) {
+        const int idx = (btq->qs[j / 4] >> (2 * (j % 4))) & 3;
+        sumf += (float)sq[j] * centroids[idx];
+    }
+
+    // Scale: d_tq3 * d_q8 / 32  (two 1/sqrt(32) normalizations combined)
+    const float d_q8 = __low2float(bq8_1[0].ds);
+    return sumf * d * d_q8 * 0.03125f;  // 0.03125 = 1/32
+}
