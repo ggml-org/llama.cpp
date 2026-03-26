@@ -2049,6 +2049,21 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
          (device_weights &&
           (target != GGML_LAYOUT_AOS || ggml_backend_sycl_weights_evictable())));
     if (cache_weights) {
+        // Fast path: try direct cache lookup first (O(1) hash lookup, no locks/ensure).
+        // This avoids the expensive ensure_cached_layout path on every MUL_MAT.
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            if (key.valid) {
+                void * fast_ptr = cache->lookup(key, target);
+                if (fast_ptr) {
+                    if (host_weights) {
+                        ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_TARGET_HIT);
+                    }
+                    return fast_ptr;
+                }
+            }
+        }
+        // Slow path: ensure_cached_layout (creates entry if missing)
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
         if (cached) {
             if (host_weights) {
