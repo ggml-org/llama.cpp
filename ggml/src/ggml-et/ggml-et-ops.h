@@ -106,6 +106,14 @@ struct ggml_et_softmax_params {
     float max_bias;       // Max bias for ALiBi (0.0f if not used)
 };
 
+struct ggml_et_flash_attn_ext_params {
+    ggml_tensor src0;     // Q tensor (F32)
+    ggml_tensor src1;     // K tensor (F32)
+    ggml_tensor src2;     // V tensor (F32)
+    ggml_tensor dst;      // Output tensor (F32)
+    float scale;          // Scale factor applied to QK
+};
+
 struct ggml_et_get_rows_params {
     ggml_tensor src0;     // Data tensor (F32 or Q8_0)
     ggml_tensor src1;     // Row indices tensor (I32)
@@ -218,6 +226,7 @@ bool ggml_et_op_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
 bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
