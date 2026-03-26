@@ -675,6 +675,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_cont(dev_ctx, node);
                 break;
 
+            case GGML_OP_CPY:
+                ggml_et_op_cpy(dev_ctx, node);
+                break;
+
             case GGML_OP_CONCAT:
                 ggml_et_op_concat(dev_ctx, node);
                 break;
@@ -979,6 +983,31 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_CPY:
+            // CPY copies src[0] data into dst layout (same as CONT for same-type)
+            // Special path: zero-element tensors (scalars) are accepted as no-ops
+            if (op->src[0]) {
+                const int64_t nelements = op->ne[0] * op->ne[1] * op->ne[2] * op->ne[3];
+                if (nelements == 0) {
+                    // Zero-element / scalar no-op case - always supported
+                    supported = true;
+                } else if ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                           op->src[0]->type == op->type &&
+                           ggml_is_contiguous(op)) {
+                    // Same-type with contiguous dst - reuse CONT kernel
+                    if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
+                        GGML_LOG_WARN("ET: CPY operation detected aliased tensors, unsupported");
+                        supported = false;
+                    } else {
+                        supported = true;
+                    }
+                } else {
+                    supported = false;
+                }
+            } else {
+                supported = false;
+            }
+            break;
         case GGML_OP_CONCAT:
             // F32 contiguous, ne[0] cacheline-aligned (16 floats = 64 bytes)
             // For dim==0, both src ne[0] must also be cacheline-aligned
@@ -1094,9 +1123,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 

@@ -1272,6 +1272,75 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
     return kernel_result;
 }
 
+bool ggml_et_op_cpy(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    // CPY copies data from src[0] into the layout of dst (which matches src[1])
+    // For same-type with contiguous dst, this is identical to CONT
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: CPY operation missing source tensor\n");
+        return false;
+    }
+
+    // Scalar / zero-element special path: if any dimension is 0, nothing to copy
+    const int64_t nelements = node->ne[0] * node->ne[1] * node->ne[2] * node->ne[3];
+    if (nelements == 0) {
+        GGML_LOG_DEBUG("ET: CPY no-op (zero elements): ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]\n",
+                       node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+        ET_PERF_END("CPY", "noop", node);
+        return true;
+    }
+
+    // For now, require same type (no type conversion)
+    if (node->type != node->src[0]->type) {
+        GGML_LOG_ERROR("ET: CPY type conversion not yet supported: src=%s dst=%s\n",
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->type));
+        return false;
+    }
+
+    // Only F32 and F16 supported
+    if (node->type != GGML_TYPE_F32 && node->type != GGML_TYPE_F16) {
+        GGML_LOG_ERROR("ET: CPY unsupported type: %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    // Reuse CONT kernel: it reads src0 with arbitrary strides and writes linearly to dst
+    const char* kernel_name;
+    if (node->type == GGML_TYPE_F32) {
+        kernel_name = "cont_f32";
+    } else {
+        kernel_name = "cont_f16";
+    }
+
+    ggml_et_cont_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+
+    // CPU comparison for debugging
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (cont_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_CPY)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for CPY operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &cont_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for CPY operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("CPY", kernel_name, node);
+    return kernel_result;
+}
+
 bool ggml_et_op_concat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 
