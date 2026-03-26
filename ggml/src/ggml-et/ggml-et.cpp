@@ -954,14 +954,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FLASH_ATTN_EXT:
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
-                op->src[2] && op->src[2]->type == GGML_TYPE_F32 &&
-                op->src[3] == nullptr &&
+                op->src[1] && (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
+                op->src[2] && (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) &&
                 op->src[4] == nullptr &&
                 ggml_is_contiguous_rows(op) &&
-                ggml_is_contiguous_rows(op->src[0]) &&
-                ggml_is_contiguous_rows(op->src[1]) &&
-                ggml_is_contiguous_rows(op->src[2])) {
+                ggml_is_contiguous_rows(op->src[0])) {
                 float max_bias = 0.0f;
                 float logit_softcap = 0.0f;
                 memcpy(&max_bias,      (const float *) op->op_params + 1, sizeof(max_bias));
@@ -969,25 +966,38 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
 
                 const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(op);
 
+                // Mask must be F16 or F32 if present
+                bool mask_ok = (op->src[3] == nullptr) ||
+                               (op->src[3]->type == GGML_TYPE_F32) ||
+                               (op->src[3]->type == GGML_TYPE_F16);
+
+                // GQA: n_head_q must be a multiple of n_head_kv
+                const int64_t nhq = op->src[0]->ne[2];
+                const int64_t nhk = op->src[1]->ne[2];
+
+                // K/V row stride must match element size
+                const size_t k_elem = op->src[1]->type == GGML_TYPE_F16 ? 2 : 4;
+                const size_t v_elem = op->src[2]->type == GGML_TYPE_F16 ? 2 : 4;
+
                 supported =
+                    mask_ok &&
                     (prec == GGML_PREC_F32 || prec == GGML_PREC_DEFAULT) &&
                     max_bias == 0.0f &&
                     logit_softcap == 0.0f &&
                     op->src[0]->nb[0] == sizeof(float) &&
-                    op->src[1]->nb[0] == sizeof(float) &&
-                    op->src[2]->nb[0] == sizeof(float) &&
+                    op->src[1]->nb[0] == k_elem &&
+                    op->src[2]->nb[0] == v_elem &&
                     op->nb[0] == sizeof(float) &&
-                    op->src[0]->ne[0] == 16 &&
-                    op->src[1]->ne[0] == 16 &&
-                    op->src[2]->ne[0] == 16 &&
-                    op->ne[0] == 16 &&
+                    op->src[0]->ne[0] == op->src[1]->ne[0] &&  // dk matches
+                    op->src[2]->ne[0] == op->ne[0] &&           // dv matches
+                    op->src[2]->ne[0] <= 128 &&                 // dv limit
+                    nhq % nhk == 0 &&                           // GQA ratio is integer
                     op->src[0]->ne[1] == op->ne[2] &&
                     op->src[0]->ne[2] == op->ne[1] &&
                     op->src[0]->ne[3] == op->ne[3] &&
                     op->src[1]->ne[1] == op->src[2]->ne[1] &&
                     op->src[1]->ne[2] == op->src[2]->ne[2] &&
                     op->src[1]->ne[3] == op->src[2]->ne[3] &&
-                    op->src[0]->ne[2] == op->src[1]->ne[2] &&
                     op->src[0]->ne[3] == op->src[1]->ne[3];
             } else {
                 supported = false;
@@ -1047,6 +1057,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                     } else {
                         supported = true;
                     }
+                } else if (op->type == GGML_TYPE_F16 &&
+                           op->src[0]->type == GGML_TYPE_F32 &&
+                           ggml_is_contiguous(op)) {
+                    // F32 -> F16 conversion copy
+                    supported = true;
                 } else {
                     supported = false;
                 }
@@ -1169,9 +1184,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
