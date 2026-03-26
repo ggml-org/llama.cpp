@@ -28,6 +28,13 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
+enum resize_algo {
+    RESIZE_ALGO_BILINEAR, // stretch to target resolution
+    RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
+    RESIZE_ALGO_BICUBIC_PILLOW,
+    // RESIZE_ALGO_LANCZOS, // TODO
+};
+
 struct clip_hparams {
     int32_t image_size = 0;
     int32_t patch_size = 0;
@@ -37,13 +44,26 @@ struct clip_hparams {
     int32_t n_head = 0;
     int32_t n_layer = 0;
     // idefics3
+    int32_t n_merge = 0; // number of patch merges **per-side**
+
+    // for preprocessor
     int32_t image_longest_edge = 0;
     int32_t image_min_pixels = -1;
     int32_t image_max_pixels = -1;
-    int32_t n_merge = 0; // number of patch merges **per-side**
+    resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
+    bool image_resize_pad = true; // if false, center-crop will be applied when resizing
+    std::array<uint8_t, 3> image_pad_color = {0, 0, 0};
 
+    // (preprocessor) for llava-uhd style models
+    std::vector<clip_image_size> image_res_candidates;
     int32_t preproc_min_tiles = 0;
     int32_t preproc_max_tiles = 0;
+    resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
+    resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
+    bool image_pad_rf = true;  // if true, refined image will be padded (e.g. llava-1.6)
+    bool image_pad_ov = false; // if true, overview image will be padded (e.g. llava-1.6)
+    std::array<uint8_t, 3> image_pad_color_rf = {0, 0, 0}; // padding color for refined image
+    std::array<uint8_t, 3> image_pad_color_ov = {0, 0, 0}; // padding color for overview image
 
     float image_mean[3];
     float image_std[3];
@@ -60,8 +80,6 @@ struct clip_hparams {
     float eps = 1e-6;
     float rope_theta = 0.0;
 
-    std::vector<clip_image_size> image_res_candidates; // for llava-uhd style models
-    int32_t image_crop_resolution;
     std::unordered_set<int32_t> vision_feature_layer;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
