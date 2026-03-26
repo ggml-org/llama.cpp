@@ -59,10 +59,18 @@ public:
         return m_decoder->get_input_op_params(m_node_idx, m_input_names[index]);
     }
 
+    int32_t get_op_dynamic_dim() const {
+        return m_decoder->get_op_dynamic_dim(m_node_idx);
+    }
+
     int32_t * get_output_op_params() const { return m_decoder->get_output_op_params(m_node_idx); }
 
     ov::element::Type get_output_type() const {
         return m_decoder->get_output_type(m_node_idx);
+    }
+
+    std::vector<size_t> get_output_stride() const {
+        return m_decoder->get_output_stride(m_node_idx);
     }
 
     Output<Node> get_input(int idx) const override {

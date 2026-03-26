@@ -545,6 +545,9 @@ bool is_model_splitted(ggml_cgraph * cgraph) {
         if ((cgraph->n_nodes <= 1 && use_count==0) || (cgraph->n_nodes <= 1 && node->op == GGML_OP_VIEW && use_count == 1 && node->src[0] != nullptr && node->src[0]->op == GGML_OP_NONE)) {
             return false;
         }
+        if (cgraph->n_nodes == 1 && (cgraph->nodes[0]->op == GGML_OP_TRANSPOSE || cgraph->nodes[0]->op == GGML_OP_PERMUTE)) {
+            return false;
+        }
         int input_use_count = 0;
         for (int j = 0; j < cgraph->n_nodes; j++) {
             ggml_tensor * other_node = cgraph->nodes[j];

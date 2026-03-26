@@ -107,6 +107,8 @@ public:
 
     virtual ov::element::Type get_output_type(int node_idx) const override;
 
+    virtual std::vector<size_t> get_output_stride(int node_idx) const override;
+
     virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const override;
 
     virtual int32_t * get_output_op_params(int node_idx) const override;
@@ -120,6 +122,8 @@ public:
     virtual const std::string & get_op_name() const override;
 
     virtual const std::string & get_op_name(int node_idx) const override;
+
+    virtual int32_t get_op_dynamic_dim(int node_idx) const override;
 
     virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const override;
 

@@ -35,6 +35,8 @@ public:
 
     virtual element::Type get_output_type(const int node_idx) const = 0;
 
+    virtual std::vector<size_t> get_output_stride(int node_idx) const = 0;
+
     virtual int32_t* get_input_op_params(int node_idx, const std::string& name) const = 0;
 
     virtual int32_t * get_output_op_params(int node_idx) const = 0;
@@ -69,6 +71,8 @@ public:
     virtual bool is_splited_model() const = 0;
 
     virtual int is_swa_layer(int layer) const = 0;
+
+    virtual int32_t get_op_dynamic_dim(int node_idx) const = 0;
 };
 
 }  // namespace ggml

@@ -936,6 +936,14 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_TRANSPOSE: {
+        // if the type is bf16, will return true
+        if (op->type == GGML_TYPE_BF16) {
+            // GGML_LOG_WARN("OpenVINO backend does not support CONT with BF16 type\n");
+            return true;
+        }
+        break;
+    }
     default:
         break;
     }
@@ -957,7 +965,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE, GGML_OP_ADD, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_VIEW,
-                                                 /*GGML_OP_CONT,*/ GGML_OP_RESHAPE, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE,
+                                                 GGML_OP_CONT, GGML_OP_RESHAPE, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE,
                                                  GGML_OP_GET_ROWS, GGML_OP_ROPE, GGML_OP_RMS_NORM, GGML_OP_SCALE,
                                                  // softmax is not updated due to replaced by flash_attn_ext
                                                  // GGML_OP_SOFT_MAX,
