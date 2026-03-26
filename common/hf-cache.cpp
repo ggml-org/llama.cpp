@@ -38,6 +38,7 @@ static fs::path get_cache_directory() {
             const char * var;
             fs::path path;
         } entries[] = {
+            {"LLAMA_CACHE",           fs::path()},
             {"HF_HUB_CACHE",          fs::path()},
             {"HUGGINGFACE_HUB_CACHE", fs::path()},
             {"HF_HOME",               fs::path("hub")},
