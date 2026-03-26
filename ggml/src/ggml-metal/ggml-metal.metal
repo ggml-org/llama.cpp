@@ -688,49 +688,42 @@ void dequantize_turbo3_0(device const block_turbo3_0 * xb, short il, thread type
     reg = (type4x4) reg_f;
 }
 
-// Two 4-entry half LUTs (one per sign) instead of one 8-entry LUT.
-// Halves constant cache divergent lookups (4 possible addresses vs 8).
-// Fixes catastrophic decode slowdown on M1/M2 where constant cache serializes
-// 8-way divergent access from 32 threads in a simdgroup.
-//
-// Quantize stores: qs = (sorted_8_idx & 0x3), sign = (sorted_8_idx >> 2)
-//   sign=0: qs indexes into negative half (sorted most→least negative)
-//   sign=1: qs indexes into positive half (sorted least→most positive)
-constant half turbo_neg_3bit_h[4] = {  // sign=0: qs 0,1,2,3
-    -0.190685h, -0.117832h, -0.065717h, -0.021460h
-};
-constant half turbo_pos_3bit_h[4] = {  // sign=1: qs 0,1,2,3
+// Half-precision centroid LUT for vec path — reduces constant cache pressure at long context.
+// Register LUT (cn[8] = centroid*norm in thread registers) was tested but caused register
+// spill on Metal, making it slower. Constant half LUT + float norm broadcast remains the
+// fastest approach on Apple Silicon. On CUDA, register LUT works better (see @spiritbuun).
+constant half turbo_centroids_3bit_h[8] = {
+    -0.190685h, -0.117832h, -0.065717h, -0.021460h,
      0.021460h,  0.065717h,  0.117832h,  0.190685h
 };
 
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
-// Split LUT (4 entries per sign) + float norm broadcast
+// Register centroid×norm LUT — ported from @spiritbuun's CUDA implementation.
+// Precompute centroid[i]*norm into thread-local registers once per block,
+// then index into registers instead of hitting constant memory per element.
+// On CUDA this gave 96-97% decode speed vs q8_0 (up from ~88%).
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
     const float norm = float(xb->norm);
+
+    // Original 8-entry constant half LUT + float norm broadcast.
+    // Register LUT approach (cn[8] array) tested but caused register spill
+    // on Metal, making it slower than constant memory. Reverting to the
+    // proven approach from main branch: constant half LUT + float multiply.
+    // This is the fastest vec dequant on M5 Max (77.4 tok/s).
+    // Note: @spiritbuun's register LUT works great on CUDA (96-97% of q8_0)
+    // but Metal's register file handles it differently.
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    // Extract 2-bit qs indices and 1-bit sign bits
-    const uint8_t q0 = (qb      ) & 0x03;
-    const uint8_t q1 = (qb >> 2) & 0x03;
-    const uint8_t q2 = (qb >> 4) & 0x03;
-    const uint8_t q3 = (qb >> 6) & 0x03;
-    const uint8_t s0 = (sb >> (sshift + 0)) & 1;
-    const uint8_t s1 = (sb >> (sshift + 1)) & 1;
-    const uint8_t s2 = (sb >> (sshift + 2)) & 1;
-    const uint8_t s3 = (sb >> (sshift + 3)) & 1;
-
-    // Each element reads from one of two 4-entry LUTs based on its sign bit.
-    // Max 4 possible constant addresses per lookup (vs 8 before).
-    float4 vals = float4(
-        float(s0 ? turbo_pos_3bit_h[q0] : turbo_neg_3bit_h[q0]),
-        float(s1 ? turbo_pos_3bit_h[q1] : turbo_neg_3bit_h[q1]),
-        float(s2 ? turbo_pos_3bit_h[q2] : turbo_neg_3bit_h[q2]),
-        float(s3 ? turbo_pos_3bit_h[q3] : turbo_neg_3bit_h[q3])
-    );
-    reg = type4(vals * norm);
+    float4 centroids = float4(half4(
+        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)]
+    ));
+    reg = type4(centroids * norm);
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
