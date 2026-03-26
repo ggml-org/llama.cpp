@@ -231,7 +231,7 @@ docker run --name llamacpp \
 
 3. **Install CANN (driver + toolkit)**
 
-    > The `Ascend-cann` package includes both the driver and toolkit. 
+    > The `Ascend-cann` package includes both the driver and toolkit.
     > `$ARCH` can be `x86_64` or `aarch64`, `$CHIP` can be `910b` or `310p`.
 
     ```sh
