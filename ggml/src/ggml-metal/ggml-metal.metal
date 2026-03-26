@@ -695,19 +695,21 @@ constant half turbo_centroids_3bit_h[8] = {
 };
 
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
+// Half LUT (2 bytes/entry, less cache pressure) + float norm broadcast (1 mul vs 4)
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
-    const half nh = xb->norm;
+    const float norm = float(xb->norm);
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    reg = type4(float4(half4(
-        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)] * nh,
-        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)] * nh,
-        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)] * nh,
-        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)] * nh
-    )));
+    float4 centroids = float4(half4(
+        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)],
+        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)]
+    ));
+    reg = type4(centroids * norm);
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
