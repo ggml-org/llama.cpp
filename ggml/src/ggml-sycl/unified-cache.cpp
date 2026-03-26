@@ -3903,6 +3903,19 @@ bool unified_cache::stage_expert_group(int                          block_id,
             register_ready(*s.key, s.ptr, layout, s.data->dst_size,
                            cache_entry_type::MOE_EXPERT,
                            s.data->layer_id, s.data->expert_id);
+            // Verify the entry is immediately findable
+            {
+                static std::atomic<int> verify_log{0};
+                if (verify_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    void * found = lookup(*s.key, layout);
+                    fprintf(stderr, "[STAGE-VERIFY] blk=%d exp=%d layout=%d stored=%p found=%p "
+                            "model=%llu hash=0x%llx aux=0x%llx\n",
+                            block_id, expert_id_arg, (int)layout, s.ptr, found,
+                            (unsigned long long)s.key->model_id,
+                            (unsigned long long)s.key->name_hash,
+                            (unsigned long long)s.key->aux_id);
+                }
+            }
         }
 
         return true;

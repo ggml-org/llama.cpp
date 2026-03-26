@@ -866,6 +866,12 @@ class unified_cache {
     size_t expert_count() const;
     size_t used_bytes(cache_entry_type type) const;
 
+    // Number of entries in the cache (for diagnostics).
+    size_t entry_count() const {
+        std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+        return entries_.size();
+    }
+
     void print_stats() const;
 
     // Access the internal SYCL queue (for deferred free of temp allocations

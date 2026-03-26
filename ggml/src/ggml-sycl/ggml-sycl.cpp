@@ -848,6 +848,16 @@ static bool is_expert_resident(int block_id, int expert_id, int device_id) {
 
     // All registered roles must be cached
     if (grp.has_gate && !check_key(grp.gate_key, "gate")) {
+        static std::atomic<int> fail_log{0};
+        if (fail_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+            fprintf(stderr, "[IS-EXPERT-FAIL] blk=%d exp=%d gate MISS model=%llu hash=0x%llx aux=0x%llx "
+                    "entries=%zu\n",
+                    block_id, expert_id,
+                    (unsigned long long)grp.gate_key.model_id,
+                    (unsigned long long)grp.gate_key.name_hash,
+                    (unsigned long long)grp.gate_key.aux_id,
+                    cache->entry_count());
+        }
         return false;
     }
     if (grp.has_up && !check_key(grp.up_key, "up")) {
@@ -952,7 +962,10 @@ static bool ggml_sycl_gpu_reorder_disabled();
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
 // ---------------------------------------------------------------------------
+static std::atomic<bool> g_prestage_completed{false};
+
 static void moe_prestage_popular_experts() {
+    if (g_prestage_completed.load(std::memory_order_acquire)) return;
     if (!ggml_sycl::is_expert_popularity_initialized()) return;
 
     std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
@@ -1252,6 +1265,20 @@ static void moe_prestage_popular_experts() {
                       "%.1f ms total (%s reorder)\n",
                       expert_groups_staged, prestaged, total_ms,
                       use_gpu_reorder ? "GPU" : "CPU");
+
+        // Post-prestage verification: check is_expert_resident() for STAGED experts.
+        // Uses sorted_groups (popularity-sorted) to check the ones we actually staged.
+        {
+            int ok = 0, fail = 0, checked = 0;
+            for (size_t gi = 0; gi < sorted_groups.size() && checked < 10; gi++) {
+                const auto & mg = *sorted_groups[gi];
+                checked++;
+                if (is_expert_resident(mg.block_num, mg.expert_idx, device)) ok++;
+                else fail++;
+            }
+            GGML_LOG_INFO("[MOE-PRESTAGE] Verification: %d/%d expert groups resident on device %d "
+                          "(cache entries=%zu)\n", ok, checked, device, cache->entry_count());
+        }
 
     }
 
@@ -1604,6 +1631,7 @@ static void moe_prestage_popular_experts() {
         }
     }
     ggml_sycl_watchdog_heartbeat();
+    g_prestage_completed.store(true, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -31465,13 +31493,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     {
+                        // Two counters: pre-prestage (first 3) and post-prestage (next 5)
                         static std::atomic<int> fused_route_log{0};
-                        if (fused_route_log.fetch_add(1, std::memory_order_relaxed) < 3) {
-                            GGML_LOG_INFO("[MOE-P4] layer=%d: gpu0=%zu cpu=%zu sec=%zu\n",
+                        int log_idx = fused_route_log.fetch_add(1, std::memory_order_relaxed);
+                        bool should_log = (log_idx < 3) ||
+                            (g_prestage_completed.load(std::memory_order_relaxed) && log_idx < 8);
+                        if (should_log) {
+                            GGML_LOG_INFO("[MOE-P4] layer=%d: gpu0=%zu cpu=%zu sec=%zu%s\n",
                                           cur_layer_fast,
                                           g_moe_fusion.gpu0_cached_indices.size(),
                                           g_moe_fusion.cpu_indices.size(),
-                                          g_moe_fusion.sec_indices.size());
+                                          g_moe_fusion.sec_indices.size(),
+                                          log_idx >= 3 ? " (post-prestage)" : "");
                         }
                     }
 
