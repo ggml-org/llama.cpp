@@ -5982,6 +5982,9 @@ struct moe_fusion_state {
     // Convenience: check if fused output is ready (used by GLU/ADD_ID skip guards)
     bool fused_pending() const { return phase == MOE_FUSE_FUSED_READY; }
 
+    // Timing: set at GATE save, read at FUSE and DOWN
+    std::chrono::high_resolution_clock::time_point t_layer_start{};
+
     void reset() {
         wait_act_d2h();
         phase          = MOE_FUSE_IDLE;
@@ -30350,6 +30353,7 @@ static void dispatch_experts_secondary_gpu_impl(
         return;
     }
 
+    auto t_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[MOE-B50] dispatching %zu experts to device %d (type=%d K=%lld N=%lld)\n", entries.size(),
                     target_device, (int) ctx.src0->type, (long long) ctx.K, (long long) ctx.N);
 
@@ -30874,6 +30878,14 @@ static void dispatch_experts_secondary_gpu_impl(
             flush_pending_secondary_scatter();
         }
     }
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    static std::atomic<int> sec_timing_log{0};
+    if (sec_timing_log.fetch_add(1, std::memory_order_relaxed) < 20) {
+        GGML_LOG_INFO("[SEC-TIMING] dev=%d experts=%zu %.1f ms (%.1f ms/expert)\n",
+                      target_device, entries.size(), ms, ms / entries.size());
+    }
 }
 
 static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * dst) try {
@@ -31358,6 +31370,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FIRST_SAVED;
+                    // Per-layer timing: start clock at GATE save
+                    // (using g_moe_fusion.t_layer_start)
+                    g_moe_fusion.t_layer_start = std::chrono::high_resolution_clock::now();
 
                     static std::atomic<int> flog_first{ 0 };
                     if (flog_first.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31508,6 +31523,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     g_moe_fusion.phase = MOE_FUSE_FUSED_READY;
+                    {
+                        // (using g_moe_fusion.t_layer_start)
+                        auto t_fuse_end = std::chrono::high_resolution_clock::now(); auto & t_layer_start_ref = g_moe_fusion.t_layer_start;
+                        double fuse_ms = std::chrono::duration<double, std::milli>(t_fuse_end - t_layer_start_ref).count();
+                        static std::atomic<int> fuse_timing{0};
+                        if (fuse_timing.fetch_add(1, std::memory_order_relaxed) < 10) {
+                            GGML_LOG_INFO("[LAYER-TIMING] layer=%d gate+up+SiLU: %.1f ms (cpu=%zu sec=%zu gpu0=%zu)\n",
+                                          cur_layer_fast, fuse_ms, n_cpu_f,
+                                          g_moe_fusion.sec_indices.size(),
+                                          g_moe_fusion.gpu0_cached_indices.size());
+                        }
+                    }
 
                     static std::atomic<int> flog_fuse{ 0 };
                     if (flog_fuse.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -31738,6 +31765,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_d), 0);
                     }
 
+                    {
+                        // (using g_moe_fusion.t_layer_start)
+                        auto t_down_end = std::chrono::high_resolution_clock::now(); auto & t_layer_start_ref2 = g_moe_fusion.t_layer_start;
+                        double total_ms = std::chrono::duration<double, std::milli>(t_down_end - t_layer_start_ref2).count();
+                        static std::atomic<int> down_timing{0};
+                        if (down_timing.fetch_add(1, std::memory_order_relaxed) < 10) {
+                            GGML_LOG_INFO("[LAYER-TIMING] layer=%d TOTAL (gate+up+down): %.1f ms\n",
+                                          cur_layer_fast, total_ms);
+                        }
+                    }
                     static std::atomic<int> flog_down{ 0 };
                     if (flog_down.fetch_add(1, std::memory_order_relaxed) < 3) {
                         GGML_LOG_INFO("[CPU-TG-P4] Down fused for layer %d, %zu CPU + %zu sec + %zu GPU0\n",
@@ -36888,6 +36925,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     compute_impl_guard _reentry_guard;
 
+    auto t_compute_start = std::chrono::high_resolution_clock::now();
+
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
 
@@ -38380,6 +38419,17 @@ gpu_dispatch:
         pipe.reset_graph();
     }
 #endif
+
+    // Per-token wall-clock timing
+    {
+        auto t_compute_end = std::chrono::high_resolution_clock::now();
+        double compute_ms = std::chrono::duration<double, std::milli>(t_compute_end - t_compute_start).count();
+        static std::atomic<int> compute_timing{0};
+        if (compute_timing.fetch_add(1, std::memory_order_relaxed) < 15) {
+            GGML_LOG_INFO("[TOKEN-TIMING] graph_compute_impl: %.1f ms (%d nodes)\n",
+                          compute_ms, cgraph->n_nodes);
+        }
+    }
 
     // MoE per-phase profiling: end token timing
     if (g_moe_profile_enabled) {
