@@ -152,6 +152,9 @@ public:
 
     bool get_has_shift() const;
 
+    ggml_type type_k() const;
+    ggml_type type_v() const;
+
     //
     // graph_build API
     //
@@ -327,6 +330,9 @@ public:
     //
 
     uint32_t get_n_kv() const;
+
+    ggml_type type_k() const;
+    ggml_type type_v() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;

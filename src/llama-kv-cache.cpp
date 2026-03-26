@@ -1004,6 +1004,14 @@ bool llama_kv_cache::get_has_shift() const {
     return result;
 }
 
+ggml_type llama_kv_cache::type_k() const {
+    return layers[0].k->type;
+}
+
+ggml_type llama_kv_cache::type_v() const {
+    return layers[0].v->type;
+}
+
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
@@ -2237,6 +2245,14 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
+}
+
+ggml_type llama_kv_cache_context::type_k() const {
+    return kv->type_k();
+}
+
+ggml_type llama_kv_cache_context::type_v() const {
+    return kv->type_v();
 }
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
