@@ -56,6 +56,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	dry_penalty_last_n: undefined,
 	max_tokens: undefined,
 	custom: '', // custom json-stringified object
+	preEncodeConversation: false,
 	// experimental features
 	pyInterpreterEnabled: false,
 	enableContinueGeneration: false
@@ -143,6 +144,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically expand tool call details while executing and keep them expanded after completion.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
+	preEncodeConversation:
+		'After each response, automatically re-submit the conversation (without chain-of-thought) to pre-fill the server KV cache. This makes the next turn faster since the prompt is already encoded while you read the response.',
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };

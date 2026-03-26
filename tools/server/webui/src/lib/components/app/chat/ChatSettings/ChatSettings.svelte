@@ -292,6 +292,11 @@
 			icon: Code,
 			fields: [
 				{
+					key: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					label: 'Pre-encode conversation after response',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
 					label: 'Disable reasoning content parsing',
 					type: SettingsFieldType.CHECKBOX

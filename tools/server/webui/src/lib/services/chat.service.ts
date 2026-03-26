@@ -280,6 +280,67 @@ export class ChatService {
 	}
 
 	/**
+	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
+	 * After a response completes, this re-submits the full conversation (with reasoning/CoT stripped)
+	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
+	 * This warms the cache for the next turn, making it faster.
+	 *
+	 * @param messages - The full conversation including the latest assistant response
+	 * @param model - Optional model name (required in ROUTER mode)
+	 * @param signal - Optional AbortSignal to cancel the pre-encode request
+	 */
+	static async preEncode(
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
+		model?: string | null,
+		signal?: AbortSignal
+	): Promise<void> {
+		const normalizedMessages: ApiChatMessageData[] = messages
+			.map((msg) => {
+				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+					return ChatService.convertDbMessageToApiChatMessageData(
+						msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+					);
+				}
+				return msg as ApiChatMessageData;
+			})
+			.filter((msg) => {
+				if (msg.role === MessageRole.SYSTEM) {
+					const content = typeof msg.content === 'string' ? msg.content : '';
+					return content.trim().length > 0;
+				}
+				return true;
+			});
+
+		const requestBody: Record<string, unknown> = {
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
+				role: msg.role,
+				content: ChatService.stripReasoningContent(msg.content),
+				tool_calls: msg.tool_calls,
+				tool_call_id: msg.tool_call_id
+			})),
+			stream: false,
+			n_predict: 0
+		};
+
+		if (model) {
+			requestBody.model = model;
+		}
+
+		try {
+			await fetch(`./v1/chat/completions`, {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify(requestBody),
+				signal
+			});
+		} catch (error) {
+			if (!isAbortError(error)) {
+				console.warn('[ChatService] Pre-encode request failed:', error);
+			}
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Streaming
