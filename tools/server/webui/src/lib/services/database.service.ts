@@ -174,7 +174,10 @@ export class DatabaseService {
 	 *
 	 * @param id - Conversation ID
 	 */
-	static async deleteConversation(id: string, options?: { deleteWithForks?: boolean }): Promise<void> {
+	static async deleteConversation(
+		id: string,
+		options?: { deleteWithForks?: boolean }
+	): Promise<void> {
 		await db.transaction('rw', [db.conversations, db.messages], async () => {
 			if (options?.deleteWithForks) {
 				// Recursively collect all descendant IDs
@@ -469,7 +472,10 @@ export class DatabaseService {
 				currNode: lastClonedMessage.id,
 				forkedFromConversationId: sourceConvId,
 				mcpServerOverrides: sourceConv.mcpServerOverrides
-					? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({ serverId: o.serverId, enabled: o.enabled }))
+					? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
+							serverId: o.serverId,
+							enabled: o.enabled
+						}))
 					: undefined
 			};
 

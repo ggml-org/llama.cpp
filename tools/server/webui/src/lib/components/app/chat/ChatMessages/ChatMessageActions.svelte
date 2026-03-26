@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitFork, GitBranch } from '@lucide/svelte';
+	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitBranch } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageBranchingControls,

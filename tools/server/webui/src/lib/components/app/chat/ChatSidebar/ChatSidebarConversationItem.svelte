@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal, Download, Loader2, Square, GitFork, GitBranch } from '@lucide/svelte';
+	import {
+		Trash2,
+		Pencil,
+		MoreHorizontal,
+		Download,
+		Loader2,
+		Square,
+		GitBranch
+	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
@@ -99,7 +107,10 @@
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
 >
-	<div class="flex min-w-0 flex-1 items-center gap-2" style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px">
+	<div
+		class="flex min-w-0 flex-1 items-center gap-2"
+		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
+	>
 		{#if depth > 0}
 			<Tooltip.Root>
 				<Tooltip.Trigger>

@@ -35,7 +35,7 @@
 	});
 </script>
 
-<div class="space-y-1 my-1">
+<div class="my-1 space-y-1">
 	{#if isSearchModeActive}
 		<div class="relative">
 			<Search class="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
@@ -55,14 +55,14 @@
 		</div>
 	{:else}
 		<Button
-			class="w-full justify-between hover:[&>kbd]:opacity-100 backdrop-blur-none!"
+			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			href="?new_chat=true#/"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>
 			<div class="flex items-center gap-2">
 				<SquarePen class="h-4 w-4" />
-				
+
 				New chat
 			</div>
 
@@ -70,7 +70,7 @@
 		</Button>
 
 		<Button
-			class="w-full justify-between hover:[&>kbd]:opacity-100 backdrop-blur-none!"
+			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			onclick={() => {
 				isSearchModeActive = true;
 			}}
@@ -78,7 +78,7 @@
 		>
 			<div class="flex items-center gap-2">
 				<Search class="h-4 w-4" />
-				
+
 				Search
 			</div>
 
@@ -86,7 +86,7 @@
 		</Button>
 
 		<Button
-			class="w-full justify-between hover:[&>kbd]:opacity-100 backdrop-blur-none!"
+			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			onclick={() => {
 				showChatSettingsDialogWithMcpSection = true;
 			}}
@@ -94,14 +94,12 @@
 		>
 			<div class="flex items-center gap-2">
 				<McpLogo class="h-4 w-4" />
-				
+
 				MCP Servers
 			</div>
 		</Button>
 	{/if}
 </div>
-
-
 
 <DialogChatSettings
 	open={showChatSettingsDialogWithMcpSection}

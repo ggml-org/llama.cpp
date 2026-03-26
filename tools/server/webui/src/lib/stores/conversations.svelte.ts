@@ -312,7 +312,7 @@ class ConversationsStore {
 
 			if (options?.deleteWithForks) {
 				// Collect all descendants recursively
-				const idsToRemove = new Set([convId]);
+				const idsToRemove = new SvelteSet([convId]);
 				const queue = [convId];
 				while (queue.length > 0) {
 					const parentId = queue.pop()!;

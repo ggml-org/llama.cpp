@@ -8,12 +8,14 @@
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import Input from '$lib/components/ui/input/input.svelte';
-	import { conversationsStore, conversations, buildConversationTree } from '$lib/stores/conversations.svelte';
+	import {
+		conversationsStore,
+		conversations,
+		buildConversationTree
+	} from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
-	import DialogChatSettings from '../../dialogs/DialogChatSettings.svelte';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -151,17 +153,17 @@
 
 		<Sidebar.GroupContent>
 			<Sidebar.Menu>
-			{#each conversationTree as { conversation, depth } (conversation.id)}
-				<Sidebar.MenuItem class="mb-1 p-0">
-					<ChatSidebarConversationItem
-						conversation={{
-							id: conversation.id,
-							name: conversation.name,
-							lastModified: conversation.lastModified,
-							currNode: conversation.currNode,
-							forkedFromConversationId: conversation.forkedFromConversationId
-						}}
-						{depth}
+				{#each conversationTree as { conversation, depth } (conversation.id)}
+					<Sidebar.MenuItem class="mb-1 p-0">
+						<ChatSidebarConversationItem
+							conversation={{
+								id: conversation.id,
+								name: conversation.name,
+								lastModified: conversation.lastModified,
+								currNode: conversation.currNode,
+								forkedFromConversationId: conversation.forkedFromConversationId
+							}}
+							{depth}
 							{handleMobileSidebarItemClick}
 							isActive={currentChatId === conversation.id}
 							onSelect={selectConversation}
@@ -207,9 +209,7 @@
 	{#if selectedConversationHasDescendants}
 		<div class="flex items-center gap-2 py-2">
 			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
-			<Label for="delete-with-forks" class="text-sm"
-				>Also delete all forked conversations</Label
-			>
+			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
 		</div>
 	{/if}
 </DialogConfirmation>
