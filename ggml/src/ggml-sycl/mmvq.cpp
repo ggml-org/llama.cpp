@@ -5079,6 +5079,13 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
     // This eliminates the triple-lookup bottleneck for S1 mode where
     // get_layout_ptr_for → ensure_cached_layout was called 3x per MUL_MAT.
     const sycl::usm::alloc src0_alloc = ggml_sycl_get_alloc_type(src0_dd_i);
+    {
+        static std::atomic<int> mmvq_alloc_log{0};
+        if (mmvq_alloc_log.fetch_add(1, std::memory_order_relaxed) < 5) {
+            GGML_LOG_INFO("[MMVQ-ALLOC] %s: alloc=%d (0=unknown,1=host,2=device,3=shared) ptr=%p type=%d\n",
+                          src0->name ? src0->name : "?", (int)src0_alloc, src0_dd_i, (int)src0->type);
+        }
+    }
     if (src0_alloc == sycl::usm::alloc::device) {
         // The caller resolved a VRAM pointer — determine layout from cache.
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device_id)) {

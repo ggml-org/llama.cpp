@@ -27760,7 +27760,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 }
             }
             if (has_soa_reorder || cache_has_reorder) {
-                const layout_mode soa_layout = has_soa_reorder ? effective_layout : cache_layout;
+                // Prefer cache_layout when the cache found a VRAM-resident copy.
+                // has_soa_reorder's effective_layout reflects the host-side AOS
+                // pointer — in S1 mode the VRAM COALESCED copy from S1-PRELOAD
+                // is the correct layout for TG dispatch.
+                const layout_mode soa_layout = cache_has_reorder ? cache_layout
+                                             : (has_soa_reorder ? effective_layout : cache_layout);
                 // Tensor split: cooperative multi-device MUL_MAT
                 split_config_init(ctx.stream());
                 if (g_split_config.enabled) {
