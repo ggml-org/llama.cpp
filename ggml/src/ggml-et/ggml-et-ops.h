@@ -110,8 +110,10 @@ struct ggml_et_flash_attn_ext_params {
     ggml_tensor src0;     // Q tensor (F32)
     ggml_tensor src1;     // K tensor (F32)
     ggml_tensor src2;     // V tensor (F32)
+    ggml_tensor mask;     // mask tensor (F16 or F32), zeroed when absent
     ggml_tensor dst;      // Output tensor (F32)
     float scale;          // Scale factor applied to QK
+    int32_t has_mask;     // nonzero if mask is present
 };
 
 struct ggml_et_get_rows_params {

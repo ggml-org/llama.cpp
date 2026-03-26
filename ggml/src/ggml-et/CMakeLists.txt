@@ -52,6 +52,7 @@ set(KERNELS
     rwkv_wkv7_f32
     cont_f32
     cont_f16
+    cpy_f32_f16
     set_rows_f32
     memops
 )

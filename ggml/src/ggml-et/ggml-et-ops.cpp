@@ -1130,36 +1130,52 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const gg
         return false;
     }
 
-    if (node->type != GGML_TYPE_F32 ||
-        node->src[0]->type != GGML_TYPE_F32 ||
-        node->src[1]->type != GGML_TYPE_F32 ||
-        node->src[2]->type != GGML_TYPE_F32) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT operation with unsupported types: dst=%s q=%s k=%s v=%s\n",
+    if (node->type != GGML_TYPE_F32 || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT requires F32 Q and dst, got dst=%s q=%s\n",
                        ggml_type_name(node->type),
-                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    // K and V can be F16 or F32
+    if ((node->src[1]->type != GGML_TYPE_F32 && node->src[1]->type != GGML_TYPE_F16) ||
+        (node->src[2]->type != GGML_TYPE_F32 && node->src[2]->type != GGML_TYPE_F16)) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT K/V must be F16 or F32, got k=%s v=%s\n",
                        ggml_type_name(node->src[1]->type),
                        ggml_type_name(node->src[2]->type));
         return false;
     }
 
-    if (node->src[3] != nullptr || node->src[4] != nullptr) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel does not support mask or sinks\n");
+    if (node->src[4] != nullptr) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel does not support sinks\n");
         return false;
     }
 
-    if (!ggml_is_contiguous_rows(node) ||
-        !ggml_is_contiguous_rows(node->src[0]) ||
-        !ggml_is_contiguous_rows(node->src[1]) ||
-        !ggml_is_contiguous_rows(node->src[2])) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires row-contiguous tensors\n");
+    // Mask is optional; if present must be F16 or F32
+    if (node->src[3] != nullptr &&
+        node->src[3]->type != GGML_TYPE_F32 &&
+        node->src[3]->type != GGML_TYPE_F16) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT mask must be F16 or F32, got %s\n",
+                       ggml_type_name(node->src[3]->type));
         return false;
     }
 
-    if (node->nb[0] != sizeof(float) ||
-        node->src[0]->nb[0] != sizeof(float) ||
-        node->src[1]->nb[0] != sizeof(float) ||
-        node->src[2]->nb[0] != sizeof(float)) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires contiguous rows in dim 0\n");
+    // Q and dst must be row-contiguous F32
+    if (!ggml_is_contiguous_rows(node) || !ggml_is_contiguous_rows(node->src[0])) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT requires row-contiguous Q and dst\n");
+        return false;
+    }
+
+    if (node->nb[0] != sizeof(float) || node->src[0]->nb[0] != sizeof(float)) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT requires contiguous F32 rows for Q and dst\n");
+        return false;
+    }
+
+    // K/V must have element-sized stride in dim 0
+    const size_t k_elem = node->src[1]->type == GGML_TYPE_F16 ? 2 : 4;
+    const size_t v_elem = node->src[2]->type == GGML_TYPE_F16 ? 2 : 4;
+    if (node->src[1]->nb[0] != k_elem || node->src[2]->nb[0] != v_elem) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT K/V must have element-sized stride in dim 0\n");
         return false;
     }
 
@@ -1181,30 +1197,65 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const gg
         return false;
     }
 
-    if (node->src[0]->ne[0] != 16 ||
-        node->src[1]->ne[0] != 16 ||
-        node->src[2]->ne[0] != 16 ||
-        node->ne[0] != 16) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel currently requires DK=DV=16\n");
+    // dk must match between Q and K; dv must match between V and dst
+    if (node->src[0]->ne[0] != node->src[1]->ne[0]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dk mismatch: Q=%lld K=%lld\n",
+                       (long long)node->src[0]->ne[0], (long long)node->src[1]->ne[0]);
         return false;
     }
 
+    if (node->src[2]->ne[0] != node->ne[0]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv mismatch: V=%lld dst=%lld\n",
+                       (long long)node->src[2]->ne[0], (long long)node->ne[0]);
+        return false;
+    }
+
+    if (node->src[2]->ne[0] > 128) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv=%lld exceeds maximum 256\n",
+                       (long long)node->src[2]->ne[0]);
+        return false;
+    }
+
+    // GQA: n_head_q must be a multiple of n_head_kv
+    const int64_t nhq = node->src[0]->ne[2];
+    const int64_t nhk = node->src[1]->ne[2];
+    if (nhq % nhk != 0) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT n_head_q (%lld) not divisible by n_head_kv (%lld)\n",
+                       (long long)nhq, (long long)nhk);
+        return false;
+    }
+
+    // K and V must have matching sequence length, heads, and batch dims
+    if (node->src[1]->ne[1] != node->src[2]->ne[1] ||
+        node->src[1]->ne[2] != node->src[2]->ne[2] ||
+        node->src[1]->ne[3] != node->src[2]->ne[3]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT K/V shape mismatch\n");
+        return false;
+    }
+
+    // dst layout checks: [dv, nhq, nq, no]
     if (node->src[0]->ne[1] != node->ne[2] ||
         node->src[0]->ne[2] != node->ne[1] ||
-        node->src[0]->ne[3] != node->ne[3] ||
-        node->src[1]->ne[1] != node->src[2]->ne[1] ||
-        node->src[1]->ne[2] != node->src[2]->ne[2] ||
-        node->src[1]->ne[3] != node->src[2]->ne[3] ||
-        node->src[0]->ne[2] != node->src[1]->ne[2] ||
-        node->src[0]->ne[3] != node->src[1]->ne[3]) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel requires matching non-GQA tensor shapes\n");
+        node->src[0]->ne[3] != node->ne[3]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dst shape mismatch\n");
+        return false;
+    }
+
+    // Batch dims: Q batch must match K batch
+    if (node->src[0]->ne[3] != node->src[1]->ne[3]) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT batch dimension mismatch\n");
         return false;
     }
 
     ggml_et_flash_attn_ext_params params;
+    memset(&params, 0, sizeof(params));
     params.src0 = *node->src[0];
     params.src1 = *node->src[1];
     params.src2 = *node->src[2];
+    if (node->src[3] != nullptr) {
+        params.mask = *node->src[3];
+        params.has_mask = 1;
+    }
     params.dst  = *node;
     params.scale = scale;
 
@@ -1388,26 +1439,25 @@ bool ggml_et_op_cpy(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
         return true;
     }
 
-    // For now, require same type (no type conversion)
-    if (node->type != node->src[0]->type) {
-        GGML_LOG_ERROR("ET: CPY type conversion not yet supported: src=%s dst=%s\n",
+    // Only F32 and F16 supported for dst
+    if (node->type != GGML_TYPE_F32 && node->type != GGML_TYPE_F16) {
+        GGML_LOG_ERROR("ET: CPY unsupported dst type: %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    // Select kernel based on src/dst type combination
+    const char* kernel_name;
+    if (node->src[0]->type == GGML_TYPE_F32 && node->type == GGML_TYPE_F32) {
+        kernel_name = "cont_f32";
+    } else if (node->src[0]->type == GGML_TYPE_F16 && node->type == GGML_TYPE_F16) {
+        kernel_name = "cont_f16";
+    } else if (node->src[0]->type == GGML_TYPE_F32 && node->type == GGML_TYPE_F16) {
+        kernel_name = "cpy_f32_f16";
+    } else {
+        GGML_LOG_ERROR("ET: CPY unsupported type combination: src=%s dst=%s\n",
                        ggml_type_name(node->src[0]->type),
                        ggml_type_name(node->type));
         return false;
-    }
-
-    // Only F32 and F16 supported
-    if (node->type != GGML_TYPE_F32 && node->type != GGML_TYPE_F16) {
-        GGML_LOG_ERROR("ET: CPY unsupported type: %s\n", ggml_type_name(node->type));
-        return false;
-    }
-
-    // Reuse CONT kernel: it reads src0 with arbitrary strides and writes linearly to dst
-    const char* kernel_name;
-    if (node->type == GGML_TYPE_F32) {
-        kernel_name = "cont_f32";
-    } else {
-        kernel_name = "cont_f16";
     }
 
     ggml_et_cont_params params;
