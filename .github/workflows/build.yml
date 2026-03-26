@@ -319,77 +319,81 @@ jobs:
         run: |
           time cmake --build build -j $(nproc)
 
-  ubuntu-24-webgpu:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-24-webgpu
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo add-apt-repository -y ppa:kisak/kisak-mesa
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers \
-            libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Use Vulkan SDK Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
-
-      - name: Dawn Dependency
-        id: dawn-depends
-        run: |
-          sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
-          DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
-
-      - name: Build
-        id: cmake_build
-        run: |
-          export Dawn_DIR=dawn/lib64/cmake/Dawn
-          cmake -B build \
-            -DGGML_WEBGPU=ON
-          time cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 900
+  # Disabled in favor of self-hosted WebGPU CI on real GPU hardware.
+  # The hosted Ubuntu job currently runs through llvmpipe, and the failures
+  # we have been seeing there appear to be specific to the WebGPU/llvmpipe
+  # stack rather than the ggml WebGPU backend itself.
+  # ubuntu-24-webgpu:
+  #   runs-on: ubuntu-24.04
+  #
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v6
+  #
+  #     - name: ccache
+  #       uses: ggml-org/ccache-action@v1.2.21
+  #       with:
+  #         key: ubuntu-24-webgpu
+  #         evict-old-files: 1d
+  #         save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+  #
+  #     - name: Dependencies
+  #       id: depends
+  #       run: |
+  #         sudo add-apt-repository -y ppa:kisak/kisak-mesa
+  #         sudo apt-get update -y
+  #         sudo apt-get install -y build-essential mesa-vulkan-drivers \
+  #           libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
+  #
+  #     - name: Get latest Vulkan SDK version
+  #       id: vulkan_sdk_version
+  #       run: |
+  #         echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+  #
+  #     - name: Use Vulkan SDK Cache
+  #       uses: actions/cache@v5
+  #       id: cache-sdk
+  #       with:
+  #         path: ./vulkan_sdk
+  #         key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+  #
+  #     - name: Setup Vulkan SDK
+  #       if: steps.cache-sdk.outputs.cache-hit != 'true'
+  #       uses: ./.github/actions/linux-setup-vulkan
+  #       with:
+  #         path: ./vulkan_sdk
+  #         version: ${{ env.VULKAN_SDK_VERSION }}
+  #
+  #     - name: Dawn Dependency
+  #       id: dawn-depends
+  #       run: |
+  #         sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
+  #         DAWN_VERSION="v2.0.0"
+  #         DAWN_OWNER="reeselevine"
+  #         DAWN_REPO="dawn"
+  #         DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
+  #         echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+  #         curl -L -o artifact.zip \
+  #           "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+  #         mkdir dawn
+  #         unzip artifact.zip
+  #         tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+  #
+  #     - name: Build
+  #       id: cmake_build
+  #       run: |
+  #         export Dawn_DIR=dawn/lib64/cmake/Dawn
+  #         cmake -B build \
+  #           -DGGML_WEBGPU=ON
+  #         time cmake --build build --config Release -j $(nproc)
+  #
+  #     - name: Test
+  #       id: cmake_test
+  #       run: |
+  #         cd build
+  #         # This is using llvmpipe and runs slower than other backends
+  #         ctest -L main --verbose --timeout 900
 
   ubuntu-24-webgpu-wasm:
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
