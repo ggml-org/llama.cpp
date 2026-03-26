@@ -2051,31 +2051,6 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
     }
 
     layout_mode target = GGML_LAYOUT_AOS;
-    // Fast path (before ANY registry/extra checks): direct cache lookup with
-    // the caller's requested layout. S1-PRELOAD populates the cache with
-    // COALESCED entries — this O(1) lookup finds them immediately without
-    // going through the layout choice registry (which may downgrade to AOS).
-    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled() &&
-        target != GGML_LAYOUT_AOS) {
-        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-            if (key.valid) {
-                // Try requested layout first, then COALESCED (S1-PRELOAD default),
-                // then SOA. The dispatch may request SOA but S1-PRELOAD stored COALESCED.
-                void * fast_ptr = cache->lookup(key, target);
-                if (!fast_ptr && target != GGML_LAYOUT_COALESCED &&
-                    ggml_sycl_layout_supports_coalesced(tensor)) {
-                    fast_ptr = cache->lookup(key, GGML_LAYOUT_COALESCED);
-                }
-                if (!fast_ptr && target != GGML_LAYOUT_SOA) {
-                    fast_ptr = cache->lookup(key, GGML_LAYOUT_SOA);
-                }
-                if (fast_ptr) {
-                    return fast_ptr;
-                }
-            }
-        }
-    }
 
     if (ggml_sycl_tensor_is_weight(tensor)) {
         // Layout choice registry may override the requested target.
