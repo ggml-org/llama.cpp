@@ -2229,15 +2229,15 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
     // TurboQuant pre-rotate-queries: apply WHT to Q after RoPE (matches KV quantize pipeline)
-    // Q shape here: (n_embd_head, n_head, n_tokens) = (256, 16, n_tokens) — RoPE already applied
-    // K cache stores WHT(RoPE(K)), so Q must be WHT(RoPE(Q)) for correct dot products
+    // Q shape: (n_embd_head, n_head, n_tokens) — contiguous from RoPE output
     if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
         ggml_tensor * rot_fwd = mctx_cur->get_turbo_rotation();
         if (rot_fwd && rot_fwd->buffer) {
             const int64_t hd = rot_fwd->ne[0]; // 128
             if (q->ne[0] % hd == 0) {
                 const int64_t ne0 = q->ne[0], ne1 = q->ne[1], ne2 = q->ne[2], ne3 = q->ne[3];
-                q = ggml_cont(ctx0, q);
+                // Skip ggml_cont if already contiguous (saves full tensor copy)
+                if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
                 q = ggml_reshape_2d(ctx0, q, hd, ggml_nelements(q) / hd);
                 q = ggml_mul_mat(ctx0, rot_fwd, q);
                 q = ggml_reshape_4d(ctx0, q, ne0, ne1, ne2, ne3);
@@ -2253,14 +2253,13 @@ ggml_tensor * llm_graph_context::build_attn(
         cur = ggml_mul_mat_aux(ctx0, cur, inp->self_v_rot);
 =======
     // TurboQuant V un-rotation: attention output is in WHT-rotated space
-    // Apply WHT^{-1} before the output projection (wo)
-    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+    if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0) {
         ggml_tensor * rot_inv = mctx_cur->get_turbo_rotation_inv();
         if (rot_inv && rot_inv->buffer) {
             const int64_t hd = rot_inv->ne[0]; // 128
             if (cur->ne[0] % hd == 0) {
                 const int64_t ne0 = cur->ne[0], ne1 = cur->ne[1];
-                cur = ggml_cont(ctx0, cur);
+                if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
                 cur = ggml_reshape_2d(ctx0, cur, hd, ggml_nelements(cur) / hd);
                 cur = ggml_mul_mat(ctx0, rot_inv, cur);
                 cur = ggml_reshape_2d(ctx0, cur, ne0, ne1);
