@@ -2075,8 +2075,9 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                     "[UNIFIED-CACHE] Size changed for model=%llu name_hash=0x%llx (%zu -> %zu bytes), reallocating\n",
                     (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash, it->second.size, size);
 
-                const bool   was_pinned        = it->second.pinned;
-                const size_t old_size          = it->second.size;
+                const bool   was_pinned          = it->second.pinned;
+                const size_t old_size            = it->second.size;
+                const bool   was_device_resident = !it->second.host_resident;
                 bool         use_host_fallback = false;
                 it->second.pinned              = true;
                 while (used_.load() - old_size + size > budget_) {
@@ -2165,8 +2166,12 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                 it->second.host_resident = is_host_resident;
                 it->second.location      = new_location;
                 if (!is_host_resident) {
-                    used_.fetch_add(size - old_size, std::memory_order_relaxed);
-                } else if (!it->second.host_resident) {
+                    if (size > old_size) {
+                        used_.fetch_add(size - old_size, std::memory_order_relaxed);
+                    } else if (old_size > size) {
+                        saturating_sub_used(old_size - size);
+                    }
+                } else if (was_device_resident) {
                     // Migrated from device to host, reduce device usage
                     saturating_sub_used(old_size);
                 }
@@ -2418,7 +2423,11 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 
                 it->second.device_ptr = new_device_ptr;
                 it->second.size       = alloc_size;
-                used_.fetch_add(alloc_size - old_size, std::memory_order_relaxed);
+                if (alloc_size > old_size) {
+                    used_.fetch_add(alloc_size - old_size, std::memory_order_relaxed);
+                } else if (old_size > alloc_size) {
+                    saturating_sub_used(old_size - alloc_size);
+                }
                 content_changed = true;
             }
 
@@ -3497,7 +3506,7 @@ bool unified_cache::is_cached(const ggml_sycl_cache_id & key_id, ggml_layout_mod
     if (!key_id.valid) {
         return false;
     }
-    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
     auto                                id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return false;
@@ -3516,7 +3525,7 @@ bool unified_cache::is_cached_any(const ggml_sycl_cache_id & key_id) const {
     if (!key_id.valid) {
         return false;
     }
-    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
     auto                                id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return false;
@@ -4842,6 +4851,7 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         size_t entry_size    = it->second.size;
         void * ptr           = it->second.device_ptr;
         bool   host_resident = it->second.host_resident;
+        int    entry_layout  = static_cast<int>(it->second.layout);
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict model=%llu name_hash=0x%llx layout=%d size=%zu host_resident=%d\n",
                         (unsigned long long) evict_key.id.model_id, (unsigned long long) evict_key.id.name_hash,
                         (int) it->second.layout, entry_size, host_resident ? 1 : 0);
@@ -4859,14 +4869,14 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         // Remove from lookup
         id_to_key_.erase(evict_key.id);
 
-        // Remove from entries
+        // Remove from entries — invalidates iterator, must not dereference `it` after this
         entries_.erase(it);
 
         GGML_SYCL_DEBUG(
             "[UNIFIED-CACHE] Evicted: model=%llu name_hash=0x%llx layout=%d %.2f MB (used=%.1f/%.1f MB) "
             "host_resident=%d\n",
             (unsigned long long) evict_key.id.model_id, (unsigned long long) evict_key.id.name_hash,
-            (int) it->second.layout, entry_size / (1024.0f * 1024.0f), used_.load() / (1024.0f * 1024.0f),
+            entry_layout, entry_size / (1024.0f * 1024.0f), used_.load() / (1024.0f * 1024.0f),
             budget_ / (1024.0f * 1024.0f), host_resident ? 1 : 0);
         evicted_bytes = host_resident ? 0 : entry_size;  // Only count device bytes freed
     }
@@ -6725,13 +6735,19 @@ void unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category 
     if (effective_device < 0) {
         return;
     }
-    // Atomic saturating subtract — no lock needed
-    size_t cur  = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
-    size_t next = cur > bytes ? cur - bytes : 0;
-    g_runtime_reserved_bytes[effective_device].store(next, std::memory_order_relaxed);
-    size_t cat_cur  = g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].load(std::memory_order_relaxed);
-    size_t cat_next = cat_cur > bytes ? cat_cur - bytes : 0;
-    g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].store(cat_next, std::memory_order_relaxed);
+    // Atomic saturating subtract via CAS loop — no lock needed
+    size_t cur = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
+    size_t next;
+    do {
+        next = cur > bytes ? cur - bytes : 0;
+    } while (!g_runtime_reserved_bytes[effective_device].compare_exchange_weak(
+        cur, next, std::memory_order_relaxed, std::memory_order_relaxed));
+    size_t cat_cur = g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].load(std::memory_order_relaxed);
+    size_t cat_next;
+    do {
+        cat_next = cat_cur > bytes ? cat_cur - bytes : 0;
+    } while (!g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].compare_exchange_weak(
+        cat_cur, cat_next, std::memory_order_relaxed, std::memory_order_relaxed));
     // Look up cache under shared lock, call update_reserved_bytes outside lock
     unified_cache * cache = get_cache_shared(effective_device);
     if (cache) {
