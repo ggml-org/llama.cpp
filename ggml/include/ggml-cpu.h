@@ -115,9 +115,12 @@ extern "C" {
 
     struct ggml_type_traits_cpu {
         ggml_from_float_t        from_float;
+        ggml_to_float_t          to_float;
+        ggml_from_float_t        from_float_soa;  // SoA quantize (MXFP flash attention layout)
+        ggml_to_float_t          to_float_soa;     // SoA dequant  (MXFP flash attention layout)
         ggml_vec_dot_t           vec_dot;
         enum ggml_type           vec_dot_type;
-        int64_t                  nrows; // number of rows to process simultaneously
+        int64_t                  nrows;
     };
 
     GGML_BACKEND_API const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type);

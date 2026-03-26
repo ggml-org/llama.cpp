@@ -189,6 +189,54 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
+void ggml_vec_dot_mxfp8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+    assert(n % QK_MXFP8 == 0);
+    static_assert(QK_MXFP8 == QK8_0, "QK_MXFP8 and QK8_0 must be the same");
+
+    const block_mxfp8 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+    const int nb = n / QK_MXFP8;
+
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_E8M0_TO_FP32(x[ib].e);
+        float sumi = 0;
+        for (int j = 0; j < QK_MXFP8; ++j) {
+            sumi += y[ib].qs[j] * ggml_mxfp_fp8_e4m3_to_float(x[ib].qs[j]);
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_mxfp6_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+    assert(n % QK_MXFP6 == 0);
+    static_assert(QK_MXFP6 == QK8_0, "QK_MXFP6 and QK8_0 must be the same");
+
+    const block_mxfp6 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+    const int nb = n / QK_MXFP6;
+
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_E8M0_TO_FP32(x[ib].e);
+        float sumi = 0;
+        for (int j = 0; j < QK_MXFP6; j += 4) {
+            uint8_t vals[4];
+            ggml_mxfp_unpack_fp6x4(&x[ib].qs[j * 3 / 4], vals);
+            for (int jj = 0; jj < 4; jj++) {
+                sumi += y[ib].qs[j + jj] * ggml_mxfp_fp6_e2m3_to_float(vals[jj]);
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -256,6 +304,16 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+// Generic SoA dequant wrappers — arch-specific SIMD versions override via fallback.h.
+void dequantize_row_mxfp4_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp4_soa(x, y, k);
+}
+void dequantize_row_mxfp8_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp8_soa(x, y, k);
+}
+void dequantize_row_mxfp6_soa_cpu_generic(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_mxfp6_soa(x, y, k);
+}
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;

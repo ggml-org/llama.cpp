@@ -430,59 +430,25 @@ static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
 #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
 #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
+// E8M0 shared exponent to float: returns 2^(x - 127).
+// Canonical implementation is ggml_mxfp_e8m0_to_fp32 in ggml-common.h.
+// This thin wrapper exists because not all callers include ggml-common.h.
+// MUST stay in sync — if you change the logic, change ggml-common.h too.
+//
+// E8M0 = 255 is NaN per MX spec; clamped to 254 (max finite) to match
+// the encode path which also clamps to 254, preventing Inf * 0 = NaN.
 static inline float ggml_e8m0_to_fp32(uint8_t x) {
-    uint32_t bits;  // Stores the raw bit representation of the float
-
-    // Handle special case for minimum exponent (denormalized float)
-    if (x == 0) {
-        // Bit pattern for 2^(-127):
-        // - Sign bit: 0 (positive)
-        // - Exponent: 0 (denormalized number)
-        // - Mantissa: 0x400000 (0.5 in fractional form)
-        // Value = 0.5 * 2^(-126) = 2^(-127)
-        bits = 0x00400000;
-    }
-    // note: disabled as we don't need to handle NaNs
-    //// Handle special case for NaN (all bits set)
-    //else if (x == 0xFF) {
-    //    // Standard quiet NaN pattern:
-    //    // - Sign bit: 0
-    //    // - Exponent: all 1s (0xFF)
-    //    // - Mantissa: 0x400000 (quiet NaN flag)
-    //    bits = 0x7FC00000;
-    //}
-    // Normalized values (most common case)
-    else {
-        // Construct normalized float by shifting exponent into position:
-        // - Exponent field: 8 bits (positions 30-23)
-        // - Mantissa: 0 (implicit leading 1)
-        // Value = 2^(x - 127)
-        bits = (uint32_t) x << 23;
-    }
-
-    float result;  // Final float value
-                   // Safely reinterpret bit pattern as float without type-punning issues
+    if (x == 255) { x = 254; }
+    uint32_t bits = (x == 0) ? 0x00400000u : ((uint32_t)x << 23);
+    float result;
     memcpy(&result, &bits, sizeof(float));
     return result;
 }
 
-// Equal to ggml_e8m0_to_fp32/2
-// Useful with MXFP4 quantization since the E0M2 values are doubled
+// E8M0 to float/2: returns 2^(x - 128).
 static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
-    uint32_t bits;
-
-    // For x < 2: use precomputed denormal patterns
-    if (x < 2) {
-        // 0x00200000 = 2^(-128), 0x00400000 = 2^(-127)
-        bits = 0x00200000 << x;
-    }
-    // For x >= 2: normalized exponent adjustment
-    else {
-        // 0.5 * 2^(x-127) = 2^(x-128) = normalized with exponent (x-1)
-        bits = (uint32_t)(x - 1) << 23;
-    }
-    // Note: NaNs are not handled here
-
+    if (x == 255) { x = 254; }
+    uint32_t bits = (x < 2) ? (0x00200000u << x) : ((uint32_t)(x - 1) << 23);
     float result;
     memcpy(&result, &bits, sizeof(float));
     return result;
@@ -491,23 +457,26 @@ static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
 #define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
 #define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
 
-// UE4M3: unsigned, 4 exp bits (bias=7), 3 mantissa bits
-// Returns value * 0.5 to match kvalues_mxfp4 convention (kvalues = 2 * E2M1_float)
+// UE4M3 (unsigned E4M3): 4 exponent bits (bias 7), 3 mantissa bits.
+// Returns value * 0.5 to match kvalues_mxfp4 convention (kvalues = 2 * E2M1_float).
 static inline float ggml_ue4m3_to_fp32(uint8_t x) {
     if (x == 0 || x == 0x7F) {
-        return 0.0f;
+        return 0.0f;  // zero and NaN → 0
     }
     int   exp = (x >> 3) & 0xF;
     int   man = x & 0x7;
     float raw;
     if (exp == 0) {
+        // subnormal: value = man * 2^(1 - bias - mantissa_bits) = man * 2^(-9)
         raw = ldexpf((float) man, -9);
     } else {
+        // normalized: value = (1 + man/8) * 2^(exp - 7)
         raw = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
     }
     return raw * 0.5f;
 }
 
+// Float32 to UE4M3 with round-to-nearest.
 static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     if (!(x > 0.0f)) {
         return 0;
@@ -521,7 +490,7 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     int fp32_man  = (bits >> 20) & 0x7;
     int ue4m3_exp = fp32_exp + 7;
     if (ue4m3_exp <= 0) {
-        // subnormal: value = man * 2^-9, man = round(x * 2^9)
+        // subnormal: value = man * 2^(-9), so man = round(x * 512)
         int man = (int) (x * 512.0f + 0.5f);
         if (man > 7) {
             man = 7;
