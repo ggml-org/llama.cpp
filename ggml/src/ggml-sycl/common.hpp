@@ -1943,6 +1943,28 @@ static inline bool ggml_sycl_layout_is_soa_or_coalesced(const ggml_tensor_extra_
     return mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED;
 }
 
+// Check if a tensor's dimensions support COALESCED layout.
+// Requires (ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0.
+static inline bool ggml_sycl_layout_supports_coalesced(const ggml_tensor * tensor) {
+    if (!tensor || !is_coalesced_supported(tensor->type)) {
+        return false;
+    }
+    const int64_t ncols      = tensor->ne[0];
+    int           block_size = 0;
+
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:  block_size = QK4_0;  break;
+        case GGML_TYPE_Q8_0:  block_size = QK8_0;  break;
+        case GGML_TYPE_Q6_K:  block_size = QK_K;   break;
+        case GGML_TYPE_MXFP4: block_size = QK_MXFP4; break;
+        default: return false;
+    }
+    if (block_size == 0) {
+        return false;
+    }
+    return ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS) == 0;
+}
+
 // Accessors for backend-managed layout metadata
 inline const ggml_tensor_layout * ggml_sycl_get_layout_info(const ggml_tensor * tensor) {
     return tensor ? tensor->layout : nullptr;

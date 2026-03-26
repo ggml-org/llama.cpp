@@ -8843,35 +8843,8 @@ static bool ggml_sycl_layout_supports_soa(ggml_type type) {
     }
 }
 
-static bool ggml_sycl_layout_supports_coalesced(const ggml_tensor * tensor) {
-    if (!tensor || !is_coalesced_supported(tensor->type)) {
-        return false;
-    }
-    const int64_t ncols      = tensor->ne[0];
-    int           block_size = 0;
-
-    switch (tensor->type) {
-        case GGML_TYPE_Q4_0:
-            block_size = QK4_0;
-            break;
-        case GGML_TYPE_Q8_0:
-            block_size = QK8_0;
-            break;
-
-        case GGML_TYPE_Q6_K:
-            block_size = QK_K;
-            break;
-        case GGML_TYPE_MXFP4:
-            block_size = QK_MXFP4;
-            break;
-        default:
-            return false;
-    }
-    if (block_size == 0) {
-        return false;
-    }
-    return ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS) == 0;
-}
+// ggml_sycl_layout_supports_coalesced is now defined in common.hpp
+// as a static inline function, accessible to all SYCL backend TUs.
 
 layout_mode ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device) {
     if (!tensor) {
@@ -26980,10 +26953,10 @@ static bool ggml_sycl_mul_mat_tensor_split(
         // --- Get weight pointers ---
         const size_t src0_row_bytes = ggml_row_size(src0->type, ne00);
 
-        // Primary GPU: existing SOA device pointer
-        const char * src0_primary = (const char *) ggml_sycl_get_layout_ptr_for(
-            src0, device, src0_layout);
-        if (!src0_primary) return false;
+        // Primary GPU: existing SOA/COALESCED device pointer
+        auto resolved_split_pri = ggml_sycl_resolve_weight(src0, device);
+        if (!resolved_split_pri || resolved_split_pri.layout != src0_layout) return false;
+        const char * src0_primary = (const char *) resolved_split_pri.ptr;
 
         // AOS device pointer on primary GPU (source for D2H copies to secondary/CPU)
         const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(
@@ -27310,10 +27283,11 @@ static bool ggml_sycl_mul_mat_tensor_split(
     quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
         src1_ddf, src1_ddq, K, 1, K_padded, stream);
 
-    const char * src0_dd = (const char *) ggml_sycl_get_layout_ptr_for(src0, device, src0_layout);
-    if (!src0_dd) {
+    auto resolved_split_gpu = ggml_sycl_resolve_weight(src0, device);
+    if (!resolved_split_gpu || resolved_split_gpu.layout != src0_layout) {
         return false;
     }
+    const char * src0_dd = (const char *) resolved_split_gpu.ptr;
 
     float * dst_dd = (float *) dst->data;
 
@@ -29115,7 +29089,18 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     const layout_mode use_layout =
         (src0->type == GGML_TYPE_MXFP4 && layout == GGML_LAYOUT_SOA) ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
 
-    const void * src0_weight_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, use_layout);
+    auto resolved_fused = ggml_sycl_resolve_weight(src0, ctx.device);
+    // Fused kernel only supports AOS and MXFP4 SOA — reject incompatible layouts
+    if (resolved_fused && resolved_fused.layout != use_layout) {
+        if (use_layout == GGML_LAYOUT_AOS) {
+            // Need AOS but cache returned reordered — cannot use
+            resolved_fused = {};
+        } else if (resolved_fused.layout != GGML_LAYOUT_SOA) {
+            // Need SOA but got something else (e.g. COALESCED)
+            resolved_fused = {};
+        }
+    }
+    const void * src0_weight_ptr = resolved_fused.ptr;
     if (!src0_weight_ptr) {
         GGML_SYCL_DEBUG("[MoE FUSED] No device layout ptr for %s (host_weights=%d, layout=%d)\n",
                         src0->name, (int) host_weights, (int) use_layout);
@@ -29471,7 +29456,11 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     void * src0_layout_ptr = nullptr;
 
     if (!host_weights) {
-        src0_layout_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, layout);
+        auto resolved_xmx = ggml_sycl_resolve_weight(src0, ctx.device);
+        // XMX MoE requires an exact layout match (SOA or XMX_TILED)
+        if (resolved_xmx && resolved_xmx.layout == layout) {
+            src0_layout_ptr = resolved_xmx.ptr;
+        }
     }
     const bool           use_ptr_table      = (src0_layout_ptr == nullptr);
     const void * const * expert_ptrs_host   = nullptr;
@@ -32651,13 +32640,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         // Check if weights are host-resident using the comprehensive check
         bool hw = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
         if (!hw && src0->extra) {
-            auto * ex = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-            void * lp = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
-            if (lp) {
-                auto pt = ggml_sycl_get_alloc_type(lp);
-                hw = (pt != sycl::usm::alloc::device);
+            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+            if (resolved && !resolved.on_device) {
+                hw = true;
             }
-            GGML_UNUSED(ex);
         }
         if (hw) {
             // Check env var
@@ -39902,8 +39888,12 @@ static const void * resolve_split_weight_ptr(
         int64_t             row_start,
         int64_t             row_count) {
     if (device == primary_device) {
-        // Primary device: use standard layout pointer (covers full N rows)
-        return ggml_sycl_get_layout_ptr_for(weight_tensor, device, weight_layout);
+        // Primary device: resolve via unified cache (covers full N rows)
+        auto resolved_sp = ggml_sycl_resolve_weight(weight_tensor, device);
+        if (resolved_sp && resolved_sp.layout == weight_layout) {
+            return resolved_sp.ptr;
+        }
+        return nullptr;
     }
 
     // Secondary device: look up partial-N SOA in unified cache
@@ -42120,17 +42110,12 @@ full_build:
                                                                  weight_tensor->type, weight_tensor->name);
                             }
 
-                            // Prefer a concrete SoA pointer for persistent DMMV. If it is not
-                            // materialized yet, request it from the unified cache.
-                            preferred_layout_ptr =
-                                ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
-                            if (!preferred_layout_ptr) {
-                                preferred_layout_ptr =
-                                    ggml_sycl_get_weight_layout_ptr(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
-                            }
-                            if (!preferred_layout_ptr) {
-                                preferred_layout_ptr =
-                                    ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
+                            // Prefer a concrete SoA/Coalesced pointer for persistent DMMV.
+                            {
+                                auto resolved_ptg = ggml_sycl_resolve_weight(weight_tensor, ctx.device);
+                                if (resolved_ptg && resolved_ptg.layout != GGML_LAYOUT_AOS) {
+                                    preferred_layout_ptr = resolved_ptg.ptr;
+                                }
                             }
 
                             if (preferred_layout_ptr != nullptr) {
@@ -42152,19 +42137,19 @@ full_build:
                         (int64_t) node->nb[3],
                     };
                     if (is_quantized_weight) {
-                        if (weight_layout != GGML_LAYOUT_AOS) {
-                            weight = preferred_layout_ptr ?
-                                         preferred_layout_ptr :
-                                         ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout);
-                            if (!weight) {
-                                GGML_SYCL_DEBUG(
-                                    "[PERSISTENT-TG] Weight layout %d unavailable for %s, falling back to AoS\n",
-                                    (int) weight_layout, weight_tensor->name ? weight_tensor->name : "(null)");
-                                weight_layout = GGML_LAYOUT_AOS;
-                            }
+                        if (weight_layout != GGML_LAYOUT_AOS && preferred_layout_ptr) {
+                            weight = preferred_layout_ptr;
                         }
                         if (!weight) {
-                            weight = get_tensor_ptr_view_fast(weight_tensor);
+                            // resolve_weight already tried COALESCED > SOA > AOS
+                            auto resolved_ptg_wt = ggml_sycl_resolve_weight(weight_tensor, ctx.device);
+                            if (resolved_ptg_wt && resolved_ptg_wt.layout != GGML_LAYOUT_AOS) {
+                                weight        = resolved_ptg_wt.ptr;
+                                weight_layout = resolved_ptg_wt.layout;
+                            } else {
+                                weight_layout = GGML_LAYOUT_AOS;
+                                weight        = get_tensor_ptr_view_fast(weight_tensor);
+                            }
                         }
                     } else if (is_f16_weight) {
                         weight = resolve_input_ptr_with_nb(weight_tensor, layer, weight_nb, true);
@@ -42180,7 +42165,7 @@ full_build:
                             "layout_ptr=%p data_ptr=%p\n",
                             weight_tensor->name ? weight_tensor->name : "(null)", (int) weight_tensor->type,
                             ggml_sycl_layout_mode_name(weight_layout), ggml_sycl_layout_mode_name(tensor_layout),
-                            ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout),
+                            weight,
                             get_tensor_ptr_view_fast(weight_tensor));
                     }
                     const void * input  = nullptr;
