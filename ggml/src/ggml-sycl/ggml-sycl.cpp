@@ -9217,13 +9217,17 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     }
     const bool ok = ggml_sycl_reorder_weight_cpu(reorder_buf, reorder_src, *ctx);
 
+    // Reorder must succeed: layout_supports_coalesced() and layout_supports_soa()
+    // validate dimensions before reaching this fill function.  A failure here
+    // means the layout validation in S1-PRELOAD or resolve_layout_for_tensor has
+    // a bug — the cache entry would be tagged COALESCED/SOA but contain AOS data,
+    // causing MMVQ to read garbage.
+    GGML_ASSERT(ok && "reorder_weight_cpu failed — layout dimension validation missed this tensor");
+
     if (!ok) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] reorder failed for layout=%d type=%d — storing AOS instead\n",
-                      (int) ctx->layout, (int) ctx->type);
-        // Fall back to AOS: copy raw data without reordering.
-        // The cache entry layout will be incorrect (labeled as ctx->layout but
-        // containing AOS data). To prevent MMVQ from treating AOS as COALESCED,
-        // store only dst_size=src_size worth of AOS data.
+        // Unreachable after the assert above, kept for non-assert builds
+        GGML_LOG_WARN("[UNIFIED-CACHE] reorder failed for layout=%d type=%d ncols=%lld nrows=%lld — storing AOS instead\n",
+                      (int) ctx->layout, (int) ctx->type, (long long) ctx->ncols, (long long) ctx->nrows);
         std::memcpy(reorder_buf, reorder_src, std::min(dst_size, src_size));
     }
     if (dst_size > src_size) {
@@ -10763,7 +10767,9 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
                     reorder_ctx.src_is_device = false;
                     reorder_ctx.device_id     = device;
                     const bool ok             = ggml_sycl_reorder_weight_cpu(host_ptr, src_ptr, reorder_ctx);
+                    GGML_ASSERT(ok && "reorder_weight_cpu failed in host cache path — layout validation bug");
                     if (!ok) {
+                        // Unreachable after assert, kept for non-assert builds
                         std::memcpy(host_ptr, src_ptr, std::min(dst_size, src_size));
                     }
                     if (dst_size > src_size) {
@@ -28175,25 +28181,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         // Prefer COALESCED layout for quantized types (best TG performance).
                         // COALESCED dequant→FP16 is available for Q4_0 (oneDNN PP path).
                         // Fallback chain: COALESCED → SOA → AOS.
-                        const bool  prefer_reordered = ggml_sycl_unified_soa_enabled() &&
-                                                       ggml_is_quantized(src0->type) &&
-                                                       ggml_sycl_supports_reorder_mmvq(src0->type);
-                        const bool  prefer_coalesced = prefer_reordered && is_coalesced_supported(src0->type);
-                        layout_mode requested_layout = prefer_coalesced ? GGML_LAYOUT_COALESCED
-                                                     : prefer_reordered ? GGML_LAYOUT_SOA
-                                                                        : GGML_LAYOUT_AOS;
-                        const char *      src0_ptr_source  = nullptr;
-                        const void *      src0_data =
-                            ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
-                        // Fallback: COALESCED → SOA → AOS
-                        if (!src0_data && requested_layout == GGML_LAYOUT_COALESCED) {
-                            requested_layout = GGML_LAYOUT_SOA;
-                            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
-                        }
-                        if (!src0_data && requested_layout != GGML_LAYOUT_AOS) {
-                            requested_layout = GGML_LAYOUT_AOS;
-                            src0_data = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS, &src0_ptr_source);
-                        }
+                        // Unified weight resolution: single O(1) cache lookup with
+                        // built-in COALESCED → SOA → AOS fallback.
+                        auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+                        layout_mode   requested_layout = resolved.layout;
+                        const char *  src0_ptr_source  = "resolve_weight";
+                        const void *  src0_data        = resolved.ptr;
                         const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
                         float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
@@ -32924,20 +32917,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     bool        src0_layout_aos = true;
     void *      src0_layout_ptr = nullptr;
     if (!host_weights) {
-        src0_layout     = get_effective_layout_mode(src0_extra);
-        src0_layout_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, src0_layout);
-        if (!src0_layout_ptr) {
-            if (src0_layout != GGML_LAYOUT_AOS) {
-                GGML_SYCL_DEBUG("[MoE] layout=%d unavailable for %s, falling back to AoS\n", (int) src0_layout,
-                                src0->name ? src0->name : "?");
-            }
-            src0_layout     = GGML_LAYOUT_AOS;
-            src0_layout_aos = true;
-            src0_layout_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
-            if (!src0_layout_ptr) {
-                src0_layout_ptr = ggml_sycl_get_data_ptr(src0, ctx.device);
-            }
-        }
+        auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+        src0_layout     = resolved.layout;
+        src0_layout_ptr = resolved.ptr;
         src0_layout_aos = (src0_layout == GGML_LAYOUT_AOS);
     }
     // Check if expert weights need to be cached (mmap or host/shared memory)
@@ -33013,17 +32995,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const void * src0_layout_base = nullptr;
     if (!use_expert_cache) {
         if (route_layout != src0_layout) {
-            src0_layout_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, route_layout);
-            if (!src0_layout_ptr) {
-                GGML_SYCL_DEBUG("[MoE] layout=%d unavailable for %s, falling back to AoS\n", (int) route_layout,
-                                src0->name ? src0->name : "?");
-                route_layout    = GGML_LAYOUT_AOS;
-                src0_layout_ptr = ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS);
-                if (!src0_layout_ptr) {
-                    src0_layout_ptr = ggml_sycl_get_data_ptr(src0, ctx.device);
-                }
-            }
-            src0_layout     = route_layout;
+            auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+            src0_layout_ptr = resolved.ptr;
+            src0_layout     = resolved.layout;
             src0_layout_aos = (src0_layout == GGML_LAYOUT_AOS);
         }
         src0_layout_base = src0_layout_ptr;
