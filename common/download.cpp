@@ -454,7 +454,9 @@ static gguf_split_info get_gguf_split_info(const std::string & path) {
     std::smatch m;
 
     std::string prefix = path;
-    string_remove_suffix(prefix, ".gguf");
+    if (!string_remove_suffix(prefix, ".gguf")) {
+        return {};
+    }
 
     int index = 1;
     int count = 1;

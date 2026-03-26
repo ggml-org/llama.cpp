@@ -504,7 +504,7 @@ static std::string make_old_cache_filename(const std::string & owner,
     return result;
 }
 
-static bool migrate_single_file(const fs::path    & old_cache,
+static void migrate_single_file(const fs::path    & old_cache,
                                 const std::string & owner,
                                 const std::string & repo,
                                 const nl::json    & node,
@@ -513,7 +513,7 @@ static bool migrate_single_file(const fs::path    & old_cache,
     if (!node.contains("rfilename") ||
         !node.contains("lfs")       ||
         !node["lfs"].contains("sha256")) {
-        return false;
+        return;
     }
 
     std::string path = node["rfilename"];
@@ -536,26 +536,18 @@ static bool migrate_single_file(const fs::path    & old_cache,
             LOG_WRN("%s: %s is orphan, deleting...\n", __func__, etag_path.string().c_str());
             fs::remove(etag_path);
         }
-        return false;
+        return;
     }
 
-    bool delete_old_path = false;
-
     if (!file_info) {
-        LOG_WRN("%s: %s not found in current repo, deleting...\n", __func__, old_filename.c_str());
-        delete_old_path = true;
+        LOG_WRN("%s: %s not found in current repo, ignoring...\n", __func__, old_filename.c_str());
+        return;
     } else if (!sha256.empty() && !file_info->oid.empty() && sha256 != file_info->oid) {
-        LOG_WRN("%s: %s is not up to date (sha256 mismatch), deleting...\n", __func__, old_filename.c_str());
-        delete_old_path = true;
+        LOG_WRN("%s: %s is not up to date (sha256 mismatch), ignoring...\n", __func__, old_filename.c_str());
+        return;
     }
 
     std::error_code ec;
-
-    if (delete_old_path) {
-        fs::remove(old_path, ec);
-        fs::remove(etag_path, ec);
-        return true;
-    }
 
     fs::path new_path(file_info->local_path);
     fs::create_directories(new_path.parent_path(), ec);
@@ -566,7 +558,7 @@ static bool migrate_single_file(const fs::path    & old_cache,
             fs::copy_file(old_path, new_path, ec);
             if (ec) {
                 LOG_WRN("%s: failed to move/copy %s: %s\n", __func__, old_path.string().c_str(), ec.message().c_str());
-                return false;
+                return;
             }
         }
         fs::remove(old_path, ec);
@@ -575,8 +567,6 @@ static bool migrate_single_file(const fs::path    & old_cache,
 
     std::string filename = finalize_file(*file_info);
     LOG_INF("%s: migrated %s -> %s\n", __func__, old_filename.c_str(), filename.c_str());
-
-    return true;
 }
 
 void migrate_old_cache_to_hf_cache(const std::string & token, bool offline) {

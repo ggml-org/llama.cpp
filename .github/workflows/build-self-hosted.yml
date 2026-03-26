@@ -141,60 +141,61 @@ jobs:
   #         amd-smi static
   #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-mac-metal:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
-
-  ggml-ci-mac-webgpu:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dawn Dependency
-        id: dawn-depends
-        run: |
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
-          DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
-            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
-
-  ggml-ci-mac-vulkan:
-    runs-on: [self-hosted, macOS, ARM64]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+  # TODO: sandbox Mac runners
+  #  ggml-ci-mac-metal:
+  #    runs-on: [self-hosted, macOS, ARM64]
+  #
+  #    steps:
+  #      - name: Clone
+  #        id: checkout
+  #        uses: actions/checkout@v6
+  #
+  #      - name: Test
+  #        id: ggml-ci
+  #        run: |
+  #          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+  #
+  #  ggml-ci-mac-webgpu:
+  #    runs-on: [self-hosted, macOS, ARM64]
+  #
+  #    steps:
+  #      - name: Clone
+  #        id: checkout
+  #        uses: actions/checkout@v6
+  #
+  #      - name: Dawn Dependency
+  #        id: dawn-depends
+  #        run: |
+  #          DAWN_VERSION="v2.0.0"
+  #          DAWN_OWNER="reeselevine"
+  #          DAWN_REPO="dawn"
+  #          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
+  #          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+  #          curl -L -o artifact.zip \
+  #            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+  #          mkdir dawn
+  #          unzip artifact.zip
+  #          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+  #
+  #      - name: Test
+  #        id: ggml-ci
+  #        run: |
+  #          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+  #            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+  #
+  #  ggml-ci-mac-vulkan:
+  #    runs-on: [self-hosted, macOS, ARM64]
+  #
+  #    steps:
+  #      - name: Clone
+  #        id: checkout
+  #        uses: actions/checkout@v6
+  #
+  #      - name: Test
+  #        id: ggml-ci
+  #        run: |
+  #          vulkaninfo --summary
+  #          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-linux-intel-vulkan:
     runs-on: [self-hosted, Linux, Intel]
