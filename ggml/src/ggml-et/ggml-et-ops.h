@@ -129,6 +129,37 @@ struct ggml_et_repeat_params {
     ggml_tensor dst;      // F32 output tensor (tiled result)
 };
 
+struct ggml_et_rwkv_wkv6_params {
+    float* k;           // src[0]: [S, H, T]  key
+    float* v;           // src[1]: [S, H, T]  value
+    float* r;           // src[2]: [S, H, T]  receptance
+    float* tf;          // src[3]: [S, H]     time_faaaa (per-head)
+    float* td;          // src[4]: [S, H, T]  time_decay
+    float* state_in;    // src[5]: [S*S*H, n_seqs]  initial state
+    float* dst;         // [C, T + S*n_seqs]  output + state_out
+    int32_t C;          // total channels (S * H)
+    int32_t H;          // number of heads
+    int32_t S;          // head size
+    int32_t T;          // number of tokens
+    int32_t n_seqs;     // number of sequences
+};
+
+struct ggml_et_rwkv_wkv7_params {
+    float* r;           // [S, H, T]  receptance
+    float* w;           // [S, H, T]  decay
+    float* k;           // [S, H, T]  key
+    float* v;           // [S, H, T]  value
+    float* a;           // [S, H, T]  bonus gate
+    float* b;           // [S, H, T]  bonus key
+    float* state_in;    // [S*S*H, n_seqs]  initial state
+    float* dst;         // [C, T + S*n_seqs]  output + state_out
+    int32_t C;          // total channels (S * H)
+    int32_t H;          // number of heads
+    int32_t S;          // head size
+    int32_t T;          // number of tokens
+    int32_t n_seqs;     // number of sequences
+};
+
 struct ggml_et_set_rows_params {
     ggml_tensor src0;     // F32 source data tensor
     ggml_tensor src1;     // I64 row indices tensor
@@ -192,6 +223,8 @@ bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_concat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_rwkv_wkv6(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_rwkv_wkv7(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,

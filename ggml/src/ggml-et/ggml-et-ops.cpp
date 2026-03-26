@@ -133,6 +133,22 @@ static ggml_et_cpu_compare_config repeat_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config rwkv_wkv6_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-4f,
+    /* .max_log_elements = */ 4096
+};
+
+static ggml_et_cpu_compare_config rwkv_wkv7_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-4f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config set_rows_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -1372,6 +1388,145 @@ bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
     }
 
     ET_PERF_END("REPEAT", kernel_name, node);
+    return kernel_result;
+}
+
+bool ggml_et_op_rwkv_wkv6(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for RWKV_WKV6 operation\n");
+        return false;
+    }
+
+    // Validate all 6 source tensors exist
+    for (int i = 0; i <= 5; i++) {
+        if (!node->src[i]) {
+            GGML_LOG_ERROR("ET: RWKV_WKV6 operation missing src[%d]\n", i);
+            return false;
+        }
+    }
+
+    if (node->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: RWKV_WKV6 only supports F32, got %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    const char* kernel_name = "rwkv_wkv6_f32";
+
+    const int64_t S      = node->src[0]->ne[0];  // head_size
+    const int64_t H      = node->src[0]->ne[1];  // num heads
+    const int64_t T      = node->src[1]->ne[2];  // num tokens
+    const int64_t n_seqs = node->src[5]->ne[1];  // num sequences
+    const int64_t C      = S * H;
+
+    ggml_et_rwkv_wkv6_params params;
+    params.k        = (float*)node->src[0]->data;
+    params.v        = (float*)node->src[1]->data;
+    params.r        = (float*)node->src[2]->data;
+    params.tf       = (float*)node->src[3]->data;
+    params.td       = (float*)node->src[4]->data;
+    params.state_in = (float*)node->src[5]->data;
+    params.dst      = (float*)node->data;
+    params.C        = (int32_t)C;
+    params.H        = (int32_t)H;
+    params.S        = (int32_t)S;
+    params.T        = (int32_t)T;
+    params.n_seqs   = (int32_t)n_seqs;
+
+    // Phase 1: Initialize CPU comparison context
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (rwkv_wkv6_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_RWKV_WKV6)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for RWKV_WKV6 operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &rwkv_wkv6_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for RWKV_WKV6 operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("RWKV_WKV6", kernel_name, node, "S=%d H=%d T=%d n_seqs=%d",
+                     (int)S, (int)H, (int)T, (int)n_seqs);
+    return kernel_result;
+}
+
+bool ggml_et_op_rwkv_wkv7(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for RWKV_WKV7 operation\n");
+        return false;
+    }
+
+    // Validate all 7 source tensors exist
+    for (int i = 0; i <= 6; i++) {
+        if (!node->src[i]) {
+            GGML_LOG_ERROR("ET: RWKV_WKV7 operation missing src[%d]\n", i);
+            return false;
+        }
+    }
+
+    if (node->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: RWKV_WKV7 only supports F32, got %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    const char* kernel_name = "rwkv_wkv7_f32";
+
+    const int64_t S      = node->src[2]->ne[0];  // head_size
+    const int64_t H      = node->src[2]->ne[1];  // num heads
+    const int64_t T      = node->src[1]->ne[2];  // num tokens
+    const int64_t n_seqs = node->src[6]->ne[1];  // num sequences
+    const int64_t C      = S * H;
+
+    ggml_et_rwkv_wkv7_params params;
+    params.r        = (float*)node->src[0]->data;
+    params.w        = (float*)node->src[1]->data;
+    params.k        = (float*)node->src[2]->data;
+    params.v        = (float*)node->src[3]->data;
+    params.a        = (float*)node->src[4]->data;
+    params.b        = (float*)node->src[5]->data;
+    params.state_in = (float*)node->src[6]->data;
+    params.dst      = (float*)node->data;
+    params.C        = (int32_t)C;
+    params.H        = (int32_t)H;
+    params.S        = (int32_t)S;
+    params.T        = (int32_t)T;
+    params.n_seqs   = (int32_t)n_seqs;
+
+    // Phase 1: Initialize CPU comparison context
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (rwkv_wkv7_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_RWKV_WKV7)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for RWKV_WKV7 operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &rwkv_wkv7_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for RWKV_WKV7 operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("RWKV_WKV7", kernel_name, node, "S=%d H=%d T=%d n_seqs=%d",
+                     (int)S, (int)H, (int)T, (int)n_seqs);
     return kernel_result;
 }
 

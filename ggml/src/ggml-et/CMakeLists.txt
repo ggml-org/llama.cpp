@@ -47,6 +47,8 @@ set(KERNELS
     get_rows_f32
     concat_f32
     repeat_f32
+    rwkv_wkv6_f32
+    rwkv_wkv7_f32
     cont_f32
     cont_f16
     set_rows_f32
