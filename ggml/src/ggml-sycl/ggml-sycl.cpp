@@ -38425,7 +38425,7 @@ gpu_dispatch:
         auto t_compute_end = std::chrono::high_resolution_clock::now();
         double compute_ms = std::chrono::duration<double, std::milli>(t_compute_end - t_compute_start).count();
         static std::atomic<int> compute_timing{0};
-        if (compute_timing.fetch_add(1, std::memory_order_relaxed) < 15) {
+        if (compute_timing.fetch_add(1, std::memory_order_relaxed) < 30) {
             GGML_LOG_INFO("[TOKEN-TIMING] graph_compute_impl: %.1f ms (%d nodes)\n",
                           compute_ms, cgraph->n_nodes);
         }
