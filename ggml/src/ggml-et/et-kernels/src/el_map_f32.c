@@ -190,21 +190,60 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const size_t nb00 = src0->nb[0], nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
     const size_t nb10 = src1->nb[0], nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
 
-    // Calculate total number of rows (flatten dimensions 1,2,3)
+    bool cache_aligned = (dst->ne[0] % 16 == 0);
+    if(!cache_aligned) {
+        return 1;
+    }
+
+    // Fast path: no broadcasting, contiguous
+    const bool no_broadcast = (ne10 == ne0 && ne11 == ne1 && ne12 == ne2 && ne13 == ne3);
+    const bool all_contiguous = (nb0 == 4 && nb00 == 4 && nb10 == 4 &&
+                                 nb1 == ne0 * 4 && nb01 == ne0 * 4 && nb11 == ne0 * 4);
+
+    if (no_broadcast && all_contiguous) {
+        const int64_t total_elements = ne0 * ne1 * ne2 * ne3;
+        const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes
+        const int64_t total_cachelines = (total_elements + elements_per_cacheline - 1) / elements_per_cacheline;
+
+        const int64_t cl_per_thread = (total_cachelines + num_threads - 1) / num_threads;
+        const int64_t cl_start = thread_id * cl_per_thread;
+        int64_t cl_end = cl_start + cl_per_thread;
+        if (cl_end > total_cachelines) cl_end = total_cachelines;
+
+        if (cl_start >= total_cachelines) {
+            return 0;
+        }
+
+        const int64_t elem_start = cl_start * elements_per_cacheline;
+        int64_t elem_end = cl_end * elements_per_cacheline;
+        if (elem_end > total_elements) elem_end = total_elements;
+        const int32_t count = (int32_t)(elem_end - elem_start);
+
+        switch (operation) {
+            case GGML_OP_MUL:
+                block_mul_cache_aligned(dst_data + elem_start, src0_data + elem_start, src1_data + elem_start, count);
+                break;
+            case GGML_OP_ADD:
+                block_add_cache_aligned(dst_data + elem_start, src0_data + elem_start, src1_data + elem_start, count);
+                break;
+            case GGML_OP_SUB:
+                block_sub_cache_aligned(dst_data + elem_start, src0_data + elem_start, src1_data + elem_start, count);
+                break;
+            default:
+                return 1;
+        }
+        return 0;
+    }
+
+    // Slow path: broadcasting or non-contiguous: row based or bcast on last row
     const int64_t total_rows = ne1 * ne2 * ne3;
 
-    // Distribute rows across threads using ceiling division to handle remainder
     const int64_t rows_per_thread = (total_rows + num_threads - 1) / num_threads;
     const int64_t start_row = thread_id * rows_per_thread;
     const int64_t end_row = (start_row + rows_per_thread < total_rows) ? (start_row + rows_per_thread) : total_rows;
 
     if (start_row >= total_rows) {
         return 0;
-    }
-
-    bool cache_aligned = (dst->ne[0] % 16 == 0);
-    if(!cache_aligned) {
-        return 1;
     }
 
     for (int64_t ir = start_row; ir < end_row; ir++) {
