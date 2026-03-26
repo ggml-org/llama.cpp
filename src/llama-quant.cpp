@@ -345,9 +345,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
 
     // do not quantize specific multimodal tensors
     quantize &= name.find(".position_embd") == std::string::npos;
-    quantize &= name.find("sam.patch_embd") == std::string::npos;
     quantize &= name.find("sam.pos_embd")   == std::string::npos;
+    quantize &= name.find("sam.neck.")      == std::string::npos;
+    quantize &= name.find("sam.net_")       == std::string::npos;
     quantize &= name.find(".rel_pos")       == std::string::npos;
+    quantize &= name.find(".patch_embd")    == std::string::npos;
+    quantize &= name.find(".patch_merger")  == std::string::npos;
 
     return quantize;
 }

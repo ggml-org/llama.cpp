@@ -7150,6 +7150,8 @@ class DeepseekOCRVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         if ".rel_pos_h" in name or '.rel_pos_w' in name:
             return gguf.GGMLQuantizationType.F32
+        if ".neck." in name or ".net_" in name:
+            return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
