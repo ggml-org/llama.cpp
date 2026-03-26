@@ -498,6 +498,10 @@ static std::unordered_map<int, int> g_moe_layer_seq[GGML_SYCL_MAX_DEVICES];
 // Secondary GPUs write outputs to malloc_host staging, merged via primary compute queue.
 static std::atomic<bool> g_moe_multi_gpu_active{false};
 
+// Thread-local flag: set to true when moe_prefetch_scan() has submitted hints
+// for the current graph. Checked at dispatch time to skip redundant hint() calls.
+static thread_local bool g_prefetch_scan_done = false;
+
 // ---------------------------------------------------------------------------
 // Staging buffer pool for SOA weight conversion in fill_reordered_host.
 // Reuses pinned host allocations instead of malloc_host/free per conversion.
@@ -1712,6 +1716,67 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     }
 
     return nullptr;
+}
+
+bool moe_get_expert_stage_info(int layer_idx, int expert_idx, int device_id,
+                               expert_stage_info & out) {
+    out = {};
+    const moe_expert_meta * meta = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(g_moe_expert_meta_mutex);
+        for (const auto & m : g_moe_expert_meta) {
+            if (m.layer_id == layer_idx && m.expert_idx == expert_idx) {
+                meta = &m;
+                break;
+            }
+        }
+    }
+    if (!meta) return false;
+    const uintptr_t data_addr = reinterpret_cast<uintptr_t>(meta->data_ptr);
+    if (data_addr == 0 || (data_addr >> 47) != 0) return false;
+    ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
+        meta->tensor, meta->extra, meta->expert_idx);
+    if (!key.valid) return false;
+    // Determine optimal layout for this expert type/dimensions.
+    // MXFP4 experts use SOA (COALESCED requires blocks_per_row%32==0 which
+    // fails for 120B's 2880-col experts with blocks_per_row=90).
+    const layout_mode optimal_layout = GGML_LAYOUT_SOA;
+    const size_t layout_bytes = ggml_sycl_layout_bytes_for_dims(
+        meta->type, meta->ne0, meta->ne1, optimal_layout, device_id);
+    const size_t dst_bytes = (layout_bytes > 0) ? layout_bytes : meta->bytes;
+    out.cache_key  = key;
+    out.src_ptr    = meta->data_ptr;
+    out.src_size   = meta->bytes;
+    out.dst_size   = dst_bytes;
+    out.layout     = optimal_layout;
+    out.type       = meta->type;
+    out.ncols      = meta->ne0;
+    out.nrows      = meta->ne1;
+    out.layer_id   = meta->layer_id;
+    out.expert_id  = meta->expert_idx;
+    out.valid      = true;
+    return true;
+}
+
+sycl::event fill_reordered_host(sycl::queue &                    queue,
+                                void *                           dst,
+                                size_t                           dst_size,
+                                const void *                     src,
+                                size_t                           src_size,
+                                const void *                     ctx_void,
+                                const std::vector<sycl::event> & deps) {
+    const auto * ctx = static_cast<const reorder_fill_ctx *>(ctx_void);
+    ggml_sycl_reorder_fill_ctx internal_ctx{};
+    internal_ctx.type          = ctx->type;
+    internal_ctx.ncols         = ctx->ncols;
+    internal_ctx.nrows         = ctx->nrows;
+    internal_ctx.nbytes        = ctx->nbytes;
+    internal_ctx.dst_bytes     = ctx->dst_bytes;
+    internal_ctx.layout        = ctx->layout;
+    internal_ctx.src_is_device = ctx->src_is_device;
+    internal_ctx.device_id     = ctx->device_id;
+    return ggml_sycl_fill_reordered_host(queue, dst, dst_size, src, src_size,
+                                         &internal_ctx, deps);
 }
 
 uint32_t get_expert_frequency(int layer_hash, int expert_id) {
@@ -36762,6 +36827,52 @@ static offload_plan_stats summarize_offload_plan(const ggml_cgraph *         cgr
     return stats;
 }
 
+// Pre-attention expert prefetch: submit DMA hints for ALL MoE layers before
+// any compute begins. The DMA engine processes hints in submission order; by
+// the time the first MoE layer executes (after attention), the predicted
+// experts should already be resident in VRAM.
+static void moe_prefetch_scan(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    g_prefetch_scan_done = false;
+    const int device = sycl_ctx->device;
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) return;
+    auto & predictor  = g_expert_predictors[device];
+    auto & prefetcher = g_expert_prefetchers[device];
+    if (!predictor.is_active() || !prefetcher.is_active()) return;
+    if (predictor.is_prefetch_disabled()) return;
+    if (!g_moe_warmup.warmup_done.load(std::memory_order_acquire)) return;
+    auto & seq_map = g_moe_layer_seq[device];
+    if (seq_map.empty()) return;
+    const int n_gpu_hint = g_moe_multi_gpu_active.load(std::memory_order_acquire)
+                               ? ggml_sycl_info().total_gpu_count : 1;
+    std::unordered_map<int, std::vector<int>> seq_to_hashes;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (!node || node->op != GGML_OP_MUL_MAT_ID) continue;
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->name) continue;
+        const int blk_id = parse_layer_id_from_name(src0->name);
+        if (blk_id < 0) continue;
+        const int hash_layer_id = moe_cache_layer_id(src0->name);
+        auto seq_it = seq_map.find(hash_layer_id);
+        if (seq_it == seq_map.end()) continue;
+        seq_to_hashes[seq_it->second].push_back(hash_layer_id);
+    }
+    for (const auto & [seq_layer_id, hash_ids] : seq_to_hashes) {
+        auto predicted = predictor.predict(seq_layer_id);
+        for (int hash_layer_id : hash_ids) {
+            for (int eid : predicted) {
+                prefetcher.hint(hash_layer_id, eid);
+                for (int d = 1; d < n_gpu_hint && d < GGML_SYCL_MAX_DEVICES; d++) {
+                    if (g_expert_prefetchers[d].is_initialized()) {
+                        g_expert_prefetchers[d].hint(hash_layer_id, eid);
+                    }
+                }
+            }
+        }
+    }
+    g_prefetch_scan_done = !seq_to_hashes.empty();
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     // Re-entrancy guard: Prevent nested calls to compute_impl
     static thread_local bool g_in_compute_impl = false;
@@ -36796,6 +36907,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
     ggml_sycl_moe_layer_ids_cache_new_graph();
+
+    // Pre-attention expert prefetch: submit DMA hints for all MoE layers
+    // BEFORE any compute begins. The DMA engine processes hints during
+    // attention compute, so predicted experts are in VRAM by MoE dispatch.
+    moe_prefetch_scan(sycl_ctx, cgraph);
 
     // Capture per-layer expert bias pointers from ADD_ID nodes following MoE MUL_MAT_ID.
     // Models with expert biases (e.g. GPT-OSS) have ADD_ID(MUL_MAT_ID, bias)
