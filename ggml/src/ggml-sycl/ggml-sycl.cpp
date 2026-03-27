@@ -31385,7 +31385,60 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
+                    // CPU compute for the first sub-tensor: submit ASYNC to TBB pool
+                    // before GPU dispatches so CPU and GPU work overlap.
+                    std::future<void> first_cpu_future;
+                    bool              first_cpu_pending = false;
+                    const size_t      n_cpu_first = g_moe_fusion.cpu_indices.size();
+
+                    // Persistent task storage for async CPU dispatch (must outlive future)
+                    static thread_local std::vector<cpu_expert_task> tl_first_tasks;
+
+                    struct first_out_buf {
+                        float * ptr = nullptr; size_t cap = 0; sycl::queue * q = nullptr;
+                        ~first_out_buf() { if (ptr && q) sycl::free(ptr, *q); }
+                        void ensure(size_t n, sycl::queue & sq) {
+                            if (n <= cap) return;
+                            if (ptr) sycl::free(ptr, sq);
+                            ptr = sycl::malloc_host<float>(n, sq);
+                            cap = n; q = &sq;
+                        }
+                    };
+                    static thread_local first_out_buf tl_first_out;
+                    const int64_t N_first = ne01;
+
+                    if (n_cpu_first > 0) {
+                        tl_first_out.ensure(n_cpu_first * static_cast<size_t>(N_first), *stream);
+                        g_moe_fusion.wait_act_d2h();
+
+                        tl_first_tasks.resize(n_cpu_first);
+                        for (size_t fi = 0; fi < n_cpu_first; fi++) {
+                            const size_t  ci  = g_moe_fusion.cpu_indices[fi];
+                            const int32_t eid = g_moe_fusion.ids_data[ci];
+                            tl_first_tasks[fi].weight_host = static_cast<const char *>(src0->data) +
+                                                     static_cast<size_t>(eid) * nb02;
+                            tl_first_tasks[fi].act_host    = g_moe_fusion.act_host;
+                            tl_first_tasks[fi].output_host = tl_first_out.ptr + fi * static_cast<size_t>(N_first);
+                            tl_first_tasks[fi].type        = g_moe_fusion.type;
+                            tl_first_tasks[fi].K           = g_moe_fusion.K;
+                            tl_first_tasks[fi].N           = static_cast<int>(N_first);
+                        }
+                        // Submit async — GPU dispatches below run in parallel
+                        auto * tasks_ptr = tl_first_tasks.data();
+                        int    n_tasks   = static_cast<int>(n_cpu_first);
+                        auto & cpu_pool  = g_cpu_expert_pools[ctx.device];
+                        if (cpu_pool.is_active()) {
+                            first_cpu_future = cpu_pool.submit_batch(tasks_ptr, n_tasks);
+                        } else {
+                            first_cpu_future = std::async(std::launch::async, [tasks_ptr, n_tasks]() {
+                                ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+                            });
+                        }
+                        first_cpu_pending = true;
+                    }
+
                     // Dispatch secondary GPU experts for this sub-tensor
+                    // (runs in parallel with CPU compute above)
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries(n_gpu_devs);
@@ -31412,6 +31465,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     // Dispatch GPU0-cached experts via MMVQ
+                    // (runs in parallel with CPU compute above)
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
                         const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
                         std::vector<int32_t> g0_eids(n_g0);
@@ -31436,60 +31490,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
-                    // CPU compute for the first sub-tensor (unfused, scatter to dst)
-                    {
-                        const size_t n_cpu = g_moe_fusion.cpu_indices.size();
-                        if (n_cpu > 0) {
-                            constexpr size_t             STACK_G = 16;
-                            cpu_expert_task              stack_gt[STACK_G];
-                            std::vector<cpu_expert_task> heap_gt;
-                            cpu_expert_task *            gt = stack_gt;
-                            if (n_cpu > STACK_G) { heap_gt.resize(n_cpu); gt = heap_gt.data(); }
+                    // Wait for CPU compute and scatter results H2D
+                    if (first_cpu_pending) {
+                        first_cpu_future.get();
 
-                            struct first_out_buf {
-                                float * ptr = nullptr; size_t cap = 0; sycl::queue * q = nullptr;
-                                ~first_out_buf() { if (ptr && q) sycl::free(ptr, *q); }
-                                void ensure(size_t n, sycl::queue & sq) {
-                                    if (n <= cap) return;
-                                    if (ptr) sycl::free(ptr, sq);
-                                    ptr = sycl::malloc_host<float>(n, sq);
-                                    cap = n; q = &sq;
-                                }
-                            };
-                            static thread_local first_out_buf tl_first_out;
-                            const int64_t N_first = ne01;
-                            tl_first_out.ensure(n_cpu * static_cast<size_t>(N_first), *stream);
+                        if (g_moe_profile_enabled) {
+                            g_moe_profile.moe_compute_done(static_cast<int>(n_cpu_first), 0);
+                        }
 
-                            g_moe_fusion.wait_act_d2h();
-
-                            for (size_t fi = 0; fi < n_cpu; fi++) {
-                                const size_t  ci  = g_moe_fusion.cpu_indices[fi];
-                                const int32_t eid = g_moe_fusion.ids_data[ci];
-                                gt[fi].weight_host = static_cast<const char *>(src0->data) +
-                                                     static_cast<size_t>(eid) * nb02;
-                                gt[fi].act_host    = g_moe_fusion.act_host;
-                                gt[fi].output_host = tl_first_out.ptr + fi * static_cast<size_t>(N_first);
-                                gt[fi].type        = g_moe_fusion.type;
-                                gt[fi].K           = g_moe_fusion.K;
-                                gt[fi].N           = static_cast<int>(N_first);
-                            }
-                            ggml_sycl_cpu_expert_mul_mat_batched(gt, static_cast<int>(n_cpu));
-
-                            if (g_moe_profile_enabled) {
-                                g_moe_profile.moe_compute_done(static_cast<int>(n_cpu), 0);
-                            }
-
-                            // Scatter results H2D (deferred)
-                            char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
-                            for (size_t fi = 0; fi < n_cpu; fi++) {
-                                const size_t  ci   = g_moe_fusion.cpu_indices[fi];
-                                const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
-                                const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
-                                char * slot = dst_d + id * nb1 + iid1 * nb2;
-                                tl_pending_scatter.push_back(stream->memcpy(
-                                    slot, tl_first_out.ptr + fi * static_cast<size_t>(N_first),
-                                    static_cast<size_t>(N_first) * sizeof(float)));
-                            }
+                        char * dst_d = static_cast<char *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+                        for (size_t fi = 0; fi < n_cpu_first; fi++) {
+                            const size_t  ci   = g_moe_fusion.cpu_indices[fi];
+                            const int64_t iid1 = static_cast<int64_t>(ci / static_cast<size_t>(n_ids_f));
+                            const int64_t id   = static_cast<int64_t>(ci % static_cast<size_t>(n_ids_f));
+                            char * slot = dst_d + id * nb1 + iid1 * nb2;
+                            tl_pending_scatter.push_back(stream->memcpy(
+                                slot, tl_first_out.ptr + fi * static_cast<size_t>(N_first),
+                                static_cast<size_t>(N_first) * sizeof(float)));
                         }
                     }
 
@@ -31583,7 +31600,24 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
+                    // Submit fused CPU compute ASYNC before GPU dispatches
+                    // so CPU and GPU work overlap.
+                    std::future<void> fused_cpu_future;
+                    bool              fused_cpu_pending = false;
+                    static thread_local std::vector<cpu_expert_fused_task> tl_fused_tasks;
+                    if (n_cpu_f > 0) {
+                        // Copy tasks to persistent storage (stack_ft may go out of scope)
+                        tl_fused_tasks.assign(ft, ft + n_cpu_f);
+                        auto * fused_ptr = tl_fused_tasks.data();
+                        int    n_fused   = static_cast<int>(n_cpu_f);
+                        fused_cpu_future = std::async(std::launch::async, [fused_ptr, n_fused]() {
+                            ggml_sycl_cpu_expert_fused_gate_up_silu_batched(fused_ptr, n_fused);
+                        });
+                        fused_cpu_pending = true;
+                    }
+
                     // Dispatch secondary GPU experts -- re-resolve ptrs for this sub-tensor
+                    // (runs in parallel with fused CPU compute above)
                     if (!g_moe_fusion.sec_indices.empty()) {
                         const int n_gpu_devs = ggml_sycl_info().total_gpu_count;
                         std::vector<std::vector<expert_dispatch_entry>> sec_entries(n_gpu_devs);
@@ -31613,6 +31647,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     // Dispatch GPU0-cached experts via MMVQ
+                    // (runs in parallel with fused CPU compute above)
                     if (!g_moe_fusion.gpu0_cached_indices.empty()) {
                         const size_t n_g0 = g_moe_fusion.gpu0_cached_indices.size();
                         std::vector<int32_t> g0_eids(n_g0);
@@ -31637,9 +31672,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                     }
 
-                    // CPU fused gate+up+SiLU -- runs in parallel with GPU work above
-                    if (n_cpu_f > 0) {
-                        ggml_sycl_cpu_expert_fused_gate_up_silu_batched(ft, static_cast<int>(n_cpu_f));
+                    // Wait for fused CPU compute before setting phase to FUSED_READY
+                    // (DOWN projection reads fused_output)
+                    if (fused_cpu_pending) {
+                        fused_cpu_future.get();
                     }
 
                     if (g_moe_profile_enabled) {
