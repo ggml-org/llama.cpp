@@ -33,9 +33,9 @@ struct mtmd_audio_cache {
 
     mtmd_audio_mel_filters filters;
 
-    void fill_sin_cos_table(int n);
+    void fill_sin_cos_table(uint32_t n);
 
-    void fill_hann_window(int length, bool periodic);
+    void fill_hann_window(uint32_t length, bool periodic);
 
     // Build mel filterbank matrix [n_mel × n_fft_bins] at runtime.
     // n_fft_bins must be (N_fft / 2 + 1). Example: if N_fft=512 -> n_fft_bins=257.

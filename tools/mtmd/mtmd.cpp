@@ -641,6 +641,11 @@ struct mtmd_tokenizer {
                 add_text(ctx->img_beg, true); // add image begin token
             }
 
+            // sanity check
+            GGML_ASSERT(bitmap->nx > 0 && bitmap->ny > 0);
+            GGML_ASSERT(bitmap->data.size() == (size_t)bitmap->nx * bitmap->ny * 3);
+            GGML_ASSERT(ctx->image_preproc != nullptr);
+
             // convert mtmd_bitmap to clip_image_u8
             clip_image_u8_ptr img_u8(clip_image_u8_init());
             img_u8->nx = bitmap->nx;
@@ -649,7 +654,6 @@ struct mtmd_tokenizer {
             std::memcpy(img_u8->buf.data(), bitmap->data.data(), img_u8->nx * img_u8->ny * 3);
 
             // preprocess image
-            GGML_ASSERT(ctx->image_preproc != nullptr);
             clip_image_f32_batch batch_f32;
             bool ok = ctx->image_preproc->preprocess(*img_u8, batch_f32);
             if (!ok) {
@@ -772,6 +776,11 @@ struct mtmd_tokenizer {
             if (!ctx->aud_beg.empty()) {
                 add_text(ctx->aud_beg, true); // add audio begin token
             }
+
+            // sanity check
+            GGML_ASSERT(ctx->audio_preproc != nullptr);
+            GGML_ASSERT(bitmap->data.size() > sizeof(float));
+            GGML_ASSERT(bitmap->data.size() % sizeof(float) == 0);
 
             // preprocess audio
             std::vector<mtmd_audio_mel> mel_spec_chunks;

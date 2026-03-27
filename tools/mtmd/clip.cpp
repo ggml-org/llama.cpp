@@ -1377,6 +1377,16 @@ struct clip_model_loader {
 
             // sanity check
             {
+                if (hparams.image_size < 0) {
+                    // note: some models having hparams.image_size == 0, which means the image size is dynamic
+                    throw std::runtime_error(string_format("%s: image_size (%d) cannot be negative\n", __func__, hparams.image_size));
+                }
+                if (hparams.patch_size <= 0) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0\n", __func__, hparams.patch_size));
+                }
+                if (hparams.n_embd <= 0) {
+                    throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
+                }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
                 }

@@ -99,6 +99,8 @@ struct img_tool {
     }
 
     static void crop(const clip_image_u8 & image, clip_image_u8 & dst, int x, int y, int w, int h) {
+        GGML_ASSERT(x >= 0 && y >= 0 && w > 0 && h > 0);
+        GGML_ASSERT(x + w <= image.nx && y + h <= image.ny);
         dst.nx = w;
         dst.ny = h;
         dst.buf.resize(3 * w * h);
@@ -196,6 +198,7 @@ struct img_tool {
 private:
     // Bilinear resize function
     static void resize_bilinear(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
+        GGML_ASSERT(src.nx >= 2 && src.ny >= 2);
         dst.nx = target_width;
         dst.ny = target_height;
         dst.buf.resize(3 * target_width * target_height);
@@ -207,8 +210,8 @@ private:
             for (int x = 0; x < target_width; x++) {
                 float px = x_ratio * x;
                 float py = y_ratio * y;
-                int x_floor = static_cast<int>(px);
-                int y_floor = static_cast<int>(py);
+                int x_floor = std::min(static_cast<int>(px), src.nx - 2);
+                int y_floor = std::min(static_cast<int>(py), src.ny - 2);
                 float x_lerp = px - x_floor;
                 float y_lerp = py - y_floor;
 
@@ -347,6 +350,7 @@ private:
         // Returns: kernel size (ksize) - number of input pixels that contribute to each output pixel
         auto precompute_weights = [&](int inSize, int outSize,
                                      std::vector<int> & bounds, std::vector<int32_t> & weights) -> int {
+            GGML_ASSERT(inSize > 0 && outSize > 0);
             double support, scale, filterscale;
             double center, ww, ss;
             int xx, x, ksize, xmin, xmax, xcnt;
