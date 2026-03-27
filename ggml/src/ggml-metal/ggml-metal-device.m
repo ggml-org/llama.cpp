@@ -227,10 +227,13 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 // TurboQuant: auto-select dequant path based on hardware
                 // M1/M2/M3/M4 (no tensor API): 4-mag LUT (+38-45% decode at long ctx)
                 // M5+ (has tensor API): 8-entry full LUT (best decode speed)
-                if (!ggml_metal_device_get_props(dev)->has_tensor) {
-                    [prep setObject:@"1" forKey:@"TURBO_USE_4MAG"];
-                    [prep setObject:@"1" forKey:@"TURBO_FUSED_BLOCK_DOT_OFF"];
-                    GGML_LOG_INFO("%s: turbo3 using fused block dot (pre-M5)\n", __func__);
+                {
+                    const char * force_4mag = getenv("TURBO_FORCE_4MAG");
+                    if (!ggml_metal_device_get_props(dev)->has_tensor || (force_4mag && force_4mag[0] == '1')) {
+                        [prep setObject:@"1" forKey:@"TURBO_USE_4MAG"];
+                        GGML_LOG_INFO("%s: turbo3 using 4-mag LUT%s\n", __func__,
+                            force_4mag ? " (forced)" : " (pre-M5 hardware)");
+                    }
                 }
 
                 // TurboQuant profiling: set TURBO_PROFILE_MODE env var (0-4)
