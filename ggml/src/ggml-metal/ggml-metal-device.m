@@ -229,11 +229,18 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 // M5+ (has tensor API): 8-entry full LUT (best decode speed)
                 {
                     const char * force_4mag = getenv("TURBO_FORCE_4MAG");
+                    // Always compile with 4-mag support. The dispatch code selects
+                    // 4-mag vs 8-LUT based on context depth at runtime.
+                    // Pre-M5: always 4-mag (constant cache too slow)
+                    // M5+: 4-mag for mid-context (8K-20K), 8-LUT otherwise
                     if (!ggml_metal_device_get_props(dev)->has_tensor || (force_4mag && force_4mag[0] == '1')) {
                         [prep setObject:@"1" forKey:@"TURBO_USE_4MAG"];
                         GGML_LOG_INFO("%s: turbo3 using 4-mag LUT%s\n", __func__,
                             force_4mag ? " (forced)" : " (pre-M5 hardware)");
                     }
+                    // TODO: context-adaptive dispatch — compile both 4-mag and 8-LUT
+                    // FA kernel instantiations, select based on ne11 (KV cache size)
+                    // at dispatch time in ggml_metal_op_flash_attn_ext()
                 }
 
                 // TurboQuant profiling: set TURBO_PROFILE_MODE env var (0-4)
