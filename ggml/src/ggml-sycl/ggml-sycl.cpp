@@ -1643,7 +1643,317 @@ static void moe_prestage_popular_experts() {
         }
     }
     ggml_sycl_watchdog_heartbeat();
+
+    // --- Initial Zipf-biased pinning: pin the top 25% of experts per layer ---
+    // Experts staged during Phase 1 + Phase 2 are now in cache. Pin the hottest
+    // ones so they survive LRU eviction under memory pressure.
+    {
+        const int n_experts_total = g_moe_warmup.n_experts;
+        const int hot_per_layer   = std::max(1, n_experts_total / 4);
+        int       pinned_init     = 0;
+
+        for (const auto * meta_ptr : priority_list) {
+            if (meta_ptr->block_num < 0) continue;
+            int rank_raw = ggml_sycl::get_expert_popularity_rank(meta_ptr->layer_id, meta_ptr->expert_idx);
+            int rank = (rank_raw >= 0) ? rank_raw : INT_MAX;
+            if (rank >= hot_per_layer) continue;  // only pin top 25%
+
+            // Check all actual GPUs for this expert and pin where found
+            const int n_gpus_pin = ggml_sycl_info().total_gpu_count;
+            for (int d = 0; d < n_gpus_pin && d < GGML_SYCL_MAX_DEVICES; d++) {
+                if (!is_expert_resident(meta_ptr->block_num, meta_ptr->expert_idx, d)) continue;
+                ggml_sycl::unified_cache * pin_cache = ggml_sycl::get_unified_cache_for_device(d);
+                if (!pin_cache) continue;
+
+                std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
+                auto grp_it = g_expert_groups.find(expert_group_key(meta_ptr->block_num, meta_ptr->expert_idx));
+                if (grp_it == g_expert_groups.end()) continue;
+                const auto & grp = grp_it->second;
+
+                static const ggml_layout_mode pin_layouts[] = {
+                    GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED, GGML_LAYOUT_AOS
+                };
+                auto pin_key = [&](const ggml_sycl_cache_id & key) {
+                    if (!key.valid) return;
+                    for (auto layout : pin_layouts) {
+                        if (pin_cache->lookup(key, layout)) {
+                            pin_cache->pin(key, layout);
+                            break;
+                        }
+                    }
+                };
+                if (grp.has_gate) pin_key(grp.gate_key);
+                if (grp.has_up)   pin_key(grp.up_key);
+                if (grp.has_down) pin_key(grp.down_key);
+                pinned_init++;
+            }
+        }
+
+        if (pinned_init > 0) {
+            GGML_LOG_INFO("[MOE-PRESTAGE] Zipf pinning: %d expert groups pinned (top %d per layer)\n",
+                          pinned_init, hot_per_layer);
+        }
+    }
+
     g_prestage_completed.store(true, std::memory_order_release);
+}
+
+// ---------------------------------------------------------------------------
+// Incremental re-staging: after periodic re-rank discovers new hot experts,
+// stage them to available GPUs (GPU0 + secondary) and pin the top-N as
+// non-evictable.  Unlike moe_prestage_popular_experts() which does a bulk
+// initial load, this is lightweight: only stages experts that are NOT already
+// resident and pins the ones that ARE resident (freshly popular ones).
+//
+// Zipf-biased pinning: MoE routing follows a Zipf-like distribution — a small
+// fraction of experts handle most tokens.  We pin the top hot_fraction of
+// experts (by popularity rank) so they survive LRU eviction.  Cold experts
+// that fell off are unpinned and become evictable.
+// ---------------------------------------------------------------------------
+static void moe_restage_incremental() {
+    if (!g_prestage_completed.load(std::memory_order_acquire)) return;  // initial prestage not done yet
+    if (!ggml_sycl::is_expert_popularity_initialized()) return;
+
+    // Snapshot metadata under lock, then release before doing any staging work.
+    // g_moe_expert_meta is populated once during init and never modified, but
+    // we still take the lock for correctness.
+    struct ranked_expert {
+        int    block_num;
+        int    expert_idx;
+        int    layer_id;     // hash-based layer_id (first tensor_role's)
+        int    pop_rank;
+    };
+    // Per-expert staging items: (layer_id, expert_idx) for each tensor_role
+    struct stage_item { int layer_id; int expert_idx; };
+
+    std::unordered_map<int64_t, ranked_expert> expert_map;
+    // Map from expert group key -> vector of (layer_id, expert_idx) for all 3 roles
+    std::unordered_map<int64_t, std::vector<stage_item>> expert_stage_items;
+    size_t expert_bytes = 0;
+    ggml_type expert_type = GGML_TYPE_F32;
+    int64_t expert_ne0 = 0, expert_ne1 = 0;
+    int n_layers = 0;
+
+    {
+        std::shared_lock<std::shared_mutex> meta_lock(g_moe_expert_meta_mutex);
+        if (g_moe_expert_meta.empty()) return;
+
+        std::unordered_set<int> layer_ids;
+        for (const auto & meta : g_moe_expert_meta) {
+            layer_ids.insert(meta.layer_id);
+        }
+        n_layers = static_cast<int>(layer_ids.size());
+        if (n_layers == 0) return;
+
+        expert_bytes = g_moe_expert_meta[0].bytes;
+        expert_type  = g_moe_expert_meta[0].type;
+        expert_ne0   = g_moe_expert_meta[0].ne0;
+        expert_ne1   = g_moe_expert_meta[0].ne1;
+        if (expert_bytes == 0) return;
+
+        for (const auto & meta : g_moe_expert_meta) {
+            if (meta.block_num < 0) continue;
+            const int64_t gkey = expert_group_key(meta.block_num, meta.expert_idx);
+
+            // Build unique expert map (one entry per expert group)
+            if (!expert_map.count(gkey)) {
+                int rank_raw = ggml_sycl::get_expert_popularity_rank(meta.layer_id, meta.expert_idx);
+                int rank = (rank_raw >= 0) ? rank_raw : INT_MAX;
+                expert_map[gkey] = { meta.block_num, meta.expert_idx, meta.layer_id, rank };
+            }
+
+            // Collect all tensor roles for staging
+            expert_stage_items[gkey].push_back({ meta.layer_id, meta.expert_idx });
+        }
+    }
+    // meta_lock released here — safe to call moe_expert_ensure_soa_cached
+
+    std::vector<const ranked_expert *> sorted;
+    sorted.reserve(expert_map.size());
+    for (const auto & [gkey, re] : expert_map) {
+        sorted.push_back(&re);
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const ranked_expert * a, const ranked_expert * b) {
+                  return a->pop_rank < b->pop_rank;
+              });
+
+    // Collect all available devices (GPU0 + secondaries)
+    struct device_budget {
+        int                        dev;
+        size_t                     budget_bytes;
+        ggml_sycl::unified_cache * cache;
+    };
+    std::vector<device_budget> devices;
+
+    // GPU0
+    {
+        ggml_sycl::unified_cache * cache0 = ggml_sycl::get_unified_cache_for_device(0);
+        if (cache0) {
+            size_t avail = ggml_sycl::unified_cache_available_for_compute(0);
+            devices.push_back({ 0, avail, cache0 });
+        }
+    }
+    // Secondary GPUs (limit to actual GPU count, not GGML_SYCL_MAX_DEVICES)
+    const int n_gpu_devs = ggml_sycl_info().total_gpu_count;
+    for (int dev = 1; dev < n_gpu_devs && dev < GGML_SYCL_MAX_DEVICES; dev++) {
+        if (!g_expert_prefetchers[dev].is_initialized()) continue;
+        ggml_sycl::unified_cache * sec_cache = ggml_sycl::get_unified_cache_for_device(dev);
+        if (!sec_cache) continue;
+        size_t sec_managed = ggml_sycl::unified_cache_total_managed(dev);
+        if (sec_managed == 0) continue;
+        size_t sec_free = 0, sec_total = 0;
+        try {
+            ggml_backend_sycl_get_device_memory(dev, &sec_free, &sec_total);
+        } catch (...) {
+            continue;
+        }
+        size_t reserve = std::max(size_t(256) << 20, sec_total / 10);
+        size_t budget  = (sec_managed > reserve) ? sec_managed - reserve : 0;
+        if (budget > 0) {
+            devices.push_back({ dev, budget, sec_cache });
+        }
+    }
+
+    if (devices.empty()) return;
+
+    // Determine how many experts to pin (Zipf: top 25% of experts per layer
+    // handle ~75% of routing traffic based on empirical MoE distributions).
+    const int n_experts_per_layer = g_moe_warmup.n_experts;
+    const int hot_per_layer = std::max(1, n_experts_per_layer / 4);  // top 25%
+
+    // Unpin all experts on all devices before applying new Zipf-biased pins.
+    // This ensures cold experts that fell out of the top-N become evictable.
+    for (const auto & db : devices) {
+        db.cache->unpin_experts();
+    }
+
+    // Pin the hot ones. Also stage any hot experts that aren't resident yet.
+    int pinned_count   = 0;
+    int staged_count   = 0;
+    int already_cached = 0;
+
+    for (const auto * re : sorted) {
+        const bool is_hot = (re->pop_rank < hot_per_layer);
+
+        // Check residency across all devices
+        bool resident_anywhere = false;
+        int  resident_dev      = -1;
+        for (const auto & db : devices) {
+            if (is_expert_resident(re->block_num, re->expert_idx, db.dev)) {
+                resident_anywhere = true;
+                resident_dev      = db.dev;
+                break;
+            }
+        }
+
+        if (is_hot && resident_anywhere) {
+            // Pin on the device where it's resident
+            ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(resident_dev);
+            if (cache) {
+                std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
+                auto grp_it = g_expert_groups.find(expert_group_key(re->block_num, re->expert_idx));
+                if (grp_it != g_expert_groups.end()) {
+                    const auto & grp = grp_it->second;
+                    static const ggml_layout_mode layouts[] = {
+                        GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED, GGML_LAYOUT_AOS
+                    };
+                    auto pin_key = [&](const ggml_sycl_cache_id & key) {
+                        if (!key.valid) return;
+                        for (auto layout : layouts) {
+                            if (cache->lookup(key, layout)) {
+                                cache->pin(key, layout);
+                                break;
+                            }
+                        }
+                    };
+                    if (grp.has_gate) pin_key(grp.gate_key);
+                    if (grp.has_up)   pin_key(grp.up_key);
+                    if (grp.has_down) pin_key(grp.down_key);
+                    pinned_count++;
+                }
+            }
+            already_cached++;
+            continue;
+        }
+
+        if (is_hot && !resident_anywhere) {
+            // Stage to the device with the most available budget.
+            // Prefer secondary GPUs (they have more free VRAM).
+            int    best_dev = -1;
+            size_t best_avail = 0;
+            for (size_t di = 0; di < devices.size(); di++) {
+                if (devices[di].budget_bytes > best_avail) {
+                    best_avail = devices[di].budget_bytes;
+                    best_dev   = static_cast<int>(di);
+                }
+            }
+            if (best_dev < 0) continue;
+
+            auto & db = devices[best_dev];
+            const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
+                expert_type, expert_ne0, expert_ne1, GGML_LAYOUT_SOA, db.dev);
+            const size_t dst_bytes = (soa_bytes > 0) ? soa_bytes : expert_bytes;
+
+            if (db.budget_bytes < dst_bytes) continue;
+
+            // Stage all 3 tensor roles for this expert using pre-collected items
+            const int64_t gkey = expert_group_key(re->block_num, re->expert_idx);
+            auto items_it = expert_stage_items.find(gkey);
+            bool any_staged = false;
+            if (items_it != expert_stage_items.end()) {
+                for (const auto & item : items_it->second) {
+                    void * ptr = ggml_sycl::moe_expert_ensure_soa_cached(
+                        item.layer_id, item.expert_idx, db.dev);
+                    if (ptr) any_staged = true;
+                }
+            }
+
+            if (any_staged) {
+                staged_count++;
+                db.budget_bytes -= std::min(dst_bytes * 3, db.budget_bytes);  // 3 tensors per expert
+
+                // Pin newly staged expert
+                ggml_sycl::unified_cache * cache = db.cache;
+                std::shared_lock<std::shared_mutex> grp_lock(g_expert_groups_mutex);
+                auto grp_it = g_expert_groups.find(expert_group_key(re->block_num, re->expert_idx));
+                if (grp_it != g_expert_groups.end()) {
+                    const auto & grp = grp_it->second;
+                    static const ggml_layout_mode layouts[] = {
+                        GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED, GGML_LAYOUT_AOS
+                    };
+                    auto pin_key = [&](const ggml_sycl_cache_id & key) {
+                        if (!key.valid) return;
+                        for (auto layout : layouts) {
+                            if (cache->lookup(key, layout)) {
+                                cache->pin(key, layout);
+                                break;
+                            }
+                        }
+                    };
+                    if (grp.has_gate) pin_key(grp.gate_key);
+                    if (grp.has_up)   pin_key(grp.up_key);
+                    if (grp.has_down) pin_key(grp.down_key);
+                    pinned_count++;
+                }
+            }
+        }
+    }
+
+    // Finalize any pending fills on all devices
+    for (const auto & db : devices) {
+        try { db.cache->finalize_pending_fills(); } catch (...) {}
+    }
+
+    if (staged_count > 0 || pinned_count > 0) {
+        GGML_LOG_INFO("[MOE-RESTAGE] Incremental: %d experts staged, %d pinned, "
+                      "%d already cached (hot_per_layer=%d)\n",
+                      staged_count, pinned_count, already_cached, hot_per_layer);
+        for (const auto & db : devices) {
+            GGML_LOG_INFO("[MOE-RESTAGE] GPU%d budget remaining=%.1f MB\n",
+                          db.dev, db.budget_bytes / (1024.0 * 1024.0));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1802,8 +2112,8 @@ uint32_t get_expert_frequency(int layer_hash, int expert_id) {
 // ---------------------------------------------------------------------------
 // Periodic re-ranking: re-evaluate expert popularity from epoch counters and
 // update placement table ranks.  Called every rerank_interval tokens after the
-// initial warmup.  Only updates ranks — triggers re-staging of newly-popular
-// experts via moe_prestage_popular_experts() when ranks change.
+// initial warmup.  Triggers incremental re-staging of newly-popular experts
+// via moe_restage_incremental() when ranks change (Zipf-biased pinning).
 // ---------------------------------------------------------------------------
 static void moe_periodic_rerank() {
     if (!ggml_sycl::is_expert_popularity_initialized()) return;
@@ -1856,10 +2166,12 @@ static void moe_periodic_rerank() {
                     "VRAM available=%.1f MB\n",
                     ranks_changed, vram_avail / (1024.0 * 1024.0));
 
-    // If significant rank changes occurred, trigger pre-staging of newly
-    // popular experts that may not yet be in VRAM.
+    // If significant rank changes occurred, incrementally stage newly-popular
+    // experts and pin the hottest ones to prevent LRU eviction.
+    // Uses moe_restage_incremental() instead of the full moe_prestage_popular_experts()
+    // which is gated by g_prestage_completed and only runs once.
     if (ranks_changed > 0) {
-        moe_prestage_popular_experts();
+        moe_restage_incremental();
     }
 }
 
