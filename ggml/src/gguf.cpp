@@ -323,6 +323,9 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     bool ok = true;
 
     // file magic
+    // Accepts both "GGUF" (little-endian) and "FUGG" (big-endian, reversed magic).
+    // Big-endian GGUF files use reversed magic so endianness is self-describing (issue #3957).
+    bool file_is_be = false;
     {
         std::vector<char> magic;
         ok = ok && gr.read(magic, 4);
@@ -333,18 +336,39 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
             return nullptr;
         }
 
+        bool magic_ok = true;
         for (uint32_t i = 0; i < magic.size(); i++) {
             if (magic[i] != GGUF_MAGIC[i]) {
+                magic_ok = false;
+                break;
+            }
+        }
+
+        if (!magic_ok) {
+            // Check for big-endian magic "FUGG" (reversed "GGUF")
+            bool magic_be = true;
+            for (uint32_t i = 0; i < magic.size(); i++) {
+                if (magic[i] != GGUF_MAGIC_BE[i]) {
+                    magic_be = false;
+                    break;
+                }
+            }
+
+            if (magic_be) {
+                file_is_be = true;
+            } else {
                 char c0 = isprint(magic[0]) ? magic[0] : '?';
                 char c1 = isprint(magic[1]) ? magic[1] : '?';
                 char c2 = isprint(magic[2]) ? magic[2] : '?';
                 char c3 = isprint(magic[3]) ? magic[3] : '?';
-                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF'\n", __func__, c0, c1, c2, c3);
+                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF' or 'FUGG'\n", __func__, c0, c1, c2, c3);
                 gguf_free(ctx);
                 return nullptr;
             }
         }
     }
+
+    GGML_UNUSED(file_is_be); // TODO: use file_is_be to byte-swap subsequent fields
 
     // header
     int64_t n_kv      = 0;
@@ -1360,10 +1384,18 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
 
     // write header
+    // On big-endian hosts, write reversed magic "FUGG" so endianness is self-describing (issue #3957).
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    gw.write(GGUF_MAGIC_BE[0]);
+    gw.write(GGUF_MAGIC_BE[1]);
+    gw.write(GGUF_MAGIC_BE[2]);
+    gw.write(GGUF_MAGIC_BE[3]);
+#else
     gw.write(GGUF_MAGIC[0]);
     gw.write(GGUF_MAGIC[1]);
     gw.write(GGUF_MAGIC[2]);
     gw.write(GGUF_MAGIC[3]);
+#endif
     gw.write(ctx->version);
     gw.write(n_tensors);
     gw.write(n_kv);

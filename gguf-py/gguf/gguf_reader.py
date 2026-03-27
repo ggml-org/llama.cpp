@@ -25,6 +25,7 @@ from gguf.constants import (
     GGML_QUANT_SIZES,
     GGUF_DEFAULT_ALIGNMENT,
     GGUF_MAGIC,
+    GGUF_MAGIC_BE,
     GGUF_VERSION,
     GGMLQuantizationType,
     GGUFValueType,
@@ -133,8 +134,14 @@ class GGUFReader:
         self.data = np.memmap(path, mode = mode)
         offs = 0
 
-        # Check for GGUF magic
-        if self._get(offs, np.uint32, override_order = '<')[0] != GGUF_MAGIC:
+        # Check for GGUF magic — accepts both "GGUF" (LE) and "FUGG" (BE, reversed magic).
+        # Big-endian GGUF files use reversed magic so endianness is self-describing (issue #3957).
+        magic = self._get(offs, np.uint32, override_order = '<')[0]
+        if magic == GGUF_MAGIC:
+            pass  # standard little-endian file
+        elif magic == GGUF_MAGIC_BE:
+            self.byte_order = 'S'  # mark as byte-swapped; will be resolved below
+        else:
             raise ValueError('GGUF magic invalid')
         offs += 4
 

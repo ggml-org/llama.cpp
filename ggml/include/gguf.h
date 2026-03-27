@@ -38,7 +38,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define GGUF_MAGIC   "GGUF"
+#define GGUF_MAGIC    "GGUF"
+#define GGUF_MAGIC_BE "FUGG"  // Reversed magic for big-endian GGUF files (issue #3957)
 #define GGUF_VERSION 3
 
 #define GGUF_KEY_GENERAL_ALIGNMENT "general.alignment"

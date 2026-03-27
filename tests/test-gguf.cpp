@@ -16,6 +16,7 @@ constexpr int offset_has_data    = 3000;
 
 enum handcrafted_file_type {
     HANDCRAFTED_HEADER_BAD_MAGIC           =  10,
+    HANDCRAFTED_HEADER_BE_MAGIC            =  11,  // Big-endian magic "FUGG" (issue #3957)
     HANDCRAFTED_HEADER_BAD_VERSION_0       =  15,
     HANDCRAFTED_HEADER_BAD_VERSION_1       =  20,
     HANDCRAFTED_HEADER_BAD_VERSION_FUTURE  =  30,
@@ -52,6 +53,7 @@ enum handcrafted_file_type {
 static std::string handcrafted_file_type_name(const enum handcrafted_file_type hft) {
     switch (hft) {
         case HANDCRAFTED_HEADER_BAD_MAGIC:           return "HEADER_BAD_MAGIC";
+        case HANDCRAFTED_HEADER_BE_MAGIC:            return "HEADER_BE_MAGIC";
         case HANDCRAFTED_HEADER_BAD_VERSION_0:       return "HEADER_BAD_VERSION_0";
         case HANDCRAFTED_HEADER_BAD_VERSION_1:       return "HEADER_BAD_VERSION_1";
         case HANDCRAFTED_HEADER_BAD_VERSION_FUTURE:  return "HEADER_BAD_VERSION_FUTURE";
@@ -88,6 +90,10 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
 
 static bool expect_context_not_null(const enum handcrafted_file_type hft) {
     if (hft < offset_has_kv) {
+        // BE magic "FUGG" is valid — file should load (issue #3957).
+        if (hft == HANDCRAFTED_HEADER_BE_MAGIC) {
+            return true;
+        }
         return hft >= HANDCRAFTED_HEADER_EMPTY;
     }
     if (hft < offset_has_tensors) {
@@ -167,8 +173,11 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     uint32_t alignment = GGUF_DEFAULT_ALIGNMENT;
 
     if (hft == HANDCRAFTED_HEADER_BAD_MAGIC) {
-        const char bad_magic[4] = {'F', 'U', 'G', 'G'};
+        const char bad_magic[4] = {'B', 'A', 'D', '!'};
         helper_write(file, bad_magic, sizeof(bad_magic));
+    } else if (hft == HANDCRAFTED_HEADER_BE_MAGIC) {
+        // Big-endian magic "FUGG" (reversed "GGUF") — valid per issue #3957.
+        helper_write(file, GGUF_MAGIC_BE, 4);
     } else {
         helper_write(file, GGUF_MAGIC, 4);
     }
@@ -665,6 +674,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
 
     const std::vector<handcrafted_file_type> hfts = {
         HANDCRAFTED_HEADER_BAD_MAGIC,
+        HANDCRAFTED_HEADER_BE_MAGIC,
         HANDCRAFTED_HEADER_BAD_VERSION_0,
         HANDCRAFTED_HEADER_BAD_VERSION_1,
         HANDCRAFTED_HEADER_BAD_VERSION_FUTURE,
