@@ -2953,9 +2953,11 @@ llama_context * llama_init_from_model(
         }
     }
 
-    // TQ3_0 K cache has no flash attention kernel support - force off
-    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && params.type_k == GGML_TYPE_TQ3_0) {
-        LLAMA_LOG_WARN("%s: flash_attn is not supported with TQ3_0 K cache - forcing off\n", __func__);
+    // TQ3_0 FlashAttention is currently only wired for the vector K=tq3_0, V=f16 path.
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED &&
+        params.type_k == GGML_TYPE_TQ3_0 &&
+        params.type_v != GGML_TYPE_F16) {
+        LLAMA_LOG_WARN("%s: flash_attn with TQ3_0 K cache currently requires F16 V cache - forcing off\n", __func__);
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     }
 

@@ -288,6 +288,79 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q8_0(
     return sum;
 }
 
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tq3_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    GGML_UNUSED(Q_v);
+    static_assert(nthreads == QK_TQ3_0 / int(sizeof(int)), "TQ3_0 FlashAttention expects 8-lane KQ groups");
+
+    constexpr float centroids[4] = { -1.510f, -0.4528f, 0.4528f, 1.510f };
+    constexpr float inv_wht_norm = 1.0f / 32.0f;
+    constexpr int8_t signs[QK_TQ3_0] = {
+        +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+        +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+    };
+
+    const int subgroup_lane = nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads;
+    const auto * K_tq3_0 = (const block_tq3_0 *) K_c;
+    const float2 * Q_ds = (const float2 *) Q_ds_v;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int ib = 0; ib < D / QK_TQ3_0; ++ib) {
+        const int q_i32 = Q_q8[ib];
+        const int8_t * q_q8 = (const int8_t *) &q_i32;
+
+        float q_rot[4];
+#pragma unroll
+        for (int l = 0; l < 4; ++l) {
+            q_rot[l] = float(q_q8[l]) * signs[subgroup_lane * 4 + l];
+        }
+
+        // Two butterfly stages stay inside each 4-value lane chunk.
+        float a0 = q_rot[0], a1 = q_rot[1], a2 = q_rot[2], a3 = q_rot[3];
+        q_rot[0] = a0 + a1;
+        q_rot[1] = a0 - a1;
+        q_rot[2] = a2 + a3;
+        q_rot[3] = a2 - a3;
+
+        a0 = q_rot[0], a1 = q_rot[1], a2 = q_rot[2], a3 = q_rot[3];
+        q_rot[0] = a0 + a2;
+        q_rot[1] = a1 + a3;
+        q_rot[2] = a0 - a2;
+        q_rot[3] = a1 - a3;
+
+        // Remaining three stages operate across the 8-lane subgroup.
+        const unsigned mask = 0xFFFFFFFFu;
+#pragma unroll
+        for (int xor_lane = 1; xor_lane < nthreads; xor_lane <<= 1) {
+            const bool upper_half = (subgroup_lane & xor_lane) != 0;
+#pragma unroll
+            for (int l = 0; l < 4; ++l) {
+                const float other = __shfl_xor_sync(mask, q_rot[l], xor_lane, nthreads);
+                q_rot[l] = upper_half ? other - q_rot[l] : q_rot[l] + other;
+            }
+        }
+
+        const float q_scale = Q_ds[ib].x;
+        const float k_scale = __half2float(K_tq3_0[ib].gamma);
+        const uint8_t codes = K_tq3_0[ib].qs[subgroup_lane];
+
+        float partial = 0.0f;
+#pragma unroll
+        for (int l = 0; l < 4; ++l) {
+            const int idx = (codes >> (2 * l)) & 0x3;
+            partial += q_rot[l] * centroids[idx];
+        }
+
+        sum += partial * q_scale * k_scale * inv_wht_norm;
+    }
+
+    return sum;
+}
+
 template <typename Tds, int ni>
 static __device__ __forceinline__ void quantize_q8_1_to_shared(
     const float * __restrict__ x, const float scale, int * __restrict__ yq32, void * __restrict__ yds) {
@@ -593,6 +666,8 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TQ3_0) {
+        return vec_dot_fattn_vec_KQ_tq3_0<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
