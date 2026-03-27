@@ -19,8 +19,15 @@
 
 #define TURBO_SEED_ROTATION 42
 #define TURBO_SEED_QJL      1042
-#define TURBO_D             128  /* rotation group size = head_dim (independent of block size) */
 #define TURBO_QJL_CONST     1.2533141373155003f  /* sqrt(pi/2) */
+
+/* Rotation group size = QK_TURBO3_GROUP (from ggml-common.h), NOT a separate constant.
+ * turbo4 block size (QK_TURBO4) happens to equal the rotation group size today,
+ * but they are semantically different. Assert they match so turbo4 code can safely
+ * use QK_TURBO4 for both array sizing and loop bounds. */
+static_assert(QK_TURBO4 == QK_TURBO3_GROUP,
+    "turbo4 block size must equal rotation group size (both 128)");
+#define TURBO_ROT_DIM QK_TURBO3_GROUP
 
 /* Optimal centroids from paper (scaled by 1/sqrt(d)) */
 /* 1-bit: ±sqrt(2/(pi*d)) */
@@ -37,8 +44,8 @@ static const float CENTROIDS_3BIT[8] = {
 
 /* ---------- rotation matrix (lazy init) ---------- */
 
-static float turbo_rotation[TURBO_D * TURBO_D];
-static float turbo_rotation_t[TURBO_D * TURBO_D]; /* transpose */
+static float turbo_rotation[TURBO_ROT_DIM * TURBO_ROT_DIM];
+static float turbo_rotation_t[TURBO_ROT_DIM * TURBO_ROT_DIM]; /* transpose */
 static int   turbo_rotation_initialized = 0;
 
 /* Simple LCG PRNG for deterministic rotation generation */
@@ -61,11 +68,11 @@ static double turbo_prng_normal(void) {
 static void turbo_init_rotation(void) {
     if (turbo_rotation_initialized) return;
 
-    const int d = TURBO_D;
+    const int d = TURBO_ROT_DIM;
 
     /* Generate random Gaussian matrix */
     turbo_prng_seed(TURBO_SEED_ROTATION);
-    float G[TURBO_D * TURBO_D];
+    float G[TURBO_ROT_DIM * TURBO_ROT_DIM];
     for (int i = 0; i < d * d; i++) {
         G[i] = (float)turbo_prng_normal();
     }
@@ -111,14 +118,14 @@ static void turbo_init_rotation(void) {
 
 /* ---------- QJL projection matrix (lazy init, seed-based) ---------- */
 
-static float turbo_qjl_matrix[TURBO_D * TURBO_D];
-static float turbo_qjl_matrix_t[TURBO_D * TURBO_D];
+static float turbo_qjl_matrix[TURBO_ROT_DIM * TURBO_ROT_DIM];
+static float turbo_qjl_matrix_t[TURBO_ROT_DIM * TURBO_ROT_DIM];
 static int   turbo_qjl_initialized = 0;
 
 static void turbo_init_qjl(void) {
     if (turbo_qjl_initialized) return;
 
-    const int d = TURBO_D;
+    const int d = TURBO_ROT_DIM;
     turbo_prng_seed(TURBO_SEED_QJL);
 
     for (int i = 0; i < d * d; i++) {
@@ -235,7 +242,7 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         float norm = sqrtf(norm_sq);
 
         /* Normalize */
-        float normalized[TURBO_D];
+        float normalized[TURBO_ROT_DIM];
         if (norm > 1e-10f) {
             const float inv = 1.0f / norm;
             for (int i = 0; i < d; i++) normalized[i] = src[i] * inv;
@@ -244,31 +251,31 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         }
 
         /* Step 2: Rotate */
-        float rotated[TURBO_D];
+        float rotated[TURBO_ROT_DIM];
         matvec(turbo_rotation, normalized, rotated, d);
 
         /* Step 3: 3-bit quantization */
-        uint8_t indices[TURBO_D];
+        uint8_t indices[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             indices[i] = (uint8_t)nearest_centroid_3bit(rotated[i]);
         }
 
         /* Step 4: Residual */
-        float reconstructed[TURBO_D];
+        float reconstructed[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             reconstructed[i] = CENTROIDS_3BIT[indices[i]];
         }
-        float mse_recon[TURBO_D];
+        float mse_recon[TURBO_ROT_DIM];
         matvec(turbo_rotation_t, reconstructed, mse_recon, d);
 
-        float residual[TURBO_D];
+        float residual[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             residual[i] = normalized[i] - mse_recon[i];
         }
 
 
         /* Step 5: QJL */
-        float projected[TURBO_D];
+        float projected[TURBO_ROT_DIM];
         matvec(turbo_qjl_matrix, residual, projected, d);
 
         /* Pack */
@@ -310,7 +317,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
 
         /* Unpack 3-bit indices */
-        uint8_t indices[TURBO_D];
+        uint8_t indices[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             int bit_offset = i * 3;
             int byte_idx   = bit_offset / 8;
@@ -323,7 +330,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         }
 
         /* Unpack signs */
-        float signs[TURBO_D];
+        float signs[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             signs[i] = (x[block].signs[i / 8] & (1 << (i % 8))) ? 1.0f : -1.0f;
         }
@@ -332,15 +339,15 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
 
         /* PolarQuant dequant */
-        float rotated_recon[TURBO_D];
+        float rotated_recon[TURBO_ROT_DIM];
         for (int i = 0; i < d; i++) {
             rotated_recon[i] = CENTROIDS_3BIT[indices[i]];
         }
-        float mse_recon[TURBO_D];
+        float mse_recon[TURBO_ROT_DIM];
         matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
 
         /* QJL dequant */
-        float qjl_recon[TURBO_D];
+        float qjl_recon[TURBO_ROT_DIM];
         matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
         for (int i = 0; i < d; i++) {
             qjl_recon[i] *= qjl_scale;

@@ -519,7 +519,7 @@ constant float turbo_mid_2bit[3] = { -0.086728f, 0.0f, 0.086728f };
 constant float turbo_mid_3bit[7] = { -0.154259f, -0.091775f, -0.043589f, 0.0f, 0.043589f, 0.091775f, 0.154259f };
 
 // Quantize 32 elements into one block_turbo3_0 (NO rotation — rotation happens
-// at the 128-element group level in kernel_set_rows_turbo)
+// at the 128-element group level in kernel_set_rows_turbo3)
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
 #pragma METAL fp math_mode(safe)
     // Compute norm for this 32-element sub-block
@@ -9715,12 +9715,11 @@ kernel void kernel_set_rows_q32(
     }
 }
 
-// TurboQuant set_rows kernel — block size 128 (QK_TURBO3/QK_TURBO4)
-// TurboQuant SET_ROWS kernel — processes QK_TURBO3_GROUP (128) elements per iteration,
+// TurboQuant3 SET_ROWS kernel — processes QK_TURBO3_GROUP (128) elements per iteration,
 // writes QK_TURBO3_GROUP/QK_TURBO3 (4) blocks per iteration.
 // The rotation operates on 128 elements, then results are split into 32-element blocks.
-template<typename TI, typename block_q, int QK, void (*quantize_func)(device const float *, device block_q &)>
-kernel void kernel_set_rows_turbo(
+template<typename TI>
+kernel void kernel_set_rows_turbo3(
         constant ggml_metal_kargs_set_rows & args,
         device const  void * src0,
         device const  void * src1,
@@ -9738,44 +9737,48 @@ kernel void kernel_set_rows_turbo(
     const int32_t i10 = i01;
     const TI      i1  = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
 
-          device block_q * dst_row = (      device block_q *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
-    const device float   * src_row = (const device float   *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+          device block_turbo3_0 * dst_row = (      device block_turbo3_0 *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
+    const device float           * src_row = (const device float         *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
 
-    // Process in groups of 4 blocks (128 elements) for rotation
-    const int blocks_per_group = QK_TURBO3_GROUP / QK;  // 128/32 = 4
-    const int n_groups = args.nk0 / blocks_per_group;
+    // Process in groups of 4 blocks (128 elements) for rotation.
+    // Use ceiling division so tail blocks for non-128-aligned head dims are not dropped.
+    const int blocks_per_group = QK_TURBO3_GROUP / QK_TURBO3;  // 128/32 = 4
+    const int n_groups = (args.nk0 + blocks_per_group - 1) / blocks_per_group;
 
     for (int grp = tiitg%tptg.x; grp < n_groups; grp += tptg.x) {
         const device float * grp_src = src_row + QK_TURBO3_GROUP * grp;
 
-        // Normalize and rotate the full 128-element group
+        // How many blocks are valid in this group (may be < 4 for tail group)
+        const int grp_start_block = grp * blocks_per_group;
+        const int grp_blocks = min(blocks_per_group, (int)args.nk0 - grp_start_block);
+        const int grp_elems = grp_blocks * QK_TURBO3;
+
+        // Normalize the valid elements, zero-pad the rest for WHT
         float norm_sq = 0.0f;
-        for (int j = 0; j < QK_TURBO3_GROUP; j++) norm_sq += grp_src[j] * grp_src[j];
+        for (int j = 0; j < grp_elems; j++) norm_sq += grp_src[j] * grp_src[j];
         float grp_norm = sqrt(norm_sq);
         float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
 
         float x[128];
-        for (int j = 0; j < 128; j++) x[j] = grp_src[j] * inv_norm;
+        for (int j = 0; j < grp_elems; j++) x[j] = grp_src[j] * inv_norm;
+        for (int j = grp_elems; j < 128; j++) x[j] = 0.0f;  // zero-pad tail
         turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
 
-        // Split into 4 blocks of 32 elements each
-        // All blocks store the SAME group norm — centroids are in normalized space
+        // Split into blocks (may be fewer than 4 for tail group)
         // Norm correction (ported from @spiritbuun's CUDA implementation):
-        // Accumulate ||centroid_vector||^2 across all 128 elements, then store
-        // grp_norm / ||centroid_vector|| instead of raw grp_norm. This makes
-        // dequantized vectors have the exact original L2 norm at zero decode cost.
+        // Store grp_norm / ||centroid_vector|| so dequant has exact original L2 norm.
         float recon_norm_sq = 0.0f;
 
-        for (int b = 0; b < blocks_per_group; b++) {
-            device block_q & blk = dst_row[grp * blocks_per_group + b];
-            const int off = b * QK;
+        for (int b = 0; b < grp_blocks; b++) {
+            device block_turbo3_0 & blk = dst_row[grp_start_block + b];
+            const int off = b * QK_TURBO3;
 
-            for (int j = 0; j < QK / 4; j++) blk.qs[j] = 0;
-            for (int j = 0; j < QK / 8; j++) blk.signs[j] = 0;
+            for (int j = 0; j < QK_TURBO3 / 4; j++) blk.qs[j] = 0;
+            for (int j = 0; j < QK_TURBO3 / 8; j++) blk.signs[j] = 0;
 
-            // Quantize rotated values to 3-bit centroids
-            for (int j = 0; j < QK; j++) {
-                float rv = x[off + j];  // rotated, normalized value
+            // Quantize rotated values to 3-bit centroids (split: 2-bit low in qs, 1-bit high in signs)
+            for (int j = 0; j < QK_TURBO3; j++) {
+                float rv = x[off + j];
                 uint8_t idx;
                 if      (rv < turbo_mid_3bit[0]) idx = 0;
                 else if (rv < turbo_mid_3bit[1]) idx = 1;
@@ -9789,18 +9792,110 @@ kernel void kernel_set_rows_turbo(
                 blk.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
                 if (idx & 0x4) blk.signs[j / 8] |= (1 << (j % 8));
 
-                // Accumulate centroid reconstruction norm for norm correction
                 float c = turbo_centroids_3bit[idx];
                 recon_norm_sq += c * c;
             }
         }
 
         // Norm correction: store corrected norm so dequant(x) has exact original L2 norm.
-        // Zero decode cost — dequant already multiplies by stored norm.
         float recon_norm = sqrt(recon_norm_sq);
         float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
-        for (int b = 0; b < blocks_per_group; b++) {
-            dst_row[grp * blocks_per_group + b].norm = half(corrected_norm);
+        for (int b = 0; b < grp_blocks; b++) {
+            dst_row[grp_start_block + b].norm = half(corrected_norm);
+        }
+    }
+}
+
+// TurboQuant4 SET_ROWS kernel — processes 128 elements per block (QK_TURBO4).
+// Turbo4 = 3-bit PolarQuant + 1-bit QJL residual correction.
+// Unlike turbo3 which splits 128-element groups into 4x32-element blocks,
+// turbo4 uses a single 128-element block with packed 3-bit indices + QJL signs.
+template<typename TI>
+kernel void kernel_set_rows_turbo4(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI      i1  = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+          device block_turbo4_0 * dst_row = (      device block_turbo4_0 *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
+    const device float           * src_row = (const device float         *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    // Each block is one 128-element group
+    const int n_blocks = args.nk0;  // nk0 = ne0 / QK_TURBO4, already in block units
+
+    for (int blk_idx = tiitg%tptg.x; blk_idx < n_blocks; blk_idx += tptg.x) {
+        const device float * blk_src = src_row + QK_TURBO4 * blk_idx;
+        device block_turbo4_0 & blk = dst_row[blk_idx];
+
+        // Step 1: Compute norm + normalize
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_TURBO4; j++) norm_sq += blk_src[j] * blk_src[j];
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        blk.norm = half(grp_norm);
+
+        float x[128];
+        for (int j = 0; j < 128; j++) x[j] = blk_src[j] * inv_norm;
+        float normalized[128];
+        for (int j = 0; j < 128; j++) normalized[j] = x[j];
+
+        // Step 2: WHT rotate in-place
+        turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
+
+        // Step 3: 3-bit PolarQuant quantization — packed 3-bit indices
+        for (int j = 0; j < QK_TURBO4 * 3 / 8; j++) blk.qs[j] = 0;
+        for (int j = 0; j < QK_TURBO4 / 8; j++) blk.signs[j] = 0;
+
+        float recon[128];
+        for (int j = 0; j < 128; j++) {
+            float val = x[j];
+            uint8_t idx;
+            if      (val < turbo_mid_3bit[0]) idx = 0;
+            else if (val < turbo_mid_3bit[1]) idx = 1;
+            else if (val < turbo_mid_3bit[2]) idx = 2;
+            else if (val < turbo_mid_3bit[3]) idx = 3;
+            else if (val < turbo_mid_3bit[4]) idx = 4;
+            else if (val < turbo_mid_3bit[5]) idx = 5;
+            else if (val < turbo_mid_3bit[6]) idx = 6;
+            else                              idx = 7;
+            recon[j] = turbo_centroids_3bit[idx];
+
+            // Pack 3-bit index (may span byte boundary)
+            int bit_offset = j * 3;
+            int byte_idx = bit_offset / 8;
+            int bit_pos = bit_offset % 8;
+            blk.qs[byte_idx] |= (uint8_t)((idx & 0x7) << bit_pos);
+            if (bit_pos > 5 && byte_idx + 1 < QK_TURBO4 * 3 / 8) {
+                blk.qs[byte_idx + 1] |= (uint8_t)((idx & 0x7) >> (8 - bit_pos));
+            }
+        }
+
+        // Step 4: Compute residual and its norm
+        float rnorm_sq = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            x[j] = normalized[j] - recon[j];  // residual in x buffer
+            rnorm_sq += x[j] * x[j];
+        }
+        blk.rnorm = half(sqrt(rnorm_sq));
+
+        // Step 5: QJL — WHT rotate residual, store sign bits
+        turbo_rotate_forward(x, turbo_qjl_wht_signs1, turbo_qjl_wht_signs2);
+        for (int i = 0; i < 128; i++) {
+            if (x[i] >= 0.0f) {
+                blk.signs[i / 8] |= (1 << (i % 8));
+            }
         }
     }
 }
@@ -10608,13 +10703,14 @@ template [[host_name("kernel_set_rows_q5_1_i32")]]   kernel set_rows_q32_t kerne
 template [[host_name("kernel_set_rows_iq4_nl_i64")]] kernel set_rows_q32_t kernel_set_rows_q32<int64_t, block_iq4_nl, quantize_iq4_nl>;
 template [[host_name("kernel_set_rows_iq4_nl_i32")]] kernel set_rows_q32_t kernel_set_rows_q32<int32_t, block_iq4_nl, quantize_iq4_nl>;
 
-// TurboQuant set_rows instantiations (block size 128)
-typedef decltype(kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>) set_rows_turbo_t;
+// TurboQuant set_rows instantiations — separate turbo3 and turbo4 kernels
+typedef decltype(kernel_set_rows_turbo3<int64_t>) set_rows_turbo3_t;
+typedef decltype(kernel_set_rows_turbo4<int64_t>) set_rows_turbo4_t;
 
-template [[host_name("kernel_set_rows_turbo3_i64")]] kernel set_rows_turbo_t kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
-template [[host_name("kernel_set_rows_turbo3_i32")]] kernel set_rows_turbo_t kernel_set_rows_turbo<int32_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
-template [[host_name("kernel_set_rows_turbo4_i64")]] kernel set_rows_turbo_t kernel_set_rows_turbo<int64_t, block_turbo4_0, QK_TURBO4, quantize_turbo4_0>;
-template [[host_name("kernel_set_rows_turbo4_i32")]] kernel set_rows_turbo_t kernel_set_rows_turbo<int32_t, block_turbo4_0, QK_TURBO4, quantize_turbo4_0>;
+template [[host_name("kernel_set_rows_turbo3_i64")]] kernel set_rows_turbo3_t kernel_set_rows_turbo3<int64_t>;
+template [[host_name("kernel_set_rows_turbo3_i32")]] kernel set_rows_turbo3_t kernel_set_rows_turbo3<int32_t>;
+template [[host_name("kernel_set_rows_turbo4_i64")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int64_t>;
+template [[host_name("kernel_set_rows_turbo4_i32")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int32_t>;
 
 //
 // matrix-matrix multiplication
