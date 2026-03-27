@@ -17802,7 +17802,24 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                     src0_layout                   = resolved.layout;
                     exc_ctx.src0_layout           = resolved.layout;
                 } else {
+                    // resolve_weight miss: S1-PRELOAD should have cached all dense
+                    // weights in VRAM.  A miss here means either:
+                    //   (a) VRAM was too tight for S1-PRELOAD to cache this tensor
+                    //   (b) MoE expert tensor not yet demand-loaded
+                    //   (c) non-USM memory (aligned_alloc) skipped bulk preload
+                    //   (d) first inference before S1-PRELOAD completes
+                    // Log at DEBUG level so cache misses are visible for diagnosis.
+                    GGML_SYCL_DEBUG("[MUL_MAT] resolve_weight miss for %s on device %d "
+                                    "(resolved=%d on_device=%d ptr=%p)\n",
+                                    src0->name ? src0->name : "?", i,
+                                    resolved ? 1 : 0,
+                                    resolved ? (int) resolved.on_device : 0,
+                                    resolved ? resolved.ptr : nullptr);
                     // Fallback: full resolution chain (layout registry, ensure_cached, etc.)
+                    // This path handles edge cases where resolve_weight's O(1) lookup
+                    // fails but the heavier get_layout_ptr_for chain can still find or
+                    // materialize a usable pointer (e.g. layout_ptr override, on-demand
+                    // cache fill, host-pinned AOS fallback).
                     dev[i].src0_ptr_origin = "layout_ptr";
                     dev[i].src0_dd =
                         (char *) ggml_sycl_get_layout_ptr_for(src0, i, src0_layout, &dev[i].src0_layout_ptr_source);
