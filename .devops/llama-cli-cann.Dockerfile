@@ -1,4 +1,4 @@
-ARG ASCEND_VERSION=8.1.RC1.alpha001-910b-openeuler22.03-py3.10
+ARG ASCEND_VERSION=8.5.0-910b-openeuler22.03-py3.10
 
 FROM ascendai/cann:$ASCEND_VERSION AS build
 

@@ -63,7 +63,7 @@ jobs:
       - name: Set container image
         id: cann-image
         run: |
-          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc2-910b-openeuler24.03-py3.11' || '8.3.rc2-310p-openeuler24.03-py3.11' }}"
+          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.5.0-910b-openeuler24.03-py3.11' || '8.5.0-310p-openeuler24.03-py3.11' }}"
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
 
       - name: Pull container image
