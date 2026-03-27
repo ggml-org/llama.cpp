@@ -1670,7 +1670,6 @@ int ggml_metal_op_turbo_wht(ggml_metal_op_t ctx, int idx) {
     memcpy(&direction, op->op_params, sizeof(int));
 
     const int64_t n_elements = ggml_nelements(op->src[0]);
-    GGML_ASSERT(n_elements % 128 == 0 && "TURBO_WHT requires head_dim to be a multiple of 128");
     const int64_t n_groups = n_elements / 128;
 
     auto pipeline = ggml_metal_library_get_pipeline_turbo_wht(lib);
