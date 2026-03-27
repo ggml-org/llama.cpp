@@ -503,8 +503,7 @@ static binary_overlap_flags ggml_webgpu_detect_binary_overlap(ggml_tensor * src0
     return flags;
 }
 
-
-static wgpu::BindGroupEntry ggml_webgpu_make_bind_group_entry(uint32_t binding,
+static wgpu::BindGroupEntry ggml_webgpu_make_bind_group_entry(uint32_t     binding,
                                                               wgpu::Buffer buffer,
                                                               uint64_t     offset,
                                                               uint64_t     size) {
@@ -744,13 +743,13 @@ static webgpu_command ggml_backend_webgpu_build_multi(
         ts_bufs.host_buf.Unmap();
     }
 
-    wgpu::PassTimestampWrites ts_writes = {};
-    ts_writes.querySet                  = ts_bufs.query_set;
-    ts_writes.beginningOfPassWriteIndex = 0;
-    ts_writes.endOfPassWriteIndex       = 1;
+    wgpu::PassTimestampWrites ts_writes   = {};
+    ts_writes.querySet                    = ts_bufs.query_set;
+    ts_writes.beginningOfPassWriteIndex   = 0;
+    ts_writes.endOfPassWriteIndex         = 1;
     wgpu::ComputePassDescriptor pass_desc = {};
     pass_desc.timestampWrites             = &ts_writes;
-    wgpu::ComputePassEncoder    pass      = encoder.BeginComputePass(&pass_desc);
+    wgpu::ComputePassEncoder pass         = encoder.BeginComputePass(&pass_desc);
 #else
     wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
 #endif
@@ -799,12 +798,10 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
                                               uint32_t                value,
                                               size_t                  offset,
                                               size_t                  size) {
-    std::vector<uint32_t>             params  = { (uint32_t) offset, (uint32_t) size, value };
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_bind_group_entry(0, buf, 0, buf.GetSize())
-    };
-    size_t   bytes_per_wg = WEBGPU_MAX_WG_SIZE * ctx->capabilities.memset_bytes_per_thread;
-    uint32_t wg_x         = CEIL_DIV(size + 3, bytes_per_wg);
+    std::vector<uint32_t>             params       = { (uint32_t) offset, (uint32_t) size, value };
+    std::vector<wgpu::BindGroupEntry> entries      = { ggml_webgpu_make_bind_group_entry(0, buf, 0, buf.GetSize()) };
+    size_t                            bytes_per_wg = WEBGPU_MAX_WG_SIZE * ctx->capabilities.memset_bytes_per_thread;
+    uint32_t                          wg_x         = CEIL_DIV(size + 3, bytes_per_wg);
 
     webgpu_command command =
         ggml_backend_webgpu_build(ctx, ctx->memset_buf_pool, ctx->memset_pipelines[0], params, entries, wg_x);
@@ -869,6 +866,7 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     delete ctx;
     delete backend;
 }
+
 static webgpu_command ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     uint32_t ne = (uint32_t) ggml_nelements(dst);
 
@@ -902,9 +900,8 @@ static webgpu_command ggml_webgpu_set(webgpu_context & ctx, ggml_tensor * src0, 
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    shader_lib_ctx.inplace = inplace;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.inplace     = inplace;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_set_pipeline(shader_lib_ctx);
 
@@ -952,8 +949,7 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_pad_pipeline(shader_lib_ctx);
 
@@ -1007,8 +1003,7 @@ static webgpu_command ggml_webgpu_solve_tri(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_solve_tri_pipeline(shader_lib_ctx);
@@ -1059,8 +1054,7 @@ static webgpu_command ggml_webgpu_ssm_conv(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline  = ctx->shader_lib->get_ssm_conv_pipeline(shader_lib_ctx);
     auto *          decisions = static_cast<ggml_webgpu_ssm_conv_shader_decisions *>(pipeline.context.get());
@@ -1113,8 +1107,7 @@ static webgpu_command ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     shader_lib_ctx.src3                           = src3;
     shader_lib_ctx.src4                           = src4;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_gated_delta_net_pipeline(shader_lib_ctx);
 
@@ -1150,12 +1143,9 @@ static webgpu_command ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 3, src3),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 4, src4),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 5, src5),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0), ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2), ggml_webgpu_make_tensor_bind_group_entry(ctx, 3, src3),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 4, src4), ggml_webgpu_make_tensor_bind_group_entry(ctx, 5, src5),
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 6, dst),
     };
 
@@ -1176,8 +1166,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.src1                           = idx;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_set_rows_pipeline(shader_lib_ctx);
 
@@ -1262,11 +1251,9 @@ static webgpu_command ggml_webgpu_get_rows(webgpu_context & ctx,
                                      (uint32_t) (idx->ne[1]),
                                      (uint32_t) (idx->ne[2]) };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, idx),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, idx),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst) };
 
     uint32_t blocks_per_row = (uint32_t) (dst->ne[0] / (src->type == GGML_TYPE_F32 && dst->ne[0] % 4 == 0 ? 4 : 1));
     uint32_t total_rows     = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
@@ -1322,8 +1309,7 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size              = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.supports_subgroup_matrix = ctx->global_ctx->capabilities.supports_subgroup_matrix;
     shader_lib_ctx.sg_mat_m                 = ctx->global_ctx->capabilities.sg_mat_m;
     shader_lib_ctx.sg_mat_n                 = ctx->global_ctx->capabilities.sg_mat_n;
@@ -1485,8 +1471,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     shader_lib_ctx.src3                           = mask;
     shader_lib_ctx.src4                           = sinks;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
     shader_lib_ctx.sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m;
     shader_lib_ctx.sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n;
@@ -1511,9 +1496,8 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.src1                           = nullptr;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    shader_lib_ctx.inplace = inplace;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.inplace     = inplace;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_unary_pipeline(shader_lib_ctx);
 
@@ -1585,8 +1569,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.inplace     = flags.inplace;
     shader_lib_ctx.overlap     = flags.overlap;
     shader_lib_ctx.src_overlap = flags.src_overlap;
@@ -1638,8 +1621,8 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
         size_t merged_offset = std::min(src0_webgpu_tensor_align_offset, src1_webgpu_tensor_align_offset);
         size_t merged_end    = std::max(src0_webgpu_tensor_align_offset + ggml_webgpu_tensor_binding_size(ctx, src0),
                                         src1_webgpu_tensor_align_offset + ggml_webgpu_tensor_binding_size(ctx, src1));
-        entries.push_back(
-            ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), merged_offset, merged_end - merged_offset));
+        entries.push_back(ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), merged_offset,
+                                                            merged_end - merged_offset));
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
     } else {
         entries.push_back(ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0),
@@ -1695,8 +1678,7 @@ static webgpu_command ggml_webgpu_concat(webgpu_context & ctx,
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline  = ctx->shader_lib->get_concat_pipeline(shader_lib_ctx);
     auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
@@ -1731,8 +1713,7 @@ static webgpu_command ggml_webgpu_repeat(webgpu_context & ctx, ggml_tensor * src
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src0;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline  = ctx->shader_lib->get_repeat_pipeline(shader_lib_ctx);
     auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
@@ -1759,9 +1740,7 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
         *(uint32_t *) dst->op_params  // epsilon, treated as f32 in the shader
     };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src) };
     if (!inplace) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
     }
@@ -1769,9 +1748,8 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    shader_lib_ctx.inplace = inplace;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.inplace     = inplace;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_row_norm_pipeline(shader_lib_ctx);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, ggml_nrows(src));
@@ -1839,11 +1817,9 @@ static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
         (uint32_t) sections[3]
     };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1)
-    };
-    uint32_t dst_binding = 2;
+    std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
+                                                      ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1) };
+    uint32_t                          dst_binding = 2;
     if (has_freq_factor) {
         dst_binding = 3;
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2));
@@ -1907,9 +1883,8 @@ static webgpu_command ggml_webgpu_scale(webgpu_context & ctx, ggml_tensor * src,
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.src1                           = nullptr;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    shader_lib_ctx.inplace = inplace;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.inplace     = inplace;
 
     webgpu_pipeline pipeline  = ctx->shader_lib->get_scale_pipeline(shader_lib_ctx);
     auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
@@ -1933,9 +1908,7 @@ static webgpu_command ggml_webgpu_scale(webgpu_context & ctx, ggml_tensor * src,
     };
 
     // bindgroups unchanged
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src) };
 
     if (!inplace) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
@@ -1986,10 +1959,8 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
         *(uint32_t *) &m1
     };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0)
-    };
-    uint32_t binding_num = 1;
+    std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0) };
+    uint32_t                          binding_num = 1;
     if (mask_type < 2) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding_num, src1));
         binding_num++;
@@ -2012,16 +1983,13 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
                                      (uint32_t) src->ne[0] };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst) };
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_argmax_pipeline(shader_lib_ctx);
     uint32_t        wg_x     = ggml_nelements(dst);
@@ -2035,8 +2003,7 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.src1                           = nullptr;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
 
     webgpu_pipeline argsort_pipeline = ctx->shader_lib->get_argsort_pipeline(shader_lib_ctx);
@@ -2184,17 +2151,14 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
                                      (uint32_t) src->ne[0] };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst) };
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.src1                           = nullptr;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_cumsum_pipeline(shader_lib_ctx);
     uint32_t        wg_x     = ggml_nrows(dst);
@@ -2212,16 +2176,13 @@ static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * s
                                      total_sum ? 1 : (uint32_t) src->ne[1],
                                      total_sum ? 1 : (uint32_t) src->ne[2] };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst)
-    };
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst) };
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
     shader_lib_ctx.src0                           = src;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_sum_rows_pipeline(shader_lib_ctx);
 
@@ -2676,8 +2637,9 @@ static void ggml_backend_webgpu_device_get_props(ggml_backend_dev_t dev, struct 
 }
 
 static ggml_guid_t ggml_backend_webgpu_guid(void) {
-    static const char * guid_str = "__ggml_webgpu :)";
-    return reinterpret_cast<ggml_guid_t>((void *) guid_str);
+    static ggml_guid guid = { 0x67, 0xc7, 0xa4, 0xb1, 0x78, 0x74, 0x4f, 0x51,
+                              0x9d, 0x65, 0x44, 0x6d, 0xe4, 0x1b, 0x82, 0x9a };
+    return &guid;
 }
 
 static void ggml_webgpu_init_memset_pipeline(webgpu_global_context & ctx) {

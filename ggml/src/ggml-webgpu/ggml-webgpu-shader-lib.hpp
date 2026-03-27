@@ -909,7 +909,7 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_scale_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_scale_pipeline_key key = {};
-        key.inplace                         = context.inplace;
+        key.inplace                        = context.inplace;
 
         auto it = scale_pipelines.find(key);
         if (it != scale_pipelines.end()) {
@@ -1086,10 +1086,10 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_mul_mat_vec_pipeline_key key = {};
         key.src0_type                            = context.src0->type;
         key.src1_type                            = context.src1->type;
-        key.vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
+        key.vectorized                           = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
-                             1 :
-                             0;
+                                                       1 :
+                                                       0;
 
         auto it = mul_mat_vec_pipelines.find(key);
         if (it != mul_mat_vec_pipelines.end()) {
