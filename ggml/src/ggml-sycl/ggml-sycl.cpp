@@ -6646,15 +6646,36 @@ static void flush_pending_cpu_scatter() {
         double total_bytes = 0;
         int    n_entries   = 0;
         if (g_pending_scatter.stream && g_pending_scatter.out_pinned) {
-            const float * src = g_pending_scatter.out_pinned;
-            for (auto & e : g_pending_scatter.entries) {
-                if (e.dst_device) {
-                    g_pending_scatter.stream->memcpy(
-                        e.dst_device, src, static_cast<size_t>(e.N) * sizeof(float));
-                    total_bytes += static_cast<double>(e.N) * sizeof(float);
-                    n_entries++;
+            // Batch contiguous scatter entries into single memcpy calls.
+            // Source (out_pinned) is always contiguous; check if destination
+            // addresses are also contiguous to merge.
+            const auto & entries = g_pending_scatter.entries;
+            const float * src_base = g_pending_scatter.out_pinned;
+            size_t i = 0;
+            while (i < entries.size()) {
+                if (!entries[i].dst_device) {
+                    src_base += entries[i].N;
+                    i++;
+                    continue;
                 }
-                src += e.N;
+                // Start a new batch from entry i
+                char *       batch_dst   = entries[i].dst_device;
+                const float * batch_src  = src_base;
+                size_t        batch_N    = static_cast<size_t>(entries[i].N);
+                src_base += entries[i].N;
+                size_t j = i + 1;
+                // Merge subsequent entries if dst is contiguous
+                while (j < entries.size() && entries[j].dst_device &&
+                       entries[j].dst_device == batch_dst + batch_N * sizeof(float)) {
+                    batch_N  += static_cast<size_t>(entries[j].N);
+                    src_base += entries[j].N;
+                    j++;
+                }
+                g_pending_scatter.stream->memcpy(
+                    batch_dst, batch_src, batch_N * sizeof(float));
+                total_bytes += static_cast<double>(batch_N) * sizeof(float);
+                n_entries++;
+                i = j;
             }
 
             auto t2 = hrc::now();  // After memcpy submissions
@@ -33426,20 +33447,21 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Optimization: when act_on_host (batch=1), use the shared
                 // activation D2H with event-level wait instead of stream->wait()
                 // to avoid draining the B580 compute pipeline.
+                // Track deferred D2H event for the single-activation path
+                sycl::event act_single_evt;
+                bool        act_single_pending = false;
+
                 if (act_on_host && cpu_expert_tg_active) {
-                    // Use shared activation — wait only for the D2H event
+                    // Use shared activation — wait only for the D2H event.
+                    // Skip memcpy: tasks will point directly to shared_act_host.
                     act_d2h_event.wait();
-                    // Point act_pinned at the shared staging buffer.
-                    // All CPU tasks will read from here; batched dispatch
-                    // auto-deduplicates Q8_0 quantization via pointer equality.
-                    std::memcpy(act_pinned, shared_act_host,
-                                static_cast<size_t>(K) * sizeof(float));
                 } else if (cpu_expert_tg_active && n_cpu > 1) {
-                    // Single D2H: all experts share the same activation at offset 0
-                    // Per-event wait: only blocks until this memcpy completes,
-                    // GPU compute pipeline continues executing in parallel.
-                    stream->memcpy(act_pinned, src1_original,
-                                   static_cast<size_t>(K) * sizeof(float)).wait();
+                    // Single D2H: all experts share the same activation at offset 0.
+                    // Submit async — wait deferred until just before CPU pool submission
+                    // to overlap D2H with task struct building below.
+                    act_single_evt = stream->memcpy(act_pinned, src1_original,
+                                   static_cast<size_t>(K) * sizeof(float));
+                    act_single_pending = true;
                 } else {
                     // Per-expert D2H: collect events and batch-wait instead
                     // of draining the entire GPU queue with stream->wait().
@@ -33474,14 +33496,21 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     // When cpu_expert_tg_active, all tasks share the single
                     // activation copy; batched dispatch deduplicates Q8_0
                     // quantization via act_host pointer equality.
+                    // When act_on_host, point directly to shared staging buffer
+                    // (skip intermediate memcpy).
                     t.act_host    = cpu_expert_tg_active
-                                        ? act_pinned
+                                        ? (act_on_host ? shared_act_host : act_pinned)
                                         : act_pinned + ci * static_cast<size_t>(K);
                     t.output_host = out_pinned + ci * static_cast<size_t>(N);
                     t.type        = src0->type;
                     t.K           = static_cast<int>(K);
                     t.N           = static_cast<int>(N);
                     result.tasks.push_back(t);
+                }
+
+                // Wait for deferred single-activation D2H before CPU tasks read it
+                if (act_single_pending) {
+                    act_single_evt.wait();
                 }
 
                 // Submit to CPU thread pool
