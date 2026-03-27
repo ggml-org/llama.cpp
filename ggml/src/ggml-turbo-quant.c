@@ -70,16 +70,17 @@ static void turbo_init_rotation(void) {
 
     const int d = TURBO_ROT_DIM;
 
-    /* Generate random Gaussian matrix */
+    /* Generate random Gaussian matrix directly into turbo_rotation.
+     * Previous code used a 64KB stack-local G[] then memcpy'd — this
+     * caused stack overflow on llama.cpp worker threads with reduced
+     * stack sizes. */
     turbo_prng_seed(TURBO_SEED_ROTATION);
-    float G[TURBO_ROT_DIM * TURBO_ROT_DIM];
     for (int i = 0; i < d * d; i++) {
-        G[i] = (float)turbo_prng_normal();
+        turbo_rotation[i] = (float)turbo_prng_normal();
     }
 
     /* QR decomposition via modified Gram-Schmidt */
     /* Q stored column-major in turbo_rotation */
-    memcpy(turbo_rotation, G, d * d * sizeof(float));
 
     for (int j = 0; j < d; j++) {
         /* Normalize column j */
