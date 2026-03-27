@@ -43,6 +43,12 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
     wg_x = CEIL_DIV(total_wg, wg_y);
 }
 
+static inline uint32_t ggml_webgpu_u32_from_f32(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
 #ifdef GGML_WEBGPU_DEBUG
 #    define WEBGPU_LOG_DEBUG(msg)  std::cout << msg << std::endl
 #    define WEBGPU_DEBUG_BUF_ELEMS 512
@@ -1406,11 +1412,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                                              ggml_tensor *    mask,
                                              ggml_tensor *    sinks,
                                              ggml_tensor *    dst) {
-    float scale = *(float *) dst->op_params;
-    float max_bias;
-    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
-    float logit_softcap;
-    memcpy(&logit_softcap, (float *) dst->op_params + 2, sizeof(float));
+    float scale         = ggml_get_op_params_f32(dst, 0);
+    float max_bias      = ggml_get_op_params_f32(dst, 1);
+    float logit_softcap = ggml_get_op_params_f32(dst, 2);
     if (logit_softcap != 0.0f) {
         scale /= logit_softcap;
     }
@@ -1442,12 +1446,12 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         (uint32_t) (V->nb[3] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 3
         has_mask ? (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 3
         (uint32_t) (Q->ne[2] / K->ne[2]),  // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
-        *(uint32_t *) &scale,              // scale (possibly adjusted for logit softcap)
-        *(uint32_t *) &max_bias,
-        *(uint32_t *) &logit_softcap,
-        *(uint32_t *) &n_head_log2,
-        *(uint32_t *) &m0,
-        *(uint32_t *) &m1
+        ggml_webgpu_u32_from_f32(scale),   // scale (possibly adjusted for logit softcap)
+        ggml_webgpu_u32_from_f32(max_bias),
+        ggml_webgpu_u32_from_f32(logit_softcap),
+        ggml_webgpu_u32_from_f32(n_head_log2),
+        ggml_webgpu_u32_from_f32(m0),
+        ggml_webgpu_u32_from_f32(m1)
 
     };
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -1528,10 +1532,10 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
                     float alpha_p = ggml_get_op_params_f32(dst, 2);
                     float beta    = ggml_get_op_params_f32(dst, 3);
                     float eps     = ggml_get_op_params_f32(dst, 4);
-                    params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_n));
-                    params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_p));
-                    params.push_back(*reinterpret_cast<const uint32_t *>(&beta));
-                    params.push_back(*reinterpret_cast<const uint32_t *>(&eps));
+                    params.push_back(ggml_webgpu_u32_from_f32(alpha_n));
+                    params.push_back(ggml_webgpu_u32_from_f32(alpha_p));
+                    params.push_back(ggml_webgpu_u32_from_f32(beta));
+                    params.push_back(ggml_webgpu_u32_from_f32(eps));
                     break;
                 }
             default:
@@ -1540,11 +1544,11 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     } else if (dst->op == GGML_OP_CLAMP) {
         float clamp_min = ggml_get_op_params_f32(dst, 0);
         float clamp_max = ggml_get_op_params_f32(dst, 1);
-        params.push_back(*reinterpret_cast<const uint32_t *>(&clamp_min));
-        params.push_back(*reinterpret_cast<const uint32_t *>(&clamp_max));
+        params.push_back(ggml_webgpu_u32_from_f32(clamp_min));
+        params.push_back(ggml_webgpu_u32_from_f32(clamp_max));
     } else if (dst->op == GGML_OP_FILL) {
         float fill_val = ggml_get_op_params_f32(dst, 0);
-        params.push_back(*reinterpret_cast<const uint32_t *>(&fill_val));
+        params.push_back(ggml_webgpu_u32_from_f32(fill_val));
         effective_src = dst;  // fill simply fills dst
     }
 
@@ -1737,7 +1741,7 @@ static webgpu_command ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * s
         (uint32_t) src->ne[1],
         (uint32_t) src->ne[2],
         (uint32_t) src->ne[3],
-        *(uint32_t *) dst->op_params  // epsilon, treated as f32 in the shader
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 0))  // epsilon, treated as f32 in the shader
     };
 
     std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src) };
@@ -1805,12 +1809,12 @@ static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
         (uint32_t) src0->ne[2],
         (uint32_t) n_dims,
         (uint32_t) mode,
-        *(uint32_t *) &theta_scale,
-        *(uint32_t *) &attn_factor,
-        *(uint32_t *) &freq_scale,
-        *(uint32_t *) &ext_factor,
-        *(uint32_t *) &corr_dims[0],
-        *(uint32_t *) &corr_dims[1],
+        ggml_webgpu_u32_from_f32(theta_scale),
+        ggml_webgpu_u32_from_f32(attn_factor),
+        ggml_webgpu_u32_from_f32(freq_scale),
+        ggml_webgpu_u32_from_f32(ext_factor),
+        ggml_webgpu_u32_from_f32(corr_dims[0]),
+        ggml_webgpu_u32_from_f32(corr_dims[1]),
         (uint32_t) sections[0],
         (uint32_t) sections[1],
         (uint32_t) sections[2],
@@ -1856,9 +1860,9 @@ static webgpu_command ggml_webgpu_glu(webgpu_context & ctx, ggml_tensor * src0, 
         (uint32_t) dst->ne[0],
         (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2],
-        (uint32_t) ((int32_t *) dst->op_params)[1],  // swapped
-        *(uint32_t *) &dst->op_params[2],            // alpha, for swiglu_oai
-        *(uint32_t *) &dst->op_params[3],            // limit, for swiglu_oai
+        (uint32_t) ((int32_t *) dst->op_params)[1],                // swapped
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 2)),  // alpha, for swiglu_oai
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 3)),  // limit, for swiglu_oai
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -1903,8 +1907,8 @@ static webgpu_command ggml_webgpu_scale(webgpu_context & ctx, ggml_tensor * src,
         (uint32_t) src->ne[0],
         (uint32_t) src->ne[1],
         (uint32_t) src->ne[2],
-        *(uint32_t *) dst->op_params,     // scale
-        *(uint32_t *) &dst->op_params[1]  // bias
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 0)),  // scale
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 1))   // bias
     };
 
     // bindgroups unchanged
@@ -1923,14 +1927,13 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
                                            ggml_tensor *    src1,
                                            ggml_tensor *    src2,
                                            ggml_tensor *    dst) {
-    const int inplace   = ggml_webgpu_tensor_equal(src0, dst);
-    const int mask_type = (src1 != nullptr) ? src1->type : 2;  // use 2 for no mask here
-    const int has_sink  = (src2 != nullptr);
-    float     max_bias;
-    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
-    float n_head_log2 = float(1u << (uint32_t) floor(log2(src0->ne[2])));
-    float m0          = powf(2.0f, -(max_bias) / n_head_log2);
-    float m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+    const int inplace     = ggml_webgpu_tensor_equal(src0, dst);
+    const int mask_type   = (src1 != nullptr) ? src1->type : 2;  // use 2 for no mask here
+    const int has_sink    = (src2 != nullptr);
+    float     max_bias    = ggml_get_op_params_f32(dst, 1);
+    float     n_head_log2 = float(1u << (uint32_t) floor(log2(src0->ne[2])));
+    float     m0          = powf(2.0f, -(max_bias) / n_head_log2);
+    float     m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
@@ -1952,11 +1955,12 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
         (uint32_t) src0->ne[2],
         mask_type < 2 ? (uint32_t) src1->ne[2] : 0,
         mask_type < 2 ? (uint32_t) src1->ne[3] : 0,
-        *(uint32_t *) dst->op_params,  // scale
-        *(uint32_t *) &max_bias,
-        *(uint32_t *) &n_head_log2,
-        *(uint32_t *) &m0,
-        *(uint32_t *) &m1
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 0)),  // scale
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 1)),  // bias
+        ggml_webgpu_u32_from_f32(max_bias),
+        ggml_webgpu_u32_from_f32(n_head_log2),
+        ggml_webgpu_u32_from_f32(m0),
+        ggml_webgpu_u32_from_f32(m1)
     };
 
     std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0) };
@@ -3394,8 +3398,8 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     // Intentionally leak the global registry context to avoid crashing inside
     // Dawn/Vulkan static teardown during process exit.
     static ggml_backend_webgpu_reg_context * ctx = new ggml_backend_webgpu_reg_context();
-    ctx->name         = GGML_WEBGPU_NAME;
-    ctx->device_count = 1;
+    ctx->name                                    = GGML_WEBGPU_NAME;
+    ctx->device_count                            = 1;
 
     wgpu::InstanceDescriptor               instance_descriptor{};
     std::vector<wgpu::InstanceFeatureName> instance_features = { wgpu::InstanceFeatureName::TimedWaitAny };
@@ -3410,7 +3414,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     instance_descriptor.nextInChain        = &instanceTogglesDesc;
 #endif
 
-    wgpu::Instance inst             = wgpu::CreateInstance(&instance_descriptor);
+    wgpu::Instance inst              = wgpu::CreateInstance(&instance_descriptor);
     ctx->webgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
     ctx->webgpu_global_ctx->instance = std::move(inst);
 
@@ -3422,7 +3426,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
 #endif
     GGML_ASSERT(ctx->webgpu_global_ctx->instance != nullptr);
 
-    static ggml_backend_reg * reg = new ggml_backend_reg {
+    static ggml_backend_reg * reg = new ggml_backend_reg{
         /* .api_version = */ GGML_BACKEND_API_VERSION,
         /* .iface       = */ ggml_backend_webgpu_reg_i,
         /* .context     = */ ctx,

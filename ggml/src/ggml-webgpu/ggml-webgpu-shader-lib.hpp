@@ -1588,7 +1588,7 @@ class ggml_webgpu_shader_lib {
         key.kv_direct                           = kv_direct;
         key.has_mask                            = has_mask;
         key.has_sinks                           = has_sinks;
-        key.uses_logit_softcap                  = (*(float *) &context.dst->op_params[2]) != 0.0f;
+        key.uses_logit_softcap                  = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
 
         auto it = flash_attn_pipelines.find(key);
         if (it != flash_attn_pipelines.end()) {
