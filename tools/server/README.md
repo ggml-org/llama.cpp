@@ -36,7 +36,6 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--license` | show source code license and dependencies |
 | `-cl, --cache-list` | show list of models in cache |
 | `--completion-bash` | print source-able bash completion script for llama.cpp |
-| `--verbose-prompt` | print a verbose prompt before generation (default: false) |
 | `-t, --threads N` | number of CPU threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |
 | `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
 | `-C, --cpu-mask M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "") |
@@ -194,6 +193,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--webui-config JSON` | JSON that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG) |
 | `--webui-config-file PATH` | JSON file that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG_FILE) |
 | `--webui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff<br/>(env: LLAMA_ARG_TOOLS) |
 | `--webui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_WEBUI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
@@ -292,6 +292,12 @@ It is currently available in the following endpoints:
 - The non-OAI-compatible embeddings endpoint.
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
+
+### Built-in tools support
+
+The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI.
+
+To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
 ## Build
 
@@ -1437,6 +1443,14 @@ curl http://localhost:8080/v1/messages/count_tokens \
 ```json
 {"input_tokens": 10}
 ```
+
+## Server built-in tools
+
+The server exposes a REST API under `/tools` that allows the Web UI to call built-in tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+
+**Please do NOT use this endpoint in a downstream application**
+
+For further documentation about this endpoint, please refer to [server internal documentation](./README-dev.md)
 
 ## Using multiple models
 

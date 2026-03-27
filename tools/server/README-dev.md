@@ -125,6 +125,61 @@ The framework automatically starts a `llama-server` instance, sends requests, an
 
 For detailed instructions, see the [test documentation](./tests/README.md).
 
+### API for tools
+
+This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+
+**GET /tools**
+
+Get a list of tools, each tool has these fields:
+- `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
+- `display_name` (string): the name to be displayed on UI. Example: `Read file`
+- `type` (string): always be `"builtin"` for now
+- `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
+- `definition` (object): the OAI-compat definition of this tool
+
+**POST /tools**
+
+Invoke a tool call, request body is a JSON object with:
+- `tool` (string): the name of the tool
+- `params` (object): a mapping from argument name (string) to argument value
+
+Returns JSON object. There are two response formats:
+
+Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
+
+```json
+{
+    "plain_text_response": "this is a text response"
+}
+```
+
+The client should extract this value and place it inside message content (note: content is no longer a JSON), example
+
+```json
+{
+    "role": "tool",
+    "content": "this is a text response"
+}
+```
+
+Format 2: Normal JSON response, example:
+
+```json
+{
+    "error": "cannot open this file"
+}
+```
+
+That requires `JSON.stringify` when formatted to message content:
+
+```json
+{
+    "role": "tool",
+    "content": "{\"error\":\"cannot open this file\"}"
+}
+```
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
