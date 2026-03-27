@@ -818,6 +818,10 @@ bool is_expert_popularity_initialized() {
 
 }  // namespace ggml_sycl
 
+// Tracks whether initial expert prestage has completed. Defined here (before
+// is_expert_resident) so startup-time cache misses can be suppressed.
+static std::atomic<bool> g_prestage_completed{ false };
+
 // Check if an expert's weights are fully resident in VRAM on a given device.
 // Checks the unified cache for ALL 3 tensors (gate, up, down) across multiple
 // layout modes (SOA, COALESCED, AOS, XMX_TILED).
@@ -853,15 +857,18 @@ static bool is_expert_resident(int block_id, int expert_id, int device_id) {
 
     // All registered roles must be cached
     if (grp.has_gate && !check_key(grp.gate_key, "gate")) {
-        static std::atomic<int> fail_log{0};
-        if (fail_log.fetch_add(1, std::memory_order_relaxed) < 3) {
-            fprintf(stderr, "[IS-EXPERT-FAIL] blk=%d exp=%d gate MISS model=%llu hash=0x%llx aux=0x%llx "
-                    "entries=%zu\n",
-                    block_id, expert_id,
-                    (unsigned long long)grp.gate_key.model_id,
-                    (unsigned long long)grp.gate_key.name_hash,
-                    (unsigned long long)grp.gate_key.aux_id,
-                    cache->entry_count());
+        // Suppress during startup: before initial prestage completes, experts
+        // aren't cached yet (expected).  Only log after prestage has run.
+        if (g_prestage_completed.load(std::memory_order_acquire)) {
+            static std::atomic<int> fail_log{ 0 };
+            if (fail_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                fprintf(stderr,
+                        "[IS-EXPERT-FAIL] blk=%d exp=%d gate MISS model=%llu hash=0x%llx aux=0x%llx "
+                        "entries=%zu\n",
+                        block_id, expert_id, (unsigned long long) grp.gate_key.model_id,
+                        (unsigned long long) grp.gate_key.name_hash, (unsigned long long) grp.gate_key.aux_id,
+                        cache->entry_count());
+            }
         }
         return false;
     }
@@ -967,7 +974,7 @@ static bool ggml_sycl_gpu_reorder_disabled();
 // Proactive pre-staging: upload popular experts to GPU0 VRAM after warmup.
 // Called immediately after moe_apply_popularity_placement() sets popularity ranks.
 // ---------------------------------------------------------------------------
-static std::atomic<bool> g_prestage_completed{false};
+// g_prestage_completed defined earlier (before is_expert_resident).
 
 static void moe_prestage_popular_experts() {
     if (g_prestage_completed.load(std::memory_order_acquire)) return;
@@ -5065,6 +5072,15 @@ ggml_sycl_cache_id ggml_backend_sycl_get_weight_cache_key(const ggml_tensor * te
             ggml_backend_sycl_register_host_weight_tensor(dev, const_cast<ggml_tensor *>(tensor));
             extra = static_cast<ggml_tensor_extra_gpu *>(const_cast<ggml_tensor *>(tensor)->extra);
         }
+    }
+
+    // MoE expert slice: delegate to the expert-specific key generator so that
+    // the cache key matches what registration/prestage used (name ":eN" suffix,
+    // per-expert dimensions, combined aux_id).  Without this, resolve_weight
+    // generates a key with the full tensor name (no suffix) which never matches
+    // the registered expert entries (IS-EXPERT-FAIL).
+    if (extra && extra->moe_expert_id >= 0) {
+        return ggml_sycl_get_moe_expert_cache_key(tensor, extra, extra->moe_expert_id);
     }
 
     uint64_t cache_uuid = ggml_sycl_assign_cache_uuid(extra);
@@ -33192,6 +33208,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     dst_row.nb[3]                                         = nb1;
     static thread_local ggml_tensor_extra_gpu local_extra = {};
     if (src0_extra) {
+        local_extra.cache_uuid = src0_extra->cache_uuid;
+        local_extra.model_id   = src0_extra->model_id;
         std::memcpy(local_extra.data_device, src0_extra->data_device, sizeof(local_extra.data_device));
         std::memcpy(local_extra.data_device_size, src0_extra->data_device_size, sizeof(local_extra.data_device_size));
         std::memcpy(local_extra.events, src0_extra->events, sizeof(local_extra.events));
@@ -33208,6 +33226,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         std::memcpy(local_extra.tp_local_ne, src0_extra->tp_local_ne, sizeof(local_extra.tp_local_ne));
         std::memcpy(local_extra.tp_offset_ne, src0_extra->tp_offset_ne, sizeof(local_extra.tp_offset_ne));
     } else {
+        local_extra.cache_uuid = 0;
+        local_extra.model_id   = 0;
         std::memset(local_extra.data_device, 0, sizeof(local_extra.data_device));
         std::memset(local_extra.data_device_size, 0, sizeof(local_extra.data_device_size));
         std::memset(local_extra.events, 0, sizeof(local_extra.events));
@@ -33222,6 +33242,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         std::memset(local_extra.tp_local_ne, 0, sizeof(local_extra.tp_local_ne));
         std::memset(local_extra.tp_offset_ne, 0, sizeof(local_extra.tp_offset_ne));
     }
+    local_extra.moe_expert_id = -1;  // Initialize: not an expert slice yet
     if (use_expert_cache) {
         // Ensure ggml_sycl_get_data_ptr uses the per-expert pointer we assign to src0_row.data.
         // Retaining src0_extra->data_device here can route kernels to the full weight buffer.
@@ -34153,6 +34174,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                         src0_row.data               = entry.device_ptr;
                         local_extra.layout.data_ptr = entry.device_ptr;
+                        local_extra.moe_expert_id   = entry.expert_id;
                         src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
                         dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
 
@@ -34160,6 +34182,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
             }
+            local_extra.moe_expert_id = -1;  // Reset after per-expert dispatch
 
             // MoE profiling: GPU MMVQ dispatch done (host-side submission)
             if (g_moe_profile_enabled) {
@@ -34380,6 +34403,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         src0_row.data = const_cast<void *>(expert_ptr);
 
                         local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
+                        local_extra.moe_expert_id   = static_cast<int>(i02);
                         src1_row.data               = src1_original + i11 * nb11 + i12 * nb12;
                         dst_row.data                = dst_original + i1 * nb1 + i2 * nb2;
 
@@ -34387,6 +34411,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
             }
+            local_extra.moe_expert_id = -1;  // Reset after per-expert dispatch
         }
 
     } else {
@@ -34523,6 +34548,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             src0_row.data               = const_cast<void *>(expert_ptr);
             local_extra.layout.data_ptr = const_cast<void *>(expert_ptr);
+            local_extra.moe_expert_id   = static_cast<int>(i02);
             GGML_ASSERT(nb11 == sizeof(float) * ne10);
 
             GGML_ASSERT(nb1 == sizeof(float) * ne0);
@@ -34567,6 +34593,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
         }
     }
+    local_extra.moe_expert_id = -1;  // Reset after per-expert dispatch
     // Debug: print output values after MoE operation
     // Note: Skip during graph recording since .wait() is incompatible with command graphs
 

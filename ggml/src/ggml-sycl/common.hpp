@@ -1864,6 +1864,12 @@ struct ggml_tensor_extra_gpu {
     bool        xmx_mxfp4_tiled_conversion_complete[GGML_SYCL_MAX_DEVICES] = { false };
     std::mutex  xmx_tiled_conversion_mutex[GGML_SYCL_MAX_DEVICES];  // Protect concurrent access
 
+    // MoE expert ID for per-expert slice tensors dispatched by mul_mat_id.
+    // Set to >= 0 when this extra belongs to a per-expert slice; -1 otherwise.
+    // Used by ggml_backend_sycl_get_weight_cache_key to generate the correct
+    // expert-specific cache key (with ":eN" suffix) matching registration keys.
+    int moe_expert_id = -1;
+
     // MoE expert pointer table (device + host staging) for per-expert layout access
     void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
     size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
