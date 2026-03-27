@@ -38,7 +38,7 @@ jobs:
     - name: Build package
       run: cd gguf-py && poetry build
     - name: Publish package
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: gguf-py/dist

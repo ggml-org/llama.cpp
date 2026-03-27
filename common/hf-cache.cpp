@@ -26,6 +26,8 @@ namespace nl = nlohmann;
 #include <windows.h>
 #else
 #define HOME_DIR "HOME"
+#include <unistd.h>
+#include <pwd.h>
 #endif
 
 namespace hf_cache {
@@ -38,6 +40,7 @@ static fs::path get_cache_directory() {
             const char * var;
             fs::path path;
         } entries[] = {
+            {"LLAMA_CACHE",           fs::path()},
             {"HF_HUB_CACHE",          fs::path()},
             {"HUGGINGFACE_HUB_CACHE", fs::path()},
             {"HF_HOME",               fs::path("hub")},
@@ -50,6 +53,13 @@ static fs::path get_cache_directory() {
                 return entry.path.empty() ? base : base / entry.path;
             }
         }
+#ifndef _WIN32
+        const struct passwd * pw = getpwuid(getuid());
+
+        if (pw->pw_dir && *pw->pw_dir) {
+            return fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub";
+        }
+#endif
         throw std::runtime_error("Failed to determine HF cache directory");
     }();
 
@@ -325,8 +335,14 @@ hf_files get_repo_files(const std::string & repo_id,
                 if (item["lfs"].contains("oid") && item["lfs"]["oid"].is_string()) {
                     file.oid = item["lfs"]["oid"].get<std::string>();
                 }
+                if (item["lfs"].contains("size") && item["lfs"]["size"].is_number()) {
+                    file.size = item["lfs"]["size"].get<size_t>();
+                }
             } else if (item.contains("oid") && item["oid"].is_string()) {
                 file.oid = item["oid"].get<std::string>();
+            }
+            if (file.size == 0 && item.contains("size") && item["size"].is_number()) {
+                file.size = item["size"].get<size_t>();
             }
 
             if (!file.oid.empty() && !is_valid_oid(file.oid)) {
@@ -487,6 +503,34 @@ std::string finalize_file(const hf_file & file) {
 
 // delete everything after this line, one day
 
+// copied from download.cpp without the tag part
+struct gguf_split_info {
+    std::string prefix; // tag included
+    int index;
+    int count;
+};
+
+static gguf_split_info get_gguf_split_info(const std::string & path) {
+    static const std::regex re_split("^(.+)-([0-9]{5})-of-([0-9]{5})$", std::regex::icase);
+    std::smatch m;
+
+    std::string prefix = path;
+    if (!string_remove_suffix(prefix, ".gguf")) {
+        return {};
+    }
+
+    int index = 1;
+    int count = 1;
+
+    if (std::regex_match(prefix, m, re_split)) {
+        index = std::stoi(m[2].str());
+        count = std::stoi(m[3].str());
+        prefix = m[1].str();
+    }
+
+    return {std::move(prefix), index, count};
+}
+
 static std::pair<std::string, std::string> parse_manifest_name(std::string & filename) {
     static const std::regex re(R"(^manifest=([^=]+)=([^=]+)=.*\.json$)");
     std::smatch match;
@@ -504,25 +548,30 @@ static std::string make_old_cache_filename(const std::string & owner,
     return result;
 }
 
-static bool migrate_single_file(const fs::path    & old_cache,
-                                const std::string & owner,
-                                const std::string & repo,
-                                const nl::json    & node,
-                                const hf_files    & files) {
+struct migrate_file {
+    std::string path;
+    std::string sha256;
+    size_t size;
+    fs::path old_path;
+    fs::path etag_path;
+    const hf_file * file;
+};
 
-    if (!node.contains("rfilename") ||
-        !node.contains("lfs")       ||
-        !node["lfs"].contains("sha256")) {
-        return false;
-    }
+using migrate_files = std::vector<migrate_file>;
 
-    std::string path = node["rfilename"];
-    std::string sha256 = node["lfs"]["sha256"];
+static bool collect_file(const fs::path    & old_cache,
+                         const std::string & owner,
+                         const std::string & repo,
+                         const std::string & path,
+                         const std::string & sha256,
+                         const hf_files    & files,
+                         migrate_files     & to_migrate) {
 
-    const hf_file * file_info = nullptr;
+    const hf_file * file = nullptr;
+
     for (const auto & f : files) {
         if (f.path == path) {
-            file_info = &f;
+            file = &f;
             break;
         }
     }
@@ -532,50 +581,104 @@ static bool migrate_single_file(const fs::path    & old_cache,
     fs::path etag_path = old_path.string() + ".etag";
 
     if (!fs::exists(old_path)) {
-        if (fs::exists(etag_path)) {
-            LOG_WRN("%s: %s is orphan, deleting...\n", __func__, etag_path.string().c_str());
-            fs::remove(etag_path);
+        if (file && fs::exists(file->final_path)) {
+            return true;
         }
+        LOG_WRN("%s: %s not found in old cache or HF cache\n", __func__, old_filename.c_str());
         return false;
     }
 
-    bool delete_old_path = false;
-
-    if (!file_info) {
-        LOG_WRN("%s: %s not found in current repo, deleting...\n", __func__, old_filename.c_str());
-        delete_old_path = true;
-    } else if (!sha256.empty() && !file_info->oid.empty() && sha256 != file_info->oid) {
-        LOG_WRN("%s: %s is not up to date (sha256 mismatch), deleting...\n", __func__, old_filename.c_str());
-        delete_old_path = true;
+    if (!file) {
+        LOG_WRN("%s: %s not found in current repo\n", __func__, old_filename.c_str());
+        return false;
     }
 
-    std::error_code ec;
+    if (!sha256.empty() && !file->oid.empty() && sha256 != file->oid) {
+        LOG_WRN("%s: %s is not up to date (sha256 mismatch)\n", __func__, old_filename.c_str());
+        return false;
+    }
 
-    if (delete_old_path) {
-        fs::remove(old_path, ec);
-        fs::remove(etag_path, ec);
+    if (file->size > 0) {
+        size_t size = fs::file_size(old_path);
+        if (size != file->size) {
+            LOG_WRN("%s: %s has wrong size %zu (expected %zu)\n", __func__, old_filename.c_str(), size, file->size);
+            return false;
+        }
+    }
+
+    to_migrate.push_back({path, sha256, file->size, old_path, etag_path, file});
+    return true;
+}
+
+static bool collect_files(const fs::path    & old_cache,
+                          const std::string & owner,
+                          const std::string & repo,
+                          const nl::json    & node,
+                          const hf_files    & files,
+                          migrate_files     & to_migrate) {
+
+    if (!node.contains("rfilename") ||
+        !node.contains("lfs")       ||
+        !node["lfs"].contains("sha256")) {
         return true;
     }
 
-    fs::path new_path(file_info->local_path);
+    std::string path = node["rfilename"];
+    std::string sha256 = node["lfs"]["sha256"];
+
+    auto split = get_gguf_split_info(path);
+
+    if (split.count <= 1) {
+        return collect_file(old_cache, owner, repo, path, sha256, files, to_migrate);
+    }
+
+    std::vector<std::pair<std::string, std::string>> splits;
+
+    for (const auto & f : files) {
+        auto split_f = get_gguf_split_info(f.path);
+        if (split_f.count == split.count && split_f.prefix == split.prefix) {
+            // sadly the manifest only provides the sha256 of the first file (index == 1)
+            // the rest will be verified using the size...
+            std::string f_sha256 = (split_f.index == 1) ? sha256 : "";
+            splits.emplace_back(f.path, f_sha256);
+        }
+    }
+
+    if ((int)splits.size() != split.count) {
+        LOG_WRN("%s: expected %d split files but found %d in repo\n", __func__, split.count, (int)splits.size());
+        return false;
+    }
+
+    for (const auto & [f_path, f_sha256] : splits) {
+        if (!collect_file(old_cache, owner, repo, f_path, f_sha256, files, to_migrate)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool migrate_file(const migrate_file & file) {
+    std::error_code ec;
+
+    fs::path new_path(file.file->local_path);
     fs::create_directories(new_path.parent_path(), ec);
 
     if (!fs::exists(new_path, ec)) {
-        fs::rename(old_path, new_path, ec);
+        fs::rename(file.old_path, new_path, ec);
         if (ec) {
-            fs::copy_file(old_path, new_path, ec);
+            fs::copy_file(file.old_path, new_path, ec);
             if (ec) {
-                LOG_WRN("%s: failed to move/copy %s: %s\n", __func__, old_path.string().c_str(), ec.message().c_str());
+                LOG_ERR("%s: failed to move/copy %s: %s\n", __func__, file.old_path.string().c_str(), ec.message().c_str());
                 return false;
             }
         }
-        fs::remove(old_path, ec);
+        fs::remove(file.old_path, ec);
     }
-    fs::remove(etag_path, ec);
+    fs::remove(file.etag_path, ec);
 
-    std::string filename = finalize_file(*file_info);
-    LOG_INF("%s: migrated %s -> %s\n", __func__, old_filename.c_str(), filename.c_str());
-
+    std::string filename = finalize_file(*file.file);
+    LOG_INF("%s: migrated %s -> %s\n", __func__, file.old_path.filename().string().c_str(), filename.c_str());
     return true;
 }
 
@@ -624,19 +727,43 @@ void migrate_old_cache_to_hf_cache(const std::string & token, bool offline) {
             continue;
         }
 
+        migrate_files to_migrate;
+        bool ok = true;
+
         try {
             std::ifstream manifest(entry.path());
             auto json = nl::json::parse(manifest);
-
             for (const char * key : {"ggufFile", "mmprojFile"}) {
                 if (json.contains(key)) {
-                    migrate_single_file(old_cache, owner, repo, json[key], files);
+                    if (!collect_files(old_cache, owner, repo, json[key], files, to_migrate)) {
+                        ok = false;
+                        break;
+                    }
                 }
             }
         } catch (const std::exception & e) {
             LOG_WRN("%s: failed to parse manifest %s: %s\n", __func__, filename.c_str(), e.what());
             continue;
         }
+
+        if (!ok) {
+            LOG_WRN("%s: migration skipped: one or more files failed validation\n", __func__);
+            continue;
+        }
+
+        for (const auto & file : to_migrate) {
+            if (!migrate_file(file)) {
+                ok = false;
+                break;
+            }
+        }
+
+        if (!ok) {
+            LOG_WRN("%s: migration failed: could not migrate all files\n", __func__);
+            continue;
+        }
+
+        LOG_INF("%s: migration complete, deleting manifest: %s\n", __func__, entry.path().string().c_str());
         fs::remove(entry.path());
     }
 }

@@ -14,6 +14,7 @@ struct hf_file {
     std::string final_path;
     std::string oid;
     std::string repo_id;
+    size_t size = 0; // only for the migration
 };
 
 using hf_files = std::vector<hf_file>;

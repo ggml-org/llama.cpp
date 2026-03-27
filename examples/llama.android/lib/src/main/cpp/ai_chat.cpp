@@ -365,13 +365,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
     LOGd("%s: System prompt received: \n%s", __func__, system_prompt);
     std::string formatted_system_prompt(system_prompt);
-    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
 
     // Format system prompt if applicable
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
         formatted_system_prompt = chat_add_and_format(ROLE_SYSTEM, system_prompt);
     }
+    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
 
     // Tokenize system prompt
     const auto system_tokens = common_tokenize(g_context, formatted_system_prompt,
@@ -414,13 +414,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
     const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
     LOGd("%s: User prompt received: \n%s", __func__, user_prompt);
     std::string formatted_user_prompt(user_prompt);
-    env->ReleaseStringUTFChars(juser_prompt, user_prompt);
 
     // Format user prompt if applicable
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
         formatted_user_prompt = chat_add_and_format(ROLE_USER, user_prompt);
     }
+    env->ReleaseStringUTFChars(juser_prompt, user_prompt);
 
     // Decode formatted user prompts
     auto user_tokens = common_tokenize(g_context, formatted_user_prompt, has_chat_template, has_chat_template);

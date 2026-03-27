@@ -77,7 +77,7 @@
 	let filteredOptions = $derived(filterModelOptions(options, searchTerm));
 
 	let groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favouriteModelIds, (m) =>
+		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
 			modelsStore.isModelLoaded(m)
 		)
 	);
