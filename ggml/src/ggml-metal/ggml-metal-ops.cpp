@@ -2544,6 +2544,17 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     const int64_t ne01 = op->src[0]->ne[1]; // batch size
 
     // use vec kernel if the batch size is small and if the head size is supported
+    // EXPERIMENT: force non-vec for turbo3 on pre-M5 hardware.
+    // The vec kernel uses nl=8 (4 elements per dequant call) which has 4x more
+    // loop iterations than the non-vec nl=2 path. On M2 Pro, this loop overhead
+    // dominates — the non-vec path may be faster even for batch=1.
+    const ggml_type ktype = op->src[1]->type;
+    if (ktype == GGML_TYPE_TURBO3_0 || ktype == GGML_TYPE_TURBO4_0) {
+        const char * force_nonvec = getenv("TURBO_FORCE_NONVEC");
+        if (force_nonvec && force_nonvec[0] == '1') {
+            return false;  // force non-vec path
+        }
+    }
     return (ne01 < 20) && (ne00 % 32 == 0);
 }
 
