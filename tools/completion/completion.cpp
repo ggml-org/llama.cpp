@@ -146,12 +146,18 @@ int main(int argc, char ** argv) {
 
     ctx   = llama_init->context();
     model = llama_init->model();
-    smpl  = llama_init->sampler(0);
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: unable to create context\n", __func__);
         return 1;
     }
+
+    if (model == NULL) {
+        LOG_ERR("%s: error: unable to load model\n", __func__);
+        return 1;
+    }
+
+    smpl = llama_init->sampler(0);
 
     llama_memory_t mem = llama_get_memory(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
