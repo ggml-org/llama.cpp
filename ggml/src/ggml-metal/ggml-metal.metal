@@ -697,6 +697,12 @@ constant half turbo_centroids_3bit_h[8] = {
      0.021460h,  0.065717h,  0.117832h,  0.190685h
 };
 
+// 4-entry magnitude LUT (positive values only, ascending order)
+// Used with ALU sign application to halve constant cache divergence
+constant half turbo_mag_3bit_h[4] = {
+    0.021460h, 0.065717h, 0.117832h, 0.190685h
+};
+
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
 // Experiment: batched byte reads (ported from @spiritbuun's CUDA impl).
 // Read qs + signs bytes with minimal device memory accesses.
@@ -744,7 +750,10 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // Pretend all elements are centroid 0 — isolates LUT indexing cost
     reg = type4(float4(float(turbo_centroids_3bit_h[0])) * norm);
 #else
-    // MODE 0: Full batched extract dequant (production code)
+    // MODE 0: 4-entry magnitude LUT + ALU sign (halves constant cache divergence)
+    // Only 4 possible constant addresses per lookup (vs 8 in full LUT).
+    // Sign applied via select() — no branch, just conditional negate.
+    // Correct sign mapping: sign=1 → +mag[qs], sign=0 → -mag[3-qs] (reversed)
     const float norm = float(xb->norm);
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
@@ -759,12 +768,27 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     const uint8_t s2 = (sb >> (sshift + 2)) & 1;
     const uint8_t s3 = (sb >> (sshift + 3)) & 1;
 
-    reg = type4(float4(
-        float(turbo_centroids_3bit_h[q0 | (s0 << 2)]),
-        float(turbo_centroids_3bit_h[q1 | (s1 << 2)]),
-        float(turbo_centroids_3bit_h[q2 | (s2 << 2)]),
-        float(turbo_centroids_3bit_h[q3 | (s3 << 2)])
-    ) * norm);
+    // 4-entry magnitude LUT — only 4 possible constant addresses per lookup.
+    // The magnitude index depends on BOTH qs and sign (reversed for negative).
+    // Use XOR trick: sign=0 → flip bits of qs (3-qs = qs ^ 0x3 for 2-bit values)
+    // This avoids the ternary and keeps it branchless.
+    const uint8_t mi0 = q0 ^ (s0 ? 0 : 0x3);  // s0=1: q0, s0=0: 3-q0
+    const uint8_t mi1 = q1 ^ (s1 ? 0 : 0x3);
+    const uint8_t mi2 = q2 ^ (s2 ? 0 : 0x3);
+    const uint8_t mi3 = q3 ^ (s3 ? 0 : 0x3);
+
+    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
+    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
+    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
+    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
+
+    // Apply sign: branchless negate via multiply
+    const float sg0 = s0 ? 1.0f : -1.0f;
+    const float sg1 = s1 ? 1.0f : -1.0f;
+    const float sg2 = s2 ? 1.0f : -1.0f;
+    const float sg3 = s3 ? 1.0f : -1.0f;
+
+    reg = type4(float4(v0 * sg0, v1 * sg1, v2 * sg2, v3 * sg3));
 #endif
 }
 
