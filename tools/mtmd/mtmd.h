@@ -122,11 +122,6 @@ MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
 // whether the current model uses spatial 3D RoPE (temporal + 2D continuous spatial positions)
 MTMD_API bool mtmd_decode_use_spatial_3d_rope(mtmd_context * ctx);
 
-// whether the current model needs inter-chunk coordination where prefix text
-// embeddings (e.g. cls+regs) are merged with image patch embeddings into a
-// single non-causal batch, rather than processing chunks independently
-MTMD_API bool mtmd_decode_use_interchunk_merge(mtmd_context * ctx);
-
 // whether the current model supports vision input
 MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
 
@@ -195,6 +190,7 @@ MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
 MTMD_API size_t       mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens); // TODO: deprecate
 MTMD_API size_t       mtmd_image_tokens_get_nx      (const mtmd_image_tokens * image_tokens);
 MTMD_API size_t       mtmd_image_tokens_get_ny      (const mtmd_image_tokens * image_tokens);
+MTMD_API size_t       mtmd_image_tokens_get_n_prefix(const mtmd_image_tokens * image_tokens);
 MTMD_API const char * mtmd_image_tokens_get_id      (const mtmd_image_tokens * image_tokens); // TODO: deprecate
 // number of temporal positions (equals to max(t,h,w) for M-RoPE; equals to n_tokens otherwise)
 MTMD_API llama_pos    mtmd_image_tokens_get_n_pos   (const mtmd_image_tokens * image_tokens); // TODO: deprecate

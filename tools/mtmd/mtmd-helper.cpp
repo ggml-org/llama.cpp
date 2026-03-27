@@ -320,7 +320,8 @@ int32_t mtmd_helper_decode_image_chunk(
             }
             const int nx = mtmd_image_tokens_get_nx(image_tokens);
             const int ny = mtmd_image_tokens_get_ny(image_tokens);
-            batch_embd.set_position_spatial_3d(n_past, nx, ny, seq_id);
+            const int n_prefix = (int)mtmd_image_tokens_get_n_prefix(image_tokens);
+            batch_embd.set_position_spatial_3d(n_past, nx, ny, seq_id, n_prefix);
         } else {
             GGML_ABORT("invalid chunk type for Falcon 3D RoPE");
         }
@@ -434,139 +435,6 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
     return 0;
 }
 
-// Falcon OCR: combine prefix token embeddings (cls+regs) with encoded image
-// patches into a single non-causal batch with 3D RoPE positions.
-static int32_t falcon_ocr_eval_image_with_prefix(
-        mtmd_context * ctx,
-        struct llama_context * lctx,
-        const mtmd_input_chunk * image_chunk,
-        const mtmd_input_chunk * prefix_text_chunk,
-        llama_pos n_past,
-        llama_seq_id seq_id,
-        int32_t n_batch,
-        llama_pos * new_n_past) {
-    size_t n_prefix = 0;
-    const llama_token * prefix_tokens = nullptr;
-    if (prefix_text_chunk) {
-        prefix_tokens = mtmd_input_chunk_get_tokens_text(prefix_text_chunk, &n_prefix);
-    }
-
-    int64_t t0 = ggml_time_ms();
-    LOG_INF("encoding image slice...\n");
-    int32_t ret = mtmd_encode_chunk(ctx, image_chunk);
-    if (ret != 0) {
-        LOG_ERR("failed to encode image slice\n");
-        return ret;
-    }
-    LOG_INF("image slice encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
-
-    float * patch_embd = mtmd_get_output_embd(ctx);
-    int32_t n_patches = mtmd_input_chunk_get_n_tokens(image_chunk);
-
-    const llama_model * model = llama_get_model(lctx);
-    int n_mmproj_embd = llama_model_n_embd_inp(model);
-    int n_pos_per_embd = 4;
-
-    int32_t n_combined = (int32_t)n_prefix + n_patches;
-    std::vector<float> combined_embd(n_combined * n_mmproj_embd, 0.0f);
-
-    if (n_prefix > 0) {
-        for (size_t t = 0; t < n_prefix; t++) {
-            if (!llama_model_token_to_embd(model, prefix_tokens[t],
-                    combined_embd.data() + t * n_mmproj_embd)) {
-                LOG_ERR("failed to get embedding for prefix token %d\n", prefix_tokens[t]);
-                return -1;
-            }
-        }
-        LOG_INF("prepended %zu prefix token embeddings to image batch\n", n_prefix);
-    }
-
-    memcpy(combined_embd.data() + n_prefix * n_mmproj_embd,
-           patch_embd, n_patches * n_mmproj_embd * sizeof(float));
-
-    decode_embd_batch batch_embd(combined_embd.data(), n_combined, n_pos_per_embd, n_mmproj_embd);
-
-    const auto image_tokens = mtmd_input_chunk_get_tokens_image(image_chunk);
-    const int nx = mtmd_image_tokens_get_nx(image_tokens);
-    const int ny = mtmd_image_tokens_get_ny(image_tokens);
-
-    batch_embd.set_position_spatial_3d(n_past, nx, ny, seq_id, (int)n_prefix);
-
-    llama_set_causal_attn(lctx, false);
-    int32_t i_batch_idx = 0;
-    int32_t n_img_batches = (n_combined + n_batch - 1) / n_batch;
-    while (i_batch_idx < n_img_batches) {
-        int pos_offset = i_batch_idx * n_batch;
-        int n_tokens_batch = std::min(n_batch, n_combined - pos_offset);
-        llama_batch batch_view = batch_embd.get_view(pos_offset, n_tokens_batch);
-
-        LOG_INF("decoding image+prefix batch %d/%d, n_tokens = %d\n",
-                i_batch_idx+1, n_img_batches, n_tokens_batch);
-        ret = llama_decode(lctx, batch_view);
-        if (ret != 0) {
-            LOG_ERR("failed to decode image+prefix batch\n");
-            llama_set_causal_attn(lctx, true);
-            return ret;
-        }
-        i_batch_idx++;
-    }
-    llama_set_causal_attn(lctx, true);
-
-    *new_n_past = n_past + 1;
-    return 0;
-}
-
-// Falcon OCR chunk evaluator: defers pre-image text (cls+regs) and merges
-// it with image patches in a single non-causal batch.
-static int32_t eval_chunks_falcon_ocr(
-        mtmd_context * ctx,
-        struct llama_context * lctx,
-        const mtmd_input_chunks * chunks,
-        llama_pos n_past,
-        llama_seq_id seq_id,
-        int32_t n_batch,
-        bool logits_last,
-        llama_pos * new_n_past) {
-    size_t n_chunks = mtmd_input_chunks_size(chunks);
-
-    for (size_t i = 0; i < n_chunks; i++) {
-        bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
-        auto chunk = mtmd_input_chunks_get(chunks, i);
-        auto type  = mtmd_input_chunk_get_type(chunk);
-
-        if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-            bool next_is_image = (i + 1 < n_chunks &&
-                mtmd_input_chunk_get_type(mtmd_input_chunks_get(chunks, i + 1))
-                    == MTMD_INPUT_CHUNK_TYPE_IMAGE);
-            if (next_is_image) {
-                // Defer prefix (cls+regs) — merged with IMAGE below
-            } else {
-                int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk,
-                    n_past, seq_id, n_batch, chunk_logits_last, &n_past);
-                if (res != 0) { return res; }
-            }
-
-        } else if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            const mtmd_input_chunk * prefix = (i > 0 &&
-                mtmd_input_chunk_get_type(mtmd_input_chunks_get(chunks, i - 1))
-                    == MTMD_INPUT_CHUNK_TYPE_TEXT)
-                ? mtmd_input_chunks_get(chunks, i - 1) : nullptr;
-            int32_t res = falcon_ocr_eval_image_with_prefix(ctx, lctx, chunk,
-                prefix, n_past, seq_id, n_batch, &n_past);
-            if (res != 0) { return res; }
-
-        } else {
-            int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk,
-                n_past, seq_id, n_batch, chunk_logits_last, &n_past);
-            if (res != 0) { return res; }
-        }
-
-        *new_n_past = n_past;
-    }
-
-    return 0;
-}
-
 int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
                                 struct llama_context * lctx,
                                 const mtmd_input_chunks * chunks,
@@ -579,11 +447,6 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
     if (n_chunks == 0) {
         LOG_WRN("no chunks to eval\n");
         return 0;
-    }
-
-    if (mtmd_decode_use_interchunk_merge(ctx)) {
-        return eval_chunks_falcon_ocr(ctx, lctx, chunks,
-            n_past, seq_id, n_batch, logits_last, new_n_past);
     }
 
     for (size_t i = 0; i < n_chunks; i++) {
