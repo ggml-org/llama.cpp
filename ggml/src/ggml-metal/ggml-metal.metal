@@ -698,32 +698,39 @@ constant half turbo_centroids_3bit_h[8] = {
 };
 
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
-// Register centroid×norm LUT — ported from @spiritbuun's CUDA implementation.
-// Precompute centroid[i]*norm into thread-local registers once per block,
-// then index into registers instead of hitting constant memory per element.
-// On CUDA this gave 96-97% decode speed vs q8_0 (up from ~88%).
+// Experiment: batched byte reads (ported from @spiritbuun's CUDA impl).
+// Read qs + signs bytes with minimal device memory accesses.
+// The signs byte covers 8 elements — read once, shift for each element.
+// Constant half[8] LUT for centroid lookup (proven fastest on Apple Silicon).
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
+    // Batch the reads: qs[il] is 1 byte (4 2-bit indices),
+    // signs[il>>1] is 1 byte (8 sign bits, shared across 2 qs bytes).
+    // The compiler should CSE the signs read across consecutive il values,
+    // but we make the pattern explicit for Metal's optimizer.
     const float norm = float(xb->norm);
-
-    // Original 8-entry constant half LUT + float norm broadcast.
-    // Register LUT approach (cn[8] array) tested but caused register spill
-    // on Metal, making it slower than constant memory. Reverting to the
-    // proven approach from main branch: constant half LUT + float multiply.
-    // This is the fastest vec dequant on M5 Max (77.4 tok/s).
-    // Note: @spiritbuun's register LUT works great on CUDA (96-97% of q8_0)
-    // but Metal's register file handles it differently.
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    float4 centroids = float4(half4(
-        turbo_centroids_3bit_h[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)],
-        turbo_centroids_3bit_h[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)]
-    ));
-    reg = type4(centroids * norm);
+    // Unrolled centroid lookup with pre-extracted bit fields.
+    // Extract all 4 qs indices and 4 sign bits at once to help the
+    // Metal compiler schedule memory reads ahead of ALU.
+    const uint8_t q0 = (qb      ) & 0x03;
+    const uint8_t q1 = (qb >> 2) & 0x03;
+    const uint8_t q2 = (qb >> 4) & 0x03;
+    const uint8_t q3 = (qb >> 6);           // no mask needed for top 2 bits
+    const uint8_t s0 = (sb >> (sshift    )) & 1;
+    const uint8_t s1 = (sb >> (sshift + 1)) & 1;
+    const uint8_t s2 = (sb >> (sshift + 2)) & 1;
+    const uint8_t s3 = (sb >> (sshift + 3)) & 1;
+
+    reg = type4(float4(
+        float(turbo_centroids_3bit_h[q0 | (s0 << 2)]),
+        float(turbo_centroids_3bit_h[q1 | (s1 << 2)]),
+        float(turbo_centroids_3bit_h[q2 | (s2 << 2)]),
+        float(turbo_centroids_3bit_h[q3 | (s3 << 2)])
+    ) * norm);
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----
