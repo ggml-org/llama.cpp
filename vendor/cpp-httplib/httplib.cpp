@@ -142,6 +142,12 @@ SSEClient &SSEClient::set_max_reconnect_attempts(int n) {
   return *this;
 }
 
+SSEClient &SSEClient::set_headers(const Headers &headers) {
+  std::lock_guard<std::mutex> lock(headers_mutex_);
+  headers_ = headers;
+  return *this;
+}
+
 bool SSEClient::is_connected() const { return connected_.load(); }
 
 const std::string &SSEClient::last_event_id() const {
@@ -220,7 +226,11 @@ void SSEClient::run_event_loop() {
 
   while (running_.load()) {
     // Build headers, including Last-Event-ID if we have one
-    auto request_headers = headers_;
+    Headers request_headers;
+    {
+      std::lock_guard<std::mutex> lock(headers_mutex_);
+      request_headers = headers_;
+    }
     if (!last_event_id_.empty()) {
       request_headers.emplace("Last-Event-ID", last_event_id_);
     }
@@ -239,18 +249,18 @@ void SSEClient::run_event_loop() {
       continue;
     }
 
-    if (result.status() != 200) {
+    if (result.status() != StatusCode::OK_200) {
       connected_.store(false);
-      // For certain errors, don't reconnect
-      if (result.status() == 204 || // No Content - server wants us to stop
-          result.status() == 404 || // Not Found
-          result.status() == 401 || // Unauthorized
-          result.status() == 403) { // Forbidden
-        if (on_error_) { on_error_(Error::Connection); }
+      if (on_error_) { on_error_(Error::Connection); }
+
+      // For certain errors, don't reconnect.
+      // Note: 401 is intentionally absent so that handlers can refresh
+      // credentials via set_headers() and let the client reconnect.
+      if (result.status() == StatusCode::NoContent_204 ||
+          result.status() == StatusCode::NotFound_404 ||
+          result.status() == StatusCode::Forbidden_403) {
         break;
       }
-
-      if (on_error_) { on_error_(Error::Connection); }
 
       if (!should_reconnect(reconnect_count)) { break; }
       wait_for_reconnect();
@@ -9168,18 +9178,11 @@ void ClientImpl::setup_redirect_client(ClientType &client) {
   client.set_compress(compress_);
   client.set_decompress(decompress_);
 
-  // Copy authentication settings BEFORE proxy setup
-  if (!basic_auth_username_.empty()) {
-    client.set_basic_auth(basic_auth_username_, basic_auth_password_);
-  }
-  if (!bearer_token_auth_token_.empty()) {
-    client.set_bearer_token_auth(bearer_token_auth_token_);
-  }
-#ifdef CPPHTTPLIB_SSL_ENABLED
-  if (!digest_auth_username_.empty()) {
-    client.set_digest_auth(digest_auth_username_, digest_auth_password_);
-  }
-#endif
+  // NOTE: Authentication credentials (basic auth, bearer token, digest auth)
+  // are intentionally NOT copied to the redirect client. Per RFC 9110 Section
+  // 15.4, credentials must not be forwarded when redirecting to a different
+  // host. This function is only called for cross-host redirects; same-host
+  // redirects are handled directly in ClientImpl::redirect().
 
   // Setup proxy configuration (CRITICAL ORDER - proxy must be set
   // before proxy auth)
@@ -11425,7 +11428,8 @@ void Client::set_follow_location(bool on) {
 
 void Client::set_path_encode(bool on) { cli_->set_path_encode(on); }
 
-[[deprecated("Use set_path_encode instead")]]
+[[deprecated("Use set_path_encode() instead. "
+             "This function will be removed by v1.0.0.")]]
 void Client::set_url_encode(bool on) {
   cli_->set_path_encode(on);
 }
@@ -16330,9 +16334,10 @@ bool WebSocketClient::connect() {
 
   Error error;
   sock_ = detail::create_client_socket(
-      host_, std::string(), port_, AF_UNSPEC, false, false, nullptr, 5, 0,
+      host_, std::string(), port_, address_family_, tcp_nodelay_, ipv6_v6only_,
+      socket_options_, connection_timeout_sec_, connection_timeout_usec_,
       read_timeout_sec_, read_timeout_usec_, write_timeout_sec_,
-      write_timeout_usec_, std::string(), error);
+      write_timeout_usec_, interface_, error);
 
   if (sock_ == INVALID_SOCKET) { return false; }
 
@@ -16396,6 +16401,27 @@ void WebSocketClient::set_write_timeout(time_t sec, time_t usec) {
 
 void WebSocketClient::set_websocket_ping_interval(time_t sec) {
   websocket_ping_interval_sec_ = sec;
+}
+
+void WebSocketClient::set_tcp_nodelay(bool on) { tcp_nodelay_ = on; }
+
+void WebSocketClient::set_address_family(int family) {
+  address_family_ = family;
+}
+
+void WebSocketClient::set_ipv6_v6only(bool on) { ipv6_v6only_ = on; }
+
+void WebSocketClient::set_socket_options(SocketOptions socket_options) {
+  socket_options_ = std::move(socket_options);
+}
+
+void WebSocketClient::set_connection_timeout(time_t sec, time_t usec) {
+  connection_timeout_sec_ = sec;
+  connection_timeout_usec_ = usec;
+}
+
+void WebSocketClient::set_interface(const std::string &intf) {
+  interface_ = intf;
 }
 
 #ifdef CPPHTTPLIB_SSL_ENABLED

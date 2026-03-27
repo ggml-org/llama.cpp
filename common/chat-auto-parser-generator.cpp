@@ -112,8 +112,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
         } else {
             parser = content.build_parser(ctx);
         }
-        parser = wrap_for_generation_prompt(p, parser, inputs, reasoning.start);
-        return parser;
+        return p.prefix(inputs.generation_prompt, reasoning.start) + parser;
     });
 }
 

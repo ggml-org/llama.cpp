@@ -589,8 +589,10 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
         ggml_backend_buffer_t buffer = tensor->buffer;
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
         result.buffer = ctx != nullptr ? ctx->remote_ptr : 0;
+        result.data = reinterpret_cast<uint64_t>(tensor->data);
     } else {
         result.buffer = 0;
+        result.data   = 0;
     }
     for (uint32_t i = 0; i < GGML_MAX_DIMS; i++) {
         result.ne[i] = tensor->ne[i];
@@ -606,7 +608,6 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     }
     result.view_src = reinterpret_cast<uint64_t>(tensor->view_src);
     result.view_offs = tensor->view_offs;
-    result.data = reinterpret_cast<uint64_t>(tensor->data);
 
     // Avoid sending uninitialized data over the wire
     memset(result.name, 0, sizeof(result.name));
@@ -1162,12 +1163,18 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
         return nullptr;
     }
 
+    // Fix: Prevent division by zero if blck_size is 0 (e.g., deprecated types)
+    if (ggml_blck_size((enum ggml_type)tensor->type) == 0) {
+        GGML_LOG_ERROR("[%s] invalid tensor type received (blck_size is 0): %u\n", __func__, tensor->type);
+        return nullptr;
+    }
+
     ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,
         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
     // ggml_new_tensor_4d might fail if dimensions are invalid, although less likely to crash than invalid type
     if (result == nullptr) {
-        GGML_LOG_ERROR("[%s] ggml_new_tensor_4d failed for type %u\\n", __func__, tensor->type);
+        GGML_LOG_ERROR("[%s] ggml_new_tensor_4d failed for type %u\n", __func__, tensor->type);
         return nullptr;
     }
 
@@ -1438,6 +1445,10 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
 
     struct ggml_tensor * result = deserialize_tensor(ctx, tensor);
     if (result == nullptr) {
+        return nullptr;
+    }
+    if (result->buffer == nullptr && result->data != nullptr) {
+        GGML_LOG_ERROR("[%s] invalid data ptr", __func__);
         return nullptr;
     }
     tensor_map[id] = result;

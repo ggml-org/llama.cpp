@@ -4,6 +4,36 @@ This document provides an in-depth technical overview of `llama-server`, intende
 
 If you are an end user consuming `llama-server` as a product, please refer to the main [README](./README.md) instead.
 
+## Scope of features
+
+In-scope types of feature:
+
+- Backend:
+    - Basic inference features: text completion, embeddings output
+    - Chat-oriented features: chat completion, tool calling
+    - Third-party API compatibility, e.g. OAI-compat, Anthropic-compat
+    - Multimodal input/output
+    - Memory management: save/load state, context checkpoints
+    - Model management
+    - Features that are required by the Web UI
+- Frontend:
+    - Chat-oriented features, example: basic chat, image upload, edit messages
+    - Agentic features, example: MCP
+    - Model management
+
+Note: For security reasons, features that require reading or writing external files must be **disabled by default**. This covers features like: MCP, model save/load
+
+Out-of-scope features:
+
+- Backend:
+    - Features that require a loop of external API calls, e.g. server-side agentic loop. This is because external API calls in C++ are costly to maintain. Any complex third-party logic should be implemented outside of server code.
+    - Features that expose the internal state of the model to the API, example: getting the intermediate activation from API. This is because llama.cpp doesn't support a stable API for doing this, and relying on `eval_callback` can make it complicated to maintain as this API is not intended to be used in multi-sequence setup.
+    - Model-specific features. All API calls and features must remain model-agnostic.
+- Frontend:
+    - Third-party plugins, it is costly to maintain a public plugin API for such features. Instead, users can make their own MCP server for their needs.
+    - Customizable themes, it is also costly to maintain. While we do focus on the aesthetic, we try to achieve this by perfecting a small set of themes.
+    - Browser-specific features, example: [Chrome's built-in AI API](https://developer.chrome.com/docs/ai/built-in-apis).
+
 ## Backend
 
 ### Overview
@@ -94,6 +124,61 @@ Here is an example trace of an API request for text completion:
 The framework automatically starts a `llama-server` instance, sends requests, and validates responses.
 
 For detailed instructions, see the [test documentation](./tests/README.md).
+
+### API for tools
+
+This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+
+**GET /tools**
+
+Get a list of tools, each tool has these fields:
+- `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
+- `display_name` (string): the name to be displayed on UI. Example: `Read file`
+- `type` (string): always be `"builtin"` for now
+- `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
+- `definition` (object): the OAI-compat definition of this tool
+
+**POST /tools**
+
+Invoke a tool call, request body is a JSON object with:
+- `tool` (string): the name of the tool
+- `params` (object): a mapping from argument name (string) to argument value
+
+Returns JSON object. There are two response formats:
+
+Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
+
+```json
+{
+    "plain_text_response": "this is a text response"
+}
+```
+
+The client should extract this value and place it inside message content (note: content is no longer a JSON), example
+
+```json
+{
+    "role": "tool",
+    "content": "this is a text response"
+}
+```
+
+Format 2: Normal JSON response, example:
+
+```json
+{
+    "error": "cannot open this file"
+}
+```
+
+That requires `JSON.stringify` when formatted to message content:
+
+```json
+{
+    "role": "tool",
+    "content": "{\"error\":\"cannot open this file\"}"
+}
+```
 
 ### Notable Related PRs
 

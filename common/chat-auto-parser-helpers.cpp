@@ -188,6 +188,21 @@ diff_split calculate_diff_split(const std::string & left, const std::string & ri
         result.suffix = "";
         // pick prefix = all as representation
     }
+
+    // When left has no unique content (result.left is empty), left is entirely
+    // shared with right. The simultaneous prefix/suffix segment matching can
+    // incorrectly consume trailing segments of left as suffix when those same
+    // segments also appear at the end of right (e.g. "\n" at the end of both
+    // the shared content and the generation prompt). This rotates the diff.
+    // Fix: if left is a prefix of right, enforce that directly.
+    if (result.left.empty() && !result.right.empty() &&
+            left.size() <= right.size() &&
+            right.substr(0, left.size()) == left) {
+        result.prefix = left;
+        result.suffix = "";
+        result.right  = right.substr(left.size());
+    }
+
     return result;
 }
 
@@ -291,22 +306,6 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
         }
     }
     return result;
-}
-
-common_peg_parser wrap_for_generation_prompt(common_chat_peg_builder &             p,
-                                             const common_peg_parser &             prs,
-                                             const autoparser::generation_params & inputs,
-                                             const std::string &                   reasoning_start) {
-    auto parser = prs;
-    if (!inputs.generation_prompt.empty()) {
-        size_t end_pos = inputs.generation_prompt.size();
-        if (!reasoning_start.empty() && inputs.generation_prompt.find(reasoning_start) != std::string::npos) {
-            end_pos = inputs.generation_prompt.find(reasoning_start);
-        }
-        std::string cut_genprompt = inputs.generation_prompt.substr(0, end_pos);
-        parser                    = p.literal(cut_genprompt) + parser;
-    }
-    return parser;
 }
 
 namespace autoparser {

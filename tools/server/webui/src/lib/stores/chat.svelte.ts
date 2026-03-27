@@ -1207,7 +1207,6 @@ class ChatStore {
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
 				await DatabaseService.updateMessage(msg.id, { content: newContent });
-				await conversationsStore.updateCurrentNode(msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: newContent });
 			}
 
@@ -1479,6 +1478,8 @@ class ChatStore {
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
 
 		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
+
+		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
