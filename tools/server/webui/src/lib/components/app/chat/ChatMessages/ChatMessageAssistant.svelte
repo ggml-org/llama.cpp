@@ -3,14 +3,12 @@
 		ChatMessageAgenticContent,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		MarkdownContent,
 		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -87,13 +85,7 @@
 	const hasAgenticMarkers = $derived(
 		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
 	);
-	const hasStreamingToolCall = $derived(
-		isChatStreaming() && agenticStreamingToolCall(message.convId) !== null
-	);
 	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
-	const isStructuredContent = $derived(
-		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall
-	);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -256,15 +248,13 @@
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
-		{:else if isStructuredContent}
+		{:else}
 			<ChatMessageAgenticContent
 				content={messageContent || ''}
 				isStreaming={isChatStreaming()}
 				highlightTurns={highlightAgenticTurns}
 				{message}
 			/>
-		{:else}
-			<MarkdownContent content={messageContent || ''} attachments={message.extra} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
