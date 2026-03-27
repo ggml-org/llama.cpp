@@ -124,7 +124,7 @@ static inline HVX_Vector_x8 hvx_vec_load_iq4nlx4x8_partial(const uint8_t * restr
     HVX_Vector_x8 r;
     uint32_t      i = 0;
 
-#pragma unroll(2)
+    #pragma unroll(2)
     for (i = 0; i < nb; i++) {
         HVX_Vector v   = vptr[i];                   // 256 elements (128 bytes)
         HVX_Vector v0  = Q6_V_vand_VV(v, mask_h4);  // & 0x0F : first  128 elements
