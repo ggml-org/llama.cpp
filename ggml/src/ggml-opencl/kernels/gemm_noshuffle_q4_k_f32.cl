@@ -79,8 +79,8 @@ kernel void kernel_gemm_noshuffle_q4_k_f32(
         get_scale_min_k4(sub_idx, sc2, &sv2, &mn2, mask_d6, mask_d4, mask_hi2);
         get_scale_min_k4(sub_idx, sc3, &sv3, &mn3, mask_d6, mask_d4, mask_hi2);
 
-        half4 scale = convert_half4(convert_float4(d)  * convert_float4((uchar4)sv0, sv1, sv2, sv3));
-        half4 mval  = convert_half4(convert_float4(dm) * convert_float4((uchar4)mn0, mn1, mn2, mn3));
+        half4 scale = convert_half4(convert_float4(d)  * convert_float4((uchar4)(sv0, sv1, sv2, sv3)));
+        half4 mval  = convert_half4(convert_float4(dm) * convert_float4((uchar4)(mn0, mn1, mn2, mn3)));
 
         for (int l = 0; l < 32; l += 4) {
             int ki = i + l;
