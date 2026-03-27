@@ -3391,9 +3391,11 @@ static const struct ggml_backend_reg_i ggml_backend_webgpu_reg_i = {
 ggml_backend_reg_t ggml_backend_webgpu_reg() {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_reg()");
 
-    static ggml_backend_webgpu_reg_context ctx;
-    ctx.name         = GGML_WEBGPU_NAME;
-    ctx.device_count = 1;
+    // Intentionally leak the global registry context to avoid crashing inside
+    // Dawn/Vulkan static teardown during process exit.
+    static ggml_backend_webgpu_reg_context * ctx = new ggml_backend_webgpu_reg_context();
+    ctx->name         = GGML_WEBGPU_NAME;
+    ctx->device_count = 1;
 
     wgpu::InstanceDescriptor               instance_descriptor{};
     std::vector<wgpu::InstanceFeatureName> instance_features = { wgpu::InstanceFeatureName::TimedWaitAny };
@@ -3409,23 +3411,23 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
 #endif
 
     wgpu::Instance inst             = wgpu::CreateInstance(&instance_descriptor);
-    ctx.webgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
-    ctx.webgpu_global_ctx->instance = std::move(inst);
+    ctx->webgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
+    ctx->webgpu_global_ctx->instance = std::move(inst);
 
 #ifdef __EMSCRIPTEN__
-    if (ctx.webgpu_global_ctx->instance == nullptr) {
+    if (ctx->webgpu_global_ctx->instance == nullptr) {
         GGML_LOG_ERROR("ggml_webgpu: Failed to create WebGPU instance. Make sure either -sASYNCIFY or -sJSPI is set\n");
         return nullptr;
     }
 #endif
-    GGML_ASSERT(ctx.webgpu_global_ctx->instance != nullptr);
+    GGML_ASSERT(ctx->webgpu_global_ctx->instance != nullptr);
 
-    static ggml_backend_reg reg = {
+    static ggml_backend_reg * reg = new ggml_backend_reg {
         /* .api_version = */ GGML_BACKEND_API_VERSION,
         /* .iface       = */ ggml_backend_webgpu_reg_i,
-        /* .context     = */ &ctx,
+        /* .context     = */ ctx,
     };
-    return &reg;
+    return reg;
 }
 
 ggml_backend_t ggml_backend_webgpu_init(void) {
