@@ -239,10 +239,15 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                             force_4mag ? " (forced)" : " (pre-M5 hardware)");
                     }
                     // Sparse V dequant: skip V for negligible attention weights
-                    const char * sparse_v = getenv("TURBO_SPARSE_V");
-                    if (sparse_v && sparse_v[0] == '1') {
+                    // Enabled by default on M5+ (verified: PPL identical, NIAH 9/9)
+                    // Pre-M5: opt-in via TURBO_SPARSE_V=1 until verified on M2
+                    const char * sparse_v_env = getenv("TURBO_SPARSE_V");
+                    const bool sparse_v_auto = ggml_metal_device_get_props(dev)->has_tensor;  // M5+
+                    const bool sparse_v_forced = sparse_v_env && sparse_v_env[0] == '1';
+                    if (sparse_v_auto || sparse_v_forced) {
                         [prep setObject:@"1" forKey:@"TURBO_SPARSE_V"];
-                        GGML_LOG_INFO("%s: turbo3 sparse V dequant enabled\n", __func__);
+                        GGML_LOG_INFO("%s: turbo3 sparse V dequant enabled%s\n", __func__,
+                            sparse_v_forced ? " (forced)" : "");
                     }
                     // TODO: context-adaptive dispatch — compile both 4-mag and 8-LUT
                     // FA kernel instantiations, select based on ne11 (KV cache size)
