@@ -428,7 +428,10 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_COUNT   = 41,
+        GGML_TYPE_TBQ2_0  = 41, // TurboQuant 2-bit MSE codec (~2.125 bpw)
+        GGML_TYPE_TBQ3_0  = 42, // TurboQuant 3-bit MSE codec (~3.125 bpw)
+        GGML_TYPE_TBQ4_0  = 43, // TurboQuant 4-bit MSE codec (~4.125 bpw)
+        GGML_TYPE_COUNT   = 44,
     };
 
     // precision

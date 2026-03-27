@@ -248,6 +248,35 @@ typedef struct {
 static_assert(sizeof(block_q8_1) == 2*sizeof(ggml_half) + QK8_1, "wrong q8_1 block size/padding");
 
 //
+// TurboQuant rotation-based quantization (for KV-cache)
+// Block size = 128 (common head_dim)
+// Each block stores: L2 norm (FP16) + packed centroid indices
+//
+
+#define QK_TBQ 128
+
+// TurboQuant 2-bit: ~2.125 bpw
+typedef struct {
+    ggml_half d;              // L2 norm of the original vector
+    uint8_t qs[QK_TBQ / 4];  // 2 bits per element = 32 bytes
+} block_tbq2_0;
+static_assert(sizeof(block_tbq2_0) == sizeof(ggml_half) + QK_TBQ / 4, "wrong tbq2_0 block size/padding");
+
+// TurboQuant 3-bit: ~3.125 bpw
+typedef struct {
+    ggml_half d;                  // L2 norm of the original vector
+    uint8_t qs[QK_TBQ * 3 / 8];  // 3 bits per element = 48 bytes
+} block_tbq3_0;
+static_assert(sizeof(block_tbq3_0) == sizeof(ggml_half) + QK_TBQ * 3 / 8, "wrong tbq3_0 block size/padding");
+
+// TurboQuant 4-bit: ~4.125 bpw
+typedef struct {
+    ggml_half d;              // L2 norm of the original vector
+    uint8_t qs[QK_TBQ / 2];  // 4 bits per element = 64 bytes
+} block_tbq4_0;
+static_assert(sizeof(block_tbq4_0) == sizeof(ggml_half) + QK_TBQ / 2, "wrong tbq4_0 block size/padding");
+
+//
 // Ternary quantization
 //
 
@@ -1883,7 +1912,47 @@ GGML_TABLE_BEGIN(uint32_t, iq1s_grid_gpu, NGRID_IQ1S)
     0x20222020, 0x20222022, 0x20222220, 0x20222222, 0x21212021, 0x21212120, 0x21212122, 0x22202020,
     0x22202022, 0x22202220, 0x22202222, 0x22212121, 0x22222020, 0x22222022, 0x22222220, 0x22222222,
 GGML_TABLE_END()
+
 #endif
+
+// TurboQuant codebook centroids
+// Computed via weighted k-means on Beta((d-1)/2, (d-1)/2) distribution for d=128
+GGML_TABLE_BEGIN(float, turbo_quant_centroids_2bit, 4)
+    -0.1330449316f,
+    -0.0400039795f,
+     0.0399669881f,
+     0.1330132511f
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(float, turbo_quant_centroids_3bit, 8)
+    -0.1883395664f,
+    -0.1180786334f,
+    -0.0665404601f,
+    -0.0215982832f,
+     0.0215684871f,
+     0.0665209427f,
+     0.1180593945f,
+     0.1883223529f
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(float, turbo_quant_centroids_4bit, 16)
+    -0.2374774575f,
+    -0.1806258182f,
+    -0.1415972119f,
+    -0.1101005740f,
+    -0.0826619300f,
+    -0.0576337143f,
+    -0.0340588608f,
+    -0.0112796821f,
+     0.0112398949f,
+     0.0340190845f,
+     0.0575939614f,
+     0.0826222205f,
+     0.1100694884f,
+     0.1415852450f,
+     0.1806258182f,
+     0.2374774575f
+GGML_TABLE_END()
 
 #endif // GGML_COMMON_IMPL
 #endif // GGML_COMMON_IMPL

@@ -1,5 +1,7 @@
 #include "set-rows.cuh"
 #include "cpy-utils.cuh"
+#include "tbq-cuda.cuh"
+extern void tbq_cuda_ensure_rotation(void);
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
@@ -309,6 +311,21 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_TBQ2_0) {
+        set_rows_cuda_quant<idx_t, block_tbq2_0, QK_TBQ, quantize_f32_tbq2_0_block>(
+            src0_d, src1_d, (block_tbq2_0*)dst->data,
+            ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+    } else if (dst->type == GGML_TYPE_TBQ3_0) {
+        set_rows_cuda_quant<idx_t, block_tbq3_0, QK_TBQ, quantize_f32_tbq3_0_block>(
+            src0_d, src1_d, (block_tbq3_0*)dst->data,
+            ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+    } else if (dst->type == GGML_TYPE_TBQ4_0) {
+        set_rows_cuda_quant<idx_t, block_tbq4_0, QK_TBQ, quantize_f32_tbq4_0_block>(
+            src0_d, src1_d, (block_tbq4_0*)dst->data,
+            ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03, nb10, nb11, nb12, nb1, nb2, nb3, stream);
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }
@@ -316,6 +333,9 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
 
 
 void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    // Lazy-init TBQ rotation on GPU
+    if (dst->type == GGML_TYPE_TBQ2_0 || dst->type == GGML_TYPE_TBQ3_0 || dst->type == GGML_TYPE_TBQ4_0)
+        tbq_cuda_ensure_rotation();
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 

@@ -2336,6 +2336,196 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ====================== TurboQuant rotation-based quantization
+
+#include "ggml-turbo-quant.h"
+
+// Helper: find nearest centroid index
+static inline int tbq_nearest_centroid(float val, const float * centroids, int n) {
+    int best = 0;
+    float best_dist = fabsf(val - centroids[0]);
+    for (int i = 1; i < n; i++) {
+        float dist = fabsf(val - centroids[i]);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    return best;
+}
+
+// TurboQuant quantize: generic for any bit width
+// Quantizes k floats (must be multiple of QK_TBQ=128)
+// Requires turbo_quant_ctx to be set via turbo_quant_set_ctx()
+static void tbq_quantize_block(const float * GGML_RESTRICT x, void * GGML_RESTRICT y_ptr,
+                                int bits, const float * centroids, int n_centroids, int64_t k) {
+    assert(k % QK_TBQ == 0);
+
+    turbo_quant_ctx * ctx = turbo_quant_get_ctx();
+    if (ctx == NULL) { GGML_ASSERT(ctx != NULL && "TurboQuant context not initialized"); }
+    assert(ctx->dim == QK_TBQ);
+
+    const int64_t nb = k / QK_TBQ;
+    const float * rot = ctx->rotation;
+
+    // Temporary buffers for one block
+    float rotated[QK_TBQ];
+    int   indices[QK_TBQ];
+
+    for (int64_t i = 0; i < nb; i++) {
+        const float * xb = x + i * QK_TBQ;
+
+        // 1. Compute L2 norm
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_TBQ; j++) {
+            norm_sq += xb[j] * xb[j];
+        }
+        float norm = sqrtf(norm_sq);
+
+        // 2. Normalize and rotate: rotated = rotation * (x / norm)
+        float inv_norm = (norm > 1e-10f) ? (1.0f / norm) : 0.0f;
+        for (int r = 0; r < QK_TBQ; r++) {
+            float sum = 0.0f;
+            for (int c = 0; c < QK_TBQ; c++) {
+                sum += rot[r * QK_TBQ + c] * xb[c];
+            }
+            rotated[r] = sum * inv_norm;
+        }
+
+        // 3. Find nearest centroid for each coordinate
+        for (int j = 0; j < QK_TBQ; j++) {
+            indices[j] = tbq_nearest_centroid(rotated[j], centroids, n_centroids);
+        }
+
+        // 4. Pack indices and store norm based on bit width
+        if (bits == 2) {
+            block_tbq2_0 * block = ((block_tbq2_0 *)y_ptr) + i;
+            block->d = GGML_FP32_TO_FP16(norm);
+            memset(block->qs, 0, sizeof(block->qs));
+            for (int j = 0; j < QK_TBQ; j++) {
+                int byte_idx = j / 4;
+                int bit_off  = (j % 4) * 2;
+                block->qs[byte_idx] |= (uint8_t)(indices[j] << bit_off);
+            }
+        } else if (bits == 3) {
+            block_tbq3_0 * block = ((block_tbq3_0 *)y_ptr) + i;
+            block->d = GGML_FP32_TO_FP16(norm);
+            memset(block->qs, 0, sizeof(block->qs));
+            // Pack 3-bit indices: bit-level packing
+            for (int j = 0; j < QK_TBQ; j++) {
+                int bit_pos = j * 3;
+                int byte_idx = bit_pos / 8;
+                int bit_off  = bit_pos % 8;
+                block->qs[byte_idx] |= (uint8_t)(indices[j] << bit_off);
+                // Handle spill to next byte
+                if (bit_off + 3 > 8) {
+                    block->qs[byte_idx + 1] |= (uint8_t)(indices[j] >> (8 - bit_off));
+                }
+            }
+        } else if (bits == 4) {
+            block_tbq4_0 * block = ((block_tbq4_0 *)y_ptr) + i;
+            block->d = GGML_FP32_TO_FP16(norm);
+            memset(block->qs, 0, sizeof(block->qs));
+            for (int j = 0; j < QK_TBQ; j++) {
+                int byte_idx = j / 2;
+                int bit_off  = (j % 2) * 4;
+                block->qs[byte_idx] |= (uint8_t)(indices[j] << bit_off);
+            }
+        }
+    }
+}
+
+// TurboQuant dequantize: generic for any bit width
+static void tbq_dequantize_block(const void * GGML_RESTRICT x_ptr, float * GGML_RESTRICT y,
+                                  int bits, const float * centroids, int64_t k) {
+    assert(k % QK_TBQ == 0);
+
+    turbo_quant_ctx * ctx = turbo_quant_get_ctx();
+    if (ctx == NULL) { GGML_ASSERT(ctx != NULL && "TurboQuant context not initialized"); }
+    assert(ctx->dim == QK_TBQ);
+
+    const int64_t nb = k / QK_TBQ;
+    const float * rot_t = ctx->rotation_t;
+
+    float reconstructed[QK_TBQ];
+    int   indices[QK_TBQ];
+
+    for (int64_t i = 0; i < nb; i++) {
+        float norm;
+
+        // 1. Unpack indices and read norm
+        if (bits == 2) {
+            const block_tbq2_0 * block = ((const block_tbq2_0 *)x_ptr) + i;
+            norm = GGML_FP16_TO_FP32(block->d);
+            for (int j = 0; j < QK_TBQ; j++) {
+                int byte_idx = j / 4;
+                int bit_off  = (j % 4) * 2;
+                indices[j] = (block->qs[byte_idx] >> bit_off) & 0x3;
+            }
+        } else if (bits == 3) {
+            const block_tbq3_0 * block = ((const block_tbq3_0 *)x_ptr) + i;
+            norm = GGML_FP16_TO_FP32(block->d);
+            for (int j = 0; j < QK_TBQ; j++) {
+                int bit_pos = j * 3;
+                int byte_idx = bit_pos / 8;
+                int bit_off  = bit_pos % 8;
+                int val = (block->qs[byte_idx] >> bit_off);
+                if (bit_off + 3 > 8) {
+                    val |= ((int)block->qs[byte_idx + 1] << (8 - bit_off));
+                }
+                indices[j] = val & 0x7;
+            }
+        } else { // bits == 4
+            const block_tbq4_0 * block = ((const block_tbq4_0 *)x_ptr) + i;
+            norm = GGML_FP16_TO_FP32(block->d);
+            for (int j = 0; j < QK_TBQ; j++) {
+                int byte_idx = j / 2;
+                int bit_off  = (j % 2) * 4;
+                indices[j] = (block->qs[byte_idx] >> bit_off) & 0xF;
+            }
+        }
+
+        // 2. Look up centroids
+        for (int j = 0; j < QK_TBQ; j++) {
+            reconstructed[j] = centroids[indices[j]];
+        }
+
+        // 3. Inverse rotation: x_hat = rotation_t * reconstructed
+        float * yb = y + i * QK_TBQ;
+        for (int r = 0; r < QK_TBQ; r++) {
+            float sum = 0.0f;
+            for (int c = 0; c < QK_TBQ; c++) {
+                sum += rot_t[r * QK_TBQ + c] * reconstructed[c];
+            }
+            yb[r] = sum * norm;
+        }
+    }
+}
+
+void quantize_row_tbq2_0_ref(const float * GGML_RESTRICT x, block_tbq2_0 * GGML_RESTRICT y, int64_t k) {
+    tbq_quantize_block(x, y, 2, turbo_quant_centroids_2bit, 4, k);
+}
+
+void quantize_row_tbq3_0_ref(const float * GGML_RESTRICT x, block_tbq3_0 * GGML_RESTRICT y, int64_t k) {
+    tbq_quantize_block(x, y, 3, turbo_quant_centroids_3bit, 8, k);
+}
+
+void quantize_row_tbq4_0_ref(const float * GGML_RESTRICT x, block_tbq4_0 * GGML_RESTRICT y, int64_t k) {
+    tbq_quantize_block(x, y, 4, turbo_quant_centroids_4bit, 16, k);
+}
+
+void dequantize_row_tbq2_0(const block_tbq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    tbq_dequantize_block(x, y, 2, turbo_quant_centroids_2bit, k);
+}
+
+void dequantize_row_tbq3_0(const block_tbq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    tbq_dequantize_block(x, y, 3, turbo_quant_centroids_3bit, k);
+}
+
+void dequantize_row_tbq4_0(const block_tbq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    tbq_dequantize_block(x, y, 4, turbo_quant_centroids_4bit, k);
+}
+
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {

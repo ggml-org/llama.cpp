@@ -4,10 +4,13 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
+
+#include "ggml-turbo-quant.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -2168,6 +2171,20 @@ llm_graph_params llama_context::graph_params(
 ggml_status llama_context::graph_compute(
             ggml_cgraph * gf,
                    bool   batched) {
+    // Set TurboQuant context and upload rotation matrix to GPU
+    if (memory) {
+        auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+        if (kv) {
+            turbo_quant_ctx * tq = kv->tq_ctx_k ? kv->tq_ctx_k : kv->tq_ctx_v;
+            if (tq) {
+                turbo_quant_set_ctx(tq);
+
+                // GPU rotation upload happens lazily inside TBQ CUDA kernels
+                // The rotation matrix is accessible via turbo_quant_get_ctx()
+            }
+        }
+    }
+
     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
 

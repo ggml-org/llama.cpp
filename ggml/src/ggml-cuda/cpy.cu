@@ -1,4 +1,5 @@
 #include "cpy.cuh"
+#include "tbq-cuda.cuh"
 #include "dequantize.cuh"
 #include "cpy-utils.cuh"
 #if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
@@ -545,6 +546,16 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         } else {
             ggml_cpy_scalar_cuda<int32_t, float>
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
+    } else if ((src0->type == GGML_TYPE_TBQ2_0 || src0->type == GGML_TYPE_TBQ3_0 || src0->type == GGML_TYPE_TBQ4_0) && src1->type == GGML_TYPE_F32) {
+        extern void tbq_cuda_ensure_rotation(void);
+        tbq_cuda_ensure_rotation();
+        if (src0->type == GGML_TYPE_TBQ2_0) {
+            dequantize_row_tbq2_0_cuda(src0_ddc, (float*)src1_ddc, ne, main_stream);
+        } else if (src0->type == GGML_TYPE_TBQ3_0) {
+            dequantize_row_tbq3_0_cuda(src0_ddc, (float*)src1_ddc, ne, main_stream);
+        } else {
+            dequantize_row_tbq4_0_cuda(src0_ddc, (float*)src1_ddc, ne, main_stream);
         }
     } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,

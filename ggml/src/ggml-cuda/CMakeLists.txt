@@ -128,6 +128,11 @@ if (CUDAToolkit_FOUND)
                              ${GGML_SOURCES_CUDA}
                             )
 
+    # TurboQuant: enable relocatable device code for cross-TU __device__ symbol linking
+    # Required so tbq-cuda.cu device globals (g_tbq_rotation) are visible from
+    # kernels in set-rows.cu, convert.cu, cpy.cu
+    set_target_properties(ggml-cuda PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
     if (GGML_CUDA_GRAPHS)

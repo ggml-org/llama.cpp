@@ -205,6 +205,8 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ggml-turbo-quant.c
+            ../include/ggml-turbo-quant.h
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES

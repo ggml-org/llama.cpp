@@ -726,6 +726,30 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_nvfp4_ref,
     },
+    [GGML_TYPE_TBQ2_0] = {
+        .type_name                = "tbq2_0",
+        .blck_size                = QK_TBQ,
+        .type_size                = sizeof(block_tbq2_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tbq2_0,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tbq2_0_ref,
+    },
+    [GGML_TYPE_TBQ3_0] = {
+        .type_name                = "tbq3_0",
+        .blck_size                = QK_TBQ,
+        .type_size                = sizeof(block_tbq3_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tbq3_0,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tbq3_0_ref,
+    },
+    [GGML_TYPE_TBQ4_0] = {
+        .type_name                = "tbq4_0",
+        .blck_size                = QK_TBQ,
+        .type_size                = sizeof(block_tbq4_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tbq4_0,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tbq4_0_ref,
+    },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
         .blck_size                = QK_K,
@@ -4962,7 +4986,6 @@ static struct ggml_tensor * ggml_interpolate_impl(
     GGML_ASSERT((mode & 0xFF) < GGML_SCALE_MODE_COUNT);
     // TODO: implement antialias for modes other than bilinear
     GGML_ASSERT(!(mode & GGML_SCALE_FLAG_ANTIALIAS) || (mode & 0xFF) == GGML_SCALE_MODE_BILINEAR);
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
 
@@ -5308,7 +5331,6 @@ struct ggml_tensor * ggml_flash_attn_ext(
     GGML_ASSERT(q->ne[3] == v->ne[3]);
 
     if (mask) {
-        GGML_ASSERT(mask->type == GGML_TYPE_F16);
         GGML_ASSERT(ggml_is_contiguous(mask));
         //GGML_ASSERT(ggml_can_repeat_rows(mask, qk));
 

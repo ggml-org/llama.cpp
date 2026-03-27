@@ -1516,7 +1516,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);
-        cb(experts, "ffn_moe_weighted", il);
+        cb(cur, "ffn_moe_weighted", il);
     }
 
     ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
@@ -1819,6 +1819,15 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
+        // TurboQuant types need to be dequantized to F16 before flash attention
+        if (k->type == GGML_TYPE_TBQ2_0 || k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0) {
+            k = ggml_cast(ctx0, k, GGML_TYPE_F32);
+        }
+
+        if (v->type == GGML_TYPE_TBQ2_0 || v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+        }
+
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
@@ -1845,6 +1854,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
+        // TurboQuant types need to be dequantized before mul_mat
+        if (k->type == GGML_TYPE_TBQ2_0 || k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0) {
+            k = ggml_cast(ctx0, k, GGML_TYPE_F32);
+        }
+
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         cb(kq, "kq", il);
 
@@ -1882,6 +1896,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
         ggml_soft_max_add_sinks(kq, sinks);
         cb(kq, "kq_soft_max", il);
+
+        // TurboQuant types need to be dequantized before mul_mat
+        if (v->type == GGML_TYPE_TBQ2_0 || v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+        }
 
         if (!v_trans) {
             // note: avoid this branch

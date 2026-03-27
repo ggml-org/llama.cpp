@@ -5,6 +5,8 @@
 #include "llama-model.h"
 #include "llama-context.h"
 
+#include "ggml-turbo-quant.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -211,6 +213,34 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+
+    // Initialize TurboQuant contexts if needed
+    auto is_tbq_type = [](ggml_type t) {
+        return t == GGML_TYPE_TBQ2_0 || t == GGML_TYPE_TBQ3_0 || t == GGML_TYPE_TBQ4_0;
+    };
+
+    if (is_tbq_type(type_k)) {
+        const uint32_t head_dim = hparams.n_embd_head_k();
+        GGML_ASSERT(head_dim == 128 && "TurboQuant currently requires head_dim == 128");
+        tq_ctx_k = turbo_quant_init(head_dim, /*seed=*/42);
+        GGML_ASSERT(tq_ctx_k != nullptr);
+        LLAMA_LOG_INFO("%s: initialized TurboQuant context for K cache (dim=%u, type=%s)\n",
+                __func__, head_dim, ggml_type_name(type_k));
+    }
+
+    if (is_tbq_type(type_v)) {
+        const uint32_t head_dim = hparams.n_embd_head_v();
+        GGML_ASSERT(head_dim == 128 && "TurboQuant currently requires head_dim == 128");
+        tq_ctx_v = turbo_quant_init(head_dim, /*seed=*/42);
+        GGML_ASSERT(tq_ctx_v != nullptr);
+        LLAMA_LOG_INFO("%s: initialized TurboQuant context for V cache (dim=%u, type=%s)\n",
+                __func__, head_dim, ggml_type_name(type_v));
+    }
+}
+
+llama_kv_cache::~llama_kv_cache() {
+    turbo_quant_free(tq_ctx_k);
+    turbo_quant_free(tq_ctx_v);
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -1561,6 +1591,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
                                 // ref: https://github.com/ggml-org/llama.cpp/pull/13870
                                 ? LLAMA_ROPE_TYPE_NEOX
                                 : hparams.rope_type;
+
     ggml_tensor * tmp;
 
     if (ggml_is_quantized(cur->type)) {

@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct turbo_quant_ctx;
+
 struct llama_cparams;
 struct llama_hparams;
 struct llama_model;
@@ -108,7 +110,11 @@ public:
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
-    ~llama_kv_cache() = default;
+    ~llama_kv_cache();
+
+    // TurboQuant rotation contexts (non-null when TBQ types are used)
+    turbo_quant_ctx * tq_ctx_k = nullptr;
+    turbo_quant_ctx * tq_ctx_v = nullptr;
 
     //
     // llama_memory_i
@@ -251,6 +257,7 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
 
     size_t total_size() const;
 
