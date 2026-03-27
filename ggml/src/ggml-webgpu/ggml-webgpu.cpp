@@ -1956,7 +1956,6 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
         mask_type < 2 ? (uint32_t) src1->ne[2] : 0,
         mask_type < 2 ? (uint32_t) src1->ne[3] : 0,
         ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 0)),  // scale
-        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 1)),  // bias
         ggml_webgpu_u32_from_f32(max_bias),
         ggml_webgpu_u32_from_f32(n_head_log2),
         ggml_webgpu_u32_from_f32(m0),
