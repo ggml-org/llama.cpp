@@ -1114,14 +1114,12 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         return;
     }
 
-    // HMX only supports F16, Q4_0, Q8_0, IQ4_NL weights.
-    // Other types (e.g. MXFP4) fall back to HVX.
+    // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
+    // Other types fall back to HVX.
     {
         uint32_t wtype = req->src0.type;
-        if (wtype != HTP_TYPE_F16  &&
-            wtype != HTP_TYPE_Q4_0 &&
-            wtype != HTP_TYPE_Q8_0 &&
-            wtype != HTP_TYPE_IQ4_NL) {
+        if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL &&
+            wtype != HTP_TYPE_MXFP4) {
             proc_matmul_req(ctx, req, bufs, n_bufs);
             return;
         }
