@@ -292,6 +292,10 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q8_0(
 // Turbo3 KQ dot product: dequantize K from turbo3 blocks, dot with Q (float2/half2)
 // Uses float Q path (like f16), not q8_1 integer path.
 // Q_v is half2[] or float2[] with D/2 pairs, partitioned nthreads-strided.
+//
+// Optimised: elem0 = 2*k_KQ is always even, so elem0 and elem1=elem0+1 always
+// share the same turbo3 block (ib), the same qs byte, and the same signs byte.
+// We therefore load each only once instead of twice.
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turbo3_0(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
@@ -307,22 +311,25 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turbo3_0(
     for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads) {
         const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads);
 
-        // Element indices in the K vector
-        const int elem0 = k_KQ * 2;
-        const int elem1 = elem0 + 1;
+        // elem0 is always even; elem0 and elem1 are always in the same block,
+        // the same qs byte (j0%4 ∈ {0,2}), and the same signs byte (j0%8 ∈ {0,2,4,6}).
+        const int elem0 = k_KQ * 2;                  // always even
+        const int ib    = elem0 / QK_TURBO3;          // shared block index
+        const int j0    = elem0 % QK_TURBO3;          // always even, 0..30
 
-        // Dequantize 2 K elements from turbo3 blocks
-        const int ib0 = elem0 / QK_TURBO3;
-        const int j0  = elem0 % QK_TURBO3;
-        const float norm0 = __half2float(K_turbo[ib0].norm);
+        // Single loads for the shared block fields
+        const float     norm     = __half2float(K_turbo[ib].norm);
+        const uint8_t   qs_byte  = K_turbo[ib].qs[j0 / 4];      // covers both j0 and j0+1
+        const uint8_t   sgn_byte = K_turbo[ib].signs[j0 / 8];   // covers both j0 and j0+1
 
-        const int ib1 = elem1 / QK_TURBO3;
-        const int j1  = elem1 % QK_TURBO3;
-        const float norm1 = __half2float(K_turbo[ib1].norm);
+        // Extract 3-bit indices for elem0 and elem1 from shared bytes
+        const int     shift  = (j0 % 4) * 2;                     // 0 or 4
+        const uint8_t idx0   = ((qs_byte >> shift)     & 0x3) | (((sgn_byte >> (j0 % 8))     & 0x1) << 2);
+        const uint8_t idx1   = ((qs_byte >> (shift+2)) & 0x3) | (((sgn_byte >> (j0 % 8 + 1)) & 0x1) << 2);
 
         float2 kv;
-        kv.x = turbo3_dequant_element(&K_turbo[ib0], j0, norm0);
-        kv.y = turbo3_dequant_element(&K_turbo[ib1], j1, norm1);
+        kv.x = TURBO_CENTROIDS_3BIT[idx0] * norm;
+        kv.y = TURBO_CENTROIDS_3BIT[idx1] * norm;
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
         const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads];
@@ -625,34 +632,67 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
     }
 }
 
-// Turbo3 V dequantize: extract `ne` float/half values at position i0
+// Turbo3 V dequantize: extract `ne` float/half values at position i0.
+//
+// Optimised for the ne==4 path (used by the VEC kernel with turbo3 V):
+// i0 is always a multiple of 4 from the VEC kernel access pattern, so all 4
+// elements share one qs byte and one signs byte — we load each once.
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_turbo3_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_turbo3_0 * x = (const block_turbo3_0 *) vx;
 
-    const int64_t ib  = i0 / QK_TURBO3;
-    const int     j0  = i0 % QK_TURBO3;
+    const int64_t ib   = i0 / QK_TURBO3;
+    const int     j0   = i0 % QK_TURBO3;
     const float   norm = __half2float(x[ib].norm);
 
     static_assert(ne == 2 || ne == 4, "bad ne");
 
+    if constexpr (ne == 4) {
+        // When j0 % 4 == 0 (always true from VEC kernel), all 4 elements share one
+        // qs byte (4 elements per byte) and one signs byte (8 elements per byte).
+        const uint8_t qs_byte  = x[ib].qs[j0 / 4];
+        const uint8_t sgn_byte = x[ib].signs[j0 / 8];
+        const int     shift_s  = j0 % 8;   // 0 or 4
+
+        const uint8_t idx0 = ((qs_byte >> 0) & 0x3) | (((sgn_byte >> (shift_s+0)) & 0x1) << 2);
+        const uint8_t idx1 = ((qs_byte >> 2) & 0x3) | (((sgn_byte >> (shift_s+1)) & 0x1) << 2);
+        const uint8_t idx2 = ((qs_byte >> 4) & 0x3) | (((sgn_byte >> (shift_s+2)) & 0x1) << 2);
+        const uint8_t idx3 = ((qs_byte >> 6) & 0x3) | (((sgn_byte >> (shift_s+3)) & 0x1) << 2);
+
 #ifdef FP16_AVAILABLE
-    if constexpr (std::is_same_v<T, half>) {
-#pragma unroll
-        for (int l0 = 0; l0 < ne; l0 += 2) {
-            float v0 = turbo3_dequant_element(&x[ib], j0 + l0 + 0, norm);
-            float v1 = turbo3_dequant_element(&x[ib], j0 + l0 + 1, norm);
-            ((half2 *) dst)[l0/2] = make_half2(__float2half(v0), __float2half(v1));
-        }
-    } else
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(
+                __float2half(TURBO_CENTROIDS_3BIT[idx0] * norm),
+                __float2half(TURBO_CENTROIDS_3BIT[idx1] * norm));
+            ((half2 *) dst)[1] = make_half2(
+                __float2half(TURBO_CENTROIDS_3BIT[idx2] * norm),
+                __float2half(TURBO_CENTROIDS_3BIT[idx3] * norm));
+        } else
 #endif // FP16_AVAILABLE
-    if constexpr (std::is_same_v<T, float>) {
-#pragma unroll
-        for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = turbo3_dequant_element(&x[ib], j0 + l, norm);
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *) dst)[0] = make_float2(
+                TURBO_CENTROIDS_3BIT[idx0] * norm,
+                TURBO_CENTROIDS_3BIT[idx1] * norm);
+            ((float2 *) dst)[1] = make_float2(
+                TURBO_CENTROIDS_3BIT[idx2] * norm,
+                TURBO_CENTROIDS_3BIT[idx3] * norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
         }
-    } else {
-        static_assert(std::is_same_v<T, void>, "unsupported type");
+    } else { // ne == 2
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            float v0 = turbo3_dequant_element(&x[ib], j0,   norm);
+            float v1 = turbo3_dequant_element(&x[ib], j0+1, norm);
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[0] = turbo3_dequant_element(&x[ib], j0,   norm);
+            ((float *) dst)[1] = turbo3_dequant_element(&x[ib], j0+1, norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
     }
 }
 
