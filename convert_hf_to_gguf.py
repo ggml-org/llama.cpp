@@ -8170,6 +8170,9 @@ class DeepseekV32Model(TextModel):
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer.add_bos_token, "Change value of add_bos_token to true in tokenizer_config.json file."
         self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
