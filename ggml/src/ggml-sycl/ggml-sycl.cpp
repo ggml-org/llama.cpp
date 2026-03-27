@@ -6720,6 +6720,26 @@ static void flush_pending_cpu_scatter() {
     g_pending_scatter.dst_tensor  = nullptr;
 }
 
+// Non-blocking try-flush: if CPU compute from the previous layer is already
+// done (future ready), flush immediately to overlap H2D scatter with the
+// current layer's activation D2H.  If CPU compute is still running, skip —
+// the next consumption point will do a blocking flush.
+static bool try_flush_pending_cpu_scatter() {
+    if (!g_pending_scatter.active) return false;
+    if (!g_pending_scatter.future.valid()) {
+        // No future — flush unconditionally (e.g. already waited)
+        flush_pending_cpu_scatter();
+        return true;
+    }
+    // Check if CPU compute is already done (zero-timeout poll)
+    auto status = g_pending_scatter.future.wait_for(std::chrono::seconds(0));
+    if (status == std::future_status::ready) {
+        flush_pending_cpu_scatter();
+        return true;
+    }
+    return false;  // CPU compute still running — skip for now
+}
+
 // Selective flush: only flush if the pending scatter's destination tensor
 // is consumed by the given op (i.e., dst_tensor matches one of consuming_dst's
 // sources).  Returns true if a flush was performed.
@@ -33363,6 +33383,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             const int64_t N = ne01;  // output rows per expert
 
             // ---------------------------------------------------------------
+            // Opportunistic try-flush: if the previous layer's CPU compute
+            // is already done, flush its scatter now.  The H2D memcpys are
+            // submitted to the in-order queue and can overlap with the
+            // activation D2H below.  If CPU compute is still running, skip —
+            // the consumption-based flush above will handle it.
+            // ---------------------------------------------------------------
+            try_flush_pending_cpu_scatter();
+
+            // ---------------------------------------------------------------
             // Shared activation D2H: for batch=1 TG, all experts in a layer
             // share the same src1 activation. Copy once to host-pinned staging,
             // shared between CPU dispatch and secondary GPU dispatch.
@@ -33447,21 +33476,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // Optimization: when act_on_host (batch=1), use the shared
                 // activation D2H with event-level wait instead of stream->wait()
                 // to avoid draining the B580 compute pipeline.
-                // Track deferred D2H event for the single-activation path
-                sycl::event act_single_evt;
-                bool        act_single_pending = false;
+                // Track deferred D2H event — wait is deferred until just before
+                // CPU pool submission to overlap D2H with task struct building.
+                sycl::event act_deferred_evt;
+                bool        act_deferred_pending = false;
 
                 if (act_on_host && cpu_expert_tg_active) {
-                    // Use shared activation — wait only for the D2H event.
-                    // Skip memcpy: tasks will point directly to shared_act_host.
-                    act_d2h_event.wait();
+                    // Use shared activation — defer wait until after task building.
+                    // Tasks will point directly to shared_act_host.
+                    act_deferred_evt     = act_d2h_event;
+                    act_deferred_pending = true;
                 } else if (cpu_expert_tg_active && n_cpu > 1) {
                     // Single D2H: all experts share the same activation at offset 0.
                     // Submit async — wait deferred until just before CPU pool submission
                     // to overlap D2H with task struct building below.
-                    act_single_evt = stream->memcpy(act_pinned, src1_original,
+                    act_deferred_evt = stream->memcpy(act_pinned, src1_original,
                                    static_cast<size_t>(K) * sizeof(float));
-                    act_single_pending = true;
+                    act_deferred_pending = true;
                 } else {
                     // Per-expert D2H: collect events and batch-wait instead
                     // of draining the entire GPU queue with stream->wait().
@@ -33508,9 +33539,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     result.tasks.push_back(t);
                 }
 
-                // Wait for deferred single-activation D2H before CPU tasks read it
-                if (act_single_pending) {
-                    act_single_evt.wait();
+                // Wait for deferred activation D2H before CPU tasks read it.
+                // This wait was moved here from the D2H submission site above
+                // to overlap the transfer with task struct building.
+                if (act_deferred_pending) {
+                    act_deferred_evt.wait();
                 }
 
                 // Submit to CPU thread pool
