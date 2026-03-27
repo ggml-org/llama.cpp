@@ -704,22 +704,56 @@ constant half turbo_centroids_3bit_h[8] = {
 // Constant half[8] LUT for centroid lookup (proven fastest on Apple Silicon).
 template <typename type4>
 void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread type4 & reg) {
-    // Batch the reads: qs[il] is 1 byte (4 2-bit indices),
-    // signs[il>>1] is 1 byte (8 sign bits, shared across 2 qs bytes).
-    // The compiler should CSE the signs read across consecutive il values,
-    // but we make the pattern explicit for Metal's optimizer.
+    // PROFILING MODE: controlled by TURBO_PROFILE_MODE compile flag
+    // 0 = full dequant (batched extract)
+    // 1 = no-op (return zeros) — decode ceiling without dequant cost
+    // 2 = norm only (read norm, return constant) — isolate norm read
+    // 3 = norm + qs only (skip signs) — isolate signs byte cost
+    // 4 = full dequant, skip LUT (use constant centroid) — isolate LUT cost
+#ifndef TURBO_PROFILE_MODE
+#define TURBO_PROFILE_MODE 0
+#endif
+
+#if TURBO_PROFILE_MODE == 1
+    // NO-OP: decode speed ceiling
+    reg = type4(0.0f);
+#elif TURBO_PROFILE_MODE == 2
+    // NORM ONLY: just read norm, return it as all 4 values
+    const float norm = float(xb->norm);
+    reg = type4(norm);
+#elif TURBO_PROFILE_MODE == 3
+    // NORM + QS: read norm and qs byte, skip signs
+    const float norm = float(xb->norm);
+    const uint8_t qb = xb->qs[il];
+    const uint8_t q0 = (qb      ) & 0x03;
+    const uint8_t q1 = (qb >> 2) & 0x03;
+    const uint8_t q2 = (qb >> 4) & 0x03;
+    const uint8_t q3 = (qb >> 6);
+    // Use qs without signs — just positive centroids
+    reg = type4(float4(
+        float(turbo_centroids_3bit_h[q0 + 4]),
+        float(turbo_centroids_3bit_h[q1 + 4]),
+        float(turbo_centroids_3bit_h[q2 + 4]),
+        float(turbo_centroids_3bit_h[q3 + 4])
+    ) * norm);
+#elif TURBO_PROFILE_MODE == 4
+    // SKIP LUT: read all bytes but use constant centroid value
+    const float norm = float(xb->norm);
+    const uint8_t qb = xb->qs[il];
+    const uint8_t sb = xb->signs[il >> 1];
+    // Pretend all elements are centroid 0 — isolates LUT indexing cost
+    reg = type4(float4(float(turbo_centroids_3bit_h[0])) * norm);
+#else
+    // MODE 0: Full batched extract dequant (production code)
     const float norm = float(xb->norm);
     const uint8_t qb = xb->qs[il];
     const uint8_t sb = xb->signs[il >> 1];
     const int sshift = (il & 1) << 2;
 
-    // Unrolled centroid lookup with pre-extracted bit fields.
-    // Extract all 4 qs indices and 4 sign bits at once to help the
-    // Metal compiler schedule memory reads ahead of ALU.
     const uint8_t q0 = (qb      ) & 0x03;
     const uint8_t q1 = (qb >> 2) & 0x03;
     const uint8_t q2 = (qb >> 4) & 0x03;
-    const uint8_t q3 = (qb >> 6);           // no mask needed for top 2 bits
+    const uint8_t q3 = (qb >> 6);
     const uint8_t s0 = (sb >> (sshift    )) & 1;
     const uint8_t s1 = (sb >> (sshift + 1)) & 1;
     const uint8_t s2 = (sb >> (sshift + 2)) & 1;
@@ -731,6 +765,7 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
         float(turbo_centroids_3bit_h[q2 | (s2 << 2)]),
         float(turbo_centroids_3bit_h[q3 | (s3 << 2)])
     ) * norm);
+#endif
 }
 
 // ----- turbo4 dequantize with per-thread block cache -----

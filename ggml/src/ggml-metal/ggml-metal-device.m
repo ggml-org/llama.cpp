@@ -224,6 +224,15 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
 
+                // TurboQuant profiling: set TURBO_PROFILE_MODE env var (0-4)
+                {
+                    const char * pm = getenv("TURBO_PROFILE_MODE");
+                    if (pm && pm[0] >= '0' && pm[0] <= '4') {
+                        [prep setObject:[NSString stringWithUTF8String:pm] forKey:@"TURBO_PROFILE_MODE"];
+                        GGML_LOG_INFO("%s: TURBO_PROFILE_MODE=%s\n", __func__, pm);
+                    }
+                }
+
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
 
