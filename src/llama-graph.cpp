@@ -467,15 +467,20 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 
-    if (self_rotk && self_rotv) {
+    if (self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotk->buffer));
+
+        float * data = (float *) self_rotk->data;
+
+        set_input_hadamard(self_rotk->ne[0], data);
+    }
+
+    if (self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotv->buffer));
 
-        float * dataf = (float *) self_rotk->data;
-        float * datab = (float *) self_rotv->data;
+        float * data = (float *) self_rotv->data;
 
-        set_input_hadamard(self_rotk->ne[0], dataf);
-        set_input_hadamard(self_rotv->ne[0], datab);
+        set_input_hadamard(self_rotv->ne[0], data);
     }
 }
 
@@ -525,15 +530,20 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
 
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
 
-    if (self_rotk && self_rotv) {
+    if (self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotk->buffer));
+
+        float * data = (float *) self_rotk->data;
+
+        set_input_hadamard(self_rotk->ne[0], data);
+    }
+
+    if (self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotv->buffer));
 
-        float * dataf = (float *) self_rotk->data;
-        float * datab = (float *) self_rotv->data;
+        float * data = (float *) self_rotv->data;
 
-        set_input_hadamard(self_rotk->ne[0], dataf);
-        set_input_hadamard(self_rotv->ne[0], datab);
+        set_input_hadamard(self_rotv->ne[0], data);
     }
 }
 
@@ -591,15 +601,20 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 
     mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
 
-    if (inp_attn->self_rotk && inp_attn->self_rotv) {
+    if (inp_attn->self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotk->buffer));
+
+        float * data = (float *) inp_attn->self_rotk->data;
+
+        set_input_hadamard(inp_attn->self_rotk->ne[0], data);
+    }
+
+    if (inp_attn->self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotv->buffer));
 
-        float * dataf = (float *) inp_attn->self_rotk->data;
-        float * datab = (float *) inp_attn->self_rotv->data;
+        float * data = (float *) inp_attn->self_rotv->data;
 
-        set_input_hadamard(inp_attn->self_rotk->ne[0], dataf);
-        set_input_hadamard(inp_attn->self_rotv->ne[0], datab);
+        set_input_hadamard(inp_attn->self_rotv->ne[0], data);
     }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
@@ -700,15 +715,20 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
         attn_ctx->get_swa()->set_input_kq_mask(inp_attn->self_kq_mask_swa, ubatch, cparams.causal_attn);
     }
 
-    if (inp_attn->self_rotk && inp_attn->self_rotv) {
+    if (inp_attn->self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotk->buffer));
+
+        float * data = (float *) inp_attn->self_rotk->data;
+
+        set_input_hadamard(inp_attn->self_rotk->ne[0], data);
+    }
+
+    if (inp_attn->self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotv->buffer));
 
-        float * dataf = (float *) inp_attn->self_rotk->data;
-        float * datab = (float *) inp_attn->self_rotv->data;
+        float * data = (float *) inp_attn->self_rotv->data;
 
-        set_input_hadamard(inp_attn->self_rotk->ne[0], dataf);
-        set_input_hadamard(inp_attn->self_rotv->ne[0], datab);
+        set_input_hadamard(inp_attn->self_rotv->ne[0], data);
     }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
@@ -2090,31 +2110,42 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     }
 
     {
-        // I think we can afford to rotate the V more compared to Q and K
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038
-
-        const bool can_rot =
+        const bool can_rotk =
             !hparams.is_n_embd_k_gqa_variable() &&
-            !hparams.is_n_embd_v_gqa_variable() &&
-            ggml_is_power_of_2(hparams.n_embd_head_k()) &&
-          //ggml_is_power_of_2(hparams.n_embd_head_v()) &&
-            hparams.n_embd_head_v() % 64 == 0 &&
-            hparams.n_embd_head_k() >= 64 &&
-            hparams.n_embd_head_v() >= 64 &&
-            ggml_is_quantized(mctx_cur->type_k()) &&
-            ggml_is_quantized(mctx_cur->type_v());
+            hparams.n_embd_head_k() % 64 == 0 &&
+            ggml_is_quantized(mctx_cur->type_k());
 
-        if (can_rot) {
-            const auto nk = hparams.n_embd_head_k();
-            const auto nv = 64;
+        if (can_rotk) {
+            int nrot = 64;
+            do {
+                nrot *= 2;
+            } while (hparams.n_embd_head_k() % nrot == 0);
+            nrot /= 2;
 
-            inp->self_rotk = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nk, nk);
-            inp->self_rotv = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nv, nv);
-
+            inp->self_rotk = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
             ggml_set_input(inp->self_rotk);
-            ggml_set_input(inp->self_rotv);
         } else {
             inp->self_rotk = nullptr;
+        }
+
+        const bool can_rotv =
+            !hparams.is_n_embd_v_gqa_variable() &&
+            hparams.n_embd_head_v() % 64 == 0 &&
+            ggml_is_quantized(mctx_cur->type_v());
+
+        if (can_rotv) {
+            int nrot = 64;
+
+            // TODO: I think we can afford to rotate the V more compared to Q and K - to be confirmed
+            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+            //do {
+            //    nrot *= 2;
+            //} while (hparams.n_embd_head_v() % nrot == 0);
+            //nrot /= 2;
+
+            inp->self_rotv = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
+            ggml_set_input(inp->self_rotv);
+        } else {
             inp->self_rotv = nullptr;
         }
     }
@@ -2147,6 +2178,9 @@ ggml_tensor * llm_graph_context::build_attn(
     if (inp->self_rotk) {
         q_cur = ggml_rotate_hadamard(ctx0, q_cur, inp->self_rotk);
         k_cur = ggml_rotate_hadamard(ctx0, k_cur, inp->self_rotk);
+    }
+
+    if (inp->self_rotv) {
         v_cur = ggml_rotate_hadamard(ctx0, v_cur, inp->self_rotv);
     }
 
@@ -2296,6 +2330,8 @@ ggml_tensor * llm_graph_context::build_attn(
         if (k_cur) {
             k_cur = ggml_rotate_hadamard(ctx0, k_cur, inp->self_rotk);
         }
+    }
+    if (inp->self_rotv) {
         if (v_cur) {
             v_cur = ggml_rotate_hadamard(ctx0, v_cur, inp->self_rotv);
         }
@@ -2450,31 +2486,46 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     }
 
     {
-        const bool can_rot =
+        const bool can_rotk =
             !hparams.is_n_embd_k_gqa_variable() &&
-            !hparams.is_n_embd_v_gqa_variable() &&
-            ggml_is_power_of_2(hparams.n_embd_head_k()) &&
-          //ggml_is_power_of_2(hparams.n_embd_head_v()) &&
-            hparams.n_embd_head_v() % 64 == 0 &&
-            hparams.n_embd_head_k() >= 64 &&
-            hparams.n_embd_head_v() >= 64 &&
-            ggml_is_quantized(mctx_cur->get_base()->type_k()) &&
-            ggml_is_quantized(mctx_cur->get_base()->type_v());
+            hparams.n_embd_head_k() % 64 == 0 &&
+            ggml_is_quantized(mctx_cur->get_base()->type_k());
 
-        if (can_rot) {
-            const auto nk = hparams.n_embd_head_k();
-            const auto nv = 64;
+        if (can_rotk) {
+            int nrot = 64;
+            do {
+                nrot *= 2;
+            } while (hparams.n_embd_head_k() % nrot == 0);
+            nrot /= 2;
 
-            inp->self_rotk = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nk, nk);
-            inp->self_rotv = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nv, nv);
-
+            inp->self_rotk = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
             ggml_set_input(inp->self_rotk);
-            ggml_set_input(inp->self_rotv);
         } else {
             inp->self_rotk = nullptr;
+        }
+
+        const bool can_rotv =
+            !hparams.is_n_embd_v_gqa_variable() &&
+            hparams.n_embd_head_v() % 64 == 0 &&
+            ggml_is_quantized(mctx_cur->get_base()->type_v());
+
+        if (can_rotv) {
+            int nrot = 64;
+
+            // TODO: I think we can afford to rotate the V more compared to Q and K - to be confirmed
+            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+            //do {
+            //    nrot *= 2;
+            //} while (hparams.n_embd_head_v() % nrot == 0);
+            //nrot /= 2;
+
+            inp->self_rotv = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
+            ggml_set_input(inp->self_rotv);
+        } else {
             inp->self_rotv = nullptr;
         }
     }
+
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }
