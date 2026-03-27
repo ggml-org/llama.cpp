@@ -1950,11 +1950,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
-    // TODO: TurboQuant pre-rotate-queries optimization (WIP — PPL 23.5 vs 6.19 target)
-    // The graph-side rotation approach works mechanically (ggml_mul_mat rotates correctly)
-    // but gives 4x worse PPL than dequant-side rotation for unknown reasons.
-    // Keeping dequant inverse rotation for now until this is resolved.
-    // See: docs/turbo-speed-investigation.md for full debugging history
+    // TurboQuant note: graph-side Q rotation (pre-rotate-queries) is implemented below
+    // in the flash-attn path. The VEC kernel bug (wrong Q/K stride in
+    // vec_dot_fattn_vec_KQ_turbo3_0) was fixed in fattn-common.cuh to match f16 pattern.
 
     ggml_tensor * cur;
 
@@ -2065,8 +2063,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
     }
 
-    // TODO: TurboQuant V inverse rotation (WIP — part of pre-rotate-queries optimization)
-    // See comment above for status
+    // TurboQuant: graph-side inverse WHT on attention output (undoes V rotation)
 
     ggml_build_forward_expand(gf, cur);
 
