@@ -983,7 +983,7 @@ void launch_fattn(
         //Todo: need to find a thresold based on tuning
         constexpr int thr_blocks_stream_k = 16;
 
-        // try reducing the number of stream-k blocks as 
+        // try reducing the number of stream-k blocks as
         // flash_attn_stream_k_fixup has a non-negligible overhead for large number of stream-k blocks
         // make sure to reduce only when more than 1 block per SM is used
         if(use_stream_k && nblocks_stream_k / ntiles_dst > thr_blocks_stream_k && max_blocks_per_sm > 1) {
