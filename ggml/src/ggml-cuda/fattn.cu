@@ -273,11 +273,29 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,   GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16,  GGML_TYPE_MXFP4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_MXFP4)
+
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_Q4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_Q4_1)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_Q5_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_Q5_1)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_BF16)
 #else
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,   GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0,  GGML_TYPE_Q4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,  GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16,  GGML_TYPE_BF16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_MXFP4, GGML_TYPE_MXFP4)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     GGML_ABORT("fatal error");
@@ -371,6 +389,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_MXFP4:
             break;
         default:
             return BEST_FATTN_KERNEL_NONE;
@@ -383,6 +402,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
+    // MXFP4 KV is only supported by the VEC kernel; no MMA pre-conversion path exists.
+    if (K->type == GGML_TYPE_MXFP4 || V->type == GGML_TYPE_MXFP4) {
+        return can_use_vector_kernel ? BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
+    }
+
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
@@ -394,6 +418,18 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE) {
                     if (Q->ne[1] <= 2) {
                         return BEST_FATTN_KERNEL_VEC;
+                    }
+                    // The MMA path must convert quantized K/V to F16 in VRAM before processing.
+                    // For large contexts this can exhaust available VRAM. Fall back to the VEC path
+                    // which reads quantized K/V directly without a temporary F16 buffer.
+                    {
+                        const size_t kv_f16_bytes = (size_t)ggml_nelements(K) * sizeof(half)
+                                                  + (size_t)ggml_nelements(V) * sizeof(half);
+                        size_t free_vram = 0, total_vram_unused = 0;
+                        CUDA_CHECK(cudaMemGetInfo(&free_vram, &total_vram_unused));
+                        if (kv_f16_bytes > free_vram) {
+                            return BEST_FATTN_KERNEL_VEC;
+                        }
                     }
                 } else {
                     if (Q->ne[1] == 1) {

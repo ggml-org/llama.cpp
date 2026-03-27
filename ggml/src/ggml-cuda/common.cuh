@@ -1323,6 +1323,7 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    void * cublas_workspace = nullptr;
 
     int curr_stream_no = 0;
 
@@ -1365,6 +1366,14 @@ struct ggml_backend_cuda_context {
     explicit ggml_backend_cuda_context(int device) :
         device(device),
         name(GGML_CUDA_NAME + std::to_string(device)) {
+        // Eagerly create cuBLAS handle and pre-allocate a fixed workspace before
+        // model/KV weights consume VRAM. Lazy init + lazy workspace allocation would
+        // OOM on VRAM-tight setups (e.g. RTX 5080 with mxfp4 KV cache).
+        ggml_cuda_set_device(device);
+        cublas_handle(device);
+        const size_t workspace_size = 4ull * 1024 * 1024; // 4 MiB
+        CUDA_CHECK(cudaMalloc(&cublas_workspace, workspace_size));
+        CUBLAS_CHECK(cublasSetWorkspace(cublas_handles[device], cublas_workspace, workspace_size));
     }
 
     ggml_cuda_stream_context concurrent_stream_context;

@@ -211,6 +211,41 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
 }
 
+static __device__ void quantize_f32_mxfp4_block(const float * __restrict__ x, block_mxfp4 * __restrict__ y) {
+    float amax = 0.0f;
+    for (int j = 0; j < QK_MXFP4; j++) {
+        amax = fmaxf(amax, fabsf(x[j]));
+    }
+
+    const uint8_t e = amax > 0.0f ? (uint8_t)(floorf(log2f(amax)) - 2 + 127) : 0;
+    y->e = e;
+
+    const float d = ggml_cuda_e8m0_to_fp32(e);
+    const float inv_d = d > 0.0f ? 1.0f / d : 0.0f;
+
+    for (int j = 0; j < QK_MXFP4/2; ++j) {
+        const float x0 = x[j] * inv_d;
+        const float x1 = x[QK_MXFP4/2 + j] * inv_d;
+
+        // Find best MXFP4 index via lookup table
+        // kvalues_mxfp4 stores 2*E2M1_float, so scale by 0.5
+        uint8_t best0 = 0, best1 = 0;
+        float best_err0 = 1e9f, best_err1 = 1e9f;
+        for (int i = 0; i < 16; i++) {
+            float v = kvalues_mxfp4[i] * 0.5f;
+            float err0 = fabsf(v - x0);
+            float err1 = fabsf(v - x1);
+            if (err0 < best_err0) { best_err0 = err0; best0 = i; }
+            if (err1 < best_err1) { best_err1 = err1; best1 = i; }
+        }
+        y->qs[j] = best0 | (best1 << 4);
+    }
+}
+
+static __device__ void cpy_blck_f32_mxfp4(const char * cxi, char * cdsti) {
+    quantize_f32_mxfp4_block((const float *)cxi, (block_mxfp4 *)cdsti);
+}
+
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_scalar(const char * cxi, char * cdsti) {
     *(dst_t *) cdsti = ggml_cuda_cast<dst_t>(*(const src_t *) cxi);

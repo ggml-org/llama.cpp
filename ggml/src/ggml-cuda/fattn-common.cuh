@@ -288,6 +288,43 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q8_0(
     return sum;
 }
 
+template<int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_mxfp4(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_mxfp4 * K_mxfp4 = (const block_mxfp4 *) K_c;
+    GGML_UNUSED(Q_v);
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
+        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+
+        // ib uses QI8_1 (not QI_MXFP4) because Q is q8_1: each int holds 4 Q elements,
+        // so there are QK_MXFP4/4 = 8 int-groups per mxfp4 block. The high/low nibble
+        // selection (shift) distinguishes the two halves of each block.
+        const int ib    = k_KQ /  QI8_1;
+        const int iqs4  = k_KQ %  QI_MXFP4;
+        const int shift = k_KQ & (QI8_1/2);
+
+        const int aux_q4 = get_int_b1(K_mxfp4[ib].qs, iqs4);
+        const int2 v_full = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+        const int v = shift ? v_full.y : v_full.x;
+
+        const int u = Q_q8[k_KQ_0/nthreads];
+
+        const int sumi = ggml_cuda_dp4a(v, u, 0);
+
+        // Note: kvalues_mxfp4 stores 2*E2M1_float, so multiply by 0.5
+        const float2 Q_ds = ((const float2 *) Q_ds_v)[k_KQ_0/nthreads];
+        const float K_d = ggml_cuda_e8m0_to_fp32(K_mxfp4[ib].e) * 0.5f;
+        sum += K_d * Q_ds.x * sumi;
+    }
+
+    return sum;
+}
+
 template <typename Tds, int ni>
 static __device__ __forceinline__ void quantize_q8_1_to_shared(
     const float * __restrict__ x, const float scale, int * __restrict__ yq32, void * __restrict__ yds) {
@@ -577,6 +614,33 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
     }
 }
 
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_mxfp4(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_mxfp4 * x = (const block_mxfp4 *) vx;
+
+    const int64_t ib    =  i0           /  QK_MXFP4;
+    const int     iqs   =  i0           % (QK_MXFP4/2);
+    const int     shift = (i0 % QK_MXFP4) / (QK_MXFP4/2);
+
+    uint8_t qs[ne];
+    static_assert(ne == 2 || ne == 4, "bad ne");
+    // block_mxfp4 is 17 bytes (odd size), so x[ib].qs is not guaranteed 2-byte aligned.
+    ggml_cuda_memcpy_1<ne, 1>(qs, x[ib].qs + iqs);
+
+    // Note: kvalues_mxfp4 stores 2*E2M1_float, so multiply by 0.5
+    const float d = ggml_cuda_e8m0_to_fp32(x[ib].e) * 0.5f;
+
+    if constexpr (std::is_same_v<T, float>) {
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            const int nibble = shift ? (qs[l] >> 4) : (qs[l] & 0x0F);
+            ((float *) dst)[l] = d * kvalues_mxfp4[nibble];
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -593,6 +657,8 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_MXFP4) {
+        return vec_dot_fattn_vec_KQ_mxfp4<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -615,6 +681,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
+    } else if constexpr (type_V == GGML_TYPE_MXFP4) {
+        return dequantize_V_mxfp4<float, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
