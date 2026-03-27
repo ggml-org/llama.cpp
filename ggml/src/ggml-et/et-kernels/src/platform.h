@@ -204,4 +204,29 @@ static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
     );
 }
 
+//******************************************************************************
+// Cache Flush
+//******************************************************************************
+
+// Flush nlines contiguous 64-byte cache lines starting at addr from L1 to L2.
+// Uses FlushVA (CSR 0x8BF).  Caller must FENCE before (to drain stores to L1)
+// and WAIT_CACHEOPS after (to ensure flush completes before tensor loads).
+static inline void __attribute__((always_inline))
+flush_to_l2(const void *addr, uint64_t nlines, uint64_t stride)
+{
+    // dest=01 (L2) in bits 59:58, VA in bits 47:6, numlines-1 in bits 3:0
+    uint64_t csr_val = (0x1ULL << 58) |
+                       ((uint64_t)addr & 0xFFFFFFFFFFC0ULL) |
+                       ((nlines - 1) & 0xF);
+    uint64_t x31_val = stride & 0xFFFFFFFFFFC0ULL;
+
+    __asm__ __volatile__(
+        "mv x31, %[x31]\n"
+        "csrw 0x8BF, %[val]\n"
+        :
+        : [x31] "r"(x31_val), [val] "r"(csr_val)
+        : "x31", "memory"
+    );
+}
+
 #endif // PLATFORM_H

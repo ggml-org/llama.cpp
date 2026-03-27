@@ -77,7 +77,7 @@ extern "C" {
 #define QUANT_FP32_MUL_COL 7
 
 /*! \def QUANT_SATINT8
-    \brief Tensor Quant instruction: Clamp all 32-bit signed integer values in A to the range [-128, 127]. 
+    \brief Tensor Quant instruction: Clamp all 32-bit signed integer values in A to the range [-128, 127].
     The values are written in bits 7:0 of each element, with bits 31:8 set to zero.
 */
 #define QUANT_SATINT8 8
@@ -168,6 +168,21 @@ ger values in the vector register file.
     \brief TensorQuant is complete
 */
 #define TENSOR_QUANT_WAIT 10
+
+// TensorFMA opcode values (tensor_fma CSR 0x801, bits 3:1)
+#define TENSOR_FMA_OP_FP32   0  // TensorFMA32:    FP32  x FP32  -> FP32
+#define TENSOR_FMA_OP_FP16   1  // TensorFMA16A32: FP16  x FP16  -> FP32
+// opcode 2 is reserved
+#define TENSOR_FMA_OP_INT8   3  // TensorIMA8A32:  INT8  x INT8  -> INT32
+
+// TensorLoad transformation values (tensor_load CSR 0x83F, bits 61:59)
+#define TENSOR_LOAD_PLAIN          0  // TensorLoad:             64B rows
+#define TENSOR_LOAD_INTERLEAVE8    1  // TensorLoadInterleave8:  for TensorIMA8A32 B
+#define TENSOR_LOAD_INTERLEAVE16   2  // TensorLoadInterleave16: for TensorFMA16A32 B
+// transformations 3-4 are reserved
+#define TENSOR_LOAD_TRANSPOSE8     5  // TensorLoadTranspose8:   8-bit transpose
+#define TENSOR_LOAD_TRANSPOSE16    6  // TensorLoadTranspose16:  16-bit transpose
+#define TENSOR_LOAD_TRANSPOSE32    7  // TensorLoadTranspose32:  32-bit transpose
 
 /*! \def TENSOR_ERROR_LOAD_TRANSFORM
     \brief Define for tensor load transform error.
@@ -266,7 +281,7 @@ inline __attribute__((always_inline)) void tensor_wait(long id)
 }
 
 /*! \fn inline void tensor_load (tensor_load *conf)
-    \brief Tensor load instruction, it loads data from memory (bypass-ing the L1 cache) 
+    \brief Tensor load instruction, it loads data from memory (bypass-ing the L1 cache)
     into the L1 scratchpad. Input parameter defines the configuration to tensor load.
     \param use_tmask the tensor_mask register is used for this operation
     \param use_coop the operation is a cooperative tensor load.
@@ -277,14 +292,14 @@ inline __attribute__((always_inline)) void tensor_wait(long id)
     \param offset tensor load address offset
     \param num_lines tensor load number of cache lines
     \param stride tensor load stride value
-    \param id tensor load id  
+    \param id tensor load id
     \return none
     \tensorops Implementation of tensor_load api
-    
+
 */
 // 1. Load Matrix A segment (1 row x 16 cols) into SCP ID 0
                 // dst_start 0 refers to the first line of L1 Scratchpad
-                // tensor_load(false, false, 0, 0, 0, 
+                // tensor_load(false, false, 0, 0, 0,
                 //             (uint64_t)(src0_data + m * K + kb), 0, 1, 0, 0);
 
 
@@ -292,11 +307,18 @@ inline void __attribute__((always_inline)) tensor_load(bool use_tmask, bool use_
     uint64_t dst_start, uint64_t transformation, uint64_t use_tenb, uint64_t addr, uint64_t offset,
     uint64_t num_lines, uint64_t stride, uint64_t id)
 {
+    // Address alignment depends on transformation type:
+    //   Interleave8, Transpose8  (1,5): 16B aligned, addr bits 47:4
+    //   Interleave16, Transpose16 (2,6): 32B aligned, addr bits 47:5
+    //   Load, Transpose32, LoadB  (0,7): 64B aligned, addr bits 47:6
+    uint64_t addr_mask = (transformation == 1 || transformation == 5) ? 0xFFFFFFFFFFF0ULL :
+                         (transformation == 2 || transformation == 6) ? 0xFFFFFFFFFFE0ULL :
+                                                                        0xFFFFFFFFFFC0ULL;
     uint64_t csr_enc = (((uint64_t)use_tmask & 1) << 63) | (((uint64_t)use_coop & 1) << 62) |
                        ((transformation & 0x7) << 59) | ((dst_start & 0x3F) << 53) |
-                       ((use_tenb & 0x1) << 52) | ((addr & 0xFFFFFFFFFFC0ULL)) |
+                       ((use_tenb & 0x1) << 52) | ((addr & addr_mask)) |
                        ((offset & 0x3) << 4) | ((num_lines & 0xF));
-                       
+
     uint64_t x31_enc = (stride & 0xFFFFFFFFFFC0ULL) | (id & 0x1);
 
    __asm__ __volatile__(
@@ -310,7 +332,7 @@ inline void __attribute__((always_inline)) tensor_load(bool use_tmask, bool use_
 }
 
 /*! \fn inline void et_tensor_load (et_tensor_load_conf_t *conf)
-    \brief Tensor load instruction, it loads data from memory (bypass-ing the L1 cache) 
+    \brief Tensor load instruction, it loads data from memory (bypass-ing the L1 cache)
     into the L1 scratchpad. Input parameter defines the configuration to tensor load.
     \param conf tensor load configuration
     \return none
@@ -329,7 +351,7 @@ inline void __attribute__((always_inline)) et_tensor_load(et_tensor_load_conf_t 
     \param addr tensor load address
     \param num_lines tensor load number of cache lines
     \param stride tensor load stride value
-    \param id tensor load id  
+    \param id tensor load id
     \return none
     \tensorops Implementation of tensor_load_setup_b api
 */
@@ -379,12 +401,12 @@ inline void __attribute__((always_inline)) et_tensor_load_l2scp(et_tensor_load_l
                                      uint64_t Arows,
                                      uint64_t addr,
                                      uint64_t stride)
-   \brief Tensor Store writes a series of 64-byte blocks of data from the L1 scratchpad into memory.  
+   \brief Tensor Store writes a series of 64-byte blocks of data from the L1 scratchpad into memory.
    A matrix X can have up to 16 rows, and each row can be up to 64B in size (the number of columns depends on the type of elements of X).
    \param entry_stride Register stride
    \param start_scp_entry Start register
    \param Arows A matrix row size
-   \param addr Virtual Address 
+   \param addr Virtual Address
    \param stride This value is the distance in bytes between consecutive tensor rows in memory
    \return none
    \tensorops Implementation of tensor_store_scp api
@@ -420,7 +442,7 @@ inline void __attribute__((always_inline)) tensor_store_scp(
    \param start_reg start register address
    \param cols  matrix row size.
    \param Arows  matrix row size
-   \param addr Virtual Address 
+   \param addr Virtual Address
    \param coop_store Number of minions to cooperate with
    \param stride This value is the distance in bytes between consecutive tensor rows in memory
    \return none
@@ -449,15 +471,15 @@ inline void __attribute__((always_inline)) tensor_store(uint64_t reg_stride, uin
 /*! \fn inline void tensor_fma(bool use_tmask,
                                uint64_t b_num_col,
                                uint64_t a_num_rows,
-                               uint64_t a_num_cols, 
-                               uint64_t offset, 
-                               bool tenc_loc, 
-                               bool tenb_unsigned, 
-                               bool tena_unsigned, 
-                               bool tenb_loc, 
-                               uint64_t scp_loc_b, 
-                               uint64_t scp_loc_a, 
-                               uint64_t opcode, 
+                               uint64_t a_num_cols,
+                               uint64_t offset,
+                               bool tenc_loc,
+                               bool tenb_unsigned,
+                               bool tena_unsigned,
+                               bool tenb_loc,
+                               uint64_t scp_loc_b,
+                               uint64_t scp_loc_a,
+                               uint64_t opcode,
                                bool first_pass)
    \brief The Tensor FMA instruction multiplies two matrices A and B, optionally adds the resulting matrix
    to a third matrix C, and writes the result back onto matrix C
@@ -466,13 +488,14 @@ inline void __attribute__((always_inline)) tensor_store(uint64_t reg_stride, uin
    \param a_num_rows A matrix number of rows
    \param a_num_cols A matrix number of columns
    \param offset A matrix starting column for the operation.
-   \param tenc_loc Location of matrix C (0 = L1 scratchpad, 1 = memory).   
+   \param tenc_loc Location of matrix C (0 = L1 scratchpad, 1 = memory).
    \param tenb_unsigned TenB is signed (0) or unsigned (1).
    \param tena_unsigned TenA is signed (0) or unsigned (1).
    \param tenb_loc Location of matrix B (0 = L1 scratchpad, 1 = memory).
    \param scp_loc_b Starting L1 scratchpad cache line where matrix B is stored, ignored when xs[20] = 1.
    \param scp_loc_a Starting L1 scratchpad cache line where matrix A is stored, ignored when xs[20] = 1.
-   \param opcode TensorType = 011
+   \param opcode 0 = TensorFMA32 (F32xF32->F32), 1 = TensorFMA16A32 (F16xF16->F32), 3 = TensorIMA8A32 (I8xF8->I32).
+            Other opcodes are invalid.
    \param first_pass if set to 0 then the initial value of TenC is added to the result
    \return none
    \tensorops Implementation of tensor_fma api
@@ -494,7 +517,7 @@ tensor_fma(bool use_tmask, uint64_t b_num_col, uint64_t a_num_rows, uint64_t a_n
 
 /*! \fn inline uint32_t tensor_reduce_uint32(uint32_t value, uint64_t operation, uint64_t partnerID, uint64_t action)
    \brief Tensor reduce allows a group of harts to communicate values held in floating-point registers to collectively calculate a reduction
-   function. 
+   function.
    \param value Register stride
    \param operation Function to be performed.
    \param partnerID Receiver minionID.
@@ -523,7 +546,7 @@ tensor_reduce_uint32(uint32_t value, uint64_t operation, uint64_t partnerID, uin
 
 /*! \fn inline float tensor_reduce_float(float freg, uint64_t operation, uint64_t num_reg, uint64_t partnerID, uint64_t action) {
    \brief TensorReduce allows a group of harts to communicate values held in floating-point registers to collectively calculate a reduction
-   function. 
+   function.
    \param freg Freg register stride
    \param operation Function to be performed.
    \param num_reg number of registers to use
@@ -601,8 +624,8 @@ inline float __attribute__((always_inline)) tensor_reduce_float(
 //}
 
 /*! \fn inline void tensor_reduce(uint64_t start_reg, uint64_t operation, uint64_t num_reg, uint64_t partnerID, uint64_t action)
-   \brief The TensorReduce instruction allows up to 216 harts to collectively calculate a reduction function. 
-   \param start_reg starting register 
+   \brief The TensorReduce instruction allows up to 216 harts to collectively calculate a reduction function.
+   \param start_reg starting register
    \param operation Function to be performed.
    \param num_reg number of registers
    \param partnerID Receiver minionID.
@@ -626,7 +649,7 @@ inline void __attribute__((always_inline)) tensor_reduce(
 
 /*! \fn inline void tensor_reduce_send(uint64_t start_reg, uint64_t num_reg, uint64_t partnerID)
    \brief This function applies reduce instruction to function and then sends to partner minion.
-   \param start_reg starting register 
+   \param start_reg starting register
    \param num_reg number of registers
    \param partnerID Receiver minionID.
    \return none
@@ -641,7 +664,7 @@ tensor_reduce_send(uint64_t start_reg, uint64_t num_reg, uint64_t partnerID)
 
 /*! \fn inline void tensor_reduce_recv(uint64_t start_reg, uint64_t operation, uint64_t num_reg, uint64_t partnerID)
    \brief This function recieves reduce function from partner minion.
-   \param start_reg starting register 
+   \param start_reg starting register
    \param operation operation to be performed
    \param num_reg number of registers
    \param partnerID Receiver minionID.
@@ -656,7 +679,7 @@ tensor_reduce_recv(uint64_t start_reg, uint64_t operation, uint64_t num_reg, uin
 
 /*! \fn inline void tensor_reduce_auto(uint64_t start_reg, uint64_t operation, uint64_t num_reg, uint64_t tree_depth)
    \brief The Tensor reduce instruction allows up to 216 harts to collectively calculate a reduction function.
-   \param start_reg starting register 
+   \param start_reg starting register
    \param operation operation to be performed
    \param num_reg number of registers
    \param tree_depth tree depth
