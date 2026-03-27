@@ -701,7 +701,7 @@ int main(int argc, char ** argv) {
                 if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
                 n_session_consumed = session_tokens.size();
                 session_do_save = false;
 
