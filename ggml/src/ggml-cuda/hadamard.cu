@@ -58,19 +58,6 @@ static void hadamard_f32_cuda(int nh, const char * x, char * y, int ne0, int ne1
     }
 }
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#include <intrin.h>
-#include <ammintrin.h>
-#include <nmmintrin.h>
-#include <immintrin.h>
-#include <stdlib.h>
-static inline int popcount(uint32_t x) { return __popcnt(x); }
-#else
-static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
-#endif
-
-
 void ggml_cuda_op_hadamard(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
     GGML_ASSERT(src->type == GGML_TYPE_F32);
@@ -78,8 +65,8 @@ void ggml_cuda_op_hadamard(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_are_same_shape(src, dst));
 
     int nh = dst->op_params[0];
-    GGML_ASSERT(dst->ne[0]%nh == 0);
-    GGML_ASSERT(nh > 1 && popcount(nh) == 1);
+    GGML_ASSERT(dst->ne[0] % nh == 0);
+    GGML_ASSERT(nh > 1 && ((nh & (nh - 1)) == 0)); // power of 2
 
     hadamard_f32_cuda(nh, (const char *)src->data, (char *)dst->data, src->ne[0], src->ne[1], src->ne[2], src->ne[3],
             src->nb[1], src->nb[2], src->nb[3], dst->nb[1], dst->nb[2], dst->nb[3], ctx.stream());

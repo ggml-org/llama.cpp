@@ -11207,18 +11207,6 @@ void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_
 // MIT license
 // SPDX-License-Identifier: MIT
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#include <intrin.h>
-#include <ammintrin.h>
-#include <nmmintrin.h>
-#include <immintrin.h>
-#include <stdlib.h>
-inline int popcount(uint32_t x) { return __popcnt(x); }
-#else
-inline int popcount(uint32_t x) { return __builtin_popcount(x); }
-#endif
-
 template <typename T>
 void fast_ht(int n, T * values) {
     constexpr float ksqrt2 = 0.707106781f;
@@ -11250,7 +11238,7 @@ static void ggml_compute_forward_hadamard_f32(
     const int nth = params->nth;
 
     int nh = dst->op_params[0];
-    GGML_ASSERT(nh > 1 && popcount(uint32_t(nh)) == 1);
+    GGML_ASSERT(nh > 1 && ((nh & (nh - 1)) == 0)); // power of 2
     GGML_ASSERT(dst->ne[0] % nh == 0);
 
     int nc = dst->ne[0]/nh;
