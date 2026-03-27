@@ -768,27 +768,30 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     const uint8_t s2 = (sb >> (sshift + 2)) & 1;
     const uint8_t s3 = (sb >> (sshift + 3)) & 1;
 
-    // 4-entry magnitude LUT — only 4 possible constant addresses per lookup.
-    // The magnitude index depends on BOTH qs and sign (reversed for negative).
-    // Use XOR trick: sign=0 → flip bits of qs (3-qs = qs ^ 0x3 for 2-bit values)
-    // This avoids the ternary and keeps it branchless.
-    const uint8_t mi0 = q0 ^ (s0 ? 0 : 0x3);  // s0=1: q0, s0=0: 3-q0
-    const uint8_t mi1 = q1 ^ (s1 ? 0 : 0x3);
-    const uint8_t mi2 = q2 ^ (s2 ? 0 : 0x3);
-    const uint8_t mi3 = q3 ^ (s3 ? 0 : 0x3);
+    // ZERO-LUT: select chain computes centroid from 2-bit index + sign.
+    // No constant memory access at all. Just 2 levels of select + sign negate.
+    // 4 magnitudes: 0.021460, 0.065717, 0.117832, 0.190685
+    // 2-bit index selects magnitude, sign bit negates.
+    // Magnitude order reversed for sign=0 (use XOR to flip index).
 
-    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
-    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
-    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
-    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
+    const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
+    const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
+    const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
+    const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    // Apply sign: branchless negate via multiply
-    const float sg0 = s0 ? 1.0f : -1.0f;
-    const float sg1 = s1 ? 1.0f : -1.0f;
-    const float sg2 = s2 ? 1.0f : -1.0f;
-    const float sg3 = s3 ? 1.0f : -1.0f;
+    // 2-level select: bit1 selects high/low pair, bit0 selects within pair
+    // No constant memory, no array indexing — pure ALU
+    const float mag0 = (mi0 & 2) ? ((mi0 & 1) ? 0.190685f : 0.117832f) : ((mi0 & 1) ? 0.065717f : 0.021460f);
+    const float mag1 = (mi1 & 2) ? ((mi1 & 1) ? 0.190685f : 0.117832f) : ((mi1 & 1) ? 0.065717f : 0.021460f);
+    const float mag2 = (mi2 & 2) ? ((mi2 & 1) ? 0.190685f : 0.117832f) : ((mi2 & 1) ? 0.065717f : 0.021460f);
+    const float mag3 = (mi3 & 2) ? ((mi3 & 1) ? 0.190685f : 0.117832f) : ((mi3 & 1) ? 0.065717f : 0.021460f);
 
-    reg = type4(float4(v0 * sg0, v1 * sg1, v2 * sg2, v3 * sg3));
+    reg = type4(float4(
+        (s0 ? mag0 : -mag0) * norm,
+        (s1 ? mag1 : -mag1) * norm,
+        (s2 ? mag2 : -mag2) * norm,
+        (s3 ? mag3 : -mag3) * norm
+    ));
 #endif
 }
 
