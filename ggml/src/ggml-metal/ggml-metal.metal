@@ -780,28 +780,18 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
     // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
 #if TURBO_USE_4MAG
-    // NAMED-REGISTER centroid×norm: 4 named float variables (NOT an array).
-    // Metal keeps named scalars in registers. Arrays spill to stack.
-    // Precompute norm×magnitude for all 4 values, then select via nested ternary.
-    // This is ZERO constant memory in the per-element path — all constant reads
-    // happen once at the start, then the per-element code is pure ALU.
-    const float nm0 = float(turbo_mag_3bit_h[0]) * norm;  // 0.021460 * norm
-    const float nm1 = float(turbo_mag_3bit_h[1]) * norm;  // 0.065717 * norm
-    const float nm2 = float(turbo_mag_3bit_h[2]) * norm;  // 0.117832 * norm
-    const float nm3 = float(turbo_mag_3bit_h[3]) * norm;  // 0.190685 * norm
-
-    // XOR reverses magnitude index for negative sign
+    // 4-mag LUT + per-element norm multiply: PROVEN BEST on M2 Pro (+38-45%).
+    // 4 divergent constant reads + 0 branches = optimal for M2 hardware.
+    // Approaches with fewer constant reads all add branches/ALU that cost more.
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
     const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    // Nested ternary selects from 4 NAMED registers (no array, no constant memory)
-    // 2 levels of select: bit1 picks high/low pair, bit0 picks within pair
-    const float v0 = (mi0 & 2) ? ((mi0 & 1) ? nm3 : nm2) : ((mi0 & 1) ? nm1 : nm0);
-    const float v1 = (mi1 & 2) ? ((mi1 & 1) ? nm3 : nm2) : ((mi1 & 1) ? nm1 : nm0);
-    const float v2 = (mi2 & 2) ? ((mi2 & 1) ? nm3 : nm2) : ((mi2 & 1) ? nm1 : nm0);
-    const float v3 = (mi3 & 2) ? ((mi3 & 1) ? nm3 : nm2) : ((mi3 & 1) ? nm1 : nm0);
+    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
+    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
+    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
+    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
 
     reg = type4(float4(
         s0 ? v0 : -v0,
