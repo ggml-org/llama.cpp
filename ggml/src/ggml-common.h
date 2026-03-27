@@ -293,24 +293,6 @@ typedef struct {
 } block_tbq4_0;
 static_assert(sizeof(block_tbq4_0) == sizeof(ggml_half) + QK_K / 2, "wrong tbq4_0 block size/padding");
 
-// 3.125 bpw
-typedef struct {
-    uint8_t qs[QK_K / 4];
-    uint8_t signs[QK_K / 8];
-    ggml_half d;
-    ggml_half gamma;
-} block_tbqp3_0;
-static_assert(sizeof(block_tbqp3_0) == 2*sizeof(ggml_half) + QK_K / 4 + QK_K / 8, "wrong tbqp3_0 block size/padding");
-
-// 4.125 bpw
-typedef struct {
-    uint8_t qs[QK_K * 3 / 8];
-    uint8_t signs[QK_K / 8];
-    ggml_half d;
-    ggml_half gamma;
-} block_tbqp4_0;
-static_assert(sizeof(block_tbqp4_0) == 2*sizeof(ggml_half) + QK_K * 3 / 8 + QK_K / 8, "wrong tbqp4_0 block size/padding");
-
 //
 // Super-block quantization structures
 //

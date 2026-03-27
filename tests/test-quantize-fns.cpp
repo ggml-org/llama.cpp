@@ -26,8 +26,6 @@ constexpr float MAX_QUANTIZATION_TOTAL_ERROR_2BITS = 0.0075f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS = 0.0040f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS = 0.0050f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TBQ4 = 0.0025f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TBQP4 = 0.0060f;
-constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TBQP3 = 0.0100f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_FP4 = 0.0030f;
 constexpr float MAX_DOT_PRODUCT_ERROR = 0.02f;
 constexpr float MAX_DOT_PRODUCT_ERROR_LOWBIT = 0.04f;
@@ -111,7 +109,7 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
 }
 
 static bool test_turboq_vec_dot_dispatch() {
-    for (ggml_type type : { GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ4_0, GGML_TYPE_TBQP3_0, GGML_TYPE_TBQP4_0 }) {
+    for (ggml_type type : { GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ4_0 }) {
         const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
         if (qfns_cpu->vec_dot == nullptr || qfns_cpu->vec_dot_type != GGML_TYPE_Q8_K) {
             return false;
@@ -143,43 +141,6 @@ static bool test_tbq3_norm_scaling() {
     quantize_row_tbq3_0_ref(x.data(), &block, QK_K);
 
     return fabsf(ggml_fp16_to_fp32(block.d) - 16.0f) < 1e-3f;
-}
-
-template <typename block_t>
-static bool test_tbqp_residual_usage_impl(
-        void (*quantize_row_ref)(const float * GGML_RESTRICT, block_t * GGML_RESTRICT, int64_t),
-        void (*dequantize_row)(const block_t * GGML_RESTRICT, float * GGML_RESTRICT, int64_t)) {
-    std::vector<float> x(QK_K);
-    std::vector<float> y0(QK_K);
-    std::vector<float> y1(QK_K);
-
-    for (int i = 0; i < QK_K; ++i) {
-        x[i] = 0.1f + 2.0f*cosf((float) i);
-    }
-
-    block_t block = {};
-    quantize_row_ref(x.data(), &block, QK_K);
-    dequantize_row(&block, y0.data(), QK_K);
-
-    block_t modified = block;
-    memset(modified.signs, 0, sizeof(modified.signs));
-    modified.gamma = ggml_fp32_to_fp16(0.0f);
-    dequantize_row(&modified, y1.data(), QK_K);
-
-    float diff = 0.0f;
-    for (int i = 0; i < QK_K; ++i) {
-        diff += fabsf(y0[i] - y1[i]);
-    }
-
-    return diff > 1e-3f;
-}
-
-static bool test_tbqp3_residual_usage() {
-    return test_tbqp_residual_usage_impl(quantize_row_tbqp3_0_ref, dequantize_row_tbqp3_0);
-}
-
-static bool test_tbqp4_residual_usage() {
-    return test_tbqp_residual_usage_impl(quantize_row_tbqp4_0_ref, dequantize_row_tbqp4_0);
 }
 
 int main(int argc, char * argv[]) {
@@ -227,18 +188,6 @@ int main(int argc, char * argv[]) {
         printf("%5s norm scaling:                  %s\n", "tbq3", RESULT_STR[failed]);
     }
 
-    failed = !test_tbqp3_residual_usage();
-    num_failed += failed;
-    if (failed || verbose) {
-        printf("%5s residual usage:                %s\n", "tbqp3", RESULT_STR[failed]);
-    }
-
-    failed = !test_tbqp4_residual_usage();
-    num_failed += failed;
-    if (failed || verbose) {
-        printf("%5s residual usage:                %s\n", "tbqp4", RESULT_STR[failed]);
-    }
-
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
         const auto * qfns = ggml_get_type_traits(type);
@@ -267,8 +216,6 @@ int main(int argc, char * argv[]) {
                 type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
                 type == GGML_TYPE_TBQ3_0  ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
                 type == GGML_TYPE_TBQ4_0  ? MAX_QUANTIZATION_TOTAL_ERROR_TBQ4 :
-                type == GGML_TYPE_TBQP3_0 ? MAX_QUANTIZATION_TOTAL_ERROR_TBQP3 :
-                type == GGML_TYPE_TBQP4_0 ? MAX_QUANTIZATION_TOTAL_ERROR_TBQP4 :
                 type == GGML_TYPE_NVFP4   ? MAX_QUANTIZATION_TOTAL_ERROR_FP4 : MAX_QUANTIZATION_TOTAL_ERROR;
             failed = !(total_error < max_quantization_error);
             num_failed += failed;

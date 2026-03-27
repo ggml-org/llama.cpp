@@ -943,22 +943,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_tbq4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_tbq4_0_ref,
     },
-    [GGML_TYPE_TBQP3_0] = {
-        .type_name                = "tbqp3_0",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_tbqp3_0),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_tbqp3_0,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_tbqp3_0_ref,
-    },
-    [GGML_TYPE_TBQP4_0] = {
-        .type_name                = "tbqp4_0",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_tbqp4_0),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_tbqp4_0,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_tbqp4_0_ref,
-    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
@@ -1445,10 +1429,8 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4; break;
         case GGML_FTYPE_MOSTLY_NVFP4:         wtype = GGML_TYPE_NVFP4; break;
-        case GGML_FTYPE_MOSTLY_TBQ3_0:        wtype = GGML_TYPE_TBQ3_0;  break;
-        case GGML_FTYPE_MOSTLY_TBQ4_0:        wtype = GGML_TYPE_TBQ4_0;  break;
-        case GGML_FTYPE_MOSTLY_TBQP3_0:       wtype = GGML_TYPE_TBQP3_0; break;
-        case GGML_FTYPE_MOSTLY_TBQP4_0:       wtype = GGML_TYPE_TBQP4_0; break;
+        case GGML_FTYPE_MOSTLY_TBQ3_0:        wtype = GGML_TYPE_TBQ3_0; break;
+        case GGML_FTYPE_MOSTLY_TBQ4_0:        wtype = GGML_TYPE_TBQ4_0; break;
         case GGML_FTYPE_MOSTLY_Q2_K:          wtype = GGML_TYPE_Q2_K;  break;
         case GGML_FTYPE_MOSTLY_Q3_K:          wtype = GGML_TYPE_Q3_K;  break;
         case GGML_FTYPE_MOSTLY_Q4_K:          wtype = GGML_TYPE_Q4_K;  break;

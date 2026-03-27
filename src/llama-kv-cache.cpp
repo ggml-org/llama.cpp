@@ -1154,8 +1154,7 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
-    if (k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0 ||
-        k->type == GGML_TYPE_TBQP3_0 || k->type == GGML_TYPE_TBQP4_0) {
+    if (k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0) {
         return ggml_view_3d(ctx, k,
                 n_embd_k_gqa, n_kv, ns,
                 ggml_row_size(k->type, n_embd_k_gqa),
@@ -1184,8 +1183,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
-    if (v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0 ||
-        v->type == GGML_TYPE_TBQP3_0 || v->type == GGML_TYPE_TBQP4_0) {
+    if (v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0) {
         return ggml_view_3d(ctx, v,
                 n_embd_v_gqa, n_kv, ns,
                 ggml_row_size(v->type, n_embd_v_gqa),
