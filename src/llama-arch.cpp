@@ -73,6 +73,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_ARCTIC,           "arctic"           },
     { LLM_ARCH_DEEPSEEK,         "deepseek"         },
     { LLM_ARCH_DEEPSEEK2,        "deepseek2"        },
+    { LLM_ARCH_DEEPSEEK2OCR,     "deepseek2-ocr"    },
     { LLM_ARCH_CHATGLM,          "chatglm"          },
     { LLM_ARCH_GLM4,             "glm4"             },
     { LLM_ARCH_GLM4_MOE,         "glm4moe"          },
@@ -1571,6 +1572,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_UP_SHEXP,
             };
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_DEEPSEEK2OCR:
         case LLM_ARCH_MISTRAL4:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
@@ -1579,6 +1581,8 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_Q_A_NORM,
                 LLM_TENSOR_ATTN_KV_A_NORM,
+                LLM_TENSOR_ATTN_K, // deepseek-ocr
+                LLM_TENSOR_ATTN_V, // deepseek-ocr
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_Q_A,
                 LLM_TENSOR_ATTN_Q_B,

@@ -146,12 +146,18 @@ int main(int argc, char ** argv) {
 
     ctx   = llama_init->context();
     model = llama_init->model();
-    smpl  = llama_init->sampler(0);
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: unable to create context\n", __func__);
         return 1;
     }
+
+    if (model == NULL) {
+        LOG_ERR("%s: error: unable to load model\n", __func__);
+        return 1;
+    }
+
+    smpl = llama_init->sampler(0);
 
     llama_memory_t mem = llama_get_memory(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -695,7 +701,7 @@ int main(int argc, char ** argv) {
                 if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
                 n_session_consumed = session_tokens.size();
                 session_do_save = false;
 
