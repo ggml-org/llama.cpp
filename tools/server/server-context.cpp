@@ -874,18 +874,14 @@ private:
 
         metrics.init();
 
-        // LLAMA_KV_KEEP_ONLY_ACTIVE: clear idle slots' KV from VRAM before each decode batch
-        {
-            const char * env = getenv("LLAMA_KV_KEEP_ONLY_ACTIVE");
-            if (env && atoi(env)) {
-                if (!params_base.kv_unified) {
-                    SRV_WRN("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE requires unified KV cache, ignoring");
-                } else if (params_base.cache_ram_mib == 0) {
-                    SRV_WRN("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE requires --cache-ram, ignoring");
-                } else {
-                    kv_keep_only_active = true;
-                    SRV_INF("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE: idle slots' KV will be saved to cache-ram and cleared on release");
-                }
+        if (params_base.kv_clear_idle) {
+            if (!params_base.kv_unified) {
+                SRV_WRN("%s\n", "--kv-clear-idle requires --kv-unified, disabling");
+            } else if (params_base.cache_ram_mib == 0) {
+                SRV_WRN("%s\n", "--kv-clear-idle requires --cache-ram, disabling");
+            } else {
+                kv_keep_only_active = true;
+                SRV_INF("%s\n", "kv-clear-idle: idle slots' KV will be saved to cache-ram and cleared on release");
             }
         }
 

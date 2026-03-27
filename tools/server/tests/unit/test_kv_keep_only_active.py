@@ -19,7 +19,6 @@ class LogReader:
 @pytest.fixture(autouse=True)
 def create_server():
     global server
-    os.environ["LLAMA_KV_KEEP_ONLY_ACTIVE"] = "1"
     server = ServerPreset.tinyllama2()
     server.n_slots = 2
     server.n_predict = 4
@@ -30,7 +29,6 @@ def create_server():
     fd, server.log_path = tempfile.mkstemp(suffix='.log')
     os.close(fd)
     yield
-    os.environ.pop("LLAMA_KV_KEEP_ONLY_ACTIVE", None)
     if os.path.exists(server.log_path):
         os.unlink(server.log_path)
 
@@ -51,7 +49,7 @@ def test_clear_and_restore():
     log = LogReader(server.log_path)
 
     # verify feature is enabled
-    assert "LLAMA_KV_KEEP_ONLY_ACTIVE" in log.drain()
+    assert "kv-clear-idle" in log.drain()
 
     res = server.make_request("POST", "/completion", data={
         "prompt": LONG_PROMPT,
