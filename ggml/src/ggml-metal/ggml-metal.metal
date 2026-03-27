@@ -780,31 +780,28 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
     // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
 #if TURBO_USE_4MAG
-    // 2-pair LUT: only 2 constant addresses per lookup (vs 4 for mag, 8 for full).
-    // Each half2 entry holds two adjacent magnitudes. bit1 selects the pair,
-    // bit0 selects within via ternary. XOR reverses for negative sign.
+    // 4-mag LUT with deferred norm multiply.
+    // The centroid lookup returns the UNSCALED magnitude from constant half[4].
+    // Norm is multiplied ONCE via float4 broadcast at the end, not per-element.
+    // This reduces the ALU chain from: LUT→half2float→*norm→sign to: LUT→half2float→sign→(batch *norm)
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
     const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    // 1 constant read (half2) + 1 ternary per element
-    const half2 p0 = turbo_mag_pairs_h[(mi0 >> 1) & 1];
-    const half2 p1 = turbo_mag_pairs_h[(mi1 >> 1) & 1];
-    const half2 p2 = turbo_mag_pairs_h[(mi2 >> 1) & 1];
-    const half2 p3 = turbo_mag_pairs_h[(mi3 >> 1) & 1];
+    // 4 constant reads, no per-element norm multiply yet
+    const float v0 = float(turbo_mag_3bit_h[mi0]);
+    const float v1 = float(turbo_mag_3bit_h[mi1]);
+    const float v2 = float(turbo_mag_3bit_h[mi2]);
+    const float v3 = float(turbo_mag_3bit_h[mi3]);
 
-    const float v0 = float((mi0 & 1) ? p0.y : p0.x) * norm;
-    const float v1 = float((mi1 & 1) ? p1.y : p1.x) * norm;
-    const float v2 = float((mi2 & 1) ? p2.y : p2.x) * norm;
-    const float v3 = float((mi3 & 1) ? p3.y : p3.x) * norm;
-
+    // Apply sign + single norm broadcast
     reg = type4(float4(
         s0 ? v0 : -v0,
         s1 ? v1 : -v1,
         s2 ? v2 : -v2,
         s3 ? v3 : -v3
-    ));
+    ) * norm);
 #else
     // 8-entry full LUT: best on M5 Max (0.905x q8_0, 77.4 tok/s)
     reg = type4(float4(
