@@ -7330,10 +7330,14 @@ static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *
         return id;
     }
 
-    // Always use tensor name hash for uniqueness - this ensures different
-    // weight tensors (gate, up, down) across different layers have unique keys
-    const char * name      = tensor ? ggml_get_name(tensor) : "unknown";
-    uint64_t     name_hash = static_cast<uint64_t>(std::hash<std::string>()(name ? name : "unknown"));
+    // Use name-based key: tensor name + expert_id suffix for per-expert uniqueness.
+    // This ensures different experts have distinct name hashes while keeping the
+    // key derivable from tensor metadata alone (name + type + dimensions).
+    const char * raw_name = tensor ? ggml_get_name(tensor) : "unknown";
+    std::string  expert_name = (raw_name && raw_name[0]) ? std::string(raw_name) : std::string("unknown");
+    expert_name += ":e";
+    expert_name += std::to_string(expert_id);
+    uint64_t name_hash = static_cast<uint64_t>(std::hash<std::string>()(expert_name));
 
     id.valid         = true;
     id.model_id      = extra->model_id;
@@ -7341,15 +7345,25 @@ static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *
     id.file_idx      = 0;
     id.file_offs     = 0;
     id.nbytes        = 0;
-    id.name_hash     = name_hash;  // Always include tensor name hash
-    id.type          = GGML_TYPE_COUNT;
+    id.name_hash     = name_hash;
+    // Use proper tensor type and per-expert dimensions instead of sentinels.
+    // This makes the key compatible with resolve_weight() which expects real
+    // tensor metadata in cache entries.
+    id.type          = tensor ? tensor->type : GGML_TYPE_COUNT;
     id.tp_sharded    = false;
     id.tp_rank       = 0;
     id.tp_world_size = 1;
+    // Per-expert dimensions: ne[0]=K, ne[1]=N (rows per expert), ne[2]=1, ne[3]=1
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         id.ne[i]           = 0;
         id.tp_local_ne[i]  = 0;
         id.tp_offset_ne[i] = 0;
+    }
+    if (tensor) {
+        id.ne[0] = tensor->ne[0];
+        id.ne[1] = tensor->ne[1];
+        id.ne[2] = 1;
+        id.ne[3] = 1;
     }
     if (extra->tp_sharded && extra->tp_world_size > 1) {
         id.tp_sharded    = true;
@@ -11393,6 +11407,19 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx->device);
         if (cache_key.valid) {
             ggml_sycl_register_layout_choice(cache_key, ctx->device, GGML_LAYOUT_AOS, tensor->type, tensor->name);
+            // Register the full MoE tensor's device pointer as a DENSE_WEIGHT AOS
+            // entry in the unified cache so resolve_weight() can find it directly.
+            // This is only for device-resident tensors (not host-pinned).
+            // The entry is non-owning (pool_allocated=false) so the cache won't
+            // free the pointer — it's owned by the ggml buffer.
+            if (!buffer_is_host_pinned && tensor->data) {
+                auto * cache = ggml_sycl::get_unified_cache_for_device(ctx->device);
+                if (cache) {
+                    cache->register_ready(cache_key, const_cast<void *>(tensor->data),
+                                          GGML_LAYOUT_AOS, ggml_nbytes(tensor),
+                                          ggml_sycl::cache_entry_type::DENSE_WEIGHT);
+                }
+            }
         }
     }
     if (use_unified_cache && should_materialize && !has_preconverted_tiled) {
@@ -33132,7 +33159,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             ctx.device,                   // Device ID
             ten_name,                     // Tensor name (for key matching)
             uuid,                         // Cache UUID (for key matching)
-            mod_id);                      // Model ID (for key matching)
+            mod_id,                       // Model ID (for key matching)
+            src0->type,                   // Tensor type (for name-based key)
+            src0->ne[0],                  // K dimension (for name-based key)
+            src0->ne[1]);                 // N per-expert rows (for name-based key)
 
         GGML_SYCL_DEBUG(
             "[MOE-PRESTAGE] Layer %d: %d unique experts, %d staged, %d pinned (threshold=%d, n_experts=%ld)\n",
@@ -34568,7 +34598,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
         ggml_sycl::unpin_routed_experts(expert_ids_ptr, n_expert_used, n_tokens_ids, src0->data, expert_stride,
                                         layer_id, static_cast<int>(n_experts), ctx.device, ggml_get_name(src0),
-                                        uuid_unpin, mod_id_unpin);
+                                        uuid_unpin, mod_id_unpin,
+                                        src0->type, src0->ne[0], src0->ne[1]);
 
         GGML_SYCL_DEBUG("[MOE-UNPIN] Layer %d: Unpinned routed experts\n", layer_id);
     }

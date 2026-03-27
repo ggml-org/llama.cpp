@@ -3981,11 +3981,13 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
 
     const void * src0_d = nullptr;
     if (!use_ptr_table) {
-        src0_d = ggml_sycl_get_layout_ptr_for(src0, ctx.device, layout);
-        if (!src0_d) {
-            GGML_SYCL_DEBUG("[MMVQ] Missing layout=%d pointer for %s\n", (int) layout, src0->name);
+        auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+        if (!resolved) {
+            GGML_SYCL_DEBUG("[MMVQ] resolve_weight failed for %s (layout=%d)\n",
+                            src0->name ? src0->name : "?", (int) layout);
             return false;
         }
+        src0_d = resolved.ptr;
     }
 
     // Check Q8_1 quantization cache - MoE uses same input for gate/up/down projections
