@@ -229,7 +229,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 // M5+ (has tensor API): 8-entry full LUT (best decode speed)
                 if (!ggml_metal_device_get_props(dev)->has_tensor) {
                     [prep setObject:@"1" forKey:@"TURBO_USE_4MAG"];
-                    [prep setObject:@"1" forKey:@"TURBO_FUSED_BLOCK_DOT"];
+                    [prep setObject:@"1" forKey:@"TURBO_FUSED_BLOCK_DOT_OFF"];
                     GGML_LOG_INFO("%s: turbo3 using fused block dot (pre-M5)\n", __func__);
                 }
 
