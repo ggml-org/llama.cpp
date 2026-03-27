@@ -7373,57 +7373,6 @@ kernel void kernel_flash_attn_ext_vec(
                             mqk[cc] += dot((float4) pk4[cc*NE*NS10/4 +  ii*NL], (float4) pq4[ii*NL]);
                         }
                     } else {
-#if TURBO_USE_4MAG && TURBO_INLINE_BLOCK
-                        // INLINE BLOCK PROCESSING: bypass template dequant entirely.
-                        // Read all bytes for this thread's slice of the block once,
-                        // then process 4 elements with 4-mag LUT inline.
-                        // The compiler sees the full computation and can optimize
-                        // across the entire loop without function call boundaries.
-                        {
-                            device const char * kp = k + ((ic + NE*cc + ty)*args.nb11);
-
-                            FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
-                                const short i = ii*NL + tx;
-                                const short blk_idx = i / nl_k;
-                                const short il = i % nl_k;
-
-                                // Read block data (same as dequant but inline)
-                                device const block_turbo3_0 * xb = ((device const block_turbo3_0 *)kp) + blk_idx;
-                                const float norm = float(xb->norm);
-                                const uint8_t qb = xb->qs[il];
-                                const uint8_t sb = xb->signs[il >> 1];
-                                const int sshift = (il & 1) << 2;
-
-                                const uint8_t q0 = (qb      ) & 0x03;
-                                const uint8_t q1 = (qb >> 2) & 0x03;
-                                const uint8_t q2 = (qb >> 4) & 0x03;
-                                const uint8_t q3 = (qb >> 6);
-                                const uint8_t s0 = (sb >> (sshift    )) & 1;
-                                const uint8_t s1 = (sb >> (sshift + 1)) & 1;
-                                const uint8_t s2 = (sb >> (sshift + 2)) & 1;
-                                const uint8_t s3 = (sb >> (sshift + 3)) & 1;
-
-                                const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
-                                const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
-                                const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
-                                const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
-
-                                const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
-                                const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
-                                const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
-                                const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
-
-                                const float4 mk = float4(
-                                    s0 ? v0 : -v0,
-                                    s1 ? v1 : -v1,
-                                    s2 ? v2 : -v2,
-                                    s3 ? v3 : -v3
-                                );
-
-                                mqk[cc] += dot(mk, (float4) sq4[i]);
-                            }
-                        }
-#else
                         device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
 
                         k4_t mk;
@@ -7435,7 +7384,6 @@ kernel void kernel_flash_attn_ext_vec(
 
                             mqk[cc] += dot((float4) mk, (float4) sq4[i]);
                         }
-#endif
                     }
 
                     if (NE == 1) {
