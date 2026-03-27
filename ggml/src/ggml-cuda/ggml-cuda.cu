@@ -5022,8 +5022,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_SCATTER:
             return true;
-        case GGML_OP_HADAMARD:
-            return (op->ne[0] == 64 || op->ne[0] == 128 || op->ne[0] == 256) && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_HADAMARD: {
+            int nh = op->op_params[0];
+            return (nh == 64 || nh == 128 || nh == 256) && op->ne[0] % nh == 0 && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+        }
         default:
             return false;
     }

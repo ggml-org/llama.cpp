@@ -30,7 +30,7 @@ static __global__ void hadamard_f32(const char * src, char * dst, int ne0,
     float scale = ksqrt2;
 
 #pragma unroll
-    for (int h = 2; h < nh; h <<= 2) {
+    for (int h = 2; h < nh; h <<= 1) {
         __syncthreads();
         int ii = tid/h, jj = tid%h;
         int j = 2*h*ii+jj;
