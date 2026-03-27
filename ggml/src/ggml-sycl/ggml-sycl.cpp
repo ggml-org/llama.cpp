@@ -35563,8 +35563,25 @@ GGML_API void ggml_backend_sycl_get_device_description(int device, char * descri
     std::exit(1);
 }
 
+// TTL-based cache for VRAM budget queries — avoids repeated sysfs reads (~0.33ms each).
+// The unified cache calls get_device_memory 15-30 times per token during expert loading.
+static std::atomic<int64_t> g_mem_cache_ts[GGML_SYCL_MAX_DEVICES] = {};
+static std::atomic<size_t>  g_mem_cache_free[GGML_SYCL_MAX_DEVICES] = {};
+static std::atomic<size_t>  g_mem_cache_total[GGML_SYCL_MAX_DEVICES] = {};
+static constexpr int64_t    MEM_CACHE_TTL_NS = 10'000'000; // 10ms
+
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
+    // Check TTL cache first
+    if (device >= 0 && device < GGML_SYCL_MAX_DEVICES) {
+        auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - g_mem_cache_ts[device].load(std::memory_order_acquire) < MEM_CACHE_TTL_NS) {
+            *free  = g_mem_cache_free[device].load(std::memory_order_relaxed);
+            *total = g_mem_cache_total[device].load(std::memory_order_relaxed);
+            return;
+        }
+    }
     // For secondary GPU devices (device >= scheduler's visible count), the
     // scheduler-filtered map falls back to identity mapping which is wrong
     // when non-GPU devices are interleaved in dpct enumeration.  Use
@@ -35582,6 +35599,14 @@ void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * tot
     GGML_SYCL_DEBUG("[MEM-QUERY] dev=%d free=%.1f MB total=%.1f MB consumed=%.1f MB\n",
                     device, *free / (1024.0 * 1024.0), *total / (1024.0 * 1024.0),
                     (*total - *free) / (1024.0 * 1024.0));
+    // Update TTL cache
+    if (device >= 0 && device < GGML_SYCL_MAX_DEVICES) {
+        g_mem_cache_free[device].store(*free, std::memory_order_relaxed);
+        g_mem_cache_total[device].store(*total, std::memory_order_relaxed);
+        auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        g_mem_cache_ts[device].store(now, std::memory_order_release);
+    }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__
               << ", line:" << __LINE__ << std::endl;
