@@ -5113,7 +5113,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         #else
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
         #endif
-        
+
         cl_uchar mask_0F = 0x0F;
         cl_uchar mask_F0 = 0xF0;
 
