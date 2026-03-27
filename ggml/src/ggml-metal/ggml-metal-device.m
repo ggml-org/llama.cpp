@@ -238,6 +238,12 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                         GGML_LOG_INFO("%s: turbo3 using 4-mag LUT%s\n", __func__,
                             force_4mag ? " (forced)" : " (pre-M5 hardware)");
                     }
+                    // Sparse V dequant: skip V for negligible attention weights
+                    const char * sparse_v = getenv("TURBO_SPARSE_V");
+                    if (sparse_v && sparse_v[0] == '1') {
+                        [prep setObject:@"1" forKey:@"TURBO_SPARSE_V"];
+                        GGML_LOG_INFO("%s: turbo3 sparse V dequant enabled\n", __func__);
+                    }
                     // TODO: context-adaptive dispatch — compile both 4-mag and 8-LUT
                     // FA kernel instantiations, select based on ne11 (KV cache size)
                     // at dispatch time in ggml_metal_op_flash_attn_ext()
