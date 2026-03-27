@@ -780,28 +780,25 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
     // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
 #if TURBO_USE_4MAG
-    // 4-mag LUT with deferred norm multiply.
-    // The centroid lookup returns the UNSCALED magnitude from constant half[4].
-    // Norm is multiplied ONCE via float4 broadcast at the end, not per-element.
-    // This reduces the ALU chain from: LUT→half2float→*norm→sign to: LUT→half2float→sign→(batch *norm)
+    // 4-mag LUT + per-element norm multiply: PROVEN BEST on M2 Pro (+38-45%).
+    // Per-element norm multiply (not deferred) is faster because it provides
+    // ALU work that hides constant memory latency (instruction-level parallelism).
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
     const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    // 4 constant reads, no per-element norm multiply yet
-    const float v0 = float(turbo_mag_3bit_h[mi0]);
-    const float v1 = float(turbo_mag_3bit_h[mi1]);
-    const float v2 = float(turbo_mag_3bit_h[mi2]);
-    const float v3 = float(turbo_mag_3bit_h[mi3]);
+    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
+    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
+    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
+    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
 
-    // Apply sign + single norm broadcast
     reg = type4(float4(
         s0 ? v0 : -v0,
         s1 ? v1 : -v1,
         s2 ? v2 : -v2,
         s3 ? v3 : -v3
-    ) * norm);
+    ));
 #else
     // 8-entry full LUT: best on M5 Max (0.905x q8_0, 77.4 tok/s)
     reg = type4(float4(
