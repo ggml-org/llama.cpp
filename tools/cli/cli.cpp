@@ -581,6 +581,7 @@ int main(int argc, char ** argv) {
                 }
 
                 if (++count >= FILE_GLOB_MAX_RESULTS) {
+                    console::error("Maximum number of globbed files allowed (%zu) reached.\n", FILE_GLOB_MAX_RESULTS);
                     break;
                 }
             }
