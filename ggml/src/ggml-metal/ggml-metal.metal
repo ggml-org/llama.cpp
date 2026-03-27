@@ -768,30 +768,38 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     const uint8_t s2 = (sb >> (sshift + 2)) & 1;
     const uint8_t s3 = (sb >> (sshift + 3)) & 1;
 
-    // ZERO-LUT: select chain computes centroid from 2-bit index + sign.
-    // No constant memory access at all. Just 2 levels of select + sign negate.
-    // 4 magnitudes: 0.021460, 0.065717, 0.117832, 0.190685
-    // 2-bit index selects magnitude, sign bit negates.
-    // Magnitude order reversed for sign=0 (use XOR to flip index).
-
+    // Auto-selected dequant path based on hardware.
+    // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
+    // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
+#if TURBO_USE_4MAG
+    // 4-mag LUT: halves constant cache divergence (4 addresses vs 8).
+    // XOR trick reverses magnitude index for negative (sign=0) values.
+    // Branchless sign via multiply. Proven +38% at 8K, +45% at 16K on M2 Pro.
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
     const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    // 2-level select: bit1 selects high/low pair, bit0 selects within pair
-    // No constant memory, no array indexing — pure ALU
-    const float mag0 = (mi0 & 2) ? ((mi0 & 1) ? 0.190685f : 0.117832f) : ((mi0 & 1) ? 0.065717f : 0.021460f);
-    const float mag1 = (mi1 & 2) ? ((mi1 & 1) ? 0.190685f : 0.117832f) : ((mi1 & 1) ? 0.065717f : 0.021460f);
-    const float mag2 = (mi2 & 2) ? ((mi2 & 1) ? 0.190685f : 0.117832f) : ((mi2 & 1) ? 0.065717f : 0.021460f);
-    const float mag3 = (mi3 & 2) ? ((mi3 & 1) ? 0.190685f : 0.117832f) : ((mi3 & 1) ? 0.065717f : 0.021460f);
+    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
+    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
+    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
+    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
 
     reg = type4(float4(
-        (s0 ? mag0 : -mag0) * norm,
-        (s1 ? mag1 : -mag1) * norm,
-        (s2 ? mag2 : -mag2) * norm,
-        (s3 ? mag3 : -mag3) * norm
+        s0 ? v0 : -v0,
+        s1 ? v1 : -v1,
+        s2 ? v2 : -v2,
+        s3 ? v3 : -v3
     ));
+#else
+    // 8-entry full LUT: best on M5 Max (0.905x q8_0, 77.4 tok/s)
+    reg = type4(float4(
+        float(turbo_centroids_3bit_h[q0 | (s0 << 2)]),
+        float(turbo_centroids_3bit_h[q1 | (s1 << 2)]),
+        float(turbo_centroids_3bit_h[q2 | (s2 << 2)]),
+        float(turbo_centroids_3bit_h[q3 | (s3 << 2)])
+    ) * norm);
+#endif
 #endif
 }
 
