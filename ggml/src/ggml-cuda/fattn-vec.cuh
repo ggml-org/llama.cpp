@@ -136,7 +136,7 @@ static __global__ void flash_attn_ext_vec(
     __align__(16) float2 Q_reg[ncols][(D/2)/nthreads_KQ] = {{{0.0f, 0.0f}}}; // May be only partially initialized.
 #endif // V_DOT2_F32_F16_AVAILABLE
     int    Q_i32[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
-    float2  Q_ds[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
+    fattn_vec_Q_aux Q_aux[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
     if constexpr (Q_q8_1) {
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {
@@ -185,8 +185,15 @@ static __global__ void flash_attn_ext_vec(
             for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += nthreads_KQ) {
                 const int i = i0 + (nthreads_KQ == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_KQ);
 
-                Q_i32[j][i0/nthreads_KQ] = tmp_q_i32[i];
-                Q_ds[j][i0/nthreads_KQ]  = tmp_q_ds[i/QI8_1];
+                Q_i32[j][i0/nthreads_KQ]    = tmp_q_i32[i];
+                Q_aux[j][i0/nthreads_KQ].ds = tmp_q_ds[i/QI8_1];
+            }
+        }
+
+        if constexpr (type_K == GGML_TYPE_TQ3_0) {
+#pragma unroll
+            for (int j = 0; j < ncols; ++j) {
+                prepare_fattn_vec_Q_tq3_0<D, nthreads_KQ>(Q_i32[j], Q_aux[j]);
             }
         }
 
@@ -260,7 +267,7 @@ static __global__ void flash_attn_ext_vec(
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_aux[j]);
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
                 if (use_logit_softcap) {
