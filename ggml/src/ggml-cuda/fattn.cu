@@ -395,6 +395,18 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                     if (Q->ne[1] <= 2) {
                         return BEST_FATTN_KERNEL_VEC;
                     }
+                    // The MMA path must convert quantized K/V to F16 in VRAM before processing.
+                    // For large contexts this scratch space can exhaust available VRAM. Fall back
+                    // to the VEC path which reads quantized K/V directly without any temporary buffer.
+                    {
+                        const size_t kv_f16_bytes = (size_t)ggml_nelements(K) * sizeof(half)
+                                                  + (size_t)ggml_nelements(V) * sizeof(half);
+                        size_t free_vram = 0, total_vram_unused = 0;
+                        CUDA_CHECK(cudaMemGetInfo(&free_vram, &total_vram_unused));
+                        if (kv_f16_bytes > free_vram) {
+                            return BEST_FATTN_KERNEL_VEC;
+                        }
+                    }
                 } else {
                     if (Q->ne[1] == 1) {
                         return BEST_FATTN_KERNEL_VEC;
