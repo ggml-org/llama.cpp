@@ -2953,7 +2953,7 @@ llama_context * llama_init_from_model(
         }
     }
 
-    // TQ3_0 FlashAttention is currently only wired for the vector K=tq3_0, V=f16 path.
+    // TQ3_0 FlashAttention currently requires an F16 V cache.
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED &&
         params.type_k == GGML_TYPE_TQ3_0 &&
         params.type_v != GGML_TYPE_F16) {
