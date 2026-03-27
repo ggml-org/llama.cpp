@@ -7374,68 +7374,70 @@ kernel void kernel_flash_attn_ext_vec(
                     } else {
                         device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
 
-#if TURBO_USE_4MAG && TURBO_SIMD_SHUFFLE
-                        // SIMD SHUFFLE APPROACH: use simd_shuffle for 4-way magnitude select.
+#if TURBO_USE_4MAG && TURBO_FUSED_BLOCK_DOT
+                        // FUSED BLOCK DOT: flip computation order.
+                        // Instead of per-element: score += centroid[idx] * norm * Q[j]
+                        // Do per-centroid: score += mag[c] * norm * sum(Q[j] where mi[j]==c)
+                        //
+                        // 4 centroid iterations × masked Q accumulation replaces
+                        // 32 per-element constant memory lookups.
+                        // float(mi==c) is branchless on Apple GPU (comparison → 0/1).
+                        {
+                        FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
+                            const short i = ii*NL + tx;
+                            const short blk_idx = i / nl_k;
+                            const short il = i % nl_k;
+
+                            device const block_turbo3_0 * xb = ((device const block_turbo3_0 *)pk) + blk_idx;
+                            const float norm = float(xb->norm);
+                            const uint8_t qb = xb->qs[il];
+                            const uint8_t sb = xb->signs[il >> 1];
+                            const int sshift = (il & 1) << 2;
+
+                            // Extract magnitude indices (with XOR sign reversal)
+                            const uint8_t s0 = (sb >> (sshift    )) & 1;
+                            const uint8_t s1 = (sb >> (sshift + 1)) & 1;
+                            const uint8_t s2 = (sb >> (sshift + 2)) & 1;
+                            const uint8_t s3 = (sb >> (sshift + 3)) & 1;
+
+                            const uint mi0 = uint((qb      ) & 0x03) ^ (s0 ? 0u : 3u);
+                            const uint mi1 = uint((qb >> 2) & 0x03) ^ (s1 ? 0u : 3u);
+                            const uint mi2 = uint((qb >> 4) & 0x03) ^ (s2 ? 0u : 3u);
+                            const uint mi3 = uint((qb >> 6)       ) ^ (s3 ? 0u : 3u);
+
+                            // Sign multipliers (branchless: 2*s - 1)
+                            const float sg0 = 2.0f * float(s0) - 1.0f;
+                            const float sg1 = 2.0f * float(s1) - 1.0f;
+                            const float sg2 = 2.0f * float(s2) - 1.0f;
+                            const float sg3 = 2.0f * float(s3) - 1.0f;
+
+                            // Q values for this thread's 4 elements
+                            const float4 qv = (float4) sq4[i];
+
+                            // Accumulate per-centroid: for each magnitude c,
+                            // sum Q[j]*sign[j] where mi[j]==c
+                            // float(mi==c) is 0.0 or 1.0 — branchless comparison
+                            float score = 0.0f;
+                            for (uint c = 0; c < 4; c++) {
+                                float signed_q_sum =
+                                    qv.x * sg0 * float(mi0 == c) +
+                                    qv.y * sg1 * float(mi1 == c) +
+                                    qv.z * sg2 * float(mi2 == c) +
+                                    qv.w * sg3 * float(mi3 == c);
+
+                                // ONE constant read per centroid (shared across all elements)
+                                score += float(turbo_mag_3bit_h[c]) * signed_q_sum;
+                            }
+
+                            mqk[cc] += score * norm;
+                        }
+                        }
                         // Each iteration, 8 threads share a block (NL=8 for turbo3).
                         // Threads 0-3 within the block each hold one mag×norm value.
                         // Other threads use simd_shuffle to read the right value by mi index.
                         //
                         // This eliminates BOTH constant memory AND branches from the inner loop.
                         // The shuffle is a single-cycle cross-lane operation.
-                        FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
-                            const short i = ii*NL + tx;
-                            const short blk_idx = i / nl_k;
-                            const short il = i % nl_k;
-
-                            // Read block data
-                            device const block_turbo3_0 * xb = ((device const block_turbo3_0 *)pk) + blk_idx;
-                            const float norm = float(xb->norm);
-
-                            // Threads 0-3 within the block compute mag×norm for their index
-                            // tx % NL gives position within the block (0-7)
-                            // Threads 0-3: compute mag[thread_in_block] * norm
-                            const short thread_in_block = tx % nl_k;  // 0-7
-                            float my_magnorm = 0.0f;
-                            if (thread_in_block < 4) {
-                                my_magnorm = float(turbo_mag_3bit_h[thread_in_block]) * norm;
-                            }
-
-                            // Read qs and signs
-                            const uint8_t qb = xb->qs[il];
-                            const uint8_t sb = xb->signs[il >> 1];
-                            const int sshift = (il & 1) << 2;
-
-                            const uint8_t q0 = (qb      ) & 0x03;
-                            const uint8_t q1 = (qb >> 2) & 0x03;
-                            const uint8_t q2 = (qb >> 4) & 0x03;
-                            const uint8_t q3 = (qb >> 6);
-                            const uint8_t s0 = (sb >> (sshift    )) & 1;
-                            const uint8_t s1 = (sb >> (sshift + 1)) & 1;
-                            const uint8_t s2 = (sb >> (sshift + 2)) & 1;
-                            const uint8_t s3 = (sb >> (sshift + 3)) & 1;
-
-                            const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
-                            const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
-                            const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
-                            const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
-
-                            // SIMD SHUFFLE: read mag×norm from the thread that holds it
-                            // block_base = (tiisg / nl_k) * nl_k = first lane of this block
-                            const ushort block_base = (tiisg / nl_k) * nl_k;
-                            const float v0 = simd_shuffle(my_magnorm, block_base + mi0);
-                            const float v1 = simd_shuffle(my_magnorm, block_base + mi1);
-                            const float v2 = simd_shuffle(my_magnorm, block_base + mi2);
-                            const float v3 = simd_shuffle(my_magnorm, block_base + mi3);
-
-                            const float4 mk = float4(
-                                s0 ? v0 : -v0,
-                                s1 ? v1 : -v1,
-                                s2 ? v2 : -v2,
-                                s3 ? v3 : -v3
-                            );
-
-                            mqk[cc] += dot(mk, (float4) sq4[i]);
-                        }
 #else
                         k4_t mk;
 
