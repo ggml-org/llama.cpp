@@ -600,10 +600,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_row_norm_pipeline_key key = {
-            .op      = context.dst->op,
-            .inplace = context.inplace,
-        };
+        ggml_webgpu_row_norm_pipeline_key key = {};
+        key.op                                = context.dst->op;
+        key.inplace                           = context.inplace;
 
         auto it = row_norm_pipelines.find(key);
         if (it != row_norm_pipelines.end()) {
@@ -659,9 +658,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_set_rows_pipeline_key key = { .dst_type = context.dst->type,
-                                                  .vec4     = context.src0->ne[0] % 4 == 0,
-                                                  .i64_idx  = context.src1->type == GGML_TYPE_I64 };
+        ggml_webgpu_set_rows_pipeline_key key = {};
+        key.dst_type                          = context.dst->type;
+        key.vec4                              = context.src0->ne[0] % 4 == 0;
+        key.i64_idx                           = context.src1->type == GGML_TYPE_I64;
 
         auto it = set_rows_pipelines.find(key);
         if (it != set_rows_pipelines.end()) {
@@ -706,7 +706,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_set_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_set_pipeline_key key = { .type = context.dst->type, .inplace = context.inplace };
+        ggml_webgpu_set_pipeline_key key = {};
+        key.type                         = context.dst->type;
+        key.inplace                      = context.inplace;
 
         auto it = set_pipelines.find(key);
         if (it != set_pipelines.end()) {
@@ -813,10 +815,9 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_get_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool vectorized                 = context.src0->type == GGML_TYPE_F32 && context.dst->ne[0] % 4 == 0;
-        ggml_webgpu_get_rows_pipeline_key key = {
-            .src_type   = context.src0->type,
-            .vectorized = (int) vectorized,
-        };
+        ggml_webgpu_get_rows_pipeline_key key = {};
+        key.src_type                          = context.src0->type;
+        key.vectorized                        = (int) vectorized;
 
         auto it = get_rows_pipelines.find(key);
         if (it != get_rows_pipelines.end()) {
@@ -907,7 +908,8 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_scale_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_scale_pipeline_key key = { .inplace = context.inplace };
+        ggml_webgpu_scale_pipeline_key key = {};
+        key.inplace                         = context.inplace;
 
         auto it = scale_pipelines.find(key);
         if (it != scale_pipelines.end()) {
@@ -934,11 +936,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_solve_tri_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_solve_tri_pipeline_key key = {
-            .type = context.dst->type,
-            .n    = (int) context.src0->ne[0],
-            .k    = (int) context.src1->ne[0],
-        };
+        ggml_webgpu_solve_tri_pipeline_key key = {};
+        key.type                               = context.dst->type;
+        key.n                                  = (int) context.src0->ne[0];
+        key.k                                  = (int) context.src1->ne[0];
 
         auto it = solve_tri_pipelines.find(key);
         if (it != solve_tri_pipelines.end()) {
@@ -976,10 +977,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_ssm_conv_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_ssm_conv_pipeline_key key = {
-            .type       = context.dst->type,
-            .vectorized = context.src1->ne[0] == 4,
-        };
+        ggml_webgpu_ssm_conv_pipeline_key key = {};
+        key.type                              = context.dst->type;
+        key.vectorized                        = context.src1->ne[0] == 4;
 
         auto it = ssm_conv_pipelines.find(key);
         if (it != ssm_conv_pipelines.end()) {
@@ -1019,11 +1019,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_gated_delta_net_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_gated_delta_net_pipeline_key key = {
-            .type = context.dst->type,
-            .s_v  = (int) context.src2->ne[0],
-            .kda  = context.src3->ne[0] == context.src2->ne[0],
-        };
+        ggml_webgpu_gated_delta_net_pipeline_key key = {};
+        key.type                                     = context.dst->type;
+        key.s_v                                      = (int) context.src2->ne[0];
+        key.kda                                      = context.src3->ne[0] == context.src2->ne[0];
 
         auto it = gated_delta_net_pipelines.find(key);
         if (it != gated_delta_net_pipelines.end()) {
@@ -1056,7 +1055,8 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_pad_pipeline_key key = { .circular = ggml_get_op_params_i32(context.dst, 8) != 0 };
+        ggml_webgpu_pad_pipeline_key key = {};
+        key.circular                     = ggml_get_op_params_i32(context.dst, 8) != 0;
 
         auto it = pad_pipelines.find(key);
         if (it != pad_pipelines.end()) {
@@ -1083,15 +1083,13 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_vec_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_mul_mat_vec_pipeline_key key = {
-            .src0_type  = context.src0->type,
-            .src1_type  = context.src1->type,
-            // Quantized mat-vec path currently runs scalar; only allow vectorization when both inputs are float
-            .vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
-                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
-                              1 :
-                              0,
-        };
+        ggml_webgpu_mul_mat_vec_pipeline_key key = {};
+        key.src0_type                            = context.src0->type;
+        key.src1_type                            = context.src1->type;
+        key.vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
+                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                             1 :
+                             0;
 
         auto it = mul_mat_vec_pipelines.find(key);
         if (it != mul_mat_vec_pipelines.end()) {
@@ -1178,15 +1176,14 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_fast_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_mul_mat_pipeline_key key = {
-            .src0_type  = context.src0->type,
-            .src1_type  = context.src1->type,
-            .vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 && context.dst->ne[1] % 4 == 0 &&
-                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
-                              1 :
-                              0,
-            .use_subgroup_matrix = context.supports_subgroup_matrix
-        };
+        ggml_webgpu_mul_mat_pipeline_key key = {};
+        key.src0_type                        = context.src0->type;
+        key.src1_type                        = context.src1->type;
+        key.vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 && context.dst->ne[1] % 4 == 0 &&
+                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                             1 :
+                             0;
+        key.use_subgroup_matrix = context.supports_subgroup_matrix;
 
         auto it = mul_mat_fast_pipelines.find(key);
         if (it != mul_mat_fast_pipelines.end()) {
@@ -1306,8 +1303,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_legacy_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_legacy_mul_mat_pipeline_key key = { .src0_type = context.src0->type,
-                                                        .src1_type = context.src1->type };
+        ggml_webgpu_legacy_mul_mat_pipeline_key key = {};
+        key.src0_type                               = context.src0->type;
+        key.src1_type                               = context.src1->type;
 
         auto it = mul_mat_legacy_pipelines.find(key);
         if (it != mul_mat_legacy_pipelines.end()) {
@@ -1377,13 +1375,12 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_unary_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool                     is_unary = context.dst->op == GGML_OP_UNARY;
         const int                      op       = is_unary ? (int) ggml_get_unary_op(context.dst) : context.dst->op;
-        ggml_webgpu_unary_pipeline_key key      = {
-                 .type     = context.dst->type,
-                 .op       = op,
-                 .is_unary = is_unary,
-                 .inplace  = context.inplace,
-                 .ttype    = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0),
-        };
+        ggml_webgpu_unary_pipeline_key key      = {};
+        key.type                                = context.dst->type;
+        key.op                                  = op;
+        key.is_unary                            = is_unary;
+        key.inplace                             = context.inplace;
+        key.ttype                               = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0);
 
         auto it = unary_pipelines.find(key);
         if (it != unary_pipelines.end()) {
@@ -1448,13 +1445,12 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_binary_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_binary_pipeline_key key = {
-            .type        = context.dst->type,
-            .op          = context.dst->op,
-            .inplace     = context.inplace,
-            .overlap     = context.overlap,
-            .src_overlap = context.src_overlap,
-        };
+        ggml_webgpu_binary_pipeline_key key = {};
+        key.type                            = context.dst->type;
+        key.op                              = context.dst->op;
+        key.inplace                         = context.inplace;
+        key.overlap                         = context.overlap;
+        key.src_overlap                     = context.src_overlap;
 
         auto it = binary_pipelines.find(key);
         if (it != binary_pipelines.end()) {
@@ -1503,9 +1499,8 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_concat_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_concat_pipeline_key key = {
-            .type = context.dst->type,
-        };
+        ggml_webgpu_concat_pipeline_key key = {};
+        key.type                            = context.dst->type;
 
         auto it = concat_pipelines.find(key);
         if (it != concat_pipelines.end()) {
@@ -1540,9 +1535,8 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_repeat_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_repeat_pipeline_key key = {
-            .type = context.dst->type,
-        };
+        ggml_webgpu_repeat_pipeline_key key = {};
+        key.type                            = context.dst->type;
 
         auto it = repeat_pipelines.find(key);
         if (it != repeat_pipelines.end()) {
@@ -1587,15 +1581,14 @@ class ggml_webgpu_shader_lib {
         bool kv_direct = (context.src1->type == GGML_TYPE_F16) && (context.src0->ne[0] % context.sg_mat_k == 0) &&
                          (context.src1->ne[1] % context.sg_mat_n == 0);
 
-        ggml_webgpu_flash_attn_pipeline_key key = {
-            .kv_type            = context.src1->type,
-            .head_dim_qk        = (uint32_t) context.src0->ne[0],
-            .head_dim_v         = (uint32_t) context.src2->ne[0],
-            .kv_direct          = kv_direct,
-            .has_mask           = has_mask,
-            .has_sinks          = has_sinks,
-            .uses_logit_softcap = (*(float *) &context.dst->op_params[2]) != 0.0f,
-        };
+        ggml_webgpu_flash_attn_pipeline_key key = {};
+        key.kv_type                             = context.src1->type;
+        key.head_dim_qk                         = (uint32_t) context.src0->ne[0];
+        key.head_dim_v                          = (uint32_t) context.src2->ne[0];
+        key.kv_direct                           = kv_direct;
+        key.has_mask                            = has_mask;
+        key.has_sinks                           = has_sinks;
+        key.uses_logit_softcap                  = (*(float *) &context.dst->op_params[2]) != 0.0f;
 
         auto it = flash_attn_pipelines.find(key);
         if (it != flash_attn_pipelines.end()) {
