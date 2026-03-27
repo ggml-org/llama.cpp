@@ -2844,6 +2844,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
     add_opt(common_arg(
+        {"--tools"}, "TOOL1,TOOL2,...",
+        "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
+        "specify \"all\" to enable all tools\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff",
+        [](common_params & params, const std::string & value) {
+            params.server_tools = parse_csv_row(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
         string_format("whether to enable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
