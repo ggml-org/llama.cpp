@@ -100,7 +100,7 @@ struct cli_context {
             }
 
             // reasoning budget sampler
-            if (reasoning_budget >= 0 && !chat_params.thinking_end_tag.empty()) {
+            if (!chat_params.thinking_end_tag.empty()) {
                 const llama_vocab * vocab = llama_model_get_vocab(
                     llama_get_model(ctx_server.get_llama_context()));
 
