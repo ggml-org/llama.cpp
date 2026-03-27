@@ -383,7 +383,11 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_TQ1_0:
-            case GGML_TYPE_TQ2_0:   return_type = GGML_TYPE_Q4_0;   break;
+            case GGML_TYPE_TQ2_0:
+            case GGML_TYPE_TBQ3_0:
+            case GGML_TYPE_TBQ4_0:
+            case GGML_TYPE_TBQP3_0:
+            case GGML_TYPE_TBQP4_0: return_type = GGML_TYPE_Q4_0;   break;
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
@@ -481,6 +485,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 new_type = GGML_TYPE_IQ3_S;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
+                new_type = GGML_TYPE_Q4_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_TBQ3_0 || ftype == LLAMA_FTYPE_MOSTLY_TBQ4_0) {
+                new_type = GGML_TYPE_Q4_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_TBQP3_0 || ftype == LLAMA_FTYPE_MOSTLY_TBQP4_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
         }
@@ -817,6 +827,10 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_K:    return GGML_TYPE_Q6_K;
         case LLAMA_FTYPE_MOSTLY_TQ1_0:   return GGML_TYPE_TQ1_0;
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
+        case LLAMA_FTYPE_MOSTLY_TBQ3_0:  return GGML_TYPE_TBQ3_0;
+        case LLAMA_FTYPE_MOSTLY_TBQ4_0:  return GGML_TYPE_TBQ4_0;
+        case LLAMA_FTYPE_MOSTLY_TBQP3_0: return GGML_TYPE_TBQP3_0;
+        case LLAMA_FTYPE_MOSTLY_TBQP4_0: return GGML_TYPE_TBQP4_0;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_XS;

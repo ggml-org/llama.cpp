@@ -5474,6 +5474,31 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
 
+        case GGML_TYPE_TBQ3_0:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_tbq3_0, data, nb);
+            } break;
+        case GGML_TYPE_TBQ4_0:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_tbq4_0, data, nb);
+            } break;
+        case GGML_TYPE_TBQP3_0:
+            {
+                const block_tbqp3_0 * q = (const block_tbqp3_0 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].d, i)) return false;
+                    if (!validate_fp16(q[i].gamma, i)) return false;
+                }
+            } break;
+        case GGML_TYPE_TBQP4_0:
+            {
+                const block_tbqp4_0 * q = (const block_tbqp4_0 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].d, i)) return false;
+                    if (!validate_fp16(q[i].gamma, i)) return false;
+                }
+            } break;
+
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
