@@ -788,6 +788,15 @@ private:
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
+
+                if (kv_keep_only_active) {
+                    auto & slot = slots[id_slot];
+                    if (slot.prompt.n_tokens() > 0) {
+                        slot.prompt_save(*prompt_cache);
+                        slot.prompt_clear(false);
+                        prompt_cache->update();
+                    }
+                }
             };
 
             slot.reset();
@@ -875,7 +884,7 @@ private:
                     SRV_WRN("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE requires --cache-ram, ignoring");
                 } else {
                     kv_keep_only_active = true;
-                    SRV_INF("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE: idle slots' KV will be cleared from VRAM before each decode");
+                    SRV_INF("%s\n", "LLAMA_KV_KEEP_ONLY_ACTIVE: idle slots' KV will be saved to cache-ram and cleared on release");
                 }
             }
         }
@@ -2703,34 +2712,6 @@ private:
             }
         } else {
             n_empty_consecutive = 0;
-        }
-
-        if (kv_keep_only_active && batch.n_tokens > 0) { // LLAMA_KV_KEEP_ONLY_ACTIVE: clear idle slots' KV
-            int kv_used = 0;
-            int n_cleared = 0;
-
-            for (auto & slot : slots) {
-                const int n_tokens = slot.prompt.n_tokens();
-                if (n_tokens == 0) {
-                    continue;
-                }
-                if (slot.is_processing()) {
-                    kv_used += n_tokens;
-                    continue;
-                }
-
-                slot.prompt_save(*prompt_cache);
-                slot.prompt_clear(false);
-                ++n_cleared;
-
-                SLT_DBG(slot, "kv_keep_only_active: cleared idle slot with %d tokens\n", n_tokens);
-            }
-
-            if (n_cleared > 0) {
-                prompt_cache->update();
-
-                SRV_INF("kv_keep_only_active: cleared %d slot(s), kv: %d/%d\n", n_cleared, kv_used, n_ctx);
-            }
         }
 
         int32_t i_next = 0;

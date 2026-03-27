@@ -68,7 +68,7 @@ def test_clear_and_restore():
         "cache_prompt": True,
     })
     assert res.status_code == 200
-    assert "kv_keep_only_active: cleared 1 slot" in log.drain()
+    assert "clearing prompt with" in log.drain()
 
     # Re-send same prompt — should restore from cache-ram
     res = server.make_request("POST", "/completion", data={
