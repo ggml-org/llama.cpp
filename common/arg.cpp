@@ -1079,7 +1079,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.verbose_prompt = true;
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--display-prompt"},
         {"--no-display-prompt"},
