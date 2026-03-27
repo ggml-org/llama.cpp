@@ -976,7 +976,7 @@ void launch_fattn(
         const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
         const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const int nblocks_stream_k = std::min(max_blocks, ntiles_KV*ntiles_dst);
+        int nblocks_stream_k = std::min(max_blocks, ntiles_KV*ntiles_dst);
 
         const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
 
