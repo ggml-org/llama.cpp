@@ -1857,10 +1857,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                float   kq_scale,
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
-    const bool k_is_tbq = k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0 ||
-        k->type == GGML_TYPE_TBQP3_0 || k->type == GGML_TYPE_TBQP4_0;
-    const bool v_is_tbq = v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0 ||
-        v->type == GGML_TYPE_TBQP3_0 || v->type == GGML_TYPE_TBQP4_0;
+    const bool k_is_tbq = k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0;
+    const bool v_is_tbq = v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0;
     const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
     const enum ggml_type tbq_attn_type = use_flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 

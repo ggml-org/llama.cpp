@@ -7288,8 +7288,6 @@ static const ggml_type other_types[] = {
 static const ggml_type turboq_types[] = {
     GGML_TYPE_TBQ3_0,
     GGML_TYPE_TBQ4_0,
-    GGML_TYPE_TBQP3_0,
-    GGML_TYPE_TBQP4_0,
 };
 
 #ifdef _MSC_VER

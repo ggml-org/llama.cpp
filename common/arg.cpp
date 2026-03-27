@@ -389,8 +389,6 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_Q5_1,
     GGML_TYPE_TBQ3_0,
     GGML_TYPE_TBQ4_0,
-    GGML_TYPE_TBQP3_0,
-    GGML_TYPE_TBQP4_0,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
