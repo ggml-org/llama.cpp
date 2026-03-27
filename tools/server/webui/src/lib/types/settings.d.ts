@@ -24,6 +24,8 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
 	disableReasoningParsing?: boolean;
+	// Strip reasoning content from context before sending
+	excludeReasoningFromContext?: boolean;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;

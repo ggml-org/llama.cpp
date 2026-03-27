@@ -297,6 +297,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
+					label: 'Exclude reasoning from context',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 					label: 'Enable raw output toggle',
 					type: SettingsFieldType.CHECKBOX

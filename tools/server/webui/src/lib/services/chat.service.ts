@@ -58,6 +58,46 @@ export class ChatService {
 	 */
 
 	/**
+	 * Extracts reasoning text from content that contains internal reasoning tags.
+	 * Returns the concatenated reasoning content or undefined if none found.
+	 */
+	private static extractReasoningFromContent(
+		content: ApiChatMessageData['content'] | null | undefined
+	): string | undefined {
+		if (!content) return undefined;
+
+		const extractFromString = (text: string): string => {
+			const parts: string[] = [];
+			// Use a fresh regex instance to avoid shared lastIndex state
+			const re = new RegExp(AGENTIC_REGEX.REASONING_EXTRACT.source);
+			let match = re.exec(text);
+			while (match) {
+				parts.push(match[1]);
+				// advance past the matched portion and retry
+				text = text.slice(match.index + match[0].length);
+				match = re.exec(text);
+			}
+			return parts.join('');
+		};
+
+		if (typeof content === 'string') {
+			const result = extractFromString(content);
+			return result || undefined;
+		}
+
+		if (!Array.isArray(content)) return undefined;
+
+		const parts: string[] = [];
+		for (const part of content) {
+			if (part.type === ContentPartType.TEXT && part.text) {
+				const result = extractFromString(part.text);
+				if (result) parts.push(result);
+			}
+		}
+		return parts.length > 0 ? parts.join('') : undefined;
+	}
+
+	/**
 	 * Sends a chat completion request to the llama.cpp server.
 	 * Supports both streaming and non-streaming responses with comprehensive parameter configuration.
 	 * Automatically converts database messages with attachments to the appropriate API format.
@@ -111,7 +151,8 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			disableReasoningParsing,
+			excludeReasoningFromContext
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -159,14 +200,24 @@ export class ChatService {
 		}
 
 		const requestBody: ApiChatCompletionRequest = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
-				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
-				content: ChatService.stripReasoningContent(msg.content),
-				tool_calls: msg.tool_calls,
-				tool_call_id: msg.tool_call_id
-			})),
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				// Always strip internal reasoning/agentic tags from content
+				const cleanedContent = ChatService.stripReasoningContent(msg.content);
+				const mapped: ApiChatCompletionRequest['messages'][0] = {
+					role: msg.role,
+					content: cleanedContent,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+				// When preserving reasoning, extract it from raw content and send as separate field
+				if (!excludeReasoningFromContext) {
+					const reasoning = ChatService.extractReasoningFromContent(msg.content);
+					if (reasoning) {
+						mapped.reasoning_content = reasoning;
+					}
+				}
+				return mapped;
+			}),
 			stream,
 			return_progress: stream ? true : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined

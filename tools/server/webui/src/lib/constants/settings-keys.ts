@@ -54,6 +54,7 @@ export const SETTINGS_KEYS = {
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
+	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	CUSTOM: 'custom'
 } as const;

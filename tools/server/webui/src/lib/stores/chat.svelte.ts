@@ -1479,6 +1479,8 @@ class ChatStore {
 
 		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
+		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
+
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
 

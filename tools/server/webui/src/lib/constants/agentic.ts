@@ -50,6 +50,8 @@ export const AGENTIC_REGEX = {
 	PARTIAL_MARKER: /<<<[A-Za-z_]*$/,
 	// Matches reasoning content blocks (including tags)
 	REASONING_BLOCK: /<<<reasoning_content_start>>>[\s\S]*?<<<reasoning_content_end>>>/g,
+	// Captures the reasoning text between start/end tags
+	REASONING_EXTRACT: /<<<reasoning_content_start>>>([\s\S]*?)<<<reasoning_content_end>>>/,
 	// Matches an opening reasoning tag and any remaining content (unterminated)
 	REASONING_OPEN: /<<<reasoning_content_start>>>[\s\S]*$/,
 	// Matches a complete agentic tool call display block (start to end marker)
