@@ -780,21 +780,8 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
     // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
 #if TURBO_USE_4MAG
-    // 4-mag LUT: THE PROVEN OPTIMAL APPROACH FOR APPLE8 (M1/M2/M3/M4).
-    //
-    // 12 approaches tested. This one wins by +38-45% over main at long context.
-    // 4 divergent constant reads + XOR sign + per-element norm = best balance.
-    //
-    // WHY alternatives fail on Apple8:
-    //   - Zero-memory (FMA/bit-arith): 7 ALU ops > 1 divergent constant read
-    //   - Zero-branch (FMA branchless): same ALU cost, no improvement
-    //   - Fewer constant addrs (2-pair, select chain): branches > constant reads
-    //   - More constant addrs (8-LUT): too much divergence
-    //   - Register arrays: Metal spills to stack
-    //   - Inline FA block: instruction cache pressure
-    //
-    // The remaining 38% gap (vs 24.5 ceiling) cannot be closed at the dequant
-    // level. It requires block format change or custom FA kernel.
+    // 4-mag LUT (proven +38-45% on M2). See decode-speed-hardware-analysis.md
+    // for the full 12-approach experiment log.
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
@@ -7387,6 +7374,69 @@ kernel void kernel_flash_attn_ext_vec(
                     } else {
                         device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
 
+#if TURBO_USE_4MAG && TURBO_SIMD_SHUFFLE
+                        // SIMD SHUFFLE APPROACH: use simd_shuffle for 4-way magnitude select.
+                        // Each iteration, 8 threads share a block (NL=8 for turbo3).
+                        // Threads 0-3 within the block each hold one mag×norm value.
+                        // Other threads use simd_shuffle to read the right value by mi index.
+                        //
+                        // This eliminates BOTH constant memory AND branches from the inner loop.
+                        // The shuffle is a single-cycle cross-lane operation.
+                        FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
+                            const short i = ii*NL + tx;
+                            const short blk_idx = i / nl_k;
+                            const short il = i % nl_k;
+
+                            // Read block data
+                            device const block_turbo3_0 * xb = ((device const block_turbo3_0 *)pk) + blk_idx;
+                            const float norm = float(xb->norm);
+
+                            // Threads 0-3 within the block compute mag×norm for their index
+                            // tx % NL gives position within the block (0-7)
+                            // Threads 0-3: compute mag[thread_in_block] * norm
+                            const short thread_in_block = tx % nl_k;  // 0-7
+                            float my_magnorm = 0.0f;
+                            if (thread_in_block < 4) {
+                                my_magnorm = float(turbo_mag_3bit_h[thread_in_block]) * norm;
+                            }
+
+                            // Read qs and signs
+                            const uint8_t qb = xb->qs[il];
+                            const uint8_t sb = xb->signs[il >> 1];
+                            const int sshift = (il & 1) << 2;
+
+                            const uint8_t q0 = (qb      ) & 0x03;
+                            const uint8_t q1 = (qb >> 2) & 0x03;
+                            const uint8_t q2 = (qb >> 4) & 0x03;
+                            const uint8_t q3 = (qb >> 6);
+                            const uint8_t s0 = (sb >> (sshift    )) & 1;
+                            const uint8_t s1 = (sb >> (sshift + 1)) & 1;
+                            const uint8_t s2 = (sb >> (sshift + 2)) & 1;
+                            const uint8_t s3 = (sb >> (sshift + 3)) & 1;
+
+                            const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
+                            const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
+                            const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
+                            const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
+
+                            // SIMD SHUFFLE: read mag×norm from the thread that holds it
+                            // block_base = (tiisg / nl_k) * nl_k = first lane of this block
+                            const ushort block_base = (tiisg / nl_k) * nl_k;
+                            const float v0 = simd_shuffle(my_magnorm, block_base + mi0);
+                            const float v1 = simd_shuffle(my_magnorm, block_base + mi1);
+                            const float v2 = simd_shuffle(my_magnorm, block_base + mi2);
+                            const float v3 = simd_shuffle(my_magnorm, block_base + mi3);
+
+                            const float4 mk = float4(
+                                s0 ? v0 : -v0,
+                                s1 ? v1 : -v1,
+                                s2 ? v2 : -v2,
+                                s3 ? v3 : -v3
+                            );
+
+                            mqk[cc] += dot(mk, (float4) sq4[i]);
+                        }
+#else
                         k4_t mk;
 
                         FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
@@ -7396,6 +7446,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                             mqk[cc] += dot((float4) mk, (float4) sq4[i]);
                         }
+#endif
                     }
 
                     if (NE == 1) {
