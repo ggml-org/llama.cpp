@@ -67,6 +67,9 @@ namespace ggml_sycl_tbb = tbb;
 #    include <cpuid.h>
 #endif
 
+// Forward declaration — defined below, after staging infrastructure.
+static int ggml_sycl_cpu_threads_hint();
+
 // ---------------------------------------------------------------------------
 // Runtime AVX-VNNI INT8 detection via CPUID.
 // CPUID leaf 7 sub-leaf 1, EAX bit 4 = AVX-VNNI, EDX bit 4 = AVX-VNNI-INT8.
@@ -648,9 +651,12 @@ void ggml_sycl_cpu_vec_dot_batched(const cpu_vec_dot_batch_item * items, int n_i
     const item_meta * meta_ptr = meta.data();
 
 #if GGML_SYCL_HAS_TBB
+    // Dynamic grain: ~2 tasks per thread for load balance without TBB overhead
+    const int n_thr  = ggml_sycl_cpu_threads_hint();
+    const int grain  = std::max(64, total_rows / std::max(1, n_thr * 2));
     ggml_sycl_cpu_arena().execute([&] {
         ggml_sycl_tbb::parallel_for(
-            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, grain),
             [items_ptr, q8_ptrs, meta_ptr, n_items](
                 const ggml_sycl_tbb::blocked_range<int> & range) {
                 // Binary search to find which item contains range.begin().
@@ -950,9 +956,12 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
     const task_meta *       meta_ptr  = meta.data();
 
 #if GGML_SYCL_HAS_TBB
+    // Dynamic grain: ~2 tasks per thread for load balance without TBB overhead
+    const int n_thr  = ggml_sycl_cpu_threads_hint();
+    const int grain  = std::max(64, total_rows / std::max(1, n_thr * 2));
     ggml_sycl_cpu_arena().execute([&] {
         ggml_sycl_tbb::parallel_for(
-            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, grain),
             [tasks_ptr, q8_ptrs, meta_ptr, n_tasks](
                 const ggml_sycl_tbb::blocked_range<int> & range) {
                 // Binary search for starting task
@@ -1600,9 +1609,12 @@ void ggml_sycl_cpu_expert_fused_gate_up_silu_batched(
     const fused_task_meta *       meta_ptr  = meta.data();
 
 #if GGML_SYCL_HAS_TBB
+    // Dynamic grain: ~2 tasks per thread for load balance without TBB overhead
+    const int n_thr  = ggml_sycl_cpu_threads_hint();
+    const int grain  = std::max(64, total_rows / std::max(1, n_thr * 2));
     ggml_sycl_cpu_arena().execute([&] {
         ggml_sycl_tbb::parallel_for(
-            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, grain),
             [tasks_ptr, q8_ptrs, meta_ptr, n_tasks, cpu_traits](const ggml_sycl_tbb::blocked_range<int> & range) {
                 // Binary search for starting task
                 int cur_task = 0;
