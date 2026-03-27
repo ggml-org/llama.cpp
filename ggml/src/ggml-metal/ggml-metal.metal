@@ -703,6 +703,14 @@ constant half turbo_mag_3bit_h[4] = {
     0.021460h, 0.065717h, 0.117832h, 0.190685h
 };
 
+// 2-entry PAIR LUT: each entry is a half2 containing two adjacent magnitudes.
+// Only 2 possible constant addresses per lookup (vs 4 for mag LUT, 8 for full).
+// bit1 selects the pair, bit0 selects within the pair via ternary.
+constant half2 turbo_mag_pairs_h[2] = {
+    half2(0.021460h, 0.065717h),   // pair 0: mag indices 0,1
+    half2(0.117832h, 0.190685h),   // pair 1: mag indices 2,3
+};
+
 // Vec: 4 elements per call (il ∈ {0..7}), returns type4
 // Experiment: batched byte reads (ported from @spiritbuun's CUDA impl).
 // Read qs + signs bytes with minimal device memory accesses.
@@ -772,18 +780,24 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
     // TURBO_USE_4MAG=1 (pre-M5): 4-entry magnitude LUT + XOR sign (+38-45% on M2)
     // TURBO_USE_4MAG=0 (M5+): 8-entry full LUT (best on M5, 0.905x q8_0)
 #if TURBO_USE_4MAG
-    // 4-mag LUT: halves constant cache divergence (4 addresses vs 8).
-    // XOR trick reverses magnitude index for negative (sign=0) values.
-    // Branchless sign via multiply. Proven +38% at 8K, +45% at 16K on M2 Pro.
+    // 2-pair LUT: only 2 constant addresses per lookup (vs 4 for mag, 8 for full).
+    // Each half2 entry holds two adjacent magnitudes. bit1 selects the pair,
+    // bit0 selects within via ternary. XOR reverses for negative sign.
     const uint8_t mi0 = q0 ^ (s0 ? 0u : 0x3u);
     const uint8_t mi1 = q1 ^ (s1 ? 0u : 0x3u);
     const uint8_t mi2 = q2 ^ (s2 ? 0u : 0x3u);
     const uint8_t mi3 = q3 ^ (s3 ? 0u : 0x3u);
 
-    const float v0 = float(turbo_mag_3bit_h[mi0]) * norm;
-    const float v1 = float(turbo_mag_3bit_h[mi1]) * norm;
-    const float v2 = float(turbo_mag_3bit_h[mi2]) * norm;
-    const float v3 = float(turbo_mag_3bit_h[mi3]) * norm;
+    // 1 constant read (half2) + 1 ternary per element
+    const half2 p0 = turbo_mag_pairs_h[(mi0 >> 1) & 1];
+    const half2 p1 = turbo_mag_pairs_h[(mi1 >> 1) & 1];
+    const half2 p2 = turbo_mag_pairs_h[(mi2 >> 1) & 1];
+    const half2 p3 = turbo_mag_pairs_h[(mi3 >> 1) & 1];
+
+    const float v0 = float((mi0 & 1) ? p0.y : p0.x) * norm;
+    const float v1 = float((mi1 & 1) ? p1.y : p1.x) * norm;
+    const float v2 = float((mi2 & 1) ? p2.y : p2.x) * norm;
+    const float v3 = float((mi3 & 1) ? p3.y : p3.x) * norm;
 
     reg = type4(float4(
         s0 ? v0 : -v0,
