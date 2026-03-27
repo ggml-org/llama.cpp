@@ -299,6 +299,21 @@ normalize_store_vec(float * out, float * acc, int64_t dv, float inv, int use_fas
     __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
 }
 
+static inline float __attribute__((always_inline))
+exp2f_et(float x) {
+    unsigned long old_mask;
+    float out;
+    __asm__ volatile(
+        "mova.x.m  %[ms]             \n\t"
+        "mov.m.x   m0, x0, 1         \n\t"
+        "fexp.ps   %[out], %[x]      \n\t"
+        "mova.m.x  %[ms]             \n\t"
+        : [ms] "=&r"(old_mask), [out] "=&f"(out)
+        : [x] "f"(x)
+    );
+    return out;
+}
+
 int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     (void) env;
 
@@ -520,37 +535,11 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
                 if (s > M) {
                     M = s;
-                    float diff_l2 = (Mold - M) * 1.4426950408889634f;
-                    {
-                        unsigned long _ms;
-                        float _exp0;
-                        __asm__ volatile(
-                            "mova.x.m  %[ms]               \n\t"
-                            "mov.m.x   m0, x0, 1           \n\t"
-                            "fexp.ps   %[exp0], %[diff]    \n\t"
-                            "mova.m.x  %[ms]               \n\t"
-                            : [ms] "=&r"(_ms), [exp0] "=&f"(_exp0)
-                            : [diff] "f"(diff_l2)
-                        );
-                        ms = _exp0;
-                    }
+                    ms = exp2f_et((Mold - M) * 1.4426950408889634f);
                     vs = 1.0f;
                 } else {
                     ms = 1.0f;
-                    float diff_l2 = (s - M) * 1.4426950408889634f;
-                    {
-                        unsigned long _ms;
-                        float _exp0;
-                        __asm__ volatile(
-                            "mova.x.m  %[ms]               \n\t"
-                            "mov.m.x   m0, x0, 1           \n\t"
-                            "fexp.ps   %[exp0], %[diff]    \n\t"
-                            "mova.m.x  %[ms]               \n\t"
-                            : [ms] "=&r"(_ms), [exp0] "=&f"(_exp0)
-                            : [diff] "f"(diff_l2)
-                        );
-                        vs = _exp0;
-                    }
+                    vs = exp2f_et((s - M) * 1.4426950408889634f);
                 }
 
                 const char * pv = v_head + (kv_base + j) * v->nb[1];
