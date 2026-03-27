@@ -10916,7 +10916,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                             }
                         }
                     }
+                    free(host_src2);
                     buf_src2 = clCreateBuffer(backend_ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, ne20 * ne21 * 4 * num_tiles_per_expert * sizeof(short), host_src2_reorder, &status);
+                    free(host_src2_reorder);
                     CL_CHECK(status);
 
                     // set thread grid
@@ -10960,8 +10962,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 CL_CHECK(clReleaseMemObject(src1_sub_buffer));
                 CL_CHECK(clReleaseMemObject(buf_src1_image));
                 CL_CHECK(clReleaseMemObject(buf_src2));
-                free(host_src2);
-                free(host_src2_reorder);
                 return;
             } // else fallback to generic kernel
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
