@@ -1221,8 +1221,14 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const gg
     }
 
     if (node->src[2]->ne[0] > 128) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv=%lld exceeds maximum 256\n",
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv=%lld exceeds maximum 128\n",
                        (long long)node->src[2]->ne[0]);
+        return false;
+    }
+
+    if (node->src[0]->ne[0] > 256) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dk=%lld exceeds maximum 256\n",
+                       (long long)node->src[0]->ne[0]);
         return false;
     }
 
@@ -1269,9 +1275,19 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const gg
     params.dst  = *node;
     params.scale = scale;
 
-    const bool kernel_result = ggml_et_launch_kernel(dev_ctx, "flash_attn_ext_f32", &params, sizeof(params), 0xFFFFFFFF);
+    // Use matrix engine kernel when K/V are F16 and dk is a multiple of 32
+    const char * kernel_name;
+    if (node->src[1]->type == GGML_TYPE_F16 &&
+        node->src[2]->type == GGML_TYPE_F16 &&
+        (node->src[0]->ne[0] % 32) == 0) {
+        kernel_name = "flash_attn_ext_f16_me";
+    } else {
+        kernel_name = "flash_attn_ext_f32";
+    }
 
-    ET_PERF_END_EXT("FLASH_ATTN_EXT", "flash_attn_ext_f32", node, "scale=%.6f", (double) scale);
+    const bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END_EXT("FLASH_ATTN_EXT", kernel_name, node, "scale=%.6f", (double) scale);
     return kernel_result;
 }
 

@@ -54,6 +54,7 @@ set(KERNELS
     cont_f32
     cont_f16
     cpy_f32_f16
+    flash_attn_ext_f16_me
     set_rows_f32
     memops
 )
