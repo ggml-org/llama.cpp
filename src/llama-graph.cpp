@@ -2129,8 +2129,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         if (can_rotv) {
             int nrot = 64;
 
-            // TODO: I think we can afford to rotate the V more compared to Q and K - to be confirmed
-            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+            // using smaller rotation matrices for V seems beneficial
+            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
             //do {
             //    nrot *= 2;
             //} while (hparams.n_embd_head_v() % nrot == 0);
@@ -2505,8 +2505,8 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         if (can_rotv) {
             int nrot = 64;
 
-            // TODO: I think we can afford to rotate the V more compared to Q and K - to be confirmed
-            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+            // using smaller rotation matrices for V seems beneficial
+            // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
             //do {
             //    nrot *= 2;
             //} while (hparams.n_embd_head_v() % nrot == 0);
