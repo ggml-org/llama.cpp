@@ -1443,14 +1443,19 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
     }
 }
 
-void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn,
+                                       const float * custom_mask, const llama_pos * custom_mask_pos, int32_t custom_mask_n_pos,
+                                       int32_t custom_mask_n_head_groups,
+                                       const std::pair<llama_pos, int32_t> * custom_mask_sorted_pos) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     float * data = (float *) dst->data;
 
-    const int64_t n_kv     = dst->ne[0];
-    const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
+    const int64_t n_kv         = dst->ne[0];
+    const int64_t n_tps_dim    = dst->ne[1]; // tokens per stream
+    const int64_t n_head_dim   = dst->ne[2]; // head groups dimension (1 = broadcast, >1 = per-head)
+    const int64_t n_stream     = dst->ne[3]; // num streams in the current ubatch
 
     GGML_ASSERT(n_tokens%n_stream == 0);
 
@@ -1471,10 +1476,94 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.n_tps            =*/ n_tps,
     };
 
+    // fill the default mask for head group 0 (or the only group if broadcasting)
     if (causal_attn) {
         set_input_kq_mask_impl<true> (args, data);
     } else {
         set_input_kq_mask_impl<false>(args, data);
+    }
+
+    // replicate the default mask to all head groups (before custom overlay)
+    // the default causal/SWA mask is the same for all heads
+    if (n_head_dim > 1) {
+        const int64_t slice_size = n_kv * n_tps_dim; // elements per head-group slice
+        for (int64_t s = 0; s < n_stream; ++s) {
+            const float * src_slice = data + s * n_head_dim * slice_size;
+            for (int64_t g = 1; g < n_head_dim; ++g) {
+                float * dst_slice = data + (s * n_head_dim + g) * slice_size;
+                std::copy(src_slice, src_slice + slice_size, dst_slice);
+            }
+        }
+    }
+
+    // post-pass: overlay custom attention mask (AND logic)
+    // the custom mask can only RESTRICT attention, never open what the default mask blocks
+    if (custom_mask != nullptr && custom_mask_n_pos > 0) {
+        const int32_t nhg = (custom_mask_n_head_groups <= 1) ? 1 : custom_mask_n_head_groups;
+        const int64_t slice_size = n_kv * n_tps_dim; // elements per head-group slice
+
+        // helper: binary search in pre-sorted position array (zero allocation)
+        auto find_pos_idx = [&](llama_pos p) -> int32_t {
+            if (custom_mask_sorted_pos == nullptr) {
+                // fallback: linear scan (should not happen in normal use)
+                for (int32_t i = 0; i < custom_mask_n_pos; ++i) {
+                    if (custom_mask_pos[i] == p) return i;
+                }
+                return -1;
+            }
+            // binary search on sorted pairs
+            const auto * begin = custom_mask_sorted_pos;
+            const auto * end   = custom_mask_sorted_pos + custom_mask_n_pos;
+            const auto target  = std::make_pair(p, INT32_MIN);
+            const auto * it    = std::lower_bound(begin, end, target);
+            if (it != end && it->first == p) {
+                return it->second; // original index
+            }
+            return -1;
+        };
+
+        for (uint32_t s = 0; s < (uint32_t) n_stream; ++s) {
+            for (int64_t ii = 0; ii < n_tps; ++ii) {
+                const uint32_t i = s * n_tps + ii;
+                const llama_pos p_row = ubatch->pos[i];
+
+                // find the row index in the custom mask for this token's position
+                const int32_t cm_row = find_pos_idx(p_row);
+                if (cm_row < 0) {
+                    continue; // position not in custom mask → leave default
+                }
+
+                // iterate KV cache cells and apply custom mask
+                for (uint32_t ss = 0; ss < v_cells.size(); ++ss) {
+                    const auto & cells = v_cells[ss];
+                    for (int64_t j = 0; j < n_kv; ++j) {
+                        if (cells.is_empty(j)) {
+                            continue;
+                        }
+
+                        const llama_pos p_col = cells.pos_get(j);
+                        const int32_t cm_col = find_pos_idx(p_col);
+                        if (cm_col < 0) {
+                            continue; // KV position not in custom mask → leave default
+                        }
+
+                        // apply to each head group
+                        const int64_t n_groups_to_fill = (n_head_dim > 1) ? nhg : 1;
+                        for (int64_t g = 0; g < n_groups_to_fill; ++g) {
+                            const float cm_val = custom_mask[g * custom_mask_n_pos * custom_mask_n_pos
+                                                             + cm_row * custom_mask_n_pos + cm_col];
+                            if (cm_val <= -1e9f) {
+                                // threshold check: any very large negative value means "block"
+                                // this handles both -INFINITY (from C API) and -1e30 (from JSON)
+                                const int64_t dst_idx = (s * n_head_dim + g) * slice_size + n_kv * ii + j;
+                                data[dst_idx] = -INFINITY;
+                            }
+                            // else: leave existing mask value (AND logic — custom can only restrict)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     //const int64_t t_end = ggml_time_us();
@@ -2275,8 +2364,12 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
     kv->set_input_v_idxs(dst, ubatch, sinfos[i_cur]);
 }
 
-void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    kv->set_input_kq_mask(dst, ubatch, causal_attn);
+void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn,
+                                               const float * custom_mask, const llama_pos * custom_mask_pos, int32_t custom_mask_n_pos,
+                                               int32_t custom_mask_n_head_groups,
+                                               const std::pair<llama_pos, int32_t> * custom_mask_sorted_pos) const {
+    kv->set_input_kq_mask(dst, ubatch, causal_attn, custom_mask, custom_mask_pos, custom_mask_n_pos,
+                           custom_mask_n_head_groups, custom_mask_sorted_pos);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

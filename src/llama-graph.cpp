@@ -23,28 +23,32 @@ static ggml_tensor * build_kq_mask(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
-        const llama_cparams & cparams) {
+        const llama_cparams & cparams,
+        int32_t n_head_groups = 1) {
     const auto n_kv     = mctx->get_n_kv();
     const auto n_tokens = ubatch.n_tokens;
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const int64_t nhg   = (n_head_groups <= 1) ? 1 : n_head_groups;
 
-    return ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_kv, n_tokens/n_stream, 1, n_stream);
+    return ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_kv, n_tokens/n_stream, nhg, n_stream);
 }
 
 static bool can_reuse_kq_mask(
         ggml_tensor * kq_mask,
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
-        const llama_cparams & cparams) {
+        const llama_cparams & cparams,
+        int32_t n_head_groups = 1) {
     const auto n_kv     = mctx->get_n_kv();
     const auto n_tokens = ubatch.n_tokens;
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const int64_t nhg   = (n_head_groups <= 1) ? 1 : n_head_groups;
 
     bool res = true;
 
     res &= (kq_mask->ne[0] == n_kv);
     res &= (kq_mask->ne[1] == n_tokens/n_stream);
-    res &= (kq_mask->ne[2] == 1);
+    res &= (kq_mask->ne[2] == nhg);
     res &= (kq_mask->ne[3] == n_stream);
 
     return res;
@@ -428,7 +432,9 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
-    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn,
+                            custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos,
+                            custom_attn_mask_n_head_groups, custom_attn_mask_sorted_pos);
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -436,12 +442,20 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+    // update custom attention mask pointers (may change between decodes)
+    this->custom_attn_mask              = params.custom_attn_mask;
+    this->custom_attn_mask_pos          = params.custom_attn_mask_pos;
+    this->custom_attn_mask_n_pos        = params.custom_attn_mask_n_pos;
+    this->custom_attn_mask_n_head_groups = params.custom_attn_mask_n_head_groups;
+    this->custom_attn_mask_sorted_pos   = params.custom_attn_mask_sorted_pos;
+
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
-    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams,
+                              custom_attn_mask_n_head_groups);
 
     return res;
 }
@@ -470,18 +484,29 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
 
-    mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn,
+                                         custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos,
+                                         custom_attn_mask_n_head_groups, custom_attn_mask_sorted_pos);
 
     mctx->get_swa()->set_input_k_idxs(self_k_idxs_swa, ubatch);
     mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
-    mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn,
+                                        custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos,
+                                        custom_attn_mask_n_head_groups, custom_attn_mask_sorted_pos);
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
+
+    // update custom attention mask pointers (may change between decodes)
+    this->custom_attn_mask              = params.custom_attn_mask;
+    this->custom_attn_mask_pos          = params.custom_attn_mask_pos;
+    this->custom_attn_mask_n_pos        = params.custom_attn_mask_n_pos;
+    this->custom_attn_mask_n_head_groups = params.custom_attn_mask_n_head_groups;
+    this->custom_attn_mask_sorted_pos   = params.custom_attn_mask_sorted_pos;
 
     bool res = true;
 
@@ -491,8 +516,10 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
   //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
-    res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams);
-    res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
+    res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams,
+                              custom_attn_mask_n_head_groups);
+    res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams,
+                              custom_attn_mask_n_head_groups);
 
     return res;
 }
@@ -878,6 +905,11 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    custom_attn_mask              (params.custom_attn_mask),
+    custom_attn_mask_pos          (params.custom_attn_mask_pos),
+    custom_attn_mask_n_pos        (params.custom_attn_mask_n_pos),
+    custom_attn_mask_n_head_groups(params.custom_attn_mask_n_head_groups),
+    custom_attn_mask_sorted_pos   (params.custom_attn_mask_sorted_pos),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1992,8 +2024,11 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
-    const llama_kv_cache_context * mctx_cur) {
+    const llama_kv_cache_context * mctx_cur,
+    int32_t n_head_groups = 1) {
 
+    // note: custom_attn_mask pointers are not available here (static function),
+    //       they are set after construction in build_attn_inp_kv()
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
     {
@@ -2002,7 +2037,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+        inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur, ubatch, cparams, n_head_groups);
 
         ggml_set_input(inp->self_kq_mask);
 
@@ -2015,7 +2050,15 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
 
-    auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
+    auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur,
+                                       custom_attn_mask_n_head_groups);
+
+    // pass custom attention mask from context
+    inp->custom_attn_mask              = custom_attn_mask;
+    inp->custom_attn_mask_pos          = custom_attn_mask_pos;
+    inp->custom_attn_mask_n_pos        = custom_attn_mask_n_pos;
+    inp->custom_attn_mask_n_head_groups = custom_attn_mask_n_head_groups;
+    inp->custom_attn_mask_sorted_pos   = custom_attn_mask_sorted_pos;
 
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
@@ -2289,11 +2332,18 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
 
+    // propagate custom attention mask
+    inp->custom_attn_mask              = custom_attn_mask;
+    inp->custom_attn_mask_pos          = custom_attn_mask_pos;
+    inp->custom_attn_mask_n_pos        = custom_attn_mask_n_pos;
+    inp->custom_attn_mask_n_head_groups = custom_attn_mask_n_head_groups;
+    inp->custom_attn_mask_sorted_pos   = custom_attn_mask_sorted_pos;
+
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
+        inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams, custom_attn_mask_n_head_groups);
         ggml_set_input(inp->self_kq_mask);
         ggml_set_name(inp->self_kq_mask, "self_kq_mask");
 
@@ -2307,7 +2357,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask_swa = build_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
+        inp->self_kq_mask_swa = build_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams, custom_attn_mask_n_head_groups);
         ggml_set_input(inp->self_kq_mask_swa);
         ggml_set_name(inp->self_kq_mask_swa, "self_kq_mask_swa");
 

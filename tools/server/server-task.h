@@ -26,6 +26,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_SET_ATTN_MASK,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -166,6 +167,12 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
+
+    // used by SERVER_TASK_TYPE_SET_ATTN_MASK
+    std::vector<float>     attn_mask;     // [n_pos * n_pos], 0.0f=visible, -inf=masked
+    std::vector<llama_pos> attn_mask_pos; // [n_pos]
+    int32_t attn_mask_n_head_groups = 0;
+    int32_t attn_mask_slot_id = -1;
 
     server_task() = default;
 
@@ -556,6 +563,10 @@ struct server_task_result_get_lora : server_task_result {
 };
 
 struct server_task_result_apply_lora : server_task_result {
+    virtual json to_json() override;
+};
+
+struct server_task_result_set_attn_mask : server_task_result {
     virtual json to_json() override;
 };
 

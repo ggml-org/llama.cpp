@@ -10,6 +10,7 @@
 #include "ggml-opt.h"
 
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 struct llama_model;
@@ -104,6 +105,31 @@ struct llama_context {
     void set_embeddings (bool value);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
+
+    // custom attention mask (position-indexed, AND logic with default mask)
+    void set_attn_mask(const float * mask, const llama_pos * positions, int32_t n_pos,
+                       int32_t n_head_groups, int32_t slot_id);
+
+    // per-slot mask data
+    struct attn_mask_data {
+        std::vector<float>     mask;       // [n_head_groups * n_pos * n_pos]
+        std::vector<llama_pos> positions;  // [n_pos]
+        std::vector<std::pair<llama_pos, int32_t>> sorted_pos; // sorted by position for binary search
+        int32_t n_head_groups = 1;
+
+        bool    empty()  const { return positions.empty(); }
+        int32_t n_pos()  const { return (int32_t) positions.size(); }
+    };
+
+    // resolve the effective mask for a given slot (per-slot if available, else global)
+    const attn_mask_data & get_attn_mask_for_slot(int32_t slot_id) const;
+
+    // accessors for the global mask (used by kv cache during set_input)
+    const float     * get_attn_mask()              const;
+    const llama_pos * get_attn_mask_positions()     const;
+    int32_t           get_attn_mask_n_pos()         const;
+    int32_t           get_attn_mask_n_head_groups() const;
+    const std::pair<llama_pos, int32_t> * get_attn_mask_sorted_pos() const;
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
@@ -315,6 +341,11 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+
+    // custom attention mask (global + per-slot)
+    attn_mask_data                                  attn_mask_global; // slot_id = -1
+    std::unordered_map<int32_t, attn_mask_data>     attn_mask_slots;  // slot_id >= 0
+    static const attn_mask_data                     attn_mask_empty;  // sentinel for empty lookups
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;

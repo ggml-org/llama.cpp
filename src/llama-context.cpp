@@ -1048,6 +1048,83 @@ void llama_context::set_causal_attn(bool value) {
     sched_need_reserve = true;
 }
 
+// static sentinel for empty mask lookups
+const llama_context::attn_mask_data llama_context::attn_mask_empty = {};
+
+static void build_attn_mask_data(llama_context::attn_mask_data & dst,
+                                 const float * mask, const llama_pos * positions,
+                                 int32_t n_pos, int32_t n_head_groups) {
+    const int32_t nhg = (n_head_groups <= 1) ? 1 : n_head_groups;
+
+    dst.mask.assign(mask, mask + (int64_t) nhg * n_pos * n_pos);
+    dst.positions.assign(positions, positions + n_pos);
+    dst.n_head_groups = nhg;
+
+    // pre-sort positions for O(log n) binary search in the post-pass (zero allocation at decode time)
+    dst.sorted_pos.resize(n_pos);
+    for (int32_t i = 0; i < n_pos; ++i) {
+        dst.sorted_pos[i] = { positions[i], i };
+    }
+    std::sort(dst.sorted_pos.begin(), dst.sorted_pos.end());
+}
+
+void llama_context::set_attn_mask(const float * mask, const llama_pos * positions, int32_t n_pos,
+                                  int32_t n_head_groups, int32_t slot_id) {
+    if (mask == nullptr || n_pos <= 0) {
+        if (slot_id < 0) {
+            attn_mask_global = {};
+            attn_mask_slots.clear();
+            LLAMA_LOG_DEBUG("%s: custom attention mask cleared (all slots)\n", __func__);
+        } else {
+            attn_mask_slots.erase(slot_id);
+            LLAMA_LOG_DEBUG("%s: custom attention mask cleared for slot %d\n", __func__, slot_id);
+        }
+        return;
+    }
+
+    if (slot_id < 0) {
+        build_attn_mask_data(attn_mask_global, mask, positions, n_pos, n_head_groups);
+        LLAMA_LOG_DEBUG("%s: custom attention mask set for %d positions, %d head groups (global)\n",
+                        __func__, n_pos, attn_mask_global.n_head_groups);
+    } else {
+        auto & slot_mask = attn_mask_slots[slot_id];
+        build_attn_mask_data(slot_mask, mask, positions, n_pos, n_head_groups);
+        LLAMA_LOG_DEBUG("%s: custom attention mask set for %d positions, %d head groups (slot %d)\n",
+                        __func__, n_pos, slot_mask.n_head_groups, slot_id);
+    }
+}
+
+const llama_context::attn_mask_data & llama_context::get_attn_mask_for_slot(int32_t slot_id) const {
+    if (slot_id >= 0) {
+        auto it = attn_mask_slots.find(slot_id);
+        if (it != attn_mask_slots.end()) {
+            return it->second;
+        }
+    }
+    // fallback to global
+    return attn_mask_global.empty() ? attn_mask_empty : attn_mask_global;
+}
+
+const float * llama_context::get_attn_mask() const {
+    return attn_mask_global.empty() ? nullptr : attn_mask_global.mask.data();
+}
+
+const llama_pos * llama_context::get_attn_mask_positions() const {
+    return attn_mask_global.empty() ? nullptr : attn_mask_global.positions.data();
+}
+
+int32_t llama_context::get_attn_mask_n_pos() const {
+    return attn_mask_global.n_pos();
+}
+
+int32_t llama_context::get_attn_mask_n_head_groups() const {
+    return attn_mask_global.n_head_groups;
+}
+
+const std::pair<llama_pos, int32_t> * llama_context::get_attn_mask_sorted_pos() const {
+    return attn_mask_global.sorted_pos.empty() ? nullptr : attn_mask_global.sorted_pos.data();
+}
+
 void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -2158,6 +2235,11 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.custom_attn_mask              =*/ get_attn_mask(),
+        /*.custom_attn_mask_pos          =*/ get_attn_mask_positions(),
+        /*.custom_attn_mask_n_pos        =*/ get_attn_mask_n_pos(),
+        /*.custom_attn_mask_n_head_groups=*/ get_attn_mask_n_head_groups(),
+        /*.custom_attn_mask_sorted_pos   =*/ get_attn_mask_sorted_pos(),
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3058,6 +3140,11 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_attn_mask(llama_context * ctx, const float * mask, const llama_pos * positions, int32_t n_pos,
+                         int32_t n_head_groups, int32_t slot_id) {
+    ctx->set_attn_mask(mask, positions, n_pos, n_head_groups, slot_id);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
