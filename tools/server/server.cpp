@@ -201,6 +201,8 @@ int main(int argc, char ** argv) {
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));
+    // Custom attention mask
+    ctx_http.post("/attn-mask",           ex_wrapper(routes.post_attn_mask));
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));

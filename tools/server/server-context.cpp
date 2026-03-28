@@ -1950,6 +1950,20 @@ private:
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_SET_ATTN_MASK:
+                {
+                    if (task.attn_mask.empty()) {
+                        llama_set_attn_mask(ctx, nullptr, nullptr, 0);
+                        SRV_INF("%s", "custom attention mask cleared\n");
+                    } else {
+                        const int32_t n_pos = (int32_t) task.attn_mask_pos.size();
+                        llama_set_attn_mask(ctx, task.attn_mask.data(), task.attn_mask_pos.data(), n_pos);
+                        SRV_INF("custom attention mask set for %d positions\n", n_pos);
+                    }
+                    auto res = std::make_unique<server_task_result_set_attn_mask>();
+                    res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
         }
     }
 
@@ -4001,6 +4015,65 @@ void server_routes::init_routes() {
         }
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    // POST /attn-mask — set or clear custom attention mask
+    // Body: { "mask": [float...], "positions": [int...] }  or  { "mask": null } to clear
+    this->post_attn_mask = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_SET_ATTN_MASK);
+            task.id = rd.get_new_id();
+
+            if (body.contains("mask") && !body["mask"].is_null()) {
+                const auto & j_mask = body["mask"];
+                const auto & j_pos  = body["positions"];
+
+                if (!j_mask.is_array() || !j_pos.is_array()) {
+                    res->error(format_error_response("'mask' and 'positions' must be arrays", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+
+                const int32_t n_pos = (int32_t) j_pos.size();
+                if ((int32_t) j_mask.size() != n_pos * n_pos) {
+                    res->error(format_error_response(
+                        "mask size must be n_pos*n_pos (" + std::to_string(n_pos * n_pos) + "), got " + std::to_string(j_mask.size()),
+                        ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+
+                task.attn_mask.resize(n_pos * n_pos);
+                for (int32_t i = 0; i < n_pos * n_pos; ++i) {
+                    task.attn_mask[i] = j_mask[i].get<float>();
+                }
+
+                task.attn_mask_pos.resize(n_pos);
+                for (int32_t i = 0; i < n_pos; ++i) {
+                    task.attn_mask_pos[i] = j_pos[i].get<llama_pos>();
+                }
+            }
+            // else: empty vectors → will clear the mask
+
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_set_attn_mask*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
     };
