@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "etsoc/isa/hart.h"
 #include "etsoc/common/utils.h"
+#include "etsoc/isa/barriers.h"
 
 #define SOC_MINIONS_PER_SHIRE 32
 #define NUM_HARTS_PER_MINION 2
@@ -81,6 +82,66 @@ static inline int get_num_threads(uint64_t shire_mask) {
 #define NOP   __asm__ __volatile__ ("nop\n");
 #define FENCE __asm__ __volatile__ ("fence\n");
 #define WFI   __asm__ __volatile__ ("wfi\n");
+
+//******************************************************************************
+// Barrier Primitives
+//
+// Hardware resources used (per shire):
+//   - 32 FLBs: 8-bit atomic counters, non-blocking (CSR 0x820)
+//   - 2 FCCs per hart: credit counters, hardware-stall on consume (CSR 0x821)
+//
+// Convention:
+//   MINION barriers: FLB = local_minion_id (0-31), FCC 0
+//   SHIRE  barriers: FLB 0,                        FCC 1
+//
+// MINION and SHIRE barriers MUST NOT be concurrent. All minion barriers
+// must complete before a shire barrier, and vice versa. FLB 0 is shared
+// between minion 0's barrier and the shire barrier — safe only because
+// the FLB counter auto-resets on match.
+//
+// FCC 0 is safe for all 32 concurrent minion barriers because each
+// barrier's fcc_send targets only its own minion (per-hart private
+// counters, scoped by CREDINC mask). FCC 1 is reserved for shire-wide
+// broadcast.
+//******************************************************************************
+
+typedef enum {
+    ET_BARRIER_MINION,  // sync both harts within each minion (FLB=minion_id, FCC 0)
+    ET_BARRIER_SHIRE,   // sync all harts across the shire   (FLB=0, FCC 1)
+} et_barrier_scope_t;
+
+// Barrier with scope-derived parameters. No configuration needed.
+// Returns 1 if this hart was the last to arrive, 0 otherwise.
+static inline uint64_t __attribute__((always_inline))
+et_barrier(et_barrier_scope_t scope)
+{
+    if (scope == ET_BARRIER_MINION) {
+        uint32_t local_minion = (get_hart_id() >> 1) & 0x1F;
+        uint32_t mask = 1u << local_minion;
+        return shire_barrier(local_minion, 0, 2, mask, mask);
+    } else { /* ET_BARRIER_SHIRE */
+        uint64_t shire_id = get_shire_id();
+        uint32_t thread_count = (shire_id == SHIRE_MASTER) ? 32 : 64;
+        uint32_t mask = (shire_id == SHIRE_MASTER) ? 0xFFFF0000U : 0xFFFFFFFFU;
+        return shire_barrier(0, 1, thread_count, mask, mask);
+    }
+}
+
+// Raw barrier — caller manages FLB/FCC allocation.
+// Use when et_barrier() doesn't fit (custom thread counts, subgroups,
+// only even harts active, etc).
+//
+//   flb          — which FLB counter (0-31)
+//   fcc          — which FCC counter (0 or 1)
+//   thread_count — number of harts that will call this barrier
+//   mask_t0      — CREDINC bitmask: which minions' hart 0 gets a credit
+//   mask_t1      — CREDINC bitmask: which minions' hart 1 gets a credit
+static inline uint64_t __attribute__((always_inline))
+et_barrier_raw(uint32_t flb, uint32_t fcc, uint32_t thread_count,
+               uint32_t mask_t0, uint32_t mask_t1)
+{
+    return shire_barrier(flb, fcc, thread_count, mask_t0, mask_t1);
+}
 
 //******************************************************************************
 // Tensor Engine Wait & Error Macros
