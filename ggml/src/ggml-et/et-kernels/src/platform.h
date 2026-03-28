@@ -269,9 +269,12 @@ static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
 // Cache Flush
 //******************************************************************************
 
-// Flush nlines contiguous 64-byte cache lines starting at addr from L1 to L2.
+// Flush nlines cache lines at stride apart starting at addr from L1 to L2.
 // Uses FlushVA (CSR 0x8BF).  Caller must FENCE before (to drain stores to L1)
 // and WAIT_CACHEOPS after (to ensure flush completes before tensor loads).
+//
+// NOTE: nlines is encoded in a 4-bit field (max 16). Passing nlines > 16
+// silently truncates. DO NOT pass nlines > 16.
 static inline void __attribute__((always_inline))
 flush_to_l2(const void *addr, uint64_t nlines, uint64_t stride)
 {
