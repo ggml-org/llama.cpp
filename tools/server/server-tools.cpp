@@ -101,38 +101,6 @@ static run_proc_result run_process(
     return res;
 }
 
-// simple glob: * matches non-/ chars, ** matches anything including /
-static bool glob_match(const char * pattern, const char * str) {
-    if (*pattern == '\0') {
-        return *str == '\0';
-    }
-    if (pattern[0] == '*' && pattern[1] == '*') {
-        const char * p = pattern + 2;
-        if (*p == '/') p++;
-        if (glob_match(p, str)) return true;
-        if (*str != '\0') return glob_match(pattern, str + 1);
-        return false;
-    }
-    if (*pattern == '*') {
-        const char * p = pattern + 1;
-        for (; *str != '\0' && *str != '/'; str++) {
-            if (glob_match(p, str)) return true;
-        }
-        return glob_match(p, str);
-    }
-    if (*pattern == '?' && *str != '\0' && *str != '/') {
-        return glob_match(pattern + 1, str + 1);
-    }
-    if (*pattern == *str) {
-        return glob_match(pattern + 1, str + 1);
-    }
-    return false;
-}
-
-static bool glob_match(const std::string & pattern, const std::string & str) {
-    return glob_match(pattern.c_str(), str.c_str());
-}
-
 json server_tool::to_json() {
     return {
         {"display_name", display_name},

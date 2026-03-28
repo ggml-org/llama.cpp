@@ -794,6 +794,8 @@ std::string string_from(const std::vector<int> & values);
 std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
+bool glob_match(const std::string & pattern, const std::string & str);
+
 //
 // Filesystem utils
 //
