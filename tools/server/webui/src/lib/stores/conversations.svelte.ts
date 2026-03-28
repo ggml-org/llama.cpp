@@ -128,6 +128,10 @@ class ConversationsStore {
 		if (this.isInitialized) return;
 
 		try {
+			// Run one-time migration for old marker-based messages
+			const { runLegacyMigration } = await import('$lib/utils/legacy-migration');
+			await runLegacyMigration();
+
 			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {

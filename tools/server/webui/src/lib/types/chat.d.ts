@@ -99,21 +99,28 @@ export interface ChatMessageToolCallTiming {
 }
 
 /**
- * Callbacks for streaming chat responses
+ * Callbacks for streaming chat responses (used by both agentic and non-agentic paths)
  */
 export interface ChatStreamCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
-	onToolCallChunk?: (chunk: string) => void;
-	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
+	onToolCallsStreaming?: (toolCalls: import('./api').ApiChatCompletionToolCall[]) => void;
+	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
-	onComplete?: (
-		content?: string,
-		reasoningContent?: string,
-		timings?: ChatMessageTimings,
-		toolCallContent?: string
-	) => void;
+	onAssistantTurnComplete?: (
+		content: string,
+		reasoningContent: string | undefined,
+		timings: ChatMessageTimings | undefined,
+		toolCalls: import('./api').ApiChatCompletionToolCall[] | undefined
+	) => Promise<void>;
+	createToolResultMessage?: (
+		toolCallId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<DatabaseMessage>;
+	createAssistantMessage?: () => Promise<DatabaseMessage>;
+	onFlowComplete?: (timings?: ChatMessageTimings) => void;
 	onError?: (error: Error) => void;
 	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;
 }
