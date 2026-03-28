@@ -964,6 +964,7 @@ struct ggml_sycl_gpu_reorder_fill_ctx {
     sycl::queue *            owner_queue;      // queue that owns temp_bufs allocations
     void *                   prealloc_temp       = nullptr;  // pre-allocated reorder temp buffer (from cache)
     size_t                   prealloc_temp_size  = 0;        // size of pre-allocated buffer
+    sycl::queue *            bcs_queue           = nullptr;  // BCS (copy-only) queue for H2D pipelining
 };
 static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue & queue, void * dst, size_t dst_size,
                                                  const void * src, size_t src_size, const void * ctx_void,
@@ -1167,6 +1168,7 @@ static void moe_prestage_popular_experts() {
                 gpu_fctx.owner_queue       = nullptr;
                 gpu_fctx.prealloc_temp      = prealloc_temp;
                 gpu_fctx.prealloc_temp_size = prealloc_temp_size;
+                gpu_fctx.bcs_queue          = cache ? &cache->get_bcs_queue() : nullptr;
 
                 req.fill_fn  = ggml_sycl_fill_reordered_gpu;
                 req.fill_ctx = &gpu_fctx;
@@ -1243,20 +1245,31 @@ static void moe_prestage_popular_experts() {
                 break;
             }
 
-            // Periodic flush every 100 expert groups to prevent >20s accumulated queue
-            // work that triggers L0 DirectSubmission timeout false-positive hang.
-            if (expert_groups_staged > 0 && expert_groups_staged % 100 == 0) {
+            // Periodic batch yield every 8 expert groups.
+            // With BCS/CCS engine split, individual CCS reorder kernels are ~10us
+            // and naturally preemptible.  The yield ensures:
+            //   1. Both DMA (CCS) and BCS queues drain pending work
+            //   2. Entries get promoted to READY state via finalize_pending_fills
+            //   3. Watchdog heartbeat prevents host-side timeout
+            // Without this, ~6000 back-to-back submissions accumulate a >10s
+            // non-preemptible command list that triggers xe driver GT resets.
+            constexpr int YIELD_BATCH = 8;
+            if (expert_groups_staged > 0 && expert_groups_staged % YIELD_BATCH == 0) {
                 try {
-                    cache->get_queue().wait();
+                    cache->get_dma_queue().wait();
+                    cache->get_bcs_queue().wait();
+                    cache->finalize_pending_fills();
                 } catch (...) {
                 }
                 ggml_sycl_watchdog_heartbeat();
             }
         }
 
-        // Finalize pending fills
+        // Final flush: wait for all remaining in-flight fills and promote to READY
         if (prestaged > 0) {
             try {
+                cache->get_dma_queue().wait();
+                cache->get_bcs_queue().wait();
                 cache->finalize_pending_fills();
             } catch (...) {
             }
@@ -1451,6 +1464,7 @@ static void moe_prestage_popular_experts() {
                     fctx.owner_queue       = nullptr;
                     fctx.prealloc_temp      = sec_prealloc;
                     fctx.prealloc_temp_size = sec_prealloc_size;
+                    fctx.bcs_queue          = budget.cache ? &budget.cache->get_bcs_queue() : nullptr;
 
                     ggml_sycl::cache_layout_request req{};
                     req.key              = item.key;
@@ -8817,7 +8831,13 @@ static sycl::event ggml_sycl_reorder_weight_gpu(sycl::queue & queue,
 //   src      = original AOS data (host/mmap)
 //   ctx_void = ggml_sycl_gpu_reorder_fill_ctx *
 //
-// Flow: host AOS → pinned staging → temp VRAM → GPU kernel → SOA in dst
+// Flow: host AOS → pinned staging → [BCS] temp VRAM → [CCS] GPU kernel → SOA in dst
+//
+// BCS/CCS engine split: H2D memcpy runs on the BCS (copy-only) queue when
+// available (ctx->bcs_queue), while SOA reorder runs on the CCS queue (the
+// `queue` parameter).  This prevents CCS monopolization during MoE expert
+// prestaging (~6000 kernels) that triggers xe driver GT engine resets.
+// Event dependencies ensure the reorder kernel waits for the H2D copy.
 static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                    queue,
                                                  void *                           dst,
                                                  size_t                           dst_size,
@@ -8831,6 +8851,9 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
         return queue.ext_oneapi_submit_barrier(deps);
     }
 
+    // Select queue for H2D copy: BCS (copy engine) if available, else same CCS queue
+    sycl::queue & h2d_queue = ctx->bcs_queue ? *ctx->bcs_queue : queue;
+
     // Step 1: Stage non-USM source to pinned host memory.
     // mmap'd memory is NOT USM-accessible on Level Zero, so we must memcpy
     // to pinned host first, then DMA from pinned to device.
@@ -8841,7 +8864,7 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
         pinned_src = src;  // already USM-accessible
     } else {
         // Non-USM (mmap'd) — CPU memcpy to pinned staging
-        staging = ggml_sycl_staging_pool().acquire(src_size, queue);
+        staging = ggml_sycl_staging_pool().acquire(src_size, h2d_queue);
         if (!staging) {
             GGML_LOG_ERROR("[GPU-REORDER] staging alloc failed (%zu bytes)\n", src_size);
             return queue.ext_oneapi_submit_barrier(deps);
@@ -8875,15 +8898,16 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
         }
     }
 
-    // Step 3: DMA pinned host → temp VRAM (AOS)
-    sycl::event dma_event = queue.memcpy(temp_vram, pinned_src, src_size, deps);
+    // Step 3: DMA pinned host → temp VRAM (AOS) — on BCS queue for engine split
+    sycl::event dma_event = h2d_queue.memcpy(temp_vram, pinned_src, src_size, deps);
 
     // Release staging buffer after DMA (pool defers reuse until event completes)
     if (staging) {
         ggml_sycl_staging_pool().release(staging, dma_event);
     }
 
-    // Step 4: GPU kernel reorders AOS (temp VRAM) → SOA (dst VRAM)
+    // Step 4: GPU kernel reorders AOS (temp VRAM) → SOA (dst VRAM) — on CCS queue
+    // depends_on(dma_event) ensures CCS waits for BCS H2D completion.
     sycl::event reorder_event = ggml_sycl_reorder_weight_gpu(
         queue,
         static_cast<const uint8_t *>(temp_vram),

@@ -922,7 +922,7 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
     // contiguous chunks (reduces GPU TLB misses from scattered USM mappings).
     layout_pool_ = std::make_unique<sycl_device_pool>(queue_);
 
-    // Create a separate in-order DMA queue for cache operations.
+    // Create a separate in-order DMA queue for cache operations (CCS engine).
     // This keeps cache DMA/fill work off the compute queue, preventing
     // >20s accumulated queue work that triggers L0 DirectSubmission timeouts.
     try {
@@ -932,6 +932,25 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
     } catch (const sycl::exception & e) {
         GGML_LOG_WARN("[UNIFIED-CACHE] Failed to create DMA queue, falling back to compute queue: %s\n", e.what());
         dma_queue_.reset();
+    }
+
+    // Create a BCS (copy-only) queue for H2D transfers during expert prestaging.
+    // On Intel GPUs, Level Zero exposes queue groups: ordinal 0 = CCS (compute+copy),
+    // ordinal 1 = BCS (copy-only / blitter).  By routing H2D memcpy to a separate
+    // in-order queue, the runtime can assign it to the BCS engine, keeping CCS free
+    // for SOA reorder kernels.  This prevents CCS monopolization during the ~6000
+    // kernel submissions of MoE expert prestaging that trigger GT engine resets.
+    //
+    // Even if the runtime routes both queues to CCS, having separate queues still
+    // enables pipelining: H2D copies and reorder kernels interleave via event deps
+    // instead of serializing on a single command list.
+    try {
+        bcs_queue_ =
+            std::make_unique<sycl::queue>(queue_.get_context(), queue_.get_device(), sycl::property::queue::in_order{});
+        GGML_LOG_INFO("[UNIFIED-CACHE] Created BCS queue for H2D copy pipelining\n");
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] Failed to create BCS queue, falling back to DMA queue: %s\n", e.what());
+        bcs_queue_.reset();
     }
 
     // Ensure unordered_map has buckets before any find() calls.
@@ -3890,40 +3909,56 @@ bool unified_cache::stage_expert_group(int                          block_id,
             return false;
         }
 
-        // 2. Fill all slots (DMA + optional reorder via fill_fn from request)
+        // 2. Fill all slots (DMA + optional reorder via fill_fn from request).
+        //    Fills are submitted WITHOUT a per-expert dq.wait().  This allows
+        //    BCS H2D copies and CCS reorder kernels to pipeline across experts.
+        //    The caller batches experts and calls get_dma_queue().wait() +
+        //    finalize_pending_fills() at batch boundaries.
         sycl::queue & dq = get_dma_queue();
+        sycl::event   last_event;
         for (auto & s : slots) {
             if (s.was_existing) continue;
             if (s.req && s.req->fill_fn) {
                 // Use the caller-provided fill function (GPU reorder, CPU reorder, etc.)
-                s.req->fill_fn(dq, s.ptr, s.data->dst_size,
-                               s.data->src_ptr, s.data->src_size,
-                               s.req->fill_ctx, {});
+                last_event =
+                    s.req->fill_fn(dq, s.ptr, s.data->dst_size, s.data->src_ptr, s.data->src_size, s.req->fill_ctx, {});
             } else if (s.data->src_ptr && s.data->src_size > 0) {
                 // Raw DMA copy
-                dq.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
+                last_event = dq.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
             }
         }
-        dq.wait();  // Ensure all fills complete before registering
 
-        // 3. Register all as READY
+        // 3. Mark entries as IN_PROGRESS with ready_event (deferred READY).
+        //    Caller calls finalize_pending_fills() after batch wait to promote
+        //    these to READY state.  This avoids the per-expert dq.wait() that
+        //    serialized all BCS/CCS work and caused GT engine resets.
+        {
+            std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+            for (auto & s : slots) {
+                if (s.was_existing) {
+                    continue;
+                }
+                unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key, s.data->layer_id, s.data->expert_id };
+                auto              it = entries_.find(ckey);
+                if (it != entries_.end()) {
+                    it->second.has_ready_event = true;
+                    it->second.ready_event     = last_event;
+                    it->second.layout          = layout;
+                    it->second.size            = s.data->dst_size;
+                }
+            }
+        }
+
+        // Verify (first 3 experts only)
         for (auto & s : slots) {
             if (s.was_existing) continue;
-            register_ready(*s.key, s.ptr, layout, s.data->dst_size,
-                           cache_entry_type::MOE_EXPERT,
-                           s.data->layer_id, s.data->expert_id);
-            // Verify the entry is immediately findable
-            {
-                static std::atomic<int> verify_log{0};
-                if (verify_log.fetch_add(1, std::memory_order_relaxed) < 3) {
-                    void * found = lookup(*s.key, layout);
-                    fprintf(stderr, "[STAGE-VERIFY] blk=%d exp=%d layout=%d stored=%p found=%p "
-                            "model=%llu hash=0x%llx aux=0x%llx\n",
-                            block_id, expert_id_arg, (int)layout, s.ptr, found,
-                            (unsigned long long)s.key->model_id,
-                            (unsigned long long)s.key->name_hash,
-                            (unsigned long long)s.key->aux_id);
-                }
+            static std::atomic<int> verify_log{ 0 };
+            if (verify_log.fetch_add(1, std::memory_order_relaxed) < 3) {
+                fprintf(stderr,
+                        "[STAGE-SUBMIT] blk=%d exp=%d layout=%d ptr=%p "
+                        "model=%llu hash=0x%llx aux=0x%llx (deferred READY)\n",
+                        block_id, expert_id_arg, (int) layout, s.ptr, (unsigned long long) s.key->model_id,
+                        (unsigned long long) s.key->name_hash, (unsigned long long) s.key->aux_id);
             }
         }
 
@@ -3966,14 +4001,15 @@ bool unified_cache::stage_expert_group(int                          block_id,
         return false;
     }
 
-    // Fill all tensors using DMA queue (raw memcpy path)
+    // Fill all tensors using DMA queue (raw memcpy path) — no per-expert wait
     sycl::queue & dq = get_dma_queue();
+    sycl::event   last_event;
     for (auto & s : slots) {
         if (s.was_existing) continue;
 
         try {
             size_t copy_size = std::min(s.data->src_size, s.data->dst_size);
-            dq.memcpy(s.ptr, s.data->src_ptr, copy_size);
+            last_event       = dq.memcpy(s.ptr, s.data->src_ptr, copy_size);
         } catch (...) {
             GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: DMA memcpy "
                           "failed blk=%d exp=%d\n", block_id, expert_id_arg);
@@ -3988,19 +4024,24 @@ bool unified_cache::stage_expert_group(int                          block_id,
         }
     }
 
-    // Wait for DMA to complete before registering as READY
-    try {
-        dq.wait();
-    } catch (...) {
-    }
-
-    // Register all new entries as READY
-    for (auto & s : slots) {
-        if (s.was_existing) continue;
-        register_ready(*s.key, s.ptr, layout, s.data->dst_size,
-                       cache_entry_type::MOE_EXPERT,
-                       s.data->layer_id, s.data->expert_id,
-                       s.data->src_ptr);
+    // Mark entries as IN_PROGRESS with ready_event (deferred READY).
+    // Caller waits at batch boundaries + calls finalize_pending_fills().
+    {
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+        for (auto & s : slots) {
+            if (s.was_existing) {
+                continue;
+            }
+            unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key, s.data->layer_id, s.data->expert_id };
+            auto              it = entries_.find(ckey);
+            if (it != entries_.end()) {
+                it->second.has_ready_event = true;
+                it->second.ready_event     = last_event;
+                it->second.layout          = layout;
+                it->second.size            = s.data->dst_size;
+                it->second.src_ptr         = s.data->src_ptr;
+            }
+        }
     }
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] stage_expert_group: blk=%d exp=%d "
@@ -4165,6 +4206,14 @@ sycl::queue & unified_cache::get_dma_queue() {
         return *dma_queue_;
     }
     return queue_;
+}
+
+sycl::queue & unified_cache::get_bcs_queue() {
+    // Return BCS (copy-only) queue if available, otherwise fall back to DMA queue
+    if (bcs_queue_) {
+        return *bcs_queue_;
+    }
+    return get_dma_queue();
 }
 
 void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {

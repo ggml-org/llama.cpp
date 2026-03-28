@@ -634,6 +634,13 @@ class unified_cache {
     // --- DMA queue for cache operations (separate from compute) ---
     sycl::queue & get_dma_queue();
 
+    // --- BCS queue for copy-only H2D transfers (targets copy engine) ---
+    // Returns the BCS (copy-only) queue if available, otherwise falls back to
+    // the DMA queue.  BCS targets queue group ordinal 1 (COPY engine) on Intel
+    // GPUs, keeping H2D memcpy off the CCS (compute) engine so SOA reorder
+    // kernels can run concurrently without monopolizing CCS preempt budget.
+    sycl::queue & get_bcs_queue();
+
     // Ensure a weight is cached, loading from src_ptr if needed
     // Returns device pointer, or nullptr if cache is full and eviction failed
     //
@@ -1081,7 +1088,8 @@ class unified_cache {
     }
 
     sycl::queue &                queue_;
-    std::unique_ptr<sycl::queue> dma_queue_;                // Separate in-order queue for cache DMA ops
+    std::unique_ptr<sycl::queue> dma_queue_;                // Separate in-order queue for cache DMA ops (CCS)
+    std::unique_ptr<sycl::queue> bcs_queue_;                // Copy-only queue targeting BCS engine (ordinal 1)
     size_t               budget_;                   // Total GPU memory budget (after reservations)
     size_t               base_budget_;              // Raw cache budget before reservations
     size_t               reserved_;                 // Runtime reservation applied to budget_
