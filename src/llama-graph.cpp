@@ -1981,11 +1981,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         // TurboQuant: inverse WHT on FA output when V values are WHT-rotated.
-        // Check V type: for non-MLA, V is the cache tensor (turbo3 if user set -ctv turbo3).
-        // For MLA, V is a view of K, so v->type reflects K's type.
-        // When V is NOT turbo (e.g. -ctk turbo3 -ctv q8_0), no inverse needed.
+        // For MLA, V is a view of K with different ne[0] (e.g. V=512, K=576).
+        // Group size must come from K (which determines the WHT rotation), not V.
         if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
-            const int turbo_group = (v->ne[0] % 128 == 0) ? 128 : 64;
+            const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
+            const ggml_tensor * group_src = k_is_turbo ? k : v;
+            const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
             if (cur->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
                 cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group);  // 1 = inverse
@@ -2060,7 +2061,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         // TurboQuant: inverse WHT on attention output (non-FA path)
         if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
-            const int turbo_group = (v->ne[0] % 128 == 0) ? 128 : 64;
+            const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
+            const ggml_tensor * group_src = k_is_turbo ? k : v;
+            const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
             if (kqv->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
                 kqv = ggml_turbo_wht(ctx0, kqv, 1, turbo_group);
