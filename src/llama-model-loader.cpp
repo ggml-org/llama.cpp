@@ -1117,7 +1117,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         ggml_backend_buffer_type_t buft = nullptr;
-        bool buft_from_override = false;
 
         // check overrides
         if (tensor_buft_overrides) {
@@ -1128,10 +1127,15 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                         // when overriding to a CPU buffer, consider the extra buffer types
                         buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                        if (use_mmap) {
+                            static std::once_flag once;
+                            std::call_once(once, [] {
+                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance\n");
+                            });
+                        }
                     } else {
                         buft = overrides->buft;
                     }
-                    buft_from_override = true;
 
                     LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
                             tensor_name.c_str(),
@@ -1150,9 +1154,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         // avoid using a host buffer when using mmap
-        // but keep host buffers for overridden tensors - they need the host buffer for pinned memory
         auto * buft_dev = ggml_backend_buft_get_device(buft);
-        if (use_mmap && !buft_from_override && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+        if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
             auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             if (!cpu_dev) {
                 throw std::runtime_error("no CPU backend found");
