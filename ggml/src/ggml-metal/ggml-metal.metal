@@ -813,34 +813,14 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
 // ----- turbo4 dequantize with per-thread block cache -----
 
 static void turbo4_dequantize_full_block(device const block_turbo4_0 * xb, thread float * cache) {
-    const float norm  = float(xb->norm);
-    const float rnorm = float(xb->rnorm);
-    const float qjl_scale = 1.2533141f / 128.0f * rnorm;
+    const float norm = float(xb->norm);
 
-    // Unpack 3-bit indices → centroids, then inverse WHT
-    float recon[128];
+    // 2+1 bit unpack (byte-aligned, matching turbo3 scheme)
+    // Low 2 bits from qs[], high 1 bit from signs[]
     for (int j = 0; j < 128; j++) {
-        int bit_offset = j * 3;
-        int byte_idx = bit_offset / 8;
-        int bit_pos = bit_offset % 8;
-        uint16_t raw = (uint16_t)xb->qs[byte_idx];
-        if (byte_idx + 1 < QK_TURBO4 * 3 / 8) {
-            raw |= (uint16_t)xb->qs[byte_idx + 1] << 8;
-        }
-        uint8_t idx = (uint8_t)((raw >> bit_pos) & 0x7);
-        recon[j] = turbo_centroids_3bit[idx];
-    }
-    // turbo_rotate_inverse REMOVED — pre-rotate-queries handles this
-
-    // QJL: unpack signs, inverse WHT, scale
-    float signs_f[128];
-    for (int j = 0; j < 128; j++) {
-        signs_f[j] = (xb->signs[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
-    }
-    // turbo_rotate_inverse(QJL) REMOVED — pre-rotate-queries handles this
-
-    for (int i = 0; i < 128; i++) {
-        cache[i] = (recon[i] + signs_f[i] * qjl_scale) * norm;
+        uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
+        cache[j] = turbo_centroids_3bit[lo2 | hi1] * norm;
     }
 }
 
@@ -10021,8 +10001,9 @@ kernel void kernel_set_rows_turbo4(
         // Step 2: WHT rotate in-place
         turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
 
-        // Step 3: 3-bit PolarQuant quantization — packed 3-bit indices
-        for (int j = 0; j < QK_TURBO4 * 3 / 8; j++) blk.qs[j] = 0;
+        // Step 3: 3-bit PolarQuant — 2+1 bit packing (byte-aligned, like turbo3)
+        // Low 2 bits in qs[] (4 indices per byte), high 1 bit in signs[] (8 per byte)
+        for (int j = 0; j < QK_TURBO4 / 4; j++) blk.qs[j] = 0;
         for (int j = 0; j < QK_TURBO4 / 8; j++) blk.signs[j] = 0;
 
         float recon_norm_sq = 0.0f;
@@ -10038,55 +10019,15 @@ kernel void kernel_set_rows_turbo4(
             else if (val < turbo_mid_3bit[6]) idx = 6;
             else                              idx = 7;
 
-            // Pack 3-bit index (may span byte boundary)
-            int bit_offset = j * 3;
-            int byte_idx = bit_offset / 8;
-            int bit_pos = bit_offset % 8;
-            blk.qs[byte_idx] |= (uint8_t)((idx & 0x7) << bit_pos);
-            if (bit_pos > 5 && byte_idx + 1 < QK_TURBO4 * 3 / 8) {
-                blk.qs[byte_idx + 1] |= (uint8_t)((idx & 0x7) >> (8 - bit_pos));
-            }
+            // 2+1 bit pack: low 2 bits in qs, high bit in signs
+            blk.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+            if (idx & 0x4) blk.signs[j / 8] |= (1 << (j % 8));
 
             float c = turbo_centroids_3bit[idx];
             recon_norm_sq += c * c;
         }
 
-        // Step 4: Compute residual and QJL signs
-        // Residual = normalized - inverse_rotated(reconstruction)
-        // For now: compute residual in rotated space and apply QJL WHT
-        float recon[128];
-        for (int j = 0; j < 128; j++) {
-            recon[j] = turbo_centroids_3bit[
-                (blk.qs[(j*3)/8] >> ((j*3)%8)) & 0x7
-            ];
-        }
-        // Fix byte-spanning reads for 3-bit indices
-        for (int j = 0; j < 128; j++) {
-            int bit_offset = j * 3;
-            int byte_idx = bit_offset / 8;
-            int bit_pos = bit_offset % 8;
-            uint8_t raw = blk.qs[byte_idx] >> bit_pos;
-            if (bit_pos > 5 && byte_idx + 1 < QK_TURBO4 * 3 / 8) {
-                raw |= blk.qs[byte_idx + 1] << (8 - bit_pos);
-            }
-            recon[j] = turbo_centroids_3bit[raw & 0x7];
-        }
-
-        // Residual in rotated space → apply QJL WHT
-        float residual[128];
-        for (int j = 0; j < 128; j++) {
-            residual[j] = x[j] - recon[j];
-        }
-        float rnorm_sq = 0.0f;
-        for (int j = 0; j < 128; j++) rnorm_sq += residual[j] * residual[j];
-        blk.rnorm = half(sqrt(rnorm_sq));
-
-        turbo_rotate_forward(residual, turbo_qjl_wht_signs1, turbo_qjl_wht_signs2);
-        for (int i = 0; i < 128; i++) {
-            if (residual[i] >= 0.0f) {
-                blk.signs[i / 8] |= (1 << (i % 8));
-            }
-        }
+        blk.rnorm = half(0.0f);  // unused without QJL
 
         // Norm correction
         float recon_norm = sqrt(recon_norm_sq);
