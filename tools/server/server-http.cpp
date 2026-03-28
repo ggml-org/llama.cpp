@@ -112,6 +112,16 @@ bool server_http_context::init(const common_params & params) {
     // set timeouts and change hostname and port
     srv->set_read_timeout (params.timeout_read);
     srv->set_write_timeout(params.timeout_write);
+    srv->set_socket_options([reuse_port = params.reuse_port](socket_t sock) {
+        httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1);
+        if (reuse_port) {
+#ifdef SO_REUSEPORT
+            httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEPORT, 1);
+#else
+            LOG_WRN("%s: SO_REUSEPORT is not supported\n", __func__);
+#endif
+        }
+    });
 
     if (params.api_keys.size() == 1) {
         auto key = params.api_keys[0];

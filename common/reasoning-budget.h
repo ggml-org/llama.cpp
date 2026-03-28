@@ -51,3 +51,5 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_token> & forced_tokens,
         int32_t                          budget,
         common_reasoning_budget_state    initial_state);
+
+common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl);
