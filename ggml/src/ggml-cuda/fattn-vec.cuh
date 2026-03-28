@@ -123,6 +123,14 @@ static __global__ void flash_attn_ext_vec(
     __shared__ float  KQ[ne_KQ > ne_combine ? ne_KQ : ne_combine];
 #endif // V_DOT2_F32_F16_AVAILABLE
 
+    // Sparse V: skip V dequant for positions with negligible attention weights.
+    // At long context, most V positions contribute < 1e-6 to the output — skipping
+    // their dequant saves significant compute (especially for quantized V types).
+    constexpr float sparse_v_threshold_f = 1e-6f;
+#ifdef V_DOT2_F32_F16_AVAILABLE
+    const     half  sparse_v_threshold_h = __float2half(sparse_v_threshold_f);
+#endif
+
     float KQ_max[ncols];
     float KQ_sum[ncols];
 #pragma unroll
@@ -323,6 +331,17 @@ static __global__ void flash_attn_ext_vec(
             for (int j = 0; j < ncols; ++j) {
                 KQ_k[j] = __half2half2(KQ[j*nthreads + k]);
             }
+
+            // Sparse V: skip V dequant if all attention weights for this position are negligible
+            {
+                bool dominated = true;
+#pragma unroll
+                for (int j = 0; j < ncols; ++j) {
+                    if (__hgt(__low2half(KQ_k[j]), sparse_v_threshold_h)) { dominated = false; break; }
+                }
+                if (dominated) { continue; }
+            }
+
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
                 half2 tmp[V_rows_per_thread/2];
@@ -352,6 +371,17 @@ static __global__ void flash_attn_ext_vec(
             for (int j = 0; j < ncols; ++j) {
                 KQ_k[j] = KQ[j*nthreads + k];
             }
+
+            // Sparse V: skip V dequant if all attention weights for this position are negligible
+            {
+                bool dominated = true;
+#pragma unroll
+                for (int j = 0; j < ncols; ++j) {
+                    if (KQ_k[j] >= sparse_v_threshold_f) { dominated = false; break; }
+                }
+                if (dominated) { continue; }
+            }
+
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
                 float2 tmp[V_rows_per_thread/2];
