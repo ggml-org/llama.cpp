@@ -4,9 +4,13 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "turboquant/turboquant_op.h"
+#include "turboquant/h2o_attention_accumulator.h"
 
 #include <unordered_map>
 #include <vector>
+#include <cstdint>
+#include <memory>
 
 struct llama_cparams;
 struct llama_hparams;
@@ -18,6 +22,9 @@ struct llama_context;
 //
 
 class llama_kv_cache : public llama_memory_i {
+private:
+    // H2O accumulator management
+    turboquant::H2OAttentionAccumulator* create_h2o_accumulator_if_needed(int32_t il, int n_head, int n_kv);
 public:
     struct stream_copy_info {
         bool empty() const {
@@ -93,7 +100,7 @@ public:
 
     using slot_info_vec_t = std::vector<slot_info>;
 
-    llama_kv_cache(
+llama_kv_cache(
             const llama_model & model,
                     ggml_type   type_k,
                     ggml_type   type_v,
@@ -105,8 +112,9 @@ public:
                      uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
-        const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+         const layer_filter_cb & filter,
+         const  layer_reuse_cb & reuse,
+                 bool           use_turboquant = false);
 
     ~llama_kv_cache() = default;
 
@@ -126,6 +134,16 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+
+// Hybrid eviction policy: attention sinks + local window + heavy hitters
+void evict_tokens_hybrid(float eviction_ratio = 0.1f);
+
+// Block-level eviction (evicts entire blocks of 32-64 tokens)
+// Uses DEFAULT_BLOCK_SIZE (32) if not specified
+void evict_blocks_hybrid(float eviction_ratio = 0.1f, uint32_t block_size = 32);
+    
+    // KV cache compaction
+    void compact(uint32_t block_size = 32);
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -158,13 +176,13 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
-    // get views of the current state of the cache
-    ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
-    ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+// get views of the current state of the cache
+ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
-    // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
+// store k_cur and v_cur in the cache based on the provided head location
+ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
+ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
 
     //
     // preparation API
@@ -200,76 +218,139 @@ public:
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:
-    const llama_model & model;
-    const llama_hparams & hparams;
+     const llama_model & model;
+     const llama_hparams & hparams;
 
-    struct kv_layer {
-        // layer index in the model
-        // note: can be different from the layer index in the KV cache
-        uint32_t il;
+     struct kv_layer {
+          // layer index in the model
+          // note: can be different from the layer index in the KV cache
+          uint32_t il;
 
-        ggml_tensor * k;
-        ggml_tensor * v;
+          ggml_tensor * k;
+          ggml_tensor * v;
 
-        std::vector<ggml_tensor *> k_stream;
-        std::vector<ggml_tensor *> v_stream;
-    };
+          std::vector<ggml_tensor *> k_stream;
+          std::vector<ggml_tensor *> v_stream;
 
-    bool v_trans = true;  // the value tensor is transposed
+          // TurboQuant state for keys and values
+          bool use_turboquant = false;
 
-    const uint32_t n_seq_max = 1;
-    const uint32_t n_stream  = 1;
+          // TurboQuant quantizer (initialized when needed)
+          std::unique_ptr<turboquant::TurboQuantKVCache> key_turboquant;
+          std::unique_ptr<turboquant::TurboQuantKVCache> value_turboquant;
+          
+// Quantized data buffers for TurboQuant (packed indices)
+// Using std::vector for automatic memory management and exception safety
+// Mutable to allow modification in const methods (cpy_k/cpy_v called from const context)
+mutable std::vector<uint8_t> key_quantized_data;
+mutable std::vector<uint8_t> value_quantized_data;
+size_t key_quantized_size = 0; // Size in bytes
+size_t value_quantized_size = 0;
+size_t bytes_per_vector = 0; // Bytes per quantized vector
+// Vector norms for norm extraction/rescaling
+mutable std::vector<float> key_vector_norms;
+mutable std::vector<float> value_vector_norms;
+size_t norms_capacity = 0;
 
-    // required padding
-    const uint32_t n_pad = 1;
+// H2O attention score accumulation
+mutable std::vector<float> attention_scores; // Cumulative attention scores per position
+size_t attention_scores_capacity = 0;
 
-    // SWA
-    const uint32_t n_swa = 0;
+           // Default constructor
+           kv_layer() = default;
+           
+// Constructor for initialization
+kv_layer(uint32_t il_, ggml_tensor *k_, ggml_tensor *v_,
+std::vector<ggml_tensor *> k_stream_, std::vector<ggml_tensor *> v_stream_)
+: il(il_), k(k_), v(v_), k_stream(std::move(k_stream_)), v_stream(std::move(v_stream_)),
+key_quantized_size(0), value_quantized_size(0), bytes_per_vector(0) {
+// Vectors are default-initialized to empty, no need to initialize with nullptr
+}
+           
+           // Delete copy constructor and copy assignment due to unique_ptr members
+           kv_layer(const kv_layer&) = delete;
+           kv_layer& operator=(const kv_layer&) = delete;
+           
+// Default move constructor and move assignment
+kv_layer(kv_layer&&) = default;
+kv_layer& operator=(kv_layer&&) = default;
 
-    // env: LLAMA_KV_CACHE_DEBUG
-    int debug = 0;
+// Destructor - vectors auto-cleanup, no manual memory management needed
+~kv_layer() = default;
+      };
 
-    // this is the SWA type of the cache - not to be confused with the model SWA type
-    const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
+     bool v_trans = true;  // the value tensor is transposed
 
-    // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+     const uint32_t n_seq_max = 1;
+     const uint32_t n_stream  = 1;
 
-    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
-    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
-    std::vector<uint32_t> v_heads;
+     // required padding
+     const uint32_t n_pad = 1;
 
-    std::vector<llama_kv_cells> v_cells;
+     // SWA
+     const uint32_t n_swa = 0;
 
-    // maps from a sequence id to a stream id
-    std::vector<uint32_t> seq_to_stream;
+     // env: LLAMA_KV_CACHE_DEBUG
+     int debug = 0;
 
-    // pending stream copies that will be applied during the next update
-    stream_copy_info sc_info;
+     // this is the SWA type of the cache - not to be confused with the model SWA type
+     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
-    std::vector<kv_layer> layers;
+     // ggml contexts for the KV cache along with the allocated backend buffers:
+     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
-    // model layer id -> KV cache layer id
-    std::unordered_map<int32_t, int32_t> map_layer_ids;
+     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+     std::vector<uint32_t> v_heads;
 
-    size_t total_size() const;
+     std::vector<llama_kv_cells> v_cells;
 
-    size_t size_k_bytes() const;
-    size_t size_v_bytes() const;
+     // maps from a sequence id to a stream id
+     std::vector<uint32_t> seq_to_stream;
 
-    ggml_tensor * build_rope_shift(
-            const llama_cparams & cparams,
-                   ggml_context * ctx,
-                    ggml_tensor * cur,
-                    ggml_tensor * shift,
-                    ggml_tensor * factors,
-                          float   freq_base,
-                          float   freq_scale,
-                       uint32_t   il) const;
+     // pending stream copies that will be applied during the next update
+     stream_copy_info sc_info;
 
-    ggml_cgraph * build_graph_shift(
-               llm_graph_result * res,
-                  llama_context * lctx) const;
+     std::vector<kv_layer> layers;
+
+     // model layer id -> KV cache layer id
+     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+     size_t total_size() const;
+
+     size_t size_k_bytes() const;
+
+     size_t size_v_bytes() const;
+     
+     // Helper functions for TurboQuant dequantization
+     ggml_tensor * dequantize_from_buffer(
+         ggml_context * ctx,
+         const uint8_t * quantized_buffer,
+         size_t bytes_per_vector,
+         size_t buffer_offset,
+         int64_t n_embd_head,
+         int64_t n_head,
+         int64_t n_kv,
+         int64_t n_seq,
+         int64_t kv_size,
+         ggml_type output_type,
+         turboquant::TurboQuantKVCache * tq) const;
+
+
+
+     ggml_tensor * build_rope_shift(
+             const llama_cparams & cparams,
+                    ggml_context * ctx,
+                     ggml_tensor * cur,
+                     ggml_tensor * shift,
+                     ggml_tensor * factors,
+                           float   freq_base,
+                           float   freq_scale,
+                        uint32_t   il) const;
+
+     ggml_cgraph * build_graph_shift(
+                llm_graph_result * res,
+                   llama_context * lctx) const;
 
     struct cell_ranges_t {
         uint32_t strm;
@@ -338,8 +419,8 @@ public:
     //   - k_idxs [n_tokens]
     //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
     //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
+ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
     // create destination indices for each head of the current batch for where it would be written in the KV cache
     // the indices address the global KV cache (not per stream) - this is not relevant for the user of this API, but

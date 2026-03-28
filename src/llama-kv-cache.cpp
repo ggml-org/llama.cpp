@@ -1,3 +1,4 @@
+#include "turboquant/turboquant_impl.h"
 #include "llama-kv-cache.h"
 
 #include "llama-impl.h"
@@ -30,7 +31,8 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+bool use_turboquant) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -151,7 +153,40 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, k_stream, v_stream, });
+        // Create layer with TurboQuant support
+kv_layer new_layer(il, k, v, k_stream, v_stream);
+new_layer.use_turboquant = use_turboquant;
+
+if (use_turboquant && k) {
+    int embedding_dim = k->ne[0];
+    int kv_size = k->ne[1];
+    int bit_width = 4;
+    int bits_per_vector = embedding_dim * bit_width + 1;
+    size_t bytes_per_vector = (bits_per_vector + 7) / 8;
+    
+new_layer.bytes_per_vector = bytes_per_vector;
+new_layer.key_quantized_size = kv_size * bytes_per_vector;
+new_layer.value_quantized_size = kv_size * bytes_per_vector;
+// Allocate quantized buffers using std::vector for automatic memory management
+new_layer.key_quantized_data.resize(new_layer.key_quantized_size);
+new_layer.value_quantized_data.resize(new_layer.value_quantized_size);
+
+// Allocate norm storage for TurboQuant (one float per vector)
+new_layer.norms_capacity = kv_size;
+new_layer.key_vector_norms.resize(kv_size, 1.0f);  // Initialize to 1.0f
+new_layer.value_vector_norms.resize(kv_size, 1.0f);
+
+new_layer.key_turboquant = std::make_unique<turboquant::TurboQuantKVCache>(embedding_dim, bit_width, 42);
+new_layer.value_turboquant = std::make_unique<turboquant::TurboQuantKVCache>(embedding_dim, bit_width, 42);
+new_layer.key_turboquant->init();
+new_layer.value_turboquant->init();
+
+// Allocate H2O attention score storage (one float per KV position)
+new_layer.attention_scores_capacity = kv_size;
+new_layer.attention_scores.resize(kv_size, 0.0f);  // Initialize to 0.0f
+    }
+
+layers.emplace_back(std::move(new_layer));
     }
 
     if (reuse) {
@@ -628,6 +663,9 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info) {
     bool updated = false;
 
+    // Apply hybrid eviction policy before processing updates
+    evict_tokens_hybrid(0.1f);  // Evict 10% of middle tokens by default
+
     auto * sched = lctx->get_sched();
 
     if (!sc_info.empty()) {
@@ -973,6 +1011,26 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
     }
 }
 
+// H2O accumulator management
+turboquant::H2OAttentionAccumulator* llama_kv_cache::create_h2o_accumulator_if_needed(int32_t il, int n_head, int n_kv) {
+    // Find the layer index in our cache
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) {
+        return nullptr;
+    }
+    
+    uint32_t layer_idx = it->second;
+    if (layer_idx >= layers.size()) {
+        return nullptr;
+    }
+    
+    kv_layer& layer = layers[layer_idx];
+    
+    // Return accumulator using the pre-allocated attention_scores array
+    // The array is already allocated in the kv_layer constructor
+    return new turboquant::H2OAttentionAccumulator(layer.attention_scores.data(), n_kv, n_head);
+}
+
 bool llama_kv_cache::get_can_shift() const {
     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
     if (model.arch == LLM_ARCH_STEP35) {
@@ -1022,6 +1080,22 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
+    
+    // TurboQuant dequantization
+if (layers[ikv].use_turboquant && !layers[ikv].key_quantized_data.empty() && layers[ikv].key_turboquant) {
+    const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
+    const size_t buffer_offset = sinfo.s0;
+    const size_t bytes_per_vector = layers[ikv].bytes_per_vector;
+    const int64_t vector_size = hparams.n_embd_head_k(il) * hparams.n_head_kv(il);
+    ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns);
+    const uint8_t* quant_base = layers[ikv].key_quantized_data.data();
+    float* output_ptr = (float*)result->data;
+    for (int64_t i = 0; i < (int64_t)n_kv * ns; i++) {
+        float norm = (buffer_offset + i < layers[ikv].norms_capacity) ? layers[ikv].key_vector_norms[buffer_offset + i] : 1.0f;
+        layers[ikv].key_turboquant->dequantize_to_buffer(quant_base + (buffer_offset + i) * bytes_per_vector, output_ptr + i * vector_size, vector_size, norm);
+    }
+    return result;
+}
 
     auto * k = layers[ikv].k;
 
@@ -1042,6 +1116,22 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
 ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
+    
+// TurboQuant dequantization
+if (layers[ikv].use_turboquant && !layers[ikv].value_quantized_data.empty() && layers[ikv].value_turboquant) {
+    const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
+    const size_t buffer_offset = sinfo.s0;
+    const size_t bytes_per_vector = layers[ikv].bytes_per_vector;
+    const int64_t vector_size = hparams.n_embd_head_v(il) * hparams.n_head_kv(il);
+    ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hparams.n_embd_head_v(il), hparams.n_head_kv(il), n_kv, ns);
+    const uint8_t* quant_base = layers[ikv].value_quantized_data.data();
+    float* output_ptr = (float*)result->data;
+    for (int64_t i = 0; i < (int64_t)n_kv * ns; i++) {
+        float norm = (buffer_offset + i < layers[ikv].norms_capacity) ? layers[ikv].value_vector_norms[buffer_offset + i] : 1.0f;
+        layers[ikv].value_turboquant->dequantize_to_buffer(quant_base + (buffer_offset + i) * bytes_per_vector, output_ptr + i * vector_size, vector_size, norm);
+    }
+    return result;
+}
 
     auto * v = layers[ikv].v;
 
@@ -1077,7 +1167,24 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     const int32_t ikv = map_layer_ids.at(il);
 
-    ggml_tensor * k = layers[ikv].k;
+ggml_tensor * k = layers[ikv].k;
+// TurboQuant quantization
+if (layers[ikv].use_turboquant && layers[ikv].key_turboquant && !layers[ikv].key_quantized_data.empty()) {
+    const int64_t n_embd_gqa = k_cur->ne[0] * k_cur->ne[1];
+    const int64_t n_tokens = k_cur->ne[2];
+    const size_t bytes_per_vector = layers[ikv].bytes_per_vector;
+    std::vector<float> cpu_data(n_embd_gqa * n_tokens);
+    ggml_backend_tensor_get(k_cur, cpu_data.data(), 0, cpu_data.size() * sizeof(float));
+    for (int64_t t = 0; t < n_tokens; t++) {
+        auto [indices, qjl_bit, vector_norm] = layers[ikv].key_turboquant->quantize(cpu_data.data() + t * n_embd_gqa, n_embd_gqa);
+        auto [packed, n_bytes] = layers[ikv].key_turboquant->pack_indices(indices, qjl_bit);
+        size_t pos = sinfo.idxs[0].size() > (size_t)t ? sinfo.idxs[0][t] : (size_t)t;
+        memcpy(layers[ikv].key_quantized_data.data() + pos * bytes_per_vector, packed.data(), std::min(n_bytes, bytes_per_vector));
+        if (pos < layers[ikv].norms_capacity) {
+            layers[ikv].key_vector_norms[pos] = vector_norm;
+        }
+    }
+}
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
@@ -1112,7 +1219,24 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * v = layers[ikv].v;
+auto * v = layers[ikv].v;
+// TurboQuant quantization
+if (layers[ikv].use_turboquant && layers[ikv].value_turboquant && !layers[ikv].value_quantized_data.empty()) {
+    const int64_t n_embd_gqa = v_cur->ne[0] * v_cur->ne[1];
+    const int64_t n_tokens = v_cur->ne[2];
+    const size_t bytes_per_vector = layers[ikv].bytes_per_vector;
+    std::vector<float> cpu_data(n_embd_gqa * n_tokens);
+    ggml_backend_tensor_get(v_cur, cpu_data.data(), 0, cpu_data.size() * sizeof(float));
+    for (int64_t t = 0; t < n_tokens; t++) {
+        auto [indices, qjl_bit, vector_norm] = layers[ikv].value_turboquant->quantize(cpu_data.data() + t * n_embd_gqa, n_embd_gqa);
+        auto [packed, n_bytes] = layers[ikv].value_turboquant->pack_indices(indices, qjl_bit);
+        size_t pos = sinfo.idxs[0].size() > (size_t)t ? sinfo.idxs[0][t] : (size_t)t;
+        memcpy(layers[ikv].value_quantized_data.data() + pos * bytes_per_vector, packed.data(), std::min(n_bytes, bytes_per_vector));
+        if (pos < layers[ikv].norms_capacity) {
+            layers[ikv].value_vector_norms[pos] = vector_norm;
+        }
+    }
+}
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
@@ -2281,4 +2405,186 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+// Hybrid eviction policy: attention sinks + local window + heavy hitters
+void llama_kv_cache::evict_tokens_hybrid(float eviction_ratio) {
+    // Early return if eviction ratio is invalid or cache is too small
+    if (eviction_ratio <= 0.0f || eviction_ratio >= 1.0f) {
+        return;
+    }
+    
+    const uint32_t cache_size = get_size();
+    if (cache_size < 10) {  // Need minimum size for meaningful eviction
+        return;
+    }
+    
+    // Parameters for hybrid policy
+    const uint32_t attention_sink_count = 4;  // First 4 tokens as attention sinks
+    const uint32_t local_window_count = 128;  // Most recent 128 tokens
+    
+    // Ensure we don't exceed cache bounds
+    uint32_t protected_count = attention_sink_count + local_window_count;
+    if (protected_count >= cache_size) {
+        // Cache too small, protect everything
+        return;
+    }
+    
+    // Process each layer
+    for (uint32_t il = 0; il < layers.size(); il++) {
+        auto& layer = layers[il];
+        
+        // Skip if TurboQuant is not enabled for this layer
+        if (!layer.use_turboquant) {
+            continue;
+        }
+        
+        // For each stream in the cache
+        for (uint32_t s = 0; s < n_stream; s++) {
+            // Create vector of (position, score) pairs for sorting
+std::vector<std::pair<uint32_t, float>> position_scores;
+position_scores.reserve(cache_size);
+
+// Collect scores for middle positions (excluding attention sinks and local window)
+for (uint32_t pos = attention_sink_count;
+     pos < cache_size - local_window_count;
+     pos++) {
+    if (pos < layer.attention_scores_capacity) {
+        float score = layer.attention_scores.data()[pos];
+        position_scores.emplace_back(pos, score);
+    }
+}
+            
+            // Sort by score ascending (lowest scores first for eviction)
+            std::sort(position_scores.begin(), position_scores.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.second < b.second;
+                     });
+            
+            // Calculate number of tokens to evict
+            uint32_t evict_count = static_cast<uint32_t>(
+                position_scores.size() * eviction_ratio);
+            
+            // Ensure we don't evict more than available
+            evict_count = std::min(evict_count, static_cast<uint32_t>(position_scores.size()));
+            
+            // Evict lowest scoring tokens
+            for (uint32_t i = 0; i < evict_count; i++) {
+                uint32_t pos_to_evict = position_scores[i].first;
+                
+                // Create slot info for single token removal
+                slot_info sinfo;
+                sinfo.resize(1);
+                sinfo.s0 = 0;
+                sinfo.s1 = 0;
+                sinfo.strm[0] = s;
+sinfo.idxs[0] = {pos_to_evict};
+
+// Remove the token by replacing it with the last token
+// This maintains cache compactness
+seq_rm(-1, pos_to_evict, pos_to_evict + 1);
+        }
+    }
+}
+}
+
+// Block-level eviction: evicts entire blocks of tokens based on hybrid policy
+void llama_kv_cache::evict_blocks_hybrid(float eviction_ratio, uint32_t block_size) {
+    if (eviction_ratio <= 0.0f || eviction_ratio >= 1.0f) {
+        return;
+    }
+    
+    const uint32_t cache_size = get_size();
+    if (cache_size < block_size * 2) {
+        return;
+    }
+    
+    const uint32_t attention_sink_count = 4;
+    const uint32_t local_window_count = 128;
+    const uint32_t num_blocks = cache_size / block_size;
+    
+    for (uint32_t il = 0; il < layers.size(); il++) {
+        auto& layer = layers[il];
+        
+        if (!layer.use_turboquant) {
+            continue;
+        }
+        
+        for (uint32_t s = 0; s < n_stream; s++) {
+            std::vector<std::pair<uint32_t, float>> block_scores;
+            block_scores.reserve(num_blocks);
+            
+            for (uint32_t block = 0; block < num_blocks; block++) {
+                uint32_t block_start = block * block_size;
+                uint32_t block_end = std::min(block_start + block_size, cache_size);
+                
+                if (block_start < attention_sink_count) {
+                    continue;
+                }
+                
+                if (block_start >= cache_size - local_window_count) {
+                    continue;
+                }
+                
+float total_score = 0.0f;
+uint32_t count = 0;
+for (uint32_t pos = block_start; pos < block_end; pos++) {
+    if (pos < layer.attention_scores_capacity) {
+        total_score += layer.attention_scores.data()[pos];
+        count++;
+    }
+}
+                
+                float avg_score = count > 0 ? total_score / count : 0.0f;
+                block_scores.emplace_back(block, avg_score);
+            }
+            
+            std::sort(block_scores.begin(), block_scores.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.second < b.second;
+                     });
+            
+            uint32_t blocks_to_evict = static_cast<uint32_t>(block_scores.size() * eviction_ratio);
+            blocks_to_evict = std::min(blocks_to_evict, static_cast<uint32_t>(block_scores.size()));
+            
+            for (uint32_t i = 0; i < blocks_to_evict; i++) {
+                uint32_t block_to_evict = block_scores[i].first;
+                uint32_t pos_start = block_to_evict * block_size;
+                uint32_t pos_end = std::min(pos_start + block_size, cache_size);
+                
+                seq_rm(-1, pos_start, pos_end);
+            }
+        }
+    }
+}
+
+// KV cache compaction: shifts surviving blocks to close gaps
+void llama_kv_cache::compact(uint32_t block_size) {
+    // This function compacts the KV cache by shifting surviving blocks
+    // to close gaps created by eviction
+    for (uint32_t il = 0; il < layers.size(); il++) {
+        auto& layer = layers[il];
+        
+        if (!layer.use_turboquant) {
+            continue;
+        }
+        
+        // For each stream, compact the cache
+        for (uint32_t s = 0; s < n_stream; s++) {
+            auto& cells = v_cells[s];
+            
+            uint32_t write_pos = 0;
+            
+            for (uint32_t read_pos = 0; read_pos < cells.size(); read_pos++) {
+                if (!cells.is_empty(read_pos)) {
+                    if (read_pos != write_pos) {
+                        cells.pos_set(write_pos, cells.pos_get(read_pos));
+                        cells.seq_add(write_pos, cells.seq_get(read_pos));
+                        cells.rm(read_pos);
+                    }
+write_pos++;
+}
+}
+}
+}
 }
