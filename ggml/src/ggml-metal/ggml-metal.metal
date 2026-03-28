@@ -540,6 +540,18 @@ constant half turbo_centroids_4bit_h[16] = {
      0.068756h,  0.089527h,  0.117195h,  0.173926h
 };
 
+// 8-entry magnitude LUT for 4-bit (positive half, ascending)
+// idx 8-15 are positive: mag = centroids_4bit[idx]
+// idx 0-7 are negative: mag = centroids_4bit[15 - idx] with sign flip
+// sign = (idx >> 3) ? +1 : -1
+// mag_idx = (idx & 7) for positive, (7 - (idx & 7)) for negative — but
+// since centroids are symmetric ascending, just use: mag[idx & 7] for idx>=8,
+// mag[7 - (idx & 7)] for idx<8. Simpler: mag[idx >= 8 ? idx & 7 : 7 - (idx & 7)]
+constant half turbo_mag_4bit_h[8] = {
+    0.006938h, 0.020989h, 0.035597h, 0.051262h,
+    0.068756h, 0.089527h, 0.117195h, 0.173926h
+};
+
 // Quantize 32 elements into one block_turbo3_0 (NO rotation — rotation happens
 // at the 128-element group level in kernel_set_rows_turbo)
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
@@ -845,20 +857,18 @@ void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type
 
 template <typename type4>
 void dequantize_turbo4_0_t4(device const block_turbo4_0 * xb, short il, thread type4 & reg) {
-    // Direct 4-element extraction — 4-bit nibble unpack, half LUT + float norm
+    // Direct 16-entry half LUT — fastest on M5 Max (constant cache not the bottleneck)
+    // 8-mag LUT tested: -3% on M5 due to ternary branch overhead. Keep for M1/M2 if needed.
     const float norm = float(xb->norm);
-    const int base = il * 4;
-
-    // Read one byte = 2 nibbles
-    const int byte_idx = base / 2;
-    const uint8_t qb = xb->qs[byte_idx];
-    const uint8_t qb2 = xb->qs[byte_idx + 1];
+    const device uint8_t * qs = xb->qs + il * 2;
+    const uint8_t qb0 = qs[0];
+    const uint8_t qb1 = qs[1];
 
     reg = type4(float4(
-        float(turbo_centroids_4bit_h[(qb      ) & 0xF]) * norm,
-        float(turbo_centroids_4bit_h[(qb  >> 4) & 0xF]) * norm,
-        float(turbo_centroids_4bit_h[(qb2     ) & 0xF]) * norm,
-        float(turbo_centroids_4bit_h[(qb2 >> 4) & 0xF]) * norm
+        float(turbo_centroids_4bit_h[(qb0     ) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb0 >> 4) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb1     ) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb1 >> 4) & 0xF]) * norm
     ));
 }
 
