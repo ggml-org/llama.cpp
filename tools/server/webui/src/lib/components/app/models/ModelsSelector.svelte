@@ -292,14 +292,12 @@
 							<Tooltip.Trigger>
 								<!-- prevent another nested button element -->
 								{#snippet child({ props })}
-									<!-- TODO: add standard interface to ModelId and remove additional <span> -->
-									<span {...props}>
-										<ModelId
-											modelId={selectedOption.model}
-											class="min-w-0 overflow-hidden"
-											showOrgName
-										/></span
-									>
+									<ModelId
+										modelId={selectedOption.model}
+										class="min-w-0 overflow-hidden"
+										showOrgName
+										{...props}
+									/>
 								{/snippet}
 							</Tooltip.Trigger>
 
@@ -411,14 +409,12 @@
 						<Tooltip.Trigger>
 							<!-- prevent another nested button element -->
 							{#snippet child({ props })}
-								<!-- TODO: add standard interface to ModelId and remove additional <span> -->
-								<span {...props}>
-									<ModelId
-										modelId={selectedOption.model}
-										class="min-w-0 overflow-hidden"
-										showOrgName
-									/></span
-								>
+								<ModelId
+									modelId={selectedOption.model}
+									class="min-w-0 overflow-hidden"
+									showOrgName
+									{...props}
+								/>
 							{/snippet}
 						</Tooltip.Trigger>
 
