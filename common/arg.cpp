@@ -2808,6 +2808,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
     add_opt(common_arg(
+        {"--reuse-port"},
+        string_format("allow multiple sockets to bind to the same port (default: %s)", params.reuse_port ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.reuse_port = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REUSE_PORT"));
+    add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
         [](common_params & params, const std::string & value) {
