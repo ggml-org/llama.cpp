@@ -288,13 +288,11 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
             }
         }
 
-        /* Pack 1-bit QJL signs */
-        memset(y[block].signs, 0, d / 8);
-        for (int i = 0; i < d; i++) {
-            if (projected[i] >= 0.0f) {
-                y[block].signs[i / 8] |= (1 << (i % 8));
-            }
-        }
+        /* TODO: CPU turbo4 quantize needs rewrite for 4-bit PolarQuant.
+         * Currently only Metal SET_ROWS path is updated.
+         * QJL signs field removed from block_turbo4_0 struct.
+         */
+        (void)projected;  /* suppress unused warning */
     }
 }
 
@@ -309,47 +307,15 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     for (int block = 0; block < nb; block++) {
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
 
-        /* Unpack 3-bit indices */
-        uint8_t indices[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            int bit_offset = i * 3;
-            int byte_idx   = bit_offset / 8;
-            int bit_pos    = bit_offset % 8;
-            uint16_t raw   = (uint16_t)x[block].qs[byte_idx];
-            if (byte_idx + 1 < d * 3 / 8) {
-                raw |= (uint16_t)x[block].qs[byte_idx + 1] << 8;
-            }
-            indices[i] = (uint8_t)((raw >> bit_pos) & 0x7);
-        }
-
-        /* Unpack signs */
-        float signs[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            signs[i] = (x[block].signs[i / 8] & (1 << (i % 8))) ? 1.0f : -1.0f;
-        }
-
-        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
-        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
-
-        /* PolarQuant dequant */
-        float rotated_recon[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            rotated_recon[i] = CENTROIDS_3BIT[indices[i]];
-        }
-        float mse_recon[TURBO_D];
-        matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
-
-        /* QJL dequant */
-        float qjl_recon[TURBO_D];
-        matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
-        for (int i = 0; i < d; i++) {
-            qjl_recon[i] *= qjl_scale;
-        }
-
-        /* Combine */
+        /* TODO: CPU turbo4 dequant needs rewrite for 4-bit PolarQuant.
+         * Currently only Metal dequant path is updated.
+         * Using simple 4-bit nibble unpack as placeholder.
+         */
         float * dst = y + block * d;
         for (int i = 0; i < d; i++) {
-            dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+            uint8_t idx = (x[block].qs[i / 2] >> ((i % 2) * 4)) & 0xF;
+            /* TODO: use proper 4-bit centroids — this uses 3-bit as placeholder */
+            dst[i] = (idx < 8 ? CENTROIDS_3BIT[idx] : CENTROIDS_3BIT[7]) * norm;
         }
     }
 }

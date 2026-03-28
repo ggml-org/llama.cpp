@@ -576,64 +576,46 @@ void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
 
 void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
 #pragma METAL fp math_mode(safe)
-    // Step 1: norm + normalize
+    // 4-bit PolarQuant: normalize → rotate → quantize to 16 centroids → nibble pack
     float norm_sq = 0.0f;
     for (int j = 0; j < 128; j++) norm_sq += src[j] * src[j];
-    float norm = sqrt(norm_sq);
-    float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
-    dst.norm = half(norm);
+    float grp_norm = sqrt(norm_sq);
+    float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
 
     float x[128];
     for (int j = 0; j < 128; j++) x[j] = src[j] * inv_norm;
-    float normalized[128];
-    for (int j = 0; j < 128; j++) normalized[j] = x[j];
-
-    // Step 2: WHT rotate in-place
     turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
 
-    // Step 3: 3-bit quantization
-    for (int j = 0; j < QK_TURBO4 * 3 / 8; j++) dst.qs[j] = 0;
-    for (int j = 0; j < QK_TURBO4 / 8; j++) dst.signs[j] = 0;
+    for (int j = 0; j < QK_TURBO4 / 2; j++) dst.qs[j] = 0;
 
-    float recon[128];
+    float recon_norm_sq = 0.0f;
     for (int j = 0; j < 128; j++) {
         float val = x[j];
         uint8_t idx;
-        if      (val < turbo_mid_3bit[0]) idx = 0;
-        else if (val < turbo_mid_3bit[1]) idx = 1;
-        else if (val < turbo_mid_3bit[2]) idx = 2;
-        else if (val < turbo_mid_3bit[3]) idx = 3;
-        else if (val < turbo_mid_3bit[4]) idx = 4;
-        else if (val < turbo_mid_3bit[5]) idx = 5;
-        else if (val < turbo_mid_3bit[6]) idx = 6;
-        else                              idx = 7;
-        recon[j] = turbo_centroids_3bit[idx];
+        if      (val < turbo_mid_4bit[ 0]) idx = 0;
+        else if (val < turbo_mid_4bit[ 1]) idx = 1;
+        else if (val < turbo_mid_4bit[ 2]) idx = 2;
+        else if (val < turbo_mid_4bit[ 3]) idx = 3;
+        else if (val < turbo_mid_4bit[ 4]) idx = 4;
+        else if (val < turbo_mid_4bit[ 5]) idx = 5;
+        else if (val < turbo_mid_4bit[ 6]) idx = 6;
+        else if (val < turbo_mid_4bit[ 7]) idx = 7;
+        else if (val < turbo_mid_4bit[ 8]) idx = 8;
+        else if (val < turbo_mid_4bit[ 9]) idx = 9;
+        else if (val < turbo_mid_4bit[10]) idx = 10;
+        else if (val < turbo_mid_4bit[11]) idx = 11;
+        else if (val < turbo_mid_4bit[12]) idx = 12;
+        else if (val < turbo_mid_4bit[13]) idx = 13;
+        else if (val < turbo_mid_4bit[14]) idx = 14;
+        else                               idx = 15;
 
-        int bit_offset = j * 3;
-        int byte_idx = bit_offset / 8;
-        int bit_pos = bit_offset % 8;
-        dst.qs[byte_idx] |= (uint8_t)((idx & 0x7) << bit_pos);
-        if (bit_pos > 5 && byte_idx + 1 < QK_TURBO4 * 3 / 8) {
-            dst.qs[byte_idx + 1] |= (uint8_t)((idx & 0x7) >> (8 - bit_pos));
-        }
+        dst.qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
+        recon_norm_sq += turbo_centroids_4bit[idx] * turbo_centroids_4bit[idx];
     }
 
-    // Step 4: inverse WHT rotation + residual
-    // turbo_rotate_inverse REMOVED — pre-rotate-queries handles this
-    float rnorm_sq = 0.0f;
-    for (int j = 0; j < 128; j++) {
-        x[j] = normalized[j] - recon[j]; // residual in x buffer
-        rnorm_sq += x[j] * x[j];
-    }
-    dst.rnorm = half(sqrt(rnorm_sq));
-
-    // Step 5: QJL WHT signs
-    turbo_rotate_forward(x, turbo_qjl_wht_signs1, turbo_qjl_wht_signs2);
-    for (int i = 0; i < 128; i++) {
-        if (x[i] >= 0.0f) {
-            dst.signs[i / 8] |= (1 << (i % 8));
-        }
-    }
+    dst.rnorm = half(0.0f);
+    float recon_norm = sqrt(recon_norm_sq);
+    dst.norm = half((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm);
 }
 
 // ----- turbo3 dequantize with per-thread block cache -----
@@ -10035,7 +10017,7 @@ kernel void kernel_set_rows_turbo4(
 
         // Step 3: 4-bit PolarQuant — nibble packing (2 indices per byte)
         for (int j = 0; j < QK_TURBO4 / 2; j++) blk.qs[j] = 0;
-        for (int j = 0; j < QK_TURBO4 / 8; j++) blk.signs[j] = 0;  // unused
+        // qs[64] covers full nibble range — no signs field in 4-bit struct
 
         float recon_norm_sq = 0.0f;
         for (int j = 0; j < 128; j++) {
@@ -10065,7 +10047,7 @@ kernel void kernel_set_rows_turbo4(
             recon_norm_sq += c * c;
         }
 
-        blk.rnorm = half(0.0f);  // unused
+        blk.rnorm = half(0.0f);  // reserved field, unused in 4-bit mode
 
         // Norm correction
         float recon_norm = sqrt(recon_norm_sq);
