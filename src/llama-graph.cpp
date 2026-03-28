@@ -1984,7 +1984,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         // Check V type: for non-MLA, V is the cache tensor (turbo3 if user set -ctv turbo3).
         // For MLA, V is a view of K, so v->type reflects K's type.
         // When V is NOT turbo (e.g. -ctk turbo3 -ctv q8_0), no inverse needed.
-        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0) {
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
             const int turbo_group = (v->ne[0] % 128 == 0) ? 128 : 64;
             if (cur->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
@@ -2059,7 +2059,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cb(kqv, "kqv", il);
 
         // TurboQuant: inverse WHT on attention output (non-FA path)
-        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0) {
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
             const int turbo_group = (v->ne[0] % 128 == 0) ? 128 : 64;
             if (kqv->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
@@ -2248,7 +2248,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // TurboQuant pre-rotate-queries: O(d log d) WHT rotation via custom op
     // Q shape: (n_embd_head, n_head, n_tokens) — ne[0] must be divisible by 64
-    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
         if (q->ne[0] % 64 == 0) {
             if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
             q = ggml_turbo_wht(ctx0, q, 0, 0);  // 0 = forward, 0 = auto group size from q->ne[0]
@@ -2356,7 +2356,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     // TurboQuant: pre-rotate Q for K-only (MLA) attention
-    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
         if (q->ne[0] % 64 == 0) {
             if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
             q = ggml_turbo_wht(ctx0, q, 0, 0);  // 0 = forward, 0 = auto group size

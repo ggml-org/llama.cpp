@@ -2,8 +2,8 @@
  * TurboQuant: KV cache compression via PolarQuant + QJL
  * Based on: arXiv 2504.19874 (ICLR 2026)
  *
- * Implements GGML_TYPE_TURBO3_0 (3-bit) and GGML_TYPE_TURBO4_0 (4-bit)
- * for use as --cache-type-k turbo3 --cache-type-v turbo3 in llama-server.
+ * Implements GGML_TYPE_TURBO2_0 (2-bit), GGML_TYPE_TURBO3_0 (3-bit) and
+ * GGML_TYPE_TURBO4_0 (4-bit) for use as --cache-type-k turboN in llama-server.
  */
 
 #include "ggml-quants.h"
@@ -326,6 +326,94 @@ size_t quantize_turbo3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT d
         quantize_row_turbo3_0_ref(
             src + row * n_per_row,
             (block_turbo3_0 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
+/* ---------- TURBO2_0: 2-bit PolarQuant (no QJL) ---------- */
+
+void quantize_row_turbo2_0_ref(const float * GGML_RESTRICT x, block_turbo2_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBO2 == 0);
+
+    extern int turbo3_cpu_wht_group_size;
+    int group_size = turbo3_cpu_wht_group_size;
+    if (group_size != 64 && group_size != 128) {
+        group_size = (k % 128 == 0) ? 128 : 64;
+    }
+    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
+    assert(k % group_size == 0);
+
+    const int n_groups = k / group_size;
+    const int blocks_per_group = group_size / QK_TURBO2;
+
+    for (int g = 0; g < n_groups; g++) {
+        const float * grp_src = x + g * group_size;
+        block_turbo2_0 * grp_dst = y + g * blocks_per_group;
+
+        /* 1. L2 norm over the group */
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < group_size; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+        /* 2. Normalize */
+        for (int j = 0; j < group_size; j++) buf[j] *= inv_norm;
+
+        /* 3. Forward WHT rotation */
+        turbo_cpu_fwht(buf, group_size);
+
+        /* 4. Quantize + pack into sub-blocks */
+        float recon_sq = 0.0f;
+        for (int b = 0; b < blocks_per_group; b++) {
+            block_turbo2_0 * blk = &grp_dst[b];
+            const int off = b * QK_TURBO2;
+
+            memset(blk->qs, 0, QK_TURBO2 / 4);
+
+            for (int j = 0; j < QK_TURBO2; j++) {
+                int idx = nearest_centroid_2bit(buf[off + j]);
+                blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                recon_sq += CENTROIDS_2BIT[idx] * CENTROIDS_2BIT[idx];
+            }
+        }
+
+        /* 5. Corrected norm */
+        float recon_norm = sqrtf(recon_sq);
+        float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            grp_dst[b].norm = GGML_FP32_TO_FP16(corrected);
+        }
+    }
+}
+
+void dequantize_row_turbo2_0(const block_turbo2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBO2 == 0);
+    const int nb = k / QK_TURBO2;
+    for (int block = 0; block < nb; block++) {
+        float norm = GGML_FP16_TO_FP32(x[block].norm);
+        for (int j = 0; j < QK_TURBO2; j++) {
+            uint8_t idx = (x[block].qs[j/4] >> ((j%4)*2)) & 0x3;
+            y[block * QK_TURBO2 + j] = CENTROIDS_2BIT[idx] * norm;
+        }
+    }
+}
+
+size_t quantize_turbo2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                         int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBO2 == 0);
+
+    size_t row_size = (n_per_row / QK_TURBO2) * sizeof(block_turbo2_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_turbo2_0_ref(
+            src + row * n_per_row,
+            (block_turbo2_0 *)((char *)dst + row * row_size),
             n_per_row
         );
     }

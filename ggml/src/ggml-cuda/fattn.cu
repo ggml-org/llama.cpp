@@ -299,6 +299,13 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO3_0)
 
+    // TurboQuant2 KV cache types (always enabled)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO2_0)
+
+    // Mixed turbo2/q8_0 KV cache types
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO2_0)
+
     GGML_ABORT("fatal error");
 }
 
@@ -381,9 +388,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
     if (K->type != V->type) {
-        // Allow mixed turbo3/q8_0 KV types
+        // Allow mixed turbo/q8_0 KV types
         const bool turbo_q8_mix = (K->type == GGML_TYPE_TURBO3_0 && V->type == GGML_TYPE_Q8_0) ||
-                                  (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_TURBO3_0);
+                                  (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_TURBO3_0) ||
+                                  (K->type == GGML_TYPE_TURBO2_0 && V->type == GGML_TYPE_Q8_0) ||
+                                  (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_TURBO2_0);
         if (!turbo_q8_mix) {
             return BEST_FATTN_KERNEL_NONE;
         }
@@ -405,8 +414,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_TURBO3_0:
-            // turbo3 VEC kernel instantiated for D ∈ {64, 128, 256}.
-            // Larger D (e.g. 576) uses MMA with dequantize-to-f16 path.
+            // turbo3 VEC kernel instantiated for D in {64, 128, 256}.
+            if (K->ne[0] % 64 != 0) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            break;
+        case GGML_TYPE_TURBO2_0:
+            // turbo2 VEC kernel instantiated for D in {64, 128, 256}.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }

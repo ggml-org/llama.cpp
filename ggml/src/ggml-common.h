@@ -330,6 +330,18 @@ static_assert(sizeof(block_turbo4_0) == 2*sizeof(ggml_half) + QK_TURBO4*3/8 + QK
 
 static_assert(QK_TURBO4 == 128, "turbo4 kernels assume QK_TURBO4 == 128");
 
+// TurboQuant 2-bit: 2-bit PolarQuant indices only (no QJL)
+// Per block: norm(fp16) + 2-bit indices (8 bytes) = 10 bytes per 32 values
+// = 2.5 bits/value → 6.4× compression vs fp16
+// 4 centroids (Lloyd-Max for N(0, 1/128)): {-0.133462, -0.039994, 0.039994, 0.133462}
+#define QK_TURBO2 32   // Block size 32
+#define QK_TURBO2_GROUP 128  // rotation group size = head_dim
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected L2 norm
+    uint8_t    qs[QK_TURBO2 / 4];      //  8 bytes: 2-bit indices (4 per byte)
+} block_turbo2_0;                       // 10 bytes total
+static_assert(sizeof(block_turbo2_0) == sizeof(ggml_half) + QK_TURBO2/4, "wrong turbo2_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

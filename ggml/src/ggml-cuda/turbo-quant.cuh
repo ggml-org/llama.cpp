@@ -10,8 +10,19 @@
 
 #include "common.cuh"
 
-// ---- Quantization ratio for dequantize_block template ----
+// ---- Quantization ratios for dequantize_block template ----
 #define QR_TURBO3 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
+#define QR_TURBO2 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
+
+// ---- 2-bit centroids (Lloyd-Max for N(0, 1/128)) ----
+
+static __constant__ float TURBO_CENTROIDS_2BIT[4] = {
+    -0.133462f, -0.039994f, 0.039994f, 0.133462f
+};
+
+static __constant__ float TURBO_MID_2BIT[3] = {
+    -0.086728f, 0.0f, 0.086728f
+};
 
 // ---- 3-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
@@ -161,4 +172,33 @@ static __device__ __forceinline__ float turbo3_dequant_element(
     uint8_t hi1  = (x->signs[j / 8] >> (j % 8)) & 0x1;
     uint8_t idx  = low2 | (hi1 << 2);
     return TURBO_CENTROIDS_3BIT[idx] * norm;
+}
+
+// ---- Nearest 2-bit centroid index ----
+
+static __device__ __forceinline__ uint8_t turbo_nearest_centroid_2bit(float val) {
+    if      (val < TURBO_MID_2BIT[0]) return 0;
+    else if (val < TURBO_MID_2BIT[1]) return 1;
+    else if (val < TURBO_MID_2BIT[2]) return 2;
+    else                              return 3;
+}
+
+// ---- Per-block quantize for turbo2 (32 elements, expects already-rotated input) ----
+
+static __device__ void quantize_f32_turbo2_0_block(const float * __restrict__ src,
+                                                    block_turbo2_0 * __restrict__ dst) {
+    for (int j = 0; j < QK_TURBO2 / 4; j++) dst->qs[j] = 0;
+
+    for (int j = 0; j < QK_TURBO2; j++) {
+        uint8_t idx = turbo_nearest_centroid_2bit(src[j]);
+        dst->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+    }
+}
+
+// ---- Inline dequant helper: extract one float from turbo2 block ----
+
+static __device__ __forceinline__ float turbo2_dequant_element(
+        const block_turbo2_0 * __restrict__ x, int j, float norm) {
+    uint8_t idx = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+    return TURBO_CENTROIDS_2BIT[idx] * norm;
 }

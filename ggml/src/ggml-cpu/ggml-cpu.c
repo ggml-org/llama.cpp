@@ -205,8 +205,11 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
-// Forward declaration — defined below, after utility functions
+// Forward declarations — defined below, after utility functions
 static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by, int nrc);
 
@@ -408,6 +411,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_TURBO3_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_turbo3_0_ref,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turbo3_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO2_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo2_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turbo2_0_f32,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
@@ -3352,6 +3361,25 @@ static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
     float tmp[4096];  // max head_dim
     GGML_ASSERT(n <= 4096);
     ggml_get_type_traits(GGML_TYPE_TURBO3_0)->to_float(vx, tmp, n);
+
+    const float * y = (const float *)vy;
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += tmp[i] * y[i];
+    }
+    *s = sum;
+}
+
+// TurboQuant2 vec_dot: dequantize turbo2 block to f32, then dot with f32 operand.
+static void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+
+    float tmp[4096];
+    GGML_ASSERT(n <= 4096);
+    ggml_get_type_traits(GGML_TYPE_TURBO2_0)->to_float(vx, tmp, n);
 
     const float * y = (const float *)vy;
     float sum = 0.0f;
