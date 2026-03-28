@@ -202,6 +202,9 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    void set_input_k_rot(ggml_tensor * dst) const;
+    void set_input_v_rot(ggml_tensor * dst) const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
@@ -265,6 +268,7 @@ private:
                    ggml_context * ctx,
                     ggml_tensor * cur,
                     ggml_tensor * shift,
+                    ggml_tensor * rot,
                     ggml_tensor * factors,
                           float   freq_base,
                           float   freq_scale,
@@ -359,6 +363,9 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    void set_input_k_rot(ggml_tensor * dst) const;
+    void set_input_v_rot(ggml_tensor * dst) const;
 
 private:
     llama_memory_status status;

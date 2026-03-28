@@ -308,8 +308,8 @@ public:
     ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
-    ggml_tensor * self_rotk = nullptr;
-    ggml_tensor * self_rotv = nullptr;
+    ggml_tensor * self_k_rot = nullptr;
+    ggml_tensor * self_v_rot = nullptr;
 
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
@@ -387,8 +387,9 @@ public:
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
-    ggml_tensor * self_rotk = nullptr;
-    ggml_tensor * self_rotv = nullptr;
+    // note: using same rotation matrices for both base and swa cache
+    ggml_tensor * self_k_rot = nullptr;
+    ggml_tensor * self_v_rot = nullptr;
 
     const llama_hparams hparams;
     const llama_cparams cparams;
