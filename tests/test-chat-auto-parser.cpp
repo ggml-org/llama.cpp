@@ -1330,7 +1330,7 @@ static void test_nemotron_reasoning_detection(testing & t) {
     analysis.analyze_template(tmpl);
 
     // Check reasoning markers
-    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("reasoning_start should be '<think>\\n'", "<think>\n", analysis.reasoning.start);
     t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
 
     // Check reasoning mode detection
