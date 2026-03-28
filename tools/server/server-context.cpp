@@ -863,8 +863,8 @@ private:
 
         int n_ctx_slot = llama_n_ctx_seq(ctx);
         if (n_ctx_slot > n_ctx_train) {
-            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
-            n_ctx_slot = n_ctx_train;
+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - using rope scaling to extend\n", n_ctx_slot, n_ctx_train);
+            // Do not cap: caller has configured rope scaling (--rope-scale / --rope-scaling yarn) to handle extended context.
         }
 
         slots.clear();

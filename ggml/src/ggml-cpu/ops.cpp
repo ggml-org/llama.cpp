@@ -10634,8 +10634,11 @@ static void ggml_compute_forward_turbo_wht_f32(
     const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2;
     const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1;
 
-    const int64_t n_total = ggml_nelements(src);
-    const int64_t n_groups = n_total / 128;
+    const int64_t head_dim        = src->ne[0];
+    const int64_t n_heads         = ggml_nelements(src) / head_dim;
+    const int64_t groups_per_head = head_dim / 128;
+    const int     tail_size       = (int)(head_dim % 128);
+    const int64_t n_groups        = groups_per_head * n_heads;
 
     // Parallel over groups
     const int64_t ith = params->ith;
@@ -10644,8 +10647,12 @@ static void ggml_compute_forward_turbo_wht_f32(
     const int64_t grp_end = (n_groups * (ith + 1)) / nth;
 
     for (int64_t g = grp_start; g < grp_end; g++) {
+        const int64_t head_idx    = g / groups_per_head;
+        const int64_t grp_in_head = g % groups_per_head;
+        const int64_t base        = head_idx * head_dim + grp_in_head * 128;
+
         float x[128];
-        const float * in = src_data + g * 128;
+        const float * in = src_data + base;
 
         // Apply first signs
         for (int i = 0; i < 128; i++) x[i] = in[i] * s_first[i];
@@ -10663,9 +10670,18 @@ static void ggml_compute_forward_turbo_wht_f32(
 
         // Normalize + second signs
         const float inv_sqrt_128 = 0.08838834764831845f;
-        float * out = dst_data + g * 128;
+        float * out = dst_data + base;
         for (int i = 0; i < 128; i++) {
             out[i] = x[i] * inv_sqrt_128 * s_second[i];
+        }
+    }
+
+    // Copy tail elements unchanged (identity pass-through)
+    if (tail_size > 0 && ith == 0) {
+        const int64_t tail_offset = groups_per_head * 128;
+        for (int64_t h = 0; h < n_heads; h++) {
+            const int64_t base = h * head_dim + tail_offset;
+            memcpy(dst_data + base, src_data + base, tail_size * sizeof(float));
         }
     }
 }

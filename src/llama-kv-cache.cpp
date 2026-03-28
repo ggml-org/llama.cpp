@@ -204,6 +204,22 @@ llama_kv_cache::llama_kv_cache(
             throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
+        // TurboQuant requires head_dim (n_embd_head_k) divisible by 128.
+        // For models with non-128-aligned heads (e.g. DeepSeek2 MLA with head_dim=192/576),
+        // fall back to q8_0 with a clear message instead of asserting later.
+        const bool is_turbo_type = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 ||
+                                    type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0);
+        const uint32_t n_embd_head_k = hparams.n_embd_head_k(il);
+        if (is_turbo_type && n_embd_head_k % 128 != 0) {
+            if (il == 0) {
+                LLAMA_LOG_WARN("%s: turbo KV cache requires head_dim divisible by 128, "
+                               "but this model has n_embd_head_k=%u — falling back to q8_0\n",
+                               __func__, n_embd_head_k);
+            }
+            type_k = GGML_TYPE_Q8_0;
+            type_v = GGML_TYPE_Q8_0;
+        }
+
         const bool has_k = true;
         const bool has_v = !is_mla;
 
