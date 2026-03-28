@@ -656,7 +656,7 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     return true;
 }
 
-static inline bool glob_class_match(const char & c, const char * pattern, const char * class_end) {
+static inline bool glob_class_match(const char c, const char * pattern, const char * class_end) {
     const char * class_start = pattern;
     bool negated = false;
 
