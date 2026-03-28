@@ -209,12 +209,13 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
     }
 }
 
-#define MMQ_MMA_TILE_X_K_Q8_0 (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
-#define MMQ_MMA_TILE_X_K_FP4  (2*MMQ_TILE_NE_K + 8                                       + 4)
-#define MMQ_MMA_TILE_X_K_Q8_1 (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
-#define MMQ_MMA_TILE_X_K_Q2_K (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K                           + 4)
-#define MMQ_MMA_TILE_X_K_Q3_K (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2                         + 4)
-#define MMQ_MMA_TILE_X_K_Q6_K (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI6_K   + MMQ_TILE_NE_K/8 + 7)
+#define MMQ_MMA_TILE_X_K_Q8_0  (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
+#define MMQ_MMA_TILE_X_K_FP4   (2*MMQ_TILE_NE_K + 8                                       + 4) // MXFP4
+#define MMQ_MMA_TILE_X_K_NVFP4 (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2                         + 4) // NVFP4
+#define MMQ_MMA_TILE_X_K_Q8_1  (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
+#define MMQ_MMA_TILE_X_K_Q2_K  (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K                           + 4)
+#define MMQ_MMA_TILE_X_K_Q3_K  (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2                         + 4)
+#define MMQ_MMA_TILE_X_K_Q6_K  (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI6_K   + MMQ_TILE_NE_K/8 + 7)
 
 static_assert(MMQ_MMA_TILE_X_K_Q8_0 % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_Q8_1 % 8 == 4, "Wrong padding.");
@@ -223,6 +224,9 @@ static_assert(MMQ_MMA_TILE_X_K_Q3_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_Q6_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_FP4  % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_FP4 == MMQ_MMA_TILE_X_K_Q8_1, "Wrong tile size for MXFP4");
+static_assert(MMQ_MMA_TILE_X_K_NVFP4 % 8 == 4, "Wrong padding.");
+static_assert(MMQ_MMA_TILE_X_K_NVFP4 == MMQ_MMA_TILE_X_K_Q3_K, "Wrong tile size for NVFP4");
+
 
 static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
     switch (type) {
@@ -233,6 +237,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_Q8_0:    return MMQ_MMA_TILE_X_K_Q8_0;
         // tile sizes are the same for Q8_1 and FP4 for blackwell
         case GGML_TYPE_MXFP4:   return MMQ_MMA_TILE_X_K_Q8_1;
+        // tile sizes are the same for Q3_K and NVFP4 for generic MMQ
         case GGML_TYPE_NVFP4:   return MMQ_MMA_TILE_X_K_Q3_K;
         case GGML_TYPE_Q2_K:    return MMQ_MMA_TILE_X_K_Q2_K;
         case GGML_TYPE_Q3_K:    return MMQ_MMA_TILE_X_K_Q3_K;
@@ -873,11 +878,11 @@ static __device__ __forceinline__ void load_tiles_nvfp4(const char * __restrict_
             const int2 q1 = get_int_from_table_16(src_qs[2 * sub + 1], kvalues_mxfp4);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-            x_qs[i * MMQ_MMA_TILE_X_K_Q3_K + kqs + 4 * sub + 0] = q0.x;
-            x_qs[i * MMQ_MMA_TILE_X_K_Q3_K + kqs + 4 * sub + 1] = q1.x;
-            x_qs[i * MMQ_MMA_TILE_X_K_Q3_K + kqs + 4 * sub + 2] = q0.y;
-            x_qs[i * MMQ_MMA_TILE_X_K_Q3_K + kqs + 4 * sub + 3] = q1.y;
-            x_df[i * MMQ_MMA_TILE_X_K_Q3_K + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+            x_qs[i * MMQ_MMA_TILE_X_K_NVFP4 + kqs + 4 * sub + 0] = q0.x;
+            x_qs[i * MMQ_MMA_TILE_X_K_NVFP4 + kqs + 4 * sub + 1] = q1.x;
+            x_qs[i * MMQ_MMA_TILE_X_K_NVFP4 + kqs + 4 * sub + 2] = q0.y;
+            x_qs[i * MMQ_MMA_TILE_X_K_NVFP4 + kqs + 4 * sub + 3] = q1.y;
+            x_df[i * MMQ_MMA_TILE_X_K_NVFP4 + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
 #else
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 0] = q0.x;
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 1] = q1.x;
@@ -4140,9 +4145,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_Q5_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q5_1);
 extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
-#ifdef FP8_AVAILABLE
 extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
-#endif // FP8_AVAILABLE
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);
