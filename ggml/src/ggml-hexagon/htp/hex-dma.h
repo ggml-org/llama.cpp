@@ -143,7 +143,7 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
     desc->desc_size  = 0; // 1D mode
     desc->src_bypass = dma_src_l2_bypass_on;
     desc->dst_bypass = dma_dst_l2_bypass_on;
-    desc->order      = 1;
+    desc->order      = 0;
     desc->done       = 0;
     desc->src        = (void *) dptr.src;
     desc->dst        = (void *) dptr.dst;
@@ -179,7 +179,7 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
     desc->dst_bypass     = dma_dst_l2_bypass_on;
     desc->src_comp       = 0;
     desc->dst_comp       = 0;
-    desc->order          = 1;
+    desc->order          = 0;
     desc->done           = 0;
     desc->src_stride     = src_stride;
     desc->dst_stride     = dst_stride;
