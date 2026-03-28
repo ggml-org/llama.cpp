@@ -295,6 +295,10 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     // TurboQuant3 KV cache types (always enabled)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0)
 
+    // Mixed turbo3/q8_0 KV cache types
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO3_0)
+
     GGML_ABORT("fatal error");
 }
 
@@ -377,7 +381,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
     if (K->type != V->type) {
-        return BEST_FATTN_KERNEL_NONE;
+        // Allow mixed turbo3/q8_0 KV types
+        const bool turbo_q8_mix = (K->type == GGML_TYPE_TURBO3_0 && V->type == GGML_TYPE_Q8_0) ||
+                                  (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_TURBO3_0);
+        if (!turbo_q8_mix) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
     }
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
