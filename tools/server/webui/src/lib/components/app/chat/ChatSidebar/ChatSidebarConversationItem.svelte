@@ -1,13 +1,23 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal, Download, Loader2, Square } from '@lucide/svelte';
+	import {
+		Trash2,
+		Pencil,
+		MoreHorizontal,
+		Download,
+		Loader2,
+		Square,
+		GitBranch
+	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
 		isActive?: boolean;
+		depth?: number;
 		conversation: DatabaseConversation;
 		handleMobileSidebarItemClick?: () => void;
 		onDelete?: (id: string) => void;
@@ -23,7 +33,8 @@
 		onEdit,
 		onSelect,
 		onStop,
-		isActive = false
+		isActive = false,
+		depth = 0
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
@@ -88,14 +99,34 @@
 
 <!-- svelte-ignore a11y_mouse_events_have_key_events -->
 <button
-	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-3 py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
+	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
-		: ''}"
+		: ''} px-3"
 	onclick={handleSelect}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
 >
-	<div class="flex min-w-0 flex-1 items-center gap-2">
+	<div
+		class="flex min-w-0 flex-1 items-center gap-2"
+		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
+	>
+		{#if depth > 0}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<a
+						href="#/chat/{conversation.forkedFromConversationId}"
+						class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<GitBranch class="h-3.5 w-3.5" />
+					</a>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>See parent conversation</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
+
 		{#if isLoading}
 			<Tooltip.Root>
 				<Tooltip.Trigger>

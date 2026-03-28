@@ -1,12 +1,16 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
+	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitBranch } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import Input from '$lib/components/ui/input/input.svelte';
+	import Label from '$lib/components/ui/label/label.svelte';
 	import { MessageRole } from '$lib/enums';
+	import { activeConversation } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		role: MessageRole.USER | MessageRole.ASSISTANT;
@@ -24,6 +28,7 @@
 		onEdit?: () => void;
 		onRegenerate?: () => void;
 		onContinue?: () => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
@@ -42,6 +47,7 @@
 		onConfirmDelete,
 		onContinue,
 		onDelete,
+		onForkConversation,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
 		onRegenerate,
@@ -53,9 +59,26 @@
 		onRawOutputToggle
 	}: Props = $props();
 
+	let showForkDialog = $state(false);
+	let forkName = $state('');
+	let forkIncludeAttachments = $state(true);
+
 	function handleConfirmDelete() {
 		onConfirmDelete();
 		onShowDeleteDialogChange(false);
+	}
+
+	function handleOpenForkDialog() {
+		const conv = activeConversation();
+
+		forkName = `Fork of ${conv?.name ?? 'Conversation'}`;
+		forkIncludeAttachments = true;
+		showForkDialog = true;
+	}
+
+	function handleConfirmFork() {
+		onForkConversation?.({ name: forkName.trim(), includeAttachments: forkIncludeAttachments });
+		showForkDialog = false;
 	}
 </script>
 
@@ -84,6 +107,10 @@
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+			{/if}
+
+			{#if onForkConversation}
+				<ActionIcon icon={GitBranch} tooltip="Fork conversation" onclick={handleOpenForkDialog} />
 			{/if}
 
 			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
@@ -116,3 +143,42 @@
 	onConfirm={handleConfirmDelete}
 	onCancel={() => onShowDeleteDialogChange(false)}
 />
+
+<DialogConfirmation
+	bind:open={showForkDialog}
+	title="Fork Conversation"
+	description="Create a new conversation branching from this message."
+	confirmText="Fork"
+	cancelText="Cancel"
+	icon={GitBranch}
+	onConfirm={handleConfirmFork}
+	onCancel={() => (showForkDialog = false)}
+>
+	<div class="flex flex-col gap-4 py-2">
+		<div class="flex flex-col gap-2">
+			<Label for="fork-name">Title</Label>
+
+			<Input
+				id="fork-name"
+				class="text-foreground"
+				placeholder="Enter fork name"
+				type="text"
+				bind:value={forkName}
+			/>
+		</div>
+
+		<div class="flex items-center gap-2">
+			<Checkbox
+				id="fork-attachments"
+				checked={forkIncludeAttachments}
+				onCheckedChange={(checked) => {
+					forkIncludeAttachments = checked === true;
+				}}
+			/>
+
+			<Label for="fork-attachments" class="cursor-pointer text-sm font-normal">
+				Include all attachments
+			</Label>
+		</div>
+	</div>
+</DialogConfirmation>

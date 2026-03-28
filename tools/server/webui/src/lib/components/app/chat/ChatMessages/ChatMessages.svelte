@@ -79,6 +79,13 @@
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
 			refreshAllMessages();
+		},
+
+		forkConversation: async (
+			message: DatabaseMessage,
+			options: { name: string; includeAttachments: boolean }
+		) => {
+			await conversationsStore.forkConversation(message.id, options);
 		}
 	});
 
