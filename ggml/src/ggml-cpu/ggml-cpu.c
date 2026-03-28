@@ -1725,13 +1725,19 @@ static void ggml_compute_forward_fused_moe_silu(
     ggml_from_float_t const from_float   = type_traits_cpu[vec_dot_type].from_float;
 
     const int n_ids = ids->ne[0]; // n_expert_used
+    const int n_as  = weights_gate->ne[2]; // n_experts
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
+    void * wdata_cur = params->wdata;
+
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
-        char * wdata = (char *) params->wdata + ith * (ne11 * row_size + CACHE_LINE_SIZE);
+        char * quant_base = (char *) incr_ptr_aligned(&wdata_cur,
+            (ggml_row_size(vec_dot_type, ggml_nelements(src1)) + CACHE_LINE_SIZE) * nth, sizeof(int64_t));
+
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        char * wdata = quant_base + ith * (ne11 * row_size + CACHE_LINE_SIZE);
         for (int64_t i11 = 0; i11 < ne11; ++i11) {
             from_float((float *)((char *) src1->data + i11*nb11),
                        (void *)(wdata + i11*row_size),
@@ -1740,7 +1746,32 @@ static void ggml_compute_forward_fused_moe_silu(
         src1_q = wdata;
     }
 
-    // Process each selected expert directly (no row mapping needed)
+    incr_ptr_aligned(&wdata_cur, n_as * sizeof(int64_t), sizeof(int64_t));
+    incr_ptr_aligned(&wdata_cur, n_as * ids->ne[0] * ids->ne[1] * sizeof(struct mmid_row_mapping), sizeof(int64_t));
+
+    char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
+        incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
+
+    if (ith == 0) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
+            atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
+            atomic_store_explicit(ctr, nth, memory_order_relaxed);
+        }
+    }
+
+    ggml_barrier(params->threadpool);
+
+    const int64_t nr0 = ne01;
+    const int chunk_size = 64;
+    const bool disable_chunking = ggml_is_numa();
+
+    int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
+    if (nchunk0 < (int64_t)(nth * 4) || disable_chunking) {
+        nchunk0 = nth;
+    }
+    const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+
     for (int id = 0; id < n_ids; ++id) {
         const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
 
@@ -1750,15 +1781,25 @@ static void ggml_compute_forward_fused_moe_silu(
 
         float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1);
 
-        // Static work division: each thread gets a contiguous range of rows
-        const int64_t ir0_start = (ith * ne01) / nth;
-        const int64_t ir0_end   = ((ith + 1) * ne01) / nth;
+        atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
 
-        for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
-            float gate_val, up_val;
-            vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, src1_col, 0, 1);
-            vec_dot(ne00, &up_val,   0, up_cur   + ir0*up_nb01,   0, src1_col, 0, 1);
-            glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
+        int current_chunk = ith;
+        while (current_chunk < nchunk0) {
+            const int64_t ir0_start = dr0 * current_chunk;
+            const int64_t ir0_end   = MIN(ir0_start + dr0, nr0);
+
+            for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
+                float gate_val, up_val;
+                vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, src1_col, 0, 1);
+                vec_dot(ne00, &up_val,   0, up_cur   + ir0*up_nb01,   0, src1_col, 0, 1);
+                glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
+            }
+
+            if (nth >= nchunk0) {
+                break;
+            }
+
+            current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
     }
 }
@@ -2892,9 +2933,9 @@ struct ggml_cplan ggml_graph_plan(
                         // src1
                         if (src1->type != vec_dot_type) {
                             size_t quant_buf = ggml_row_size(vec_dot_type, ggml_nelements(src1));
-                            // fused MoE path: each thread needs its own quantization buffer
+                            // fused MoE path: each thread needs its own quantization buffer + cache line padding
                             if (src1->ne[2] == 1) {
-                                quant_buf *= n_tasks;
+                                quant_buf = (quant_buf) * n_tasks;
                             }
                             cur += quant_buf + sizeof(int64_t);
                         }
