@@ -799,15 +799,11 @@ private:
                 queue_tasks.pop_deferred_task(id_slot);
 
                 if (kv_keep_only_active) {
-                    bool should_clear = false;
                     for (const auto & s : slots) {
                         if (s.id != id_slot && s.prompt.n_tokens() > 0) {
-                            should_clear = true;
+                            slot_save_and_clear(slots[id_slot]);
                             break;
                         }
-                    }
-                    if (should_clear) {
-                        slot_save_and_clear(slots[id_slot]);
                     }
                 }
             };
