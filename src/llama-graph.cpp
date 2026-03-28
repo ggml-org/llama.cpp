@@ -57,8 +57,17 @@ static bool ggml_is_power_of_2(int n) {
 }
 
 // orthonormal Walsh-Hadamard rotation matrix
-static void set_input_hadamard(int n, float * data) {
+static void set_input_hadamard(ggml_tensor * tensor) {
+    assert(tensor->type == GGML_TYPE_F32);
+
+    const int n = tensor->ne[0];
+
     assert(ggml_is_power_of_2(n));
+    assert(tensor->ne[1] == n);
+    assert(tensor->ne[2] == 1);
+    assert(tensor->ne[3] == 1);
+
+    auto * data = (float *) tensor->data;
 
     data[0*n + 0] = 1.0 / sqrtf(n);
 
@@ -470,17 +479,13 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     if (self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotk->buffer));
 
-        float * data = (float *) self_rotk->data;
-
-        set_input_hadamard(self_rotk->ne[0], data);
+        set_input_hadamard(self_rotk);
     }
 
     if (self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotv->buffer));
 
-        float * data = (float *) self_rotv->data;
-
-        set_input_hadamard(self_rotv->ne[0], data);
+        set_input_hadamard(self_rotv);
     }
 }
 
@@ -533,17 +538,13 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     if (self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotk->buffer));
 
-        float * data = (float *) self_rotk->data;
-
-        set_input_hadamard(self_rotk->ne[0], data);
+        set_input_hadamard(self_rotk);
     }
 
     if (self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_rotv->buffer));
 
-        float * data = (float *) self_rotv->data;
-
-        set_input_hadamard(self_rotv->ne[0], data);
+        set_input_hadamard(self_rotv);
     }
 }
 
@@ -604,17 +605,13 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
     if (inp_attn->self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotk->buffer));
 
-        float * data = (float *) inp_attn->self_rotk->data;
-
-        set_input_hadamard(inp_attn->self_rotk->ne[0], data);
+        set_input_hadamard(inp_attn->self_rotk);
     }
 
     if (inp_attn->self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotv->buffer));
 
-        float * data = (float *) inp_attn->self_rotv->data;
-
-        set_input_hadamard(inp_attn->self_rotv->ne[0], data);
+        set_input_hadamard(inp_attn->self_rotv);
     }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
@@ -718,17 +715,13 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
     if (inp_attn->self_rotk) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotk->buffer));
 
-        float * data = (float *) inp_attn->self_rotk->data;
-
-        set_input_hadamard(inp_attn->self_rotk->ne[0], data);
+        set_input_hadamard(inp_attn->self_rotk);
     }
 
     if (inp_attn->self_rotv) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_rotv->buffer));
 
-        float * data = (float *) inp_attn->self_rotv->data;
-
-        set_input_hadamard(inp_attn->self_rotv->ne[0], data);
+        set_input_hadamard(inp_attn->self_rotv);
     }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
