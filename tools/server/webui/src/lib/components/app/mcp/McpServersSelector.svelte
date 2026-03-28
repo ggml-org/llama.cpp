@@ -20,7 +20,9 @@
 	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
 	let hasMcpServers = $derived(mcpServers.length > 0);
 	let enabledMcpServersForChat = $derived(
-		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
+		mcpServers.filter(
+			(s) => conversationsStore.isMcpServerEnabledForChat(s.id) && (s.url ?? '').trim()
+		)
 	);
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
@@ -40,7 +42,7 @@
 		if (query) {
 			return mcpServers.filter((s) => {
 				const name = getServerLabel(s).toLowerCase();
-				const url = s.url.toLowerCase();
+				const url = (s.url ?? '').toLowerCase();
 				return name.includes(query) || url.includes(query);
 			});
 		}

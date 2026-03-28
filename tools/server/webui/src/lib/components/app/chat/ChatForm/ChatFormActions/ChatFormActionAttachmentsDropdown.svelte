@@ -59,7 +59,7 @@
 		if (!query) return mcpServers;
 		return mcpServers.filter((s) => {
 			const name = getServerLabel(s).toLowerCase();
-			const url = s.url.toLowerCase();
+			const url = (s.url ?? '').toLowerCase();
 			return name.includes(query) || url.includes(query);
 		});
 	});
