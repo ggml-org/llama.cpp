@@ -16,4 +16,14 @@ layout (push_constant) uniform parameter
     uint mode;
     float alpha;
     float limit;
+    uint nb01;
+    uint nb02;
+    uint nb03;
+    uint ne01;
+    uint ne02;
+    uint nb11;
+    uint nb12;
+    uint nb13;
+    uint ne11;
+    uint ne12;
 } p;
