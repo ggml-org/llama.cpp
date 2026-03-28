@@ -2038,63 +2038,6 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-static ggml_tensor * build_attn_inp_k_rot(
-               ggml_context * ctx,
-        const llama_hparams & hparams,
-        const llama_kv_cache_context * mctx_cur) {
-    ggml_tensor * res = nullptr;
-
-    const bool can_k_rot =
-        !hparams.is_n_embd_k_gqa_variable() &&
-        hparams.n_embd_head_k() % 64 == 0 &&
-        ggml_is_quantized(mctx_cur->type_k());
-
-    if (can_k_rot) {
-        int nrot = 64;
-
-        // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
-        do {
-            nrot *= 2;
-        } while (hparams.n_embd_head_k() % nrot == 0);
-        nrot /= 2;
-
-        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
-        ggml_set_input(res);
-        ggml_set_name(res, "attn_inp_k_rot");
-    }
-
-    return res;
-}
-
-static ggml_tensor * build_attn_inp_v_rot(
-               ggml_context * ctx,
-        const llama_hparams & hparams,
-        const llama_kv_cache_context * mctx_cur) {
-    ggml_tensor * res = nullptr;
-
-    const bool can_v_rot =
-        !hparams.is_n_embd_v_gqa_variable() &&
-        hparams.n_embd_head_v() % 64 == 0 &&
-        ggml_is_quantized(mctx_cur->type_v());
-
-    if (can_v_rot) {
-        int nrot = 64;
-        // using smaller rotation matrices for V seems beneficial
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
-        //do {
-        //    nrot *= 2;
-        //} while (hparams.n_embd_head_v() % nrot == 0);
-        //nrot /= 2;
-
-        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
-        ggml_set_input(res);
-        ggml_set_name(res, "attn_inp_v_rot");
-    }
-
-    return res;
-}
-
 static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
            ggml_context * ctx0,
      const llama_ubatch & ubatch,
@@ -2114,8 +2057,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
     }
 
-    inp->self_k_rot = build_attn_inp_k_rot(ctx0, hparams, mctx_cur);
-    inp->self_v_rot = build_attn_inp_v_rot(ctx0, hparams, mctx_cur);
+    inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
+    inp->self_v_rot = mctx_cur->build_input_v_rot(ctx0);
 
     return inp;
 }
@@ -2442,8 +2385,8 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
     }
 
-    inp->self_k_rot = build_attn_inp_k_rot(ctx0, hparams, mctx_cur->get_base());
-    inp->self_v_rot = build_attn_inp_v_rot(ctx0, hparams, mctx_cur->get_base());
+    inp->self_k_rot = mctx_cur->get_base()->build_input_k_rot(ctx0);
+    inp->self_v_rot = mctx_cur->get_base()->build_input_v_rot(ctx0);
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }

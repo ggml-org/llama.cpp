@@ -18,6 +18,7 @@ static bool ggml_is_power_of_2(int n) {
 }
 
 // orthonormal Walsh-Hadamard rotation matrix
+// note: res^2 == I
 static void ggml_gen_hadamard(ggml_tensor * tensor) {
     assert(tensor->type == GGML_TYPE_F32);
 
@@ -1244,6 +1245,57 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
     return v_idxs;
 }
 
+ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
+    ggml_tensor * res = nullptr;
+
+    const bool can_k_rot =
+        ggml_is_quantized(type_k()) &&
+        !hparams.is_n_embd_k_gqa_variable() &&
+        hparams.n_embd_head_k() % 64 == 0;
+
+    if (can_k_rot) {
+        int nrot = 64;
+
+        // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
+        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+        do {
+            nrot *= 2;
+        } while (hparams.n_embd_head_k() % nrot == 0);
+        nrot /= 2;
+
+        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
+        ggml_set_input(res);
+        ggml_set_name(res, "attn_inp_k_rot");
+    }
+
+    return res;
+}
+
+ggml_tensor * llama_kv_cache::build_input_v_rot(ggml_context * ctx) const {
+    ggml_tensor * res = nullptr;
+
+    const bool can_v_rot =
+        ggml_is_quantized(type_v()) &&
+        !hparams.is_n_embd_v_gqa_variable() &&
+        hparams.n_embd_head_v() % 64 == 0;
+
+    if (can_v_rot) {
+        int nrot = 64;
+        // using smaller rotation matrices for V seems beneficial
+        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
+        //do {
+        //    nrot *= 2;
+        //} while (hparams.n_embd_head_v() % nrot == 0);
+        //nrot /= 2;
+
+        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
+        ggml_set_input(res);
+        ggml_set_name(res, "attn_inp_v_rot");
+    }
+
+    return res;
+}
+
 void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const {
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
@@ -1665,6 +1717,7 @@ public:
 
     ggml_tensor * k_shift; // I32 [kv_size*n_stream]
 
+    // note: assumes k_rot^2 == I
     ggml_tensor * k_rot = nullptr;
 
     const llama_kv_cache * kv_self;
@@ -2364,6 +2417,14 @@ ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, con
 
 ggml_tensor * llama_kv_cache_context::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
     return kv->build_input_v_idxs(ctx, ubatch);
+}
+
+ggml_tensor * llama_kv_cache_context::build_input_k_rot(ggml_context * ctx) const {
+    return kv->build_input_k_rot(ctx);
+}
+
+ggml_tensor * llama_kv_cache_context::build_input_v_rot(ggml_context * ctx) const {
+    return kv->build_input_v_rot(ctx);
 }
 
 void llama_kv_cache_context::set_input_k_shift(ggml_tensor * dst) const {
