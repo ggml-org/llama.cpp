@@ -557,6 +557,26 @@ int main(int argc, char ** argv) {
             size_t count = 0;
             auto curdir = std::filesystem::current_path();
             std::string pattern = string_strip(buffer.substr(6));
+            std::filesystem::path rel_path;
+
+            auto startglob = pattern.find_first_of("![*?");
+            if (startglob != std::string::npos && startglob != 0) {
+                auto endpath = pattern.substr(0, startglob).find_last_of('/');
+                if (endpath != std::string::npos) {
+                    std::string rel_pattern = pattern.substr(0, endpath);
+#if !defined(_WIN32)
+                    if (string_starts_with(rel_pattern, "~")) {
+                        const char * home = std::getenv("HOME");
+                        if (home && home[0]) {
+                            rel_pattern = std::string(home) + rel_pattern.substr(1);
+                        }
+                    }
+#endif
+                    rel_path = rel_pattern;
+                    pattern.erase(0, endpath + 1);
+                    curdir /= rel_path;
+                }
+            }
 
             for (const auto & entry : std::filesystem::recursive_directory_iterator(curdir,
                     std::filesystem::directory_options::skip_permission_denied, ec)) {
@@ -575,8 +595,7 @@ int main(int argc, char ** argv) {
                     continue;
                 }
 
-                std::filesystem::path rel_path = rel;
-                if (!add_text_file(rel_path.string())) {
+                if (!add_text_file((rel_path / rel).string())) {
                     continue;
                 }
 
