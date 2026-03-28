@@ -800,7 +800,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 }
 
 static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
-#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(HIP_FP8_AVAILABLE)
+#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
     // ROCm does not support fp8 in software on devices with fp8 hardware,
     // but CDNA3 supports only e4m3_fnuz (no inf).
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
@@ -825,7 +825,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     }
     return static_cast<float>(raw / 2);
 #endif // defined(GGML_USE_CUDA) && CUDART_VERSION >= 12080
-#endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(HIP_FP8_AVAILABLE)
+#endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
 
 __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e) {
