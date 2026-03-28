@@ -53,6 +53,7 @@
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
+#include "ggml-sycl/ssm_scan.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 
 
@@ -4190,6 +4191,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
             break;
+        case GGML_OP_SSM_SCAN:
+            ggml_sycl_ssm_scan(ctx, dst);
+            break;
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
             break;
@@ -4887,6 +4891,19 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->type == GGML_TYPE_F32 &&
                    op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_SSM_SCAN: {
+            if (op->src[3]->ne[0] == 1) {
+                // Mamba-2: d_state must be 128 or 256, d_head must be multiple of WARP_SIZE
+                return (op->src[0]->ne[0] == 128 || op->src[0]->ne[0] == 256) &&
+                       op->src[0]->ne[1] % WARP_SIZE == 0;
+            } else {
+                // Mamba-1: d_state == 16, d_head == 1, n_head % 128 == 0, n_group == 1
+                return op->src[0]->ne[0] == 16 &&
+                       op->src[0]->ne[1] == 1 &&
+                       op->src[0]->ne[2] % 128 == 0 &&
+                       op->src[4]->ne[1] == 1;
+            }
+        }
         case GGML_OP_ROLL:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_ARANGE:
