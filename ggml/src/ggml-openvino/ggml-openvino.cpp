@@ -823,15 +823,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
             return true;
         }
-        float scale = 1.0f;
-        float max_bias = 0.0f;
-        const auto * op_params = op->op_params;
-        memcpy(&scale, (const float *) op_params + 0, sizeof(float));
-        memcpy(&max_bias, (const float *) op_params + 1, sizeof(float));
-        if (max_bias > 0) {
-            // GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with max_bias > 0\n");
-            return true;
-        }
         break;
     }
     case GGML_OP_FLASH_ATTN_EXT: {
@@ -966,13 +957,13 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE, GGML_OP_ADD, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_VIEW,
                                                  GGML_OP_CONT, GGML_OP_RESHAPE, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE,
-                                                 GGML_OP_GET_ROWS, GGML_OP_ROPE, GGML_OP_RMS_NORM, GGML_OP_SCALE,
-                                                 // softmax is not updated due to replaced by flash_attn_ext
-                                                 // GGML_OP_SOFT_MAX,
+                                                 GGML_OP_GET_ROWS, GGML_OP_ROPE, GGML_OP_RMS_NORM, GGML_OP_SCALE, GGML_OP_NORM,
+                                                 GGML_OP_SOFT_MAX,
                                                  GGML_OP_SET_ROWS, GGML_OP_FLASH_ATTN_EXT, GGML_OP_CPY};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_SILU,
+        GGML_UNARY_OP_TANH,
     };
     static const std::set<ggml_glu_op> supported_glu_ops{
         GGML_GLU_OP_SWIGLU,

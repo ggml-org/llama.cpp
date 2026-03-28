@@ -266,9 +266,6 @@ public:
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_output_idx(tensor, op)) {
-            return "inp_out_ids";
-        }
         if (is_inp_mask(tensor, op)) {
             return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
         }
