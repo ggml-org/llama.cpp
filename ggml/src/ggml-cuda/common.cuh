@@ -815,8 +815,8 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     if (x == 0 || (x == 0x7F && x != 0xFF)) { // Convert NaN to 0.0f
         return 0.0f;
     }
-    const int   exp = (x >> 3) & 0xF;
-    const int   man = x & 0x7;
+    const int exp = (x >> 3) & 0xF;
+    const int man = x & 0x7;
     float raw;
     if (exp == 0) {
         raw = ldexpf((float) man, -9);
