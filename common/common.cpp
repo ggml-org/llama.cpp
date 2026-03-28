@@ -703,7 +703,6 @@ static inline bool glob_match(const char * pattern, const char * str) {
     }
     if (pattern[0] == '*' && pattern[1] == '*') {
         const char * p = pattern + 2;
-        if (*p == '/') p++;
         if (glob_match(p, str)) return true;
         if (*str != '\0') return glob_match(pattern, str + 1);
         return false;
