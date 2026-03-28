@@ -286,10 +286,16 @@ public:
     llm_graph_input_attn_kv(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_context * mctx) :
+            const llama_kv_cache_context * mctx,
+            const float * custom_attn_mask = nullptr,
+            const llama_pos * custom_attn_mask_pos = nullptr,
+            int32_t custom_attn_mask_n_pos = 0) :
         hparams(hparams),
         cparams(cparams),
-        mctx(mctx) {
+        mctx(mctx),
+        custom_attn_mask(custom_attn_mask),
+        custom_attn_mask_pos(custom_attn_mask_pos),
+        custom_attn_mask_n_pos(custom_attn_mask_n_pos) {
     }
     ~llm_graph_input_attn_kv() = default;
 
@@ -315,6 +321,11 @@ public:
     const llama_cparams cparams;
 
     const llama_kv_cache_context * mctx;
+
+    // custom attention mask (optional, borrowed pointers — must outlive the graph)
+    const float     * custom_attn_mask       = nullptr;
+    const llama_pos * custom_attn_mask_pos   = nullptr;
+    int32_t           custom_attn_mask_n_pos = 0;
 };
 
 // V-less input for the KV cache
@@ -388,6 +399,11 @@ public:
     const llama_cparams cparams;
 
     const llama_kv_cache_iswa_context * mctx;
+
+    // custom attention mask (optional, borrowed pointers — must outlive the graph)
+    const float     * custom_attn_mask       = nullptr;
+    const llama_pos * custom_attn_mask_pos   = nullptr;
+    int32_t           custom_attn_mask_n_pos = 0;
 };
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
@@ -533,6 +549,11 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    // custom attention mask (optional, borrowed pointers — must outlive the graph)
+    const float     * custom_attn_mask       = nullptr;
+    const llama_pos * custom_attn_mask_pos   = nullptr;
+    int32_t           custom_attn_mask_n_pos = 0;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -741,6 +762,11 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    // custom attention mask (borrowed pointers from llama_context)
+    const float     * custom_attn_mask       = nullptr;
+    const llama_pos * custom_attn_mask_pos   = nullptr;
+    int32_t           custom_attn_mask_n_pos = 0;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 

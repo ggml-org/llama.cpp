@@ -105,6 +105,14 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    // custom attention mask (position-indexed, AND logic with default mask)
+    void set_attn_mask(const float * mask, const llama_pos * positions, int32_t n_pos);
+
+    // accessors for the custom mask (used by kv cache during set_input)
+    const float     * get_attn_mask()           const { return attn_mask.empty() ? nullptr : attn_mask.data(); }
+    const llama_pos * get_attn_mask_positions()  const { return attn_mask_pos.empty() ? nullptr : attn_mask_pos.data(); }
+    int32_t           get_attn_mask_n_pos()      const { return (int32_t) attn_mask_pos.size(); }
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -315,6 +323,10 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+
+    // custom attention mask
+    std::vector<float>     attn_mask;     // [n_pos * n_pos], row-major, 0.0f=visible, -inf=masked
+    std::vector<llama_pos> attn_mask_pos; // [n_pos], positions the mask rows/columns correspond to
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;

@@ -967,6 +967,24 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Set a custom attention mask that restricts which tokens can attend to each other.
+    // The mask is applied on top of the default causal/non-causal mask (AND logic: custom can only
+    // restrict, never open what the default mask blocks).
+    //
+    // mask:      float array [n_pos * n_pos], row-major. mask[i * n_pos + j]:
+    //              0.0f     = defer to default mask (allow if default allows)
+    //             -INFINITY = block attention from position[i] to position[j]
+    // positions: array of n_pos llama_pos values the mask rows/columns correspond to
+    // n_pos:     number of positions in the mask
+    //
+    // Pass NULL mask to clear and restore default behavior.
+    // The mask is copied internally — the caller can free their buffers after this call.
+    LLAMA_API void llama_set_attn_mask(
+            struct llama_context * ctx,
+            const float          * mask,
+            const llama_pos      * positions,
+            int32_t                n_pos);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);

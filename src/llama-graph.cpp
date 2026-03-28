@@ -428,13 +428,19 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
-    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn,
+                            custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos);
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_context *>(params.mctx);
 
     this->mctx = mctx;
+
+    // update custom attention mask pointers (may change between decodes)
+    this->custom_attn_mask       = params.custom_attn_mask;
+    this->custom_attn_mask_pos   = params.custom_attn_mask_pos;
+    this->custom_attn_mask_n_pos = params.custom_attn_mask_n_pos;
 
     bool res = true;
 
@@ -470,18 +476,25 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
 
-    mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn,
+                                         custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos);
 
     mctx->get_swa()->set_input_k_idxs(self_k_idxs_swa, ubatch);
     mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
-    mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn,
+                                        custom_attn_mask, custom_attn_mask_pos, custom_attn_mask_n_pos);
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
+
+    // update custom attention mask pointers (may change between decodes)
+    this->custom_attn_mask       = params.custom_attn_mask;
+    this->custom_attn_mask_pos   = params.custom_attn_mask_pos;
+    this->custom_attn_mask_n_pos = params.custom_attn_mask_n_pos;
 
     bool res = true;
 
@@ -878,6 +891,9 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    custom_attn_mask       (params.custom_attn_mask),
+    custom_attn_mask_pos   (params.custom_attn_mask_pos),
+    custom_attn_mask_n_pos (params.custom_attn_mask_n_pos),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1994,6 +2010,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     const llama_cparams & cparams,
     const llama_kv_cache_context * mctx_cur) {
 
+    // note: custom_attn_mask pointers are not available here (static function),
+    //       they are set after construction in build_attn_inp_kv()
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
     {
@@ -2016,6 +2034,11 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
 
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
+
+    // pass custom attention mask from context
+    inp->custom_attn_mask       = custom_attn_mask;
+    inp->custom_attn_mask_pos   = custom_attn_mask_pos;
+    inp->custom_attn_mask_n_pos = custom_attn_mask_n_pos;
 
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
@@ -2288,6 +2311,11 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     const auto * mctx_cur = static_cast<const llama_kv_cache_iswa_context *>(mctx);
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
+
+    // propagate custom attention mask
+    inp->custom_attn_mask       = custom_attn_mask;
+    inp->custom_attn_mask_pos   = custom_attn_mask_pos;
+    inp->custom_attn_mask_n_pos = custom_attn_mask_n_pos;
 
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);

@@ -1443,7 +1443,8 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
     }
 }
 
-void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn,
+                                       const float * custom_mask, const llama_pos * custom_mask_pos, int32_t custom_mask_n_pos) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
@@ -1475,6 +1476,58 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         set_input_kq_mask_impl<true> (args, data);
     } else {
         set_input_kq_mask_impl<false>(args, data);
+    }
+
+    // post-pass: overlay custom attention mask (AND logic)
+    // the custom mask can only RESTRICT attention, never open what the default mask blocks
+    if (custom_mask != nullptr && custom_mask_n_pos > 0) {
+        // build position→custom_mask_index lookup
+        std::unordered_map<llama_pos, int32_t> pos_to_idx;
+        pos_to_idx.reserve(custom_mask_n_pos);
+        for (int32_t i = 0; i < custom_mask_n_pos; ++i) {
+            pos_to_idx[custom_mask_pos[i]] = i;
+        }
+
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            for (int64_t ii = 0; ii < n_tps; ++ii) {
+                const uint32_t i = s * n_tps + ii;
+                const llama_pos p_row = ubatch->pos[i];
+
+                // find the row index in the custom mask for this token's position
+                auto it_row = pos_to_idx.find(p_row);
+                if (it_row == pos_to_idx.end()) {
+                    continue; // position not in custom mask → leave default
+                }
+                const int32_t cm_row = it_row->second;
+
+                const uint64_t idst = n_kv * i;
+
+                // iterate KV cache cells and apply custom mask
+                for (uint32_t ss = 0; ss < v_cells.size(); ++ss) {
+                    const auto & cells = v_cells[ss];
+                    for (int64_t j = 0; j < n_kv; ++j) {
+                        if (cells.is_empty(j)) {
+                            continue;
+                        }
+
+                        const llama_pos p_col = cells.pos_get(j);
+                        auto it_col = pos_to_idx.find(p_col);
+                        if (it_col == pos_to_idx.end()) {
+                            continue; // KV position not in custom mask → leave default
+                        }
+                        const int32_t cm_col = it_col->second;
+
+                        const float cm_val = custom_mask[cm_row * custom_mask_n_pos + cm_col];
+                        if (cm_val <= -1e9f) {
+                            // threshold check: any very large negative value means "block"
+                            // this handles both -INFINITY (from C API) and -1e30 (from JSON)
+                            data[idst + j] = -INFINITY;
+                        }
+                        // else: leave existing mask value (AND logic — custom can only restrict)
+                    }
+                }
+            }
+        }
     }
 
     //const int64_t t_end = ggml_time_us();
@@ -2275,8 +2328,9 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
     kv->set_input_v_idxs(dst, ubatch, sinfos[i_cur]);
 }
 
-void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    kv->set_input_kq_mask(dst, ubatch, causal_attn);
+void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn,
+                                               const float * custom_mask, const llama_pos * custom_mask_pos, int32_t custom_mask_n_pos) const {
+    kv->set_input_kq_mask(dst, ubatch, causal_attn, custom_mask, custom_mask_pos, custom_mask_n_pos);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

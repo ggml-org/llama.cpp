@@ -1048,6 +1048,21 @@ void llama_context::set_causal_attn(bool value) {
     sched_need_reserve = true;
 }
 
+void llama_context::set_attn_mask(const float * mask, const llama_pos * positions, int32_t n_pos) {
+    if (mask == nullptr || n_pos <= 0) {
+        attn_mask.clear();
+        attn_mask_pos.clear();
+        LLAMA_LOG_DEBUG("%s: custom attention mask cleared\n", __func__);
+        return;
+    }
+
+    // build a position→index lookup for fast access during set_input
+    attn_mask.assign(mask, mask + (int64_t) n_pos * n_pos);
+    attn_mask_pos.assign(positions, positions + n_pos);
+
+    LLAMA_LOG_DEBUG("%s: custom attention mask set for %d positions\n", __func__, n_pos);
+}
+
 void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -2158,6 +2173,9 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.custom_attn_mask       =*/ get_attn_mask(),
+        /*.custom_attn_mask_pos   =*/ get_attn_mask_positions(),
+        /*.custom_attn_mask_n_pos =*/ get_attn_mask_n_pos(),
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3058,6 +3076,10 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_attn_mask(llama_context * ctx, const float * mask, const llama_pos * positions, int32_t n_pos) {
+    ctx->set_attn_mask(mask, positions, n_pos);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
