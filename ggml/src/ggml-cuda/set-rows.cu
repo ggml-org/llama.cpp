@@ -210,23 +210,24 @@ static void set_rows_cuda(
     }
 }
 
-// ---- TurboQuant3 set_rows: 128-element groups with WHT rotation + norm correction ----
+// ---- TurboQuant3 set_rows: GROUP_SIZE-element groups with WHT rotation + norm correction ----
 //
-// Parallel kernel: one CUDA block per 128-element group, QK_TURBO3_GROUP=128 threads per block.
+// Templated on GROUP_SIZE (128 or 64).
+// Parallel kernel: one CUDA block per group, GROUP_SIZE threads per block.
 // Thread j handles element j within the group.
 //
 // Steps (all parallel):
 //   1. Load element j from global memory
 //   2. Parallel L2 norm (warp reduce + inter-warp via shared memory)
 //   3. Normalize
-//   4. Forward WHT (7 butterfly stages, shared memory)
+//   4. Forward WHT (log2(GROUP_SIZE) butterfly stages, shared memory)
 //   5. Quantize element j to 3-bit centroid index
 //   6. Pack qs (warp shuffle) and signs (__ballot_sync) into turbo3 block, no atomics
 //   7. Parallel reconstruction norm (same pattern as step 2)
 //   8. Write corrected norm (one thread per sub-block)
 
-template <typename idx_t>
-__launch_bounds__(QK_TURBO3_GROUP)
+template <typename idx_t, int GROUP_SIZE>
+__launch_bounds__(128)  // max of 128 or 64
 static __global__ void k_set_rows_turbo3(
         const float * __restrict__ src0,
         const idx_t * __restrict__ src1,
@@ -247,11 +248,14 @@ static __global__ void k_set_rows_turbo3(
         const int64_t s2,
         const int64_t s3) {
 
-    // blockIdx.x = flat group index; threadIdx.x = element within group (0..127)
+    static_assert(GROUP_SIZE == 128 || GROUP_SIZE == 64, "GROUP_SIZE must be 128 or 64");
+
+    // blockIdx.x = flat group index; threadIdx.x = element within group (0..GROUP_SIZE-1)
     const int j = threadIdx.x;
 
     // Decode blockIdx.x → (i_grp, i01, i02, i03)
-    const int64_t n_groups_per_row = ne00 / QK_TURBO3_GROUP;
+    constexpr int blocks_per_group = GROUP_SIZE / QK_TURBO3;
+    const int64_t n_groups_per_row = ne00 / GROUP_SIZE;
     const int64_t g = blockIdx.x;
     const int64_t i_grp = g % n_groups_per_row;
     int64_t       tmp   = g / n_groups_per_row;
@@ -267,15 +271,16 @@ static __global__ void k_set_rows_turbo3(
     const int64_t dst_row = *(src1 + i10*s10 + i11*s11 + i12*s12);
     const float * src_row = src0 + i01*s01 + i02*s02 + i03*s03;
     block_turbo3_0 * dst_row_ptr = (block_turbo3_0 *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3);
-    block_turbo3_0 * blk_base    = dst_row_ptr + i_grp * (QK_TURBO3_GROUP / QK_TURBO3);
+    block_turbo3_0 * blk_base    = dst_row_ptr + i_grp * blocks_per_group;
 
     // ---- Step 1: Load element j (coalesced) ----
-    __shared__ float x[QK_TURBO3_GROUP];
-    x[j] = src_row[i_grp * QK_TURBO3_GROUP + j];
+    __shared__ float x[GROUP_SIZE];
+    x[j] = src_row[i_grp * GROUP_SIZE + j];
     __syncthreads();
 
     // ---- Step 2: Parallel L2 norm ----
-    __shared__ float warp_accum[QK_TURBO3_GROUP / WARP_SIZE];  // 4 warps for group=128
+    constexpr int n_warps = GROUP_SIZE / WARP_SIZE;
+    __shared__ float warp_accum[n_warps];
     float v = x[j];
     float v2 = v * v;
     for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
@@ -287,7 +292,7 @@ static __global__ void k_set_rows_turbo3(
     __shared__ float s_norm_sq;
     if (j == 0) {
         float total = 0.0f;
-        for (int w = 0; w < QK_TURBO3_GROUP / WARP_SIZE; w++) total += warp_accum[w];
+        for (int w = 0; w < n_warps; w++) total += warp_accum[w];
         s_norm_sq = total;
     }
     __syncthreads();
@@ -299,24 +304,33 @@ static __global__ void k_set_rows_turbo3(
     __syncthreads();
 
     // ---- Step 4: Forward WHT (signs1 → butterfly → signs2, normalized) ----
-    x[j] *= TURBO_WHT_SIGNS1[j];
+    if (GROUP_SIZE == 128) {
+        x[j] *= TURBO_WHT_SIGNS1[j];
+    } else {
+        x[j] *= TURBO_WHT_SIGNS1_64[j];
+    }
     __syncthreads();
 
 #define WHT_STAGE_SHARED(h) \
     if (j % (2*(h)) < (h)) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
     __syncthreads();
 
+    // Butterfly stages: loop from h=1 to h<GROUP_SIZE, doubling each time
     WHT_STAGE_SHARED(1)
     WHT_STAGE_SHARED(2)
     WHT_STAGE_SHARED(4)
     WHT_STAGE_SHARED(8)
     WHT_STAGE_SHARED(16)
     WHT_STAGE_SHARED(32)
-    WHT_STAGE_SHARED(64)
+    if (GROUP_SIZE == 128) { WHT_STAGE_SHARED(64) }
 #undef WHT_STAGE_SHARED
 
-    constexpr float inv_sqrt_128 = 0.08838834764831845f;
-    x[j] = x[j] * inv_sqrt_128 * TURBO_WHT_SIGNS2[j];
+    constexpr float inv_sqrt_group = (GROUP_SIZE == 128) ? 0.08838834764831845f : 0.125f;
+    if (GROUP_SIZE == 128) {
+        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2[j];
+    } else {
+        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2_64[j];
+    }
     __syncthreads();
 
     // ---- Step 5: Quantize element j ----
@@ -359,7 +373,7 @@ static __global__ void k_set_rows_turbo3(
     __shared__ float s_recon_sq;
     if (j == 0) {
         float total = 0.0f;
-        for (int w = 0; w < QK_TURBO3_GROUP / WARP_SIZE; w++) total += warp_accum[w];
+        for (int w = 0; w < n_warps; w++) total += warp_accum[w];
         s_recon_sq = total;
     }
     __syncthreads();
@@ -512,8 +526,15 @@ static void set_rows_cuda_turbo3(
 
     cudaStream_t stream = ctx.stream();
 
-    const int64_t n_full_groups   = ne00 / QK_TURBO3_GROUP;
-    const int     tail_size       = (int)(ne00 % QK_TURBO3_GROUP);
+    // Read WHT group size from op_params (set by llama-kv-cache.cpp based on head_dim).
+    // Default to 128 if not set (backward compat with head_dim=128 models).
+    int group_size = 128;
+    memcpy(&group_size, dst->op_params, sizeof(int));
+    if (group_size != 64 && group_size != 128) group_size = 128;
+    GGML_ASSERT(ne00 % group_size == 0);
+
+    const int64_t n_full_groups   = ne00 / group_size;
+    const int     tail_size       = (int)(ne00 % group_size);
 
     const int64_t s01 = nb01/sizeof(float);
     const int64_t s02 = nb02/sizeof(float);
@@ -522,17 +543,26 @@ static void set_rows_cuda_turbo3(
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
 
-    // Launch 1: full 128-element groups with WHT rotation
+    // Launch 1: full groups with WHT rotation
     if (n_full_groups > 0) {
         const int64_t ne_total = n_full_groups * ne01 * ne02 * ne03;
-        k_set_rows_turbo3<idx_t><<<(int)ne_total, QK_TURBO3_GROUP, 0, stream>>>(
-            src0_d, src1_d, (block_turbo3_0 *)dst->data,
-            ne00, ne01, ne10, ne11, ne12, ne13,
-            s01, s02, s03, s10, s11, s12,
-            nb1, nb2, nb3);
+        if (group_size == 128) {
+            k_set_rows_turbo3<idx_t, 128><<<(int)ne_total, 128, 0, stream>>>(
+                src0_d, src1_d, (block_turbo3_0 *)dst->data,
+                ne00, ne01, ne10, ne11, ne12, ne13,
+                s01, s02, s03, s10, s11, s12,
+                nb1, nb2, nb3);
+        } else {
+            k_set_rows_turbo3<idx_t, 64><<<(int)ne_total, 64, 0, stream>>>(
+                src0_d, src1_d, (block_turbo3_0 *)dst->data,
+                ne00, ne01, ne10, ne11, ne12, ne13,
+                s01, s02, s03, s10, s11, s12,
+                nb1, nb2, nb3);
+        }
     }
 
     // Launch 2: tail elements (no WHT, straight quantize)
+    // Not needed for 64-aligned dims but kept for potential future use
     if (tail_size > 0) {
         GGML_ASSERT(tail_size % QK_TURBO3 == 0);  // tail must be block-aligned
         const int64_t n_rows = ne01 * ne02 * ne03;

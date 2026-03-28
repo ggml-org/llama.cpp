@@ -51,6 +51,22 @@ static __constant__ float TURBO_WHT_SIGNS2[128] = {
     -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f
 };
 
+// ---- 64-element WHT sign arrays (first 64 of the 128-element arrays) ----
+
+static __constant__ float TURBO_WHT_SIGNS1_64[64] = {
+    -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+    -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f
+};
+
+static __constant__ float TURBO_WHT_SIGNS2_64[64] = {
+    1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+    1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
+    1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f
+};
+
 // ---- Fast Walsh-Hadamard Transform (in-place, normalized) ----
 // O(n log n) = 896 ops for n=128
 
@@ -71,12 +87,40 @@ static __device__ __forceinline__ void turbo_fwht_128(float * x) {
     }
 }
 
+// ---- Fast Walsh-Hadamard Transform for 64-element groups ----
+// O(n log n) = 384 ops for n=64
+
+static __device__ __forceinline__ void turbo_fwht_64(float * x) {
+    for (int h = 1; h < 64; h *= 2) {
+        for (int i = 0; i < 64; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                float a = x[j];
+                float b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+    const float inv_sqrt_64 = 0.125f;
+    for (int i = 0; i < 64; i++) {
+        x[i] *= inv_sqrt_64;
+    }
+}
+
 // ---- Forward rotation: signs1 → FWHT → signs2 ----
 
 static __device__ __forceinline__ void turbo_rotate_forward(float * x) {
     for (int i = 0; i < 128; i++) x[i] *= TURBO_WHT_SIGNS1[i];
     turbo_fwht_128(x);
     for (int i = 0; i < 128; i++) x[i] *= TURBO_WHT_SIGNS2[i];
+}
+
+// ---- Forward rotation for 64-element groups ----
+
+static __device__ __forceinline__ void turbo_rotate_forward_64(float * x) {
+    for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS1_64[i];
+    turbo_fwht_64(x);
+    for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS2_64[i];
 }
 
 // ---- Nearest 3-bit centroid index ----

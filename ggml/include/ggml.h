@@ -2549,7 +2549,8 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_turbo_wht(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   direction);
+            int                   direction,
+            int                   group_size);  // 0 = auto (64 or 128 from ne[0])
 
     // custom operators
 

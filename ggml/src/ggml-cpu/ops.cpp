@@ -10629,16 +10629,17 @@ static void ggml_compute_forward_turbo_wht_f32(
     float * dst_data = (float *) dst->data;
 
     int direction;
-    memcpy(&direction, dst->op_params, sizeof(int));
-
-    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2;
-    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1;
+    int group_size;
+    memcpy(&direction, dst->op_params + 0, sizeof(int));
+    memcpy(&group_size, dst->op_params + sizeof(int), sizeof(int));
 
     const int64_t head_dim        = src->ne[0];
     const int64_t n_heads         = ggml_nelements(src) / head_dim;
-    const int64_t groups_per_head = head_dim / 128;
-    const int     tail_size       = (int)(head_dim % 128);
+    const int64_t groups_per_head = head_dim / group_size;
+    const int     tail_size       = (int)(head_dim % group_size);
     const int64_t n_groups        = groups_per_head * n_heads;
+
+    const float inv_sqrt = 1.0f / sqrtf((float)group_size);
 
     // Parallel over groups
     const int64_t ith = params->ith;
@@ -10646,20 +10647,24 @@ static void ggml_compute_forward_turbo_wht_f32(
     const int64_t grp_start = (n_groups * ith) / nth;
     const int64_t grp_end = (n_groups * (ith + 1)) / nth;
 
+    // Select sign arrays: for 64-group, use first 64 elements of the 128-element arrays
+    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2;
+    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1;
+
     for (int64_t g = grp_start; g < grp_end; g++) {
         const int64_t head_idx    = g / groups_per_head;
         const int64_t grp_in_head = g % groups_per_head;
-        const int64_t base        = head_idx * head_dim + grp_in_head * 128;
+        const int64_t base        = head_idx * head_dim + grp_in_head * group_size;
 
-        float x[128];
+        float x[128];  // max group_size
         const float * in = src_data + base;
 
         // Apply first signs
-        for (int i = 0; i < 128; i++) x[i] = in[i] * s_first[i];
+        for (int i = 0; i < group_size; i++) x[i] = in[i] * s_first[i];
 
-        // WHT butterfly (7 stages)
-        for (int h = 1; h < 128; h *= 2) {
-            for (int i = 0; i < 128; i += h * 2) {
+        // WHT butterfly (log2(group_size) stages)
+        for (int h = 1; h < group_size; h *= 2) {
+            for (int i = 0; i < group_size; i += h * 2) {
                 for (int j = i; j < i + h; j++) {
                     float a = x[j], b = x[j + h];
                     x[j] = a + b;
@@ -10669,16 +10674,15 @@ static void ggml_compute_forward_turbo_wht_f32(
         }
 
         // Normalize + second signs
-        const float inv_sqrt_128 = 0.08838834764831845f;
         float * out = dst_data + base;
-        for (int i = 0; i < 128; i++) {
-            out[i] = x[i] * inv_sqrt_128 * s_second[i];
+        for (int i = 0; i < group_size; i++) {
+            out[i] = x[i] * inv_sqrt * s_second[i];
         }
     }
 
     // Copy tail elements unchanged (identity pass-through)
     if (tail_size > 0 && ith == 0) {
-        const int64_t tail_offset = groups_per_head * 128;
+        const int64_t tail_offset = groups_per_head * group_size;
         for (int64_t h = 0; h < n_heads; h++) {
             const int64_t base = h * head_dim + tail_offset;
             memcpy(dst_data + base, src_data + base, tail_size * sizeof(float));

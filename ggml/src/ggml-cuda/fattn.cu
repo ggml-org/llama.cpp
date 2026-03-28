@@ -396,8 +396,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_TURBO3_0:
-            // VEC kernel only instantiated for D ∈ {64, 128, 256}; D must also be 128-aligned for quantisation
-            if (K->ne[0] % QK_TURBO3_GROUP != 0) {
+            // turbo3 VEC kernel instantiated for D ∈ {64, 128, 256}.
+            // Larger D (e.g. 576) uses MMA with dequantize-to-f16 path.
+            if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
