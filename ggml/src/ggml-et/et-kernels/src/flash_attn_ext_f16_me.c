@@ -81,35 +81,46 @@ static inline float get_mask_val_from_base(const struct ggml_tensor * mask,
     return fp16_to_fp32(*(const uint16_t *)(base + ik1 * mask->nb[0]));
 }
 
-// Build interleaved B panel for TensorFMA16A32 from K^T.
-// K layout: ne[0]=dk elements contiguous (nb[0]=2), nb[1]=stride between positions.
-// We need B[k_idx, kv_idx] interleaved for the engine.
-// Output: 16 L1SCP lines × 64 bytes = 16 × 32 F16 values.
+// Build B panel input for TensorLoadTranspose16.
+//
+// TensorLoadTranspose16 does: L1Scp[c].h[i] = input[i].h[c]
+// We want the interleaved B: L1Scp[l].h[n*2+r] = K[n][dk_start + 2*l + r]
+// So we need: input[n*2+r].h[l] = K[n][dk_start + 2*l + r]
+//
+// For each KV position n, produce two rows (de-interleave even/odd dk elements):
+//   Row 2n:   K[n][dk+0], K[n][dk+2], ..., K[n][dk+30]  (16 evens)
+//   Row 2n+1: K[n][dk+1], K[n][dk+3], ..., K[n][dk+31]  (16 odds)
+//
+// Output buffer: 32 rows × 32 halfwords (64-byte stride, 16 hw data + 16 hw pad)
 //
 static inline void __attribute__((always_inline))
-pack_k_interleaved(et_fp16_t * out,
-                   const char * k_base,  // K base for this head+batch
-                   int64_t kv_start,     // first KV position
-                   int64_t dk_start,     // first dk element
-                   int64_t kv_count,     // number of KV positions (≤16)
-                   int64_t nb1_k)        // K position stride
+pack_k_for_transpose16(et_fp16_t * out,
+                       const char * k_base,
+                       int64_t kv_start,
+                       int64_t dk_start,
+                       int64_t kv_count,
+                       int64_t nb1_k)
 {
     for (int j = 0; j < (int)kv_count; ++j) {
         const et_fp16_t * k_row =
             (const et_fp16_t *)(k_base + (kv_start + j) * nb1_k) + dk_start;
+        et_fp16_t * even_row = out + (j * 2)     * 32;
+        et_fp16_t * odd_row  = out + (j * 2 + 1) * 32;
         for (int l = 0; l < TILE_K / 2; ++l) {
-            out[l * 32 + j * 2 + 0] = k_row[2 * l + 0];
-            out[l * 32 + j * 2 + 1] = k_row[2 * l + 1];
+            even_row[l] = k_row[2 * l + 0];
+            odd_row[l]  = k_row[2 * l + 1];
         }
     }
-    // Zero-pad unused columns when kv_count < 16
     for (int j = (int)kv_count; j < TILE_KV; ++j) {
+        et_fp16_t * even_row = out + (j * 2)     * 32;
+        et_fp16_t * odd_row  = out + (j * 2 + 1) * 32;
         for (int l = 0; l < TILE_K / 2; ++l) {
-            out[l * 32 + j * 2 + 0] = 0;
-            out[l * 32 + j * 2 + 1] = 0;
+            even_row[l] = 0;
+            odd_row[l]  = 0;
         }
     }
 }
+
 
 static inline void __attribute__((always_inline))
 convert_q_row_f32_to_f16(et_fp16_t * dst, const float * src, int64_t n) {
@@ -360,9 +371,8 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     setup_cache_scp();
     CLEAR_TENSOR_ERROR;
 
-    // Interleaved K panel buffers: ping-pong to overlap packing/flush of the
-    // next chunk with tensor FMA on the current chunk.
-    et_fp16_t kpanel[2][16 * 32] __attribute__((aligned(64)));
+    // Interleaved K panel buffers
+    et_fp16_t kpanel[32 * 32] __attribute__((aligned(64)));
 
     // Q converted to F16 (one row at a time)
     et_fp16_t q_f16[FA_DK_MAX] __attribute__((aligned(64)));
@@ -414,17 +424,14 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             // B = K^T_interleaved[TILE_K, kv_count] in L1SCP
             // Result: scores[1, kv_count] in vector registers
             // ============================================================
-            int cur_buf = 0;
-
-            // Prepare the first K panel before entering the pipelined loop.
-            pack_k_interleaved(kpanel[cur_buf], k_head, kv_base, 0,
-                               kv_count, k->nb[1]);
-            FENCE;
-            flush_to_l2(kpanel[cur_buf], 16, 64);
-
             for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
-                const int has_next = (dk_chunk + TILE_K) < dk;
-                const int next_buf = cur_buf ^ 1;
+
+                pack_k_for_transpose16(kpanel, k_head, kv_base, dk_chunk,
+                                       kv_count, k->nb[1]);
+                FENCE;
+                // split as `flush_to_l2` can only do 16 lines at a time
+                flush_to_l2(kpanel, 16, 64);
+                flush_to_l2(kpanel + 16 * 32, 16, 64);
 
                 // Load Q_f16 chunk into L1SCP as A (1 row × 64B)
                 tensor_load(
@@ -438,30 +445,26 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     64, // stride (doesn't matter for 1 row)
                     0
                 );
+                tensor_wait(TENSOR_LOAD_WAIT_0);
 
                 // Make sure the current panel flush completed before tensor_load.
                 WAIT_CACHEOPS;
 
-                // Load K interleaved panel into L1SCP as B (16 lines × 64B)
+                // New pack + TRANSPOSE16
                 tensor_load(
                     false, false,
                     B_L1_START,
-                    TENSOR_LOAD_PLAIN,
+                    TENSOR_LOAD_TRANSPOSE16,
                     0,
-                    (uint64_t)kpanel[cur_buf],
+                    (uint64_t)kpanel,
                     0,
-                    15,  // 16 lines
-                    64,  // contiguous stride
-                    1
+                    15,  // 16 output lines
+                    64,  // stride between source rows
+                    0
                 );
-
                 tensor_wait(TENSOR_LOAD_WAIT_0);
-                tensor_wait(TENSOR_LOAD_WAIT_1);
 
-                // TensorFMA16A32:
-                //   BCOLS  = 3   → 16 output columns (kv_count scores)
-                //   AROWS  = 0   → 1 row (single query)
-                //   ACOLS  = 15  → 32 F16 K elements
+
                 tensor_fma(
                     (kv_count < TILE_KV),  // use_tmask for partial tiles
                     3,                      // b_num_col (16 output cols)
@@ -477,18 +480,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     TENSOR_FMA_OP_FP16,
                     (dk_chunk == 0)         // first_pass
                 );
-
-                // While the tensor engine computes this chunk, prepare and flush
-                // the next panel in the alternate buffer.
-                if (has_next) {
-                    pack_k_interleaved(kpanel[next_buf], k_head, kv_base, dk_chunk + TILE_K,
-                                       kv_count, k->nb[1]);
-                    FENCE;
-                    flush_to_l2(kpanel[next_buf], 16, 64);
-                }
-
                 tensor_wait(TENSOR_FMA_WAIT);
-                cur_buf = next_buf;
             }
 
             // Extract QK^T scores from vector register file.
