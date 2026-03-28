@@ -7330,7 +7330,15 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     // queue instead of the cache's internal queue for better pipelining.
     sycl::queue * staging_queue = static_cast<sycl::queue *>(queue_ptr);
 
-    // Step 3: Stage missing experts via ensure_cached_layout to get fill events
+    // Step 3: Stage missing experts via ensure_cached_layout to get fill events.
+    // Yield every 4 experts to drain all queues (CCS + BCS + staging) and
+    // prevent xe driver GT engine resets from unbounded command list growth
+    // during inference dispatch.  The ensure_cached_layout path submits
+    // malloc_device + fill_fn + H2D memcpy per expert -- without periodic
+    // draining, a layer with many cache-miss experts (e.g. 120B model cold
+    // start) can accumulate >10s of non-preemptible work.
+    constexpr int PRESTAGE_YIELD_BATCH = 4;
+    int           experts_staged_count = 0;
     for (int32_t expert_id : experts_to_stage) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
         ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id,
@@ -7358,6 +7366,33 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
             }
         } else {
             GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Failed to stage expert %d\n", layer_id, expert_id);
+        }
+
+        // Periodic yield: drain all queues to prevent engine reset
+        experts_staged_count++;
+        if (experts_staged_count % PRESTAGE_YIELD_BATCH == 0) {
+            try {
+                cache->get_queue().wait();       // CCS compute queue
+                cache->get_bcs_queue().wait();   // BCS copy queue
+                if (staging_queue) {
+                    staging_queue->wait();        // caller's staging queue
+                }
+                cache->finalize_pending_fills();
+            } catch (...) {
+            }
+        }
+    }
+
+    // Final flush after staging loop: drain any remaining in-flight work
+    if (experts_staged_count > 0 && (experts_staged_count % PRESTAGE_YIELD_BATCH) != 0) {
+        try {
+            cache->get_queue().wait();
+            cache->get_bcs_queue().wait();
+            if (staging_queue) {
+                staging_queue->wait();
+            }
+            cache->finalize_pending_fills();
+        } catch (...) {
         }
     }
 

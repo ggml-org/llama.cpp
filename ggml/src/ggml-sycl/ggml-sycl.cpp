@@ -1245,17 +1245,21 @@ static void moe_prestage_popular_experts() {
                 break;
             }
 
-            // Periodic batch yield every 8 expert groups.
+            // Periodic batch yield every 2 expert groups.
             // With BCS/CCS engine split, individual CCS reorder kernels are ~10us
             // and naturally preemptible.  The yield ensures:
-            //   1. Both DMA (CCS) and BCS queues drain pending work
+            //   1. ALL queues (CCS compute, DMA, BCS) drain pending work
             //   2. Entries get promoted to READY state via finalize_pending_fills
             //   3. Watchdog heartbeat prevents host-side timeout
-            // Without this, ~6000 back-to-back submissions accumulate a >10s
-            // non-preemptible command list that triggers xe driver GT resets.
-            constexpr int YIELD_BATCH = 8;
+            // Without this, back-to-back submissions accumulate a non-preemptible
+            // command list that triggers xe driver GT engine resets.
+            // Reduced from 8 to 2 after 120B stability testing showed engine
+            // resets even with BCS/DMA draining — CCS compute queue was the
+            // missing piece (reorder kernels submit to CCS, not BCS).
+            constexpr int YIELD_BATCH = 2;
             if (expert_groups_staged > 0 && expert_groups_staged % YIELD_BATCH == 0) {
                 try {
+                    cache->get_queue().wait();       // CCS compute queue
                     cache->get_dma_queue().wait();
                     cache->get_bcs_queue().wait();
                     cache->finalize_pending_fills();
@@ -1268,6 +1272,7 @@ static void moe_prestage_popular_experts() {
         // Final flush: wait for all remaining in-flight fills and promote to READY
         if (prestaged > 0) {
             try {
+                cache->get_queue().wait();       // CCS compute queue
                 cache->get_dma_queue().wait();
                 cache->get_bcs_queue().wait();
                 cache->finalize_pending_fills();
@@ -10483,13 +10488,15 @@ static void ggml_sycl_preload_model_weights() {
                     }
                 }
 
-                // Periodic yield: flush pending H2D and finalize to prevent
-                // unbounded CCS command list growth during S1-PRELOAD.
+                // Periodic yield: flush ALL queues (CCS + BCS + DMA) to prevent
+                // unbounded command list growth during S1-PRELOAD.
                 // For 120B models with ~5 GB of attention weights, this prevents
-                // the xe driver GT engine reset triggered by >640ms CCS monopolization.
+                // the xe driver GT engine reset triggered by >640ms engine monopolization.
+                // CCS compute queue added: reorder kernels submit to CCS, not BCS.
                 s1_submit_count++;
                 if (s1_submit_count % S1_YIELD_INTERVAL == 0) {
                     try {
+                        cache->get_queue().wait();       // CCS compute queue
                         cache->get_bcs_queue().wait();
                         stream.wait();
                         cache->finalize_pending_fills();
@@ -10499,8 +10506,9 @@ static void ggml_sycl_preload_model_weights() {
                 }
             }
 
-            // Final wait for remaining H2D copies on this device
+            // Final wait for remaining H2D copies on this device (all queues)
             try {
+                cache->get_queue().wait();       // CCS compute queue
                 cache->get_bcs_queue().wait();
                 stream.wait();
             } catch (const sycl::exception & e) {
