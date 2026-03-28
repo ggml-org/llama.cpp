@@ -425,6 +425,7 @@ static common_chat_tool special_function_tool_with_optional_param{
         "required": ["arg1"]
     })",
 };
+
 static common_chat_tool empty_args_tool{
     /* .name = */ "empty_args",
     /* .description = */ "A tool that takes no arguments",
@@ -433,6 +434,15 @@ static common_chat_tool empty_args_tool{
         "properties": {}
     })",
 };
+
+static common_chat_tool empty_args_tool_no_properties{
+    /* .name = */ "empty_args_no_props",
+    /* .description = */ "A tool that takes no arguments and has no properties",
+    /* .parameters = */ R"({
+        "type": "object"
+    })",
+};
+
 static common_chat_tool python_tool{
     /* .name = */ "python",
     /* .description = */ "an ipython interpreter",
@@ -1409,6 +1419,176 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             "date": {"type": "string"}
         }
     })";
+
+    {
+        // Qwen3.5 (basically same as Nemotron, but keeping separate tests just in case)
+        auto tst = peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug);
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .run();
+
+                tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("<think>\nI'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "I'm\nthinking\n</think>\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "<parameter=arg2>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+        })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Hello, world!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                python_tool
+        })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        tst.test(
+               "I need to output the invoice details in JSON\n"
+               "</think>\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // tool call segment in reasoning
+        tst.test(
+               "Let's call a tool: <tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Not the real call!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call></think>\n"
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Hello, world!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>"
+            )
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                python_tool
+        })
+            .expect_reasoning("Let's call a tool: <tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "def hello():\n"
+               "    print(\"Not the real call!\")\n"
+               "\n"
+               "hello()\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        // No args tool
+        tst.test(
+               "<tool_call>\n"
+               "<function=empty_args>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(message_with_tool_calls("empty_args", "{}"))
+            .run();
+
+        // No args tool with no properties defined
+        tst.test(
+               "<tool_call>\n"
+               "<function=empty_args_no_props>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool_no_properties })
+            .expect(message_with_tool_calls("empty_args_no_props", "{}"))
+            .run();
+    }
 
     {
         // Ministral-3-14B-Reasoning-2512
