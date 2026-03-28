@@ -15,6 +15,9 @@
 #include <assert.h>
 #include <stdlib.h>
 
+/* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
+int turbo3_cpu_wht_group_size = 0;
+
 /* ---------- constants ---------- */
 
 #define TURBO_SEED_ROTATION 42
@@ -191,17 +194,110 @@ static int nearest_centroid_4bit(float val) {
 }
 
 /* ---------- TURBO3_0: 2-bit PolarQuant + 1-bit QJL ---------- */
+/* ---------- WHT sign arrays (must match CUDA/Metal, seed=42) ---------- */
+
+static const float turbo_cpu_s1[128] = {
+    -1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,
+    -1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,
+    -1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,
+    -1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1
+};
+
+static const float turbo_cpu_s2[128] = {
+    1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,
+    1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,
+    1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,
+    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1
+};
+
+/* ---------- CPU forward WHT (in-place, group_size elements) ---------- */
+
+static void turbo_cpu_fwht(float * x, int group_size) {
+    const float * s1 = turbo_cpu_s1;
+    const float * s2 = turbo_cpu_s2;
+    const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
+
+    // signs1
+    for (int i = 0; i < group_size; i++) x[i] *= s1[i];
+
+    // butterfly stages
+    for (int h = 1; h < group_size; h *= 2) {
+        for (int i = 0; i < group_size; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+
+    // normalize + signs2
+    for (int i = 0; i < group_size; i++) x[i] *= inv_sqrt * s2[i];
+}
+
+/* ---------- TURBO3_0: 3-bit PolarQuant with WHT rotation ---------- */
 
 void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * GGML_RESTRICT y, int64_t k) {
-    // Stub — Metal shader handles quantize on GPU. CPU path is simplified.
     assert(k % QK_TURBO3 == 0);
-    const int nb = k / QK_TURBO3;
-    for (int i = 0; i < nb; i++) {
-        float norm = 0.0f;
-        for (int j = 0; j < QK_TURBO3; j++) norm += x[i*QK_TURBO3 + j] * x[i*QK_TURBO3 + j];
-        y[i].norm = GGML_FP32_TO_FP16(sqrtf(norm));
-        memset(y[i].qs, 0, QK_TURBO3 / 4);
-        memset(y[i].signs, 0, QK_TURBO3 / 8);
+
+    // Read WHT group size from global (set by CPU SET_ROWS handler before each call).
+    // Fallback: 128 if row is 128-aligned, else 64.
+    extern int turbo3_cpu_wht_group_size;
+    int group_size = turbo3_cpu_wht_group_size;
+    if (group_size != 64 && group_size != 128) {
+        group_size = (k % 128 == 0) ? 128 : 64;
+    }
+    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
+    assert(k % group_size == 0);
+
+    const int n_groups = k / group_size;
+    const int blocks_per_group = group_size / QK_TURBO3;
+
+    for (int g = 0; g < n_groups; g++) {
+        const float * grp_src = x + g * group_size;
+        block_turbo3_0 * grp_dst = y + g * blocks_per_group;
+
+        // 1. L2 norm over the group
+        float norm_sq = 0.0f;
+        float buf[128];  // max group_size
+        for (int j = 0; j < group_size; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+        // 2. Normalize
+        for (int j = 0; j < group_size; j++) buf[j] *= inv_norm;
+
+        // 3. Forward WHT rotation
+        turbo_cpu_fwht(buf, group_size);
+
+        // 4. Quantize + pack into sub-blocks
+        float recon_sq = 0.0f;
+        for (int b = 0; b < blocks_per_group; b++) {
+            block_turbo3_0 * blk = &grp_dst[b];
+            const int off = b * QK_TURBO3;
+
+            memset(blk->qs, 0, QK_TURBO3 / 4);
+            memset(blk->signs, 0, QK_TURBO3 / 8);
+
+            for (int j = 0; j < QK_TURBO3; j++) {
+                int idx = nearest_centroid_3bit(buf[off + j]);
+                blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                if (idx & 0x4) {
+                    blk->signs[j / 8] |= (1 << (j % 8));
+                }
+                recon_sq += CENTROIDS_3BIT[idx] * CENTROIDS_3BIT[idx];
+            }
+        }
+
+        // 5. Corrected norm: grp_norm / recon_norm (matching CUDA kernel)
+        float recon_norm = sqrtf(recon_sq);
+        float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            grp_dst[b].norm = GGML_FP32_TO_FP16(corrected);
+        }
     }
 }
 

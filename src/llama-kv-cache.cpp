@@ -219,6 +219,7 @@ llama_kv_cache::llama_kv_cache(
             type_v = GGML_TYPE_Q8_0;
         }
 
+
         const bool has_k = true;
         const bool has_v = !is_mla;
 
