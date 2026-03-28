@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ChatMessage } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
@@ -78,6 +79,13 @@
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
 			refreshAllMessages();
+		},
+
+		forkConversation: async (
+			message: DatabaseMessage,
+			options: { name: string; includeAttachments: boolean }
+		) => {
+			await conversationsStore.forkConversation(message.id, options);
 		}
 	});
 
@@ -140,13 +148,18 @@
 	});
 </script>
 
-<div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
+<div
+	class="flex h-full flex-col space-y-10 pt-24 {className}"
+	style="height: auto; min-height: calc(100dvh - 14rem);"
+>
 	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
-		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
-			{message}
-			{isLastAssistantMessage}
-			{siblingInfo}
-		/>
+		<div use:fadeInView>
+			<ChatMessage
+				class="mx-auto w-full max-w-[48rem]"
+				{message}
+				{isLastAssistantMessage}
+				{siblingInfo}
+			/>
+		</div>
 	{/each}
 </div>

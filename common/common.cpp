@@ -656,6 +656,97 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     return true;
 }
 
+static inline bool glob_class_match(const char c, const char * pattern, const char * class_end) {
+    const char * class_start = pattern;
+    bool negated = false;
+
+    if (*class_start == '!') {
+        negated = true;
+        class_start++;
+    }
+
+    // If first character after negation is ']' or '-', treat it as literal
+    if (*class_start == ']' || *class_start == '-') {
+        if (class_start < class_end && *class_start == c) {
+            return !negated;
+        }
+        class_start++;
+    }
+
+    bool matched = false;
+
+    while (class_start < class_end) {
+        if (class_start + 2 < class_end && class_start[1] == '-' && class_start[2] != ']') {
+            char start_char = *class_start;
+            char end_char = class_start[2];
+            if (c >= start_char && c <= end_char) {
+                matched = true;
+                break;
+            }
+            class_start += 3;
+        } else {
+            if (*class_start == c) {
+                matched = true;
+                break;
+            }
+            class_start++;
+        }
+    }
+
+    return negated ? !matched : matched;
+}
+
+// simple glob: * matches non-/ chars, ** matches anything including /, [] matches character class
+static inline bool glob_match(const char * pattern, const char * str) {
+    if (*pattern == '\0') {
+        return *str == '\0';
+    }
+    if (pattern[0] == '*' && pattern[1] == '*') {
+        const char * p = pattern + 2;
+        if (glob_match(p, str)) return true;
+        if (*str != '\0') return glob_match(pattern, str + 1);
+        return false;
+    }
+    if (*pattern == '*') {
+        const char * p = pattern + 1;
+        for (; *str != '\0' && *str != '/'; str++) {
+            if (glob_match(p, str)) return true;
+        }
+        return glob_match(p, str);
+    }
+    if (*pattern == '?' && *str != '\0' && *str != '/') {
+        return glob_match(pattern + 1, str + 1);
+    }
+    if (*pattern == '[') {
+        const char * class_end = pattern + 1;
+        // If first character after '[' is ']' or '-', treat it as literal
+        if (*class_end == ']' || *class_end == '-') {
+            class_end++;
+        }
+        while (*class_end != '\0' && *class_end != ']') {
+            class_end++;
+        }
+        if (*class_end == ']') {
+            if (*str == '\0') return false;
+            bool matched = glob_class_match(*str, pattern + 1, class_end);
+            return matched && glob_match(class_end + 1, str + 1);
+        } else {
+            if (*str == '[') {
+                return glob_match(pattern + 1, str + 1);
+            }
+            return false;
+        }
+    }
+    if (*pattern == *str) {
+        return glob_match(pattern + 1, str + 1);
+    }
+    return false;
+}
+
+bool glob_match(const std::string & pattern, const std::string & str) {
+    return glob_match(pattern.c_str(), str.c_str());
+}
+
 //
 // Filesystem utils
 //

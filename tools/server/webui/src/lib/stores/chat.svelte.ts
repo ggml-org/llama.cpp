@@ -1207,7 +1207,6 @@ class ChatStore {
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
 				await DatabaseService.updateMessage(msg.id, { content: newContent });
-				await conversationsStore.updateCurrentNode(msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: newContent });
 			}
 
@@ -1266,35 +1265,53 @@ class ChatStore {
 		let result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) result = this.getMessageByIdWithRole(messageId, MessageRole.SYSTEM);
 		if (!result) return;
-		const { message: msg } = result;
+		const { message: msg, index: idx } = result;
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			const isFirstUserMessage =
 				msg.role === MessageRole.USER && rootMessage && msg.parent === rootMessage.id;
-			const parentId = msg.parent || rootMessage?.id;
-			if (!parentId) return;
 			const extrasToUse =
 				newExtras !== undefined
 					? JSON.parse(JSON.stringify(newExtras))
 					: msg.extra
 						? JSON.parse(JSON.stringify(msg.extra))
 						: undefined;
-			const newMessage = await DatabaseService.createMessageBranch(
-				{
-					convId: msg.convId,
-					type: msg.type,
-					timestamp: Date.now(),
-					role: msg.role,
+
+			let messageIdForResponse: string;
+
+			if (msg.children.length === 0) {
+				// No responses after this message — update in place instead of branching
+				const updates: Partial<DatabaseMessage> = {
 					content: newContent,
-					toolCalls: msg.toolCalls || '',
-					children: [],
-					extra: extrasToUse,
-					model: msg.model
-				},
-				parentId
-			);
-			await conversationsStore.updateCurrentNode(newMessage.id);
+					timestamp: Date.now(),
+					extra: extrasToUse
+				};
+				await DatabaseService.updateMessage(msg.id, updates);
+				conversationsStore.updateMessageAtIndex(idx, updates);
+				messageIdForResponse = msg.id;
+			} else {
+				// Has children — create a new branch as sibling
+				const parentId = msg.parent || rootMessage?.id;
+				if (!parentId) return;
+				const newMessage = await DatabaseService.createMessageBranch(
+					{
+						convId: msg.convId,
+						type: msg.type,
+						timestamp: Date.now(),
+						role: msg.role,
+						content: newContent,
+						toolCalls: msg.toolCalls || '',
+						children: [],
+						extra: extrasToUse,
+						model: msg.model
+					},
+					parentId
+				);
+				await conversationsStore.updateCurrentNode(newMessage.id);
+				messageIdForResponse = newMessage.id;
+			}
+
 			conversationsStore.updateConversationTimestamp();
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationTitleWithConfirmation(
@@ -1302,7 +1319,8 @@ class ChatStore {
 					newContent.trim()
 				);
 			await conversationsStore.refreshActiveMessages();
-			if (msg.role === MessageRole.USER) await this.generateResponseForMessage(newMessage.id);
+			if (msg.role === MessageRole.USER)
+				await this.generateResponseForMessage(messageIdForResponse);
 		} catch (error) {
 			console.error('Failed to edit message with branching:', error);
 		}
@@ -1479,6 +1497,8 @@ class ChatStore {
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
 
 		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
+
+		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
