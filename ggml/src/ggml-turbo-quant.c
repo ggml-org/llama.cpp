@@ -170,6 +170,26 @@ static int nearest_centroid_3bit(float val) {
     return 7;
 }
 
+static int nearest_centroid_4bit(float val) {
+    /* 16 centroids, optimal for N(0, 1/sqrt(128)), find nearest via midpoints */
+    if (val < -0.145560f) return 0;
+    if (val < -0.103361f) return 1;
+    if (val < -0.079142f) return 2;
+    if (val < -0.060009f) return 3;
+    if (val < -0.043430f) return 4;
+    if (val < -0.028293f) return 5;
+    if (val < -0.013963f) return 6;
+    if (val <  0.000000f) return 7;
+    if (val <  0.013963f) return 8;
+    if (val <  0.028293f) return 9;
+    if (val <  0.043430f) return 10;
+    if (val <  0.060009f) return 11;
+    if (val <  0.079142f) return 12;
+    if (val <  0.103361f) return 13;
+    if (val <  0.145560f) return 14;
+    return 15;
+}
+
 /* ---------- TURBO3_0: 2-bit PolarQuant + 1-bit QJL ---------- */
 
 void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * GGML_RESTRICT y, int64_t k) {
@@ -247,7 +267,29 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         float rotated[TURBO_D];
         matvec(turbo_rotation, normalized, rotated, d);
 
-        /* Step 3: 3-bit quantization */
+#if TURBO4_USE_4BIT
+        /* Step 3: 4-bit quantization (16 centroids) */
+        static const float CENTROIDS_4BIT[16] = {
+            -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+            -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+             0.006938f,  0.020989f,  0.035597f,  0.051262f,
+             0.068756f,  0.089527f,  0.117195f,  0.173926f
+        };
+        uint8_t indices[TURBO_D];
+        for (int i = 0; i < d; i++) {
+            indices[i] = (uint8_t)nearest_centroid_4bit(rotated[i]);
+        }
+
+        /* Norm correction */
+        float recon_norm_sq = 0.0f;
+        for (int i = 0; i < d; i++) {
+            recon_norm_sq += CENTROIDS_4BIT[indices[i]] * CENTROIDS_4BIT[indices[i]];
+        }
+        float recon_norm = sqrtf(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? norm / recon_norm : norm;
+        y[block].norm = GGML_FP32_TO_FP16(corrected_norm);
+#else
+        /* Step 3: 3-bit quantization (8 centroids) */
         uint8_t indices[TURBO_D];
         for (int i = 0; i < d; i++) {
             indices[i] = (uint8_t)nearest_centroid_3bit(rotated[i]);
@@ -266,10 +308,10 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
             residual[i] = normalized[i] - mse_recon[i];
         }
 
-
         /* Step 5: QJL */
         float projected[TURBO_D];
         matvec(turbo_qjl_matrix, residual, projected, d);
+#endif
 
         /* Pack */
         y[block].norm  = GGML_FP32_TO_FP16(norm);
