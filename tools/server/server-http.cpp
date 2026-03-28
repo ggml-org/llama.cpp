@@ -113,16 +113,10 @@ bool server_http_context::init(const common_params & params) {
     srv->set_read_timeout (params.timeout_read);
     srv->set_write_timeout(params.timeout_write);
     srv->set_socket_options([reuse_port = params.reuse_port](socket_t sock) {
-        int opt = 1;
-#ifdef _WIN32
-        const char * optval = (const char *)&opt;
-#else
-        const void * optval = &opt;
-#endif
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, optval, sizeof(opt));
+        httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1);
         if (reuse_port) {
 #ifdef SO_REUSEPORT
-            setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, optval, sizeof(opt));
+            httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEPORT, 1);
 #else
             LOG_WRN("%s: SO_REUSEPORT is not supported\n", __func__);
 #endif
