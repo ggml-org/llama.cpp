@@ -42,7 +42,7 @@ LONG_PROMPT = (
 )
 
 
-# idle slot cleared by LLAMA_KV_KEEP_ONLY_ACTIVE should restore from cache-ram
+# idle slot cleared on release should restore from cache-ram
 def test_clear_and_restore():
     global server
     server.start()
@@ -59,7 +59,10 @@ def test_clear_and_restore():
     assert res.status_code == 200
     original_prompt_n = res.body["timings"]["prompt_n"]
 
-    # Request on slot 1 triggers batch, clearing idle slot 0
+    # Slot 0 is the only slot with KV — should NOT be cleared
+    assert "clearing prompt with" not in log.drain()
+
+    # Launching slot 1 clears idle slot 0
     res = server.make_request("POST", "/completion", data={
         "prompt": "The quick brown fox",
         "id_slot": 1,
@@ -77,3 +80,11 @@ def test_clear_and_restore():
     assert "updating prompt cache" in log.drain()
     assert res.body["timings"]["cache_n"] > 0
     assert res.body["timings"]["prompt_n"] < original_prompt_n
+
+    # Follow-up — slot 0 kept its KV, no clearing needed
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT + " The knight finally reached the castle gates.",
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert "clearing prompt with" not in log.drain()

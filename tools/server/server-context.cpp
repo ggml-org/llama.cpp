@@ -606,6 +606,15 @@ private:
         llama_batch_free(batch);
     }
 
+    void slot_save_and_clear(server_slot & slot) {
+        if (slot.prompt.n_tokens() == 0) {
+            return;
+        }
+        slot.prompt_save(*prompt_cache);
+        slot.prompt_clear(false);
+        prompt_cache->update();
+    }
+
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
@@ -790,11 +799,15 @@ private:
                 queue_tasks.pop_deferred_task(id_slot);
 
                 if (kv_keep_only_active) {
-                    auto & slot = slots[id_slot];
-                    if (slot.prompt.n_tokens() > 0) {
-                        slot.prompt_save(*prompt_cache);
-                        slot.prompt_clear(false);
-                        prompt_cache->update();
+                    bool should_clear = false;
+                    for (const auto & s : slots) {
+                        if (s.id != id_slot && s.prompt.n_tokens() > 0) {
+                            should_clear = true;
+                            break;
+                        }
+                    }
+                    if (should_clear) {
+                        slot_save_and_clear(slots[id_slot]);
                     }
                 }
             };
@@ -1100,6 +1113,14 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        if (kv_keep_only_active) {
+            for (auto & s : slots) {
+                if (s.id != slot.id && !s.is_processing()) {
+                    slot_save_and_clear(s);
+                }
+            }
+        }
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
