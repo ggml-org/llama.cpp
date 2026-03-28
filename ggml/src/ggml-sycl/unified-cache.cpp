@@ -3913,18 +3913,22 @@ bool unified_cache::stage_expert_group(int                          block_id,
         //    Fills are submitted WITHOUT a per-expert dq.wait().  This allows
         //    BCS H2D copies and CCS reorder kernels to pipeline across experts.
         //    The caller batches experts and calls get_dma_queue().wait() +
-        //    finalize_pending_fills() at batch boundaries.
-        sycl::queue & dq = get_dma_queue();
+        //    get_bcs_queue().wait() + finalize_pending_fills() at batch boundaries.
+        //    Raw H2D copies go through BCS (copy-only engine) to keep CCS free.
+        //    Fill functions receive DMA queue and internally route H2D to BCS.
+        sycl::queue & dq  = get_dma_queue();
+        sycl::queue & bcs = get_bcs_queue();
         sycl::event   last_event;
         for (auto & s : slots) {
             if (s.was_existing) continue;
             if (s.req && s.req->fill_fn) {
                 // Use the caller-provided fill function (GPU reorder, CPU reorder, etc.)
+                // Fill functions route H2D to BCS internally via ctx->bcs_queue.
                 last_event =
                     s.req->fill_fn(dq, s.ptr, s.data->dst_size, s.data->src_ptr, s.data->src_size, s.req->fill_ctx, {});
             } else if (s.data->src_ptr && s.data->src_size > 0) {
-                // Raw DMA copy
-                last_event = dq.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
+                // Raw DMA copy — route to BCS (copy engine) to keep CCS free
+                last_event = bcs.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
             }
         }
 
@@ -4001,15 +4005,16 @@ bool unified_cache::stage_expert_group(int                          block_id,
         return false;
     }
 
-    // Fill all tensors using DMA queue (raw memcpy path) — no per-expert wait
-    sycl::queue & dq = get_dma_queue();
+    // Fill all tensors using BCS queue (copy-only engine) — no per-expert wait.
+    // Raw H2D copies go through BCS to keep CCS free and prevent GT engine resets.
+    sycl::queue & bcs = get_bcs_queue();
     sycl::event   last_event;
     for (auto & s : slots) {
         if (s.was_existing) continue;
 
         try {
             size_t copy_size = std::min(s.data->src_size, s.data->dst_size);
-            last_event       = dq.memcpy(s.ptr, s.data->src_ptr, copy_size);
+            last_event       = bcs.memcpy(s.ptr, s.data->src_ptr, copy_size);
         } catch (...) {
             GGML_LOG_WARN("[UNIFIED-CACHE] stage_expert_group: DMA memcpy "
                           "failed blk=%d exp=%d\n", block_id, expert_id_arg);

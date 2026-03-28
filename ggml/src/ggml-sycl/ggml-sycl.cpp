@@ -1615,8 +1615,10 @@ static void moe_prestage_popular_experts() {
                     req.fill_fn          = nullptr;
                     req.fill_ctx         = nullptr;
 
+                    // Route raw H2D to BCS (copy engine) on the secondary GPU.
+                    sycl::queue * sec_bcs = &budget.cache->get_bcs_queue();
                     try {
-                        auto result = budget.cache->ensure_cached_layout(req, {});
+                        auto result = budget.cache->ensure_cached_layout(req, {}, sec_bcs);
                         if ((result.status == ggml_sycl::cache_layout_status::READY ||
                              result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
                             && result.device_ptr) {
@@ -1776,8 +1778,13 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     req.fill_fn          = ggml_sycl_fill_reordered_host;
     req.fill_ctx         = &reorder_ctx;
 
+    // Route H2D to BCS (copy-only) queue to keep SOA reorder off CCS.
+    // Without this, runtime expert staging during inference monopolizes CCS
+    // and can trigger xe driver GT engine resets (>640ms preempt timeout).
+    sycl::queue * bcs_q = &cache->get_bcs_queue();
+
     try {
-        auto result = cache->ensure_cached_layout(req, {});
+        auto result = cache->ensure_cached_layout(req, {}, bcs_q);
         if ((result.status == cache_layout_status::READY ||
              result.status == cache_layout_status::IN_PROGRESS) && result.device_ptr) {
             // Cache already tracks the pointer — no separate table needed.
@@ -3056,9 +3063,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                                 total_uploaded, info.layer_id, info.expert_idx,
                                 budget.dev, (int)info.tensor->type, dst_bytes);
 
+                // Route H2D to BCS (copy engine) on the secondary GPU to prevent
+                // CCS monopolization during Phase 2 expert uploads.
+                sycl::queue * phase2_bcs = &budget.cache->get_bcs_queue();
+
                 cache_layout_result result{};
                 try {
-                    result = budget.cache->ensure_cached_layout(req, {});
+                    result = budget.cache->ensure_cached_layout(req, {}, phase2_bcs);
                 } catch (const std::exception & e) {
                     GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout EXCEPTION: %s\n", e.what());
                     free_staging();
@@ -10185,7 +10196,9 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
             req.fill_ctx = &tiled_ctx;
 #endif
         }
-        ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
+        // Route H2D to BCS (copy engine) to keep CCS free during MoE preload.
+        sycl::queue * bcs_q = &cache->get_bcs_queue();
+        ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {}, bcs_q);
 
         if (result.status == ggml_sycl::cache_layout_status::READY ||
             result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
@@ -10304,6 +10317,17 @@ static void ggml_sycl_preload_model_weights() {
             // (pending_dense tracking removed — S1-PRELOAD uses ensure_cached_layout which
             // handles allocation + fill + registration atomically)
 
+            // Route H2D through BCS (copy-only) queue to keep CCS free.
+            // For 120B models, S1-PRELOAD uploads ~5 GB of attention weights.
+            // Without BCS routing, all H2D memcpy + reorder kernels go to CCS,
+            // which can monopolize the compute engine and trigger GT resets.
+            sycl::queue * bcs_q = &cache->get_bcs_queue();
+
+            // Yield counter: periodically wait + finalize to prevent unbounded
+            // CCS command list growth that triggers xe driver GT engine resets.
+            constexpr size_t S1_YIELD_INTERVAL = 50;
+            size_t           s1_submit_count   = 0;
+
             // Submit all H2D copies for this device without waiting
             for (size_t idx : indices) {
                 const auto & item   = items[idx];
@@ -10354,7 +10378,7 @@ static void ggml_sycl_preload_model_weights() {
                         req.validate_content = false;
                         req.skip_fill_wait   = true;  // Async — no wait per expert
 
-                        auto result = cache->ensure_cached_layout(req, {});
+                        auto result = cache->ensure_cached_layout(req, {}, bcs_q);
                         if (result.status == ggml_sycl::cache_layout_status::READY ||
                             result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                             any_cached = true;
@@ -10447,7 +10471,7 @@ static void ggml_sycl_preload_model_weights() {
                         req.fill_ctx = &reorder_ctx;
                     }
 
-                    auto result = cache->ensure_cached_layout(req, {});
+                    auto result = cache->ensure_cached_layout(req, {}, bcs_q);
                     if (result.status == ggml_sycl::cache_layout_status::READY ||
                         result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                         dense_cached++;
@@ -10458,10 +10482,26 @@ static void ggml_sycl_preload_model_weights() {
                         dense_failed++;
                     }
                 }
+
+                // Periodic yield: flush pending H2D and finalize to prevent
+                // unbounded CCS command list growth during S1-PRELOAD.
+                // For 120B models with ~5 GB of attention weights, this prevents
+                // the xe driver GT engine reset triggered by >640ms CCS monopolization.
+                s1_submit_count++;
+                if (s1_submit_count % S1_YIELD_INTERVAL == 0) {
+                    try {
+                        cache->get_bcs_queue().wait();
+                        stream.wait();
+                        cache->finalize_pending_fills();
+                    } catch (...) {
+                    }
+                    ggml_sycl_watchdog_heartbeat();
+                }
             }
 
-            // Single wait for ALL H2D copies on this device
+            // Final wait for remaining H2D copies on this device
             try {
+                cache->get_bcs_queue().wait();
                 stream.wait();
             } catch (const sycl::exception & e) {
                 GGML_LOG_ERROR("[S1-PRELOAD] queue.wait() failed: %s\n", e.what());
@@ -11003,17 +11043,18 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         }
     }
 
-    // Fallback: ensure_cached_layout on the DMA queue (separate from compute).
+    // Fallback: ensure_cached_layout on the BCS queue (copy engine, separate from CCS).
     // This handles:
     // - Warmup: first-time SOA conversion for each weight
     // - PP: AOS layout request when S1-PRELOAD stored SOA (needs AOS copy)
     // - Any cache miss (weight not yet in VRAM)
-    // The DMA queue prevents DirectSubmission controller timeout issues.
+    // The BCS queue keeps H2D off CCS, preventing GT engine resets from long-running
+    // copy+reorder chains that exceed the xe driver preempt timeout (640ms).
 
     // Warmup/first-access: use ensure_cached_layout.
     // For 120B models post-warmup, this path is never reached (post_warmup_host returns nullptr above).
-    // Use DMA queue for 120B; for models that fit in VRAM, use compute queue for compatibility.
-    sycl::queue * override_q              = ggml_backend_sycl_all_weights_host() ? &cache->get_dma_queue() : nullptr;
+    // Use BCS queue for 120B; for models that fit in VRAM, use compute queue for compatibility.
+    sycl::queue * override_q              = ggml_backend_sycl_all_weights_host() ? &cache->get_bcs_queue() : nullptr;
     ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {}, override_q);
     bool                           had_exception = false;
     for (int attempt = 0; attempt < 3 && result.status == ggml_sycl::cache_layout_status::IN_PROGRESS; ++attempt) {

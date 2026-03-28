@@ -186,9 +186,13 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     clr.fill_fn          = fill_reordered_host;
     clr.fill_ctx         = &rctx;
 
+    // Route H2D to BCS (copy-only) queue so prefetch DMA doesn't monopolize
+    // CCS and trigger xe driver GT engine resets during inference.
+    sycl::queue * bcs_q = &cache->get_bcs_queue();
+
     cache_layout_result cr;
     try {
-        cr = cache->ensure_cached_layout(clr, {});
+        cr = cache->ensure_cached_layout(clr, {}, bcs_q);
     } catch (...) {
         return false;
     }
