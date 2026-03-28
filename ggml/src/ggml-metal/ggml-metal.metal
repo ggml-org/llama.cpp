@@ -518,6 +518,28 @@ constant float turbo_mid_2bit[3] = { -0.086728f, 0.0f, 0.086728f };
 // Midpoints for 3-bit
 constant float turbo_mid_3bit[7] = { -0.154259f, -0.091775f, -0.043589f, 0.0f, 0.043589f, 0.091775f, 0.154259f };
 
+// 4-bit PolarQuant centroids (16 levels) — optimal for N(0, 1/sqrt(128))
+constant float turbo_centroids_4bit[16] = {
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+};
+constant float turbo_mid_4bit[15] = {
+    -0.145560f, -0.103361f, -0.079142f, -0.060009f,
+    -0.043430f, -0.028293f, -0.013963f,  0.000000f,
+     0.013963f,  0.028293f,  0.043430f,  0.060009f,
+     0.079142f,  0.103361f,  0.145560f
+};
+
+// Half-precision 4-bit centroid LUT for vec path
+constant half turbo_centroids_4bit_h[16] = {
+    -0.173926h, -0.117195h, -0.089527h, -0.068756h,
+    -0.051262h, -0.035597h, -0.020989h, -0.006938h,
+     0.006938h,  0.020989h,  0.035597h,  0.051262h,
+     0.068756h,  0.089527h,  0.117195h,  0.173926h
+};
+
 // Quantize 32 elements into one block_turbo3_0 (NO rotation — rotation happens
 // at the 128-element group level in kernel_set_rows_turbo)
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
@@ -815,18 +837,16 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
 static void turbo4_dequantize_full_block(device const block_turbo4_0 * xb, thread float * cache) {
     const float norm = float(xb->norm);
 
-    // 2+1 bit unpack (byte-aligned, matching turbo3 scheme)
-    // Low 2 bits from qs[], high 1 bit from signs[]
+    // 4-bit nibble unpack — 2 elements per byte, simple and fast
     for (int j = 0; j < 128; j++) {
-        uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
-        cache[j] = turbo_centroids_3bit[lo2 | hi1] * norm;
+        uint8_t idx = (xb->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
+        cache[j] = turbo_centroids_4bit[idx] * norm;
     }
 }
 
 template <typename type4x4>
 void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type4x4 & reg) {
-    // Direct 16-element extraction — same as turbo3 pattern but for 128-element blocks
+    // Direct 16-element extraction — 4-bit nibble unpack
     const float norm = float(xb->norm);
     const int base = il * 16;
     float4x4 reg_f;
@@ -834,9 +854,8 @@ void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type
     for (int g = 0; g < 4; g++) {
         for (int k = 0; k < 4; k++) {
             const int j = base + g * 4 + k;
-            uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-            uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
-            reg_f[g][k] = turbo_centroids_3bit[lo2 | hi1] * norm;
+            uint8_t idx = (xb->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
+            reg_f[g][k] = turbo_centroids_4bit[idx] * norm;
         }
     }
     reg = (type4x4) reg_f;
@@ -844,17 +863,21 @@ void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type
 
 template <typename type4>
 void dequantize_turbo4_0_t4(device const block_turbo4_0 * xb, short il, thread type4 & reg) {
-    // Direct 4-element extraction — no full-block dequant needed.
-    // 2+1 bit packing: low 2 bits in qs[], high 1 bit in signs[]
+    // Direct 4-element extraction — 4-bit nibble unpack, half LUT + float norm
     const float norm = float(xb->norm);
     const int base = il * 4;
 
-    for (int i = 0; i < 4; i++) {
-        const int j = base + i;
-        uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
-        uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
-        reg[i] = turbo_centroids_3bit[lo2 | hi1] * norm;
-    }
+    // Read one byte = 2 nibbles
+    const int byte_idx = base / 2;
+    const uint8_t qb = xb->qs[byte_idx];
+    const uint8_t qb2 = xb->qs[byte_idx + 1];
+
+    reg = type4(float4(
+        float(turbo_centroids_4bit_h[(qb      ) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb  >> 4) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb2     ) & 0xF]) * norm,
+        float(turbo_centroids_4bit_h[(qb2 >> 4) & 0xF]) * norm
+    ));
 }
 
 template <typename type4x4>
@@ -10010,33 +10033,39 @@ kernel void kernel_set_rows_turbo4(
         // Step 2: WHT rotate in-place
         turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
 
-        // Step 3: 3-bit PolarQuant — 2+1 bit packing (byte-aligned, like turbo3)
-        // Low 2 bits in qs[] (4 indices per byte), high 1 bit in signs[] (8 per byte)
-        for (int j = 0; j < QK_TURBO4 / 4; j++) blk.qs[j] = 0;
-        for (int j = 0; j < QK_TURBO4 / 8; j++) blk.signs[j] = 0;
+        // Step 3: 4-bit PolarQuant — nibble packing (2 indices per byte)
+        for (int j = 0; j < QK_TURBO4 / 2; j++) blk.qs[j] = 0;
+        for (int j = 0; j < QK_TURBO4 / 8; j++) blk.signs[j] = 0;  // unused
 
         float recon_norm_sq = 0.0f;
         for (int j = 0; j < 128; j++) {
             float val = x[j];
             uint8_t idx;
-            if      (val < turbo_mid_3bit[0]) idx = 0;
-            else if (val < turbo_mid_3bit[1]) idx = 1;
-            else if (val < turbo_mid_3bit[2]) idx = 2;
-            else if (val < turbo_mid_3bit[3]) idx = 3;
-            else if (val < turbo_mid_3bit[4]) idx = 4;
-            else if (val < turbo_mid_3bit[5]) idx = 5;
-            else if (val < turbo_mid_3bit[6]) idx = 6;
-            else                              idx = 7;
+            if      (val < turbo_mid_4bit[ 0]) idx = 0;
+            else if (val < turbo_mid_4bit[ 1]) idx = 1;
+            else if (val < turbo_mid_4bit[ 2]) idx = 2;
+            else if (val < turbo_mid_4bit[ 3]) idx = 3;
+            else if (val < turbo_mid_4bit[ 4]) idx = 4;
+            else if (val < turbo_mid_4bit[ 5]) idx = 5;
+            else if (val < turbo_mid_4bit[ 6]) idx = 6;
+            else if (val < turbo_mid_4bit[ 7]) idx = 7;
+            else if (val < turbo_mid_4bit[ 8]) idx = 8;
+            else if (val < turbo_mid_4bit[ 9]) idx = 9;
+            else if (val < turbo_mid_4bit[10]) idx = 10;
+            else if (val < turbo_mid_4bit[11]) idx = 11;
+            else if (val < turbo_mid_4bit[12]) idx = 12;
+            else if (val < turbo_mid_4bit[13]) idx = 13;
+            else if (val < turbo_mid_4bit[14]) idx = 14;
+            else                               idx = 15;
 
-            // 2+1 bit pack: low 2 bits in qs, high bit in signs
-            blk.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
-            if (idx & 0x4) blk.signs[j / 8] |= (1 << (j % 8));
+            // 4-bit nibble pack: 2 elements per byte
+            blk.qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
 
-            float c = turbo_centroids_3bit[idx];
+            float c = turbo_centroids_4bit[idx];
             recon_norm_sq += c * c;
         }
 
-        blk.rnorm = half(0.0f);  // unused without QJL
+        blk.rnorm = half(0.0f);  // unused
 
         // Norm correction
         float recon_norm = sqrt(recon_norm_sq);
