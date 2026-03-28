@@ -103,6 +103,7 @@ class ServerProcess:
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    no_kv_clear_idle: bool = False
     log_path: str | None = None
     webui_mcp_proxy: bool = False
 
@@ -241,6 +242,8 @@ class ServerProcess:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.no_kv_clear_idle:
+            server_args.append("--no-kv-clear-idle")
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
 

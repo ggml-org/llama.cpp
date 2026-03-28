@@ -88,3 +88,29 @@ def test_clear_and_restore():
     })
     assert res.status_code == 200
     assert "clearing prompt with" not in log.drain()
+
+
+def test_disabled_with_flag():
+    global server
+    server.no_kv_clear_idle = True
+    server.start()
+    log = LogReader(server.log_path)
+
+    # Feature should not be enabled
+    assert "kv-clear-idle" not in log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    # Request on different slot — should NOT trigger clearing
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert "clearing prompt with" not in log.drain()
