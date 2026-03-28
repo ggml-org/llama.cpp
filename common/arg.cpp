@@ -1239,6 +1239,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
+        {"--kv-budget-mb"}, "N",
+        "cap KV cache at N megabytes, 0 = unbounded (default: 0)",
+        [](common_params & params, int value) {
+            params.kv_budget_bytes = (uint64_t)value * 1024 * 1024;
+        }
+    ).set_env("LLAMA_ARG_KV_BUDGET_MB").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--kv-budget-tokens"}, "N",
+        "cap KV cache at N tokens, 0 = unbounded (default: 0)",
+        [](common_params & params, int value) {
+            params.kv_budget_tokens = (uint32_t)value;
+        }
+    ).set_env("LLAMA_ARG_KV_BUDGET_TOKENS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
         string_format(
             ex == LLAMA_EXAMPLE_COMPLETION

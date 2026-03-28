@@ -20,6 +20,9 @@ struct llama_memory_params {
 
     // use full-size SWA cache
     bool swa_full;
+
+    // KV Direct: 0 = unbounded (default)
+    uint32_t kv_budget_tokens;
 };
 
 enum llama_memory_status {
