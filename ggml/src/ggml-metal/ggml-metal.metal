@@ -826,25 +826,34 @@ static void turbo4_dequantize_full_block(device const block_turbo4_0 * xb, threa
 
 template <typename type4x4>
 void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type4x4 & reg) {
-    float cache[128];
-    turbo4_dequantize_full_block(xb, cache);
-
-    const int offset = il * 16;
+    // Direct 16-element extraction — same as turbo3 pattern but for 128-element blocks
+    const float norm = float(xb->norm);
+    const int base = il * 16;
     float4x4 reg_f;
-    for (int i = 0; i < 16; i++) {
-        reg_f[i/4][i%4] = cache[offset + i];
+
+    for (int g = 0; g < 4; g++) {
+        for (int k = 0; k < 4; k++) {
+            const int j = base + g * 4 + k;
+            uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
+            reg_f[g][k] = turbo_centroids_3bit[lo2 | hi1] * norm;
+        }
     }
     reg = (type4x4) reg_f;
 }
 
 template <typename type4>
 void dequantize_turbo4_0_t4(device const block_turbo4_0 * xb, short il, thread type4 & reg) {
-    float cache[128];
-    turbo4_dequantize_full_block(xb, cache);
+    // Direct 4-element extraction — no full-block dequant needed.
+    // 2+1 bit packing: low 2 bits in qs[], high 1 bit in signs[]
+    const float norm = float(xb->norm);
+    const int base = il * 4;
 
-    const int offset = il * 4;
     for (int i = 0; i < 4; i++) {
-        reg[i] = cache[offset + i];
+        const int j = base + i;
+        uint8_t lo2 = (xb->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+        uint8_t hi1 = (xb->signs[j / 8] & (1 << (j % 8))) ? 4 : 0;
+        reg[i] = turbo_centroids_3bit[lo2 | hi1] * norm;
     }
 }
 
