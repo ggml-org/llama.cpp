@@ -122,6 +122,7 @@ public:
     // TurboQuant: delegate to the KV cache context
     ggml_tensor * get_turbo_rot_forward() const override;
     ggml_tensor * get_turbo_rot_inverse() const override;
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
 
     //
     // llama_memory_hybrid_context

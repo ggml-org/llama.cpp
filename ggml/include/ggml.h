@@ -2551,7 +2551,8 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   direction,
-            int                   group_size);  // 0 = auto (64 or 128 from ne[0])
+            int                   group_size,    // 0 = auto (64 or 128 from ne[0])
+            struct ggml_tensor  * scale);        // NULL = no InnerQ scaling
 
     // custom operators
 

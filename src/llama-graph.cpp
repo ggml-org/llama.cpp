@@ -1989,7 +1989,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
             if (cur->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
-                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group);  // 1 = inverse
+                ggml_tensor * innerq_scale = mctx ? mctx->get_turbo_innerq_scale_inv() : nullptr;
+                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale);  // 1 = inverse
             }
         }
 
@@ -2066,7 +2067,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
             if (kqv->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
-                kqv = ggml_turbo_wht(ctx0, kqv, 1, turbo_group);
+                ggml_tensor * innerq_scale = mctx ? mctx->get_turbo_innerq_scale_inv() : nullptr;
+                kqv = ggml_turbo_wht(ctx0, kqv, 1, turbo_group, innerq_scale);
             }
         }
 
@@ -2254,7 +2256,8 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
         if (q->ne[0] % 64 == 0) {
             if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-            q = ggml_turbo_wht(ctx0, q, 0, 0);  // 0 = forward, 0 = auto group size from q->ne[0]
+            ggml_tensor * innerq_scale = mctx_cur->get_turbo_innerq_scale_inv();
+            q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);  // 0 = forward, 0 = auto group size from q->ne[0]
         }
     }
 
@@ -2362,7 +2365,8 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
         if (q->ne[0] % 64 == 0) {
             if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-            q = ggml_turbo_wht(ctx0, q, 0, 0);  // 0 = forward, 0 = auto group size
+            ggml_tensor * innerq_scale = mctx_cur->get_turbo_innerq_scale_inv();
+            q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);  // 0 = forward, 0 = auto group size
         }
     }
 

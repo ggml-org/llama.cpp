@@ -278,6 +278,18 @@ static __global__ void k_set_rows_turbo3(
     x[j] = src_row[i_grp * GROUP_SIZE + j];
     __syncthreads();
 
+    // ---- InnerQ: calibrate on original (unscaled) values ----
+    if (d_innerq_calibrating) {
+        atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
+        if (j == 0) atomicAdd(&d_innerq_count, 1);
+    }
+
+    // ---- InnerQ: apply channel scale (only when active) ----
+    if (d_innerq_active) {
+        x[j] *= d_innerq_scale[j];
+    }
+    __syncthreads();
+
     // ---- Step 2: Parallel L2 norm ----
     constexpr int n_warps = GROUP_SIZE / WARP_SIZE;
     __shared__ float warp_accum[n_warps];
@@ -543,6 +555,9 @@ static void set_rows_cuda_turbo3(
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
 
+    // InnerQ: check/finalize calibration before kernel launch
+    turbo_innerq_check_finalize(group_size, ne00);
+
     // Launch 1: full groups with WHT rotation
     if (n_full_groups > 0) {
         const int64_t ne_total = n_full_groups * ne01 * ne02 * ne03;
@@ -626,6 +641,18 @@ static __global__ void k_set_rows_turbo2(
     // ---- Step 1: Load element j (coalesced) ----
     __shared__ float x[GROUP_SIZE];
     x[j] = src_row[i_grp * GROUP_SIZE + j];
+    __syncthreads();
+
+    // ---- InnerQ: calibrate on original (unscaled) values ----
+    if (d_innerq_calibrating) {
+        atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
+        if (j == 0) atomicAdd(&d_innerq_count, 1);
+    }
+
+    // ---- InnerQ: apply channel scale (only when active) ----
+    if (d_innerq_active) {
+        x[j] *= d_innerq_scale[j];
+    }
     __syncthreads();
 
     // ---- Step 2: Parallel L2 norm ----
@@ -869,6 +896,9 @@ static void set_rows_cuda_turbo2(
     const int64_t s10 = nb10/sizeof(idx_t);
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
+
+    // InnerQ: check/finalize calibration before kernel launch
+    turbo_innerq_check_finalize(group_size, ne00);
 
     if (n_full_groups > 0) {
         const int64_t ne_total = n_full_groups * ne01 * ne02 * ne03;

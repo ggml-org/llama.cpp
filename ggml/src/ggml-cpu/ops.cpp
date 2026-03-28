@@ -10633,8 +10633,10 @@ static void ggml_compute_forward_turbo_wht_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
+    const ggml_tensor * scale_tensor = dst->src[1];  // InnerQ scale_inv (may be NULL)
     const float * src_data = (const float *) src->data;
     float * dst_data = (float *) dst->data;
+    const float * scale_inv = scale_tensor ? (const float *) scale_tensor->data : NULL;
 
     int direction;
     int group_size;
@@ -10667,8 +10669,15 @@ static void ggml_compute_forward_turbo_wht_f32(
         float x[128];  // max group_size
         const float * in = src_data + base;
 
+        // InnerQ forward: apply scale_inv BEFORE signs+WHT (for Q pre-rotation)
+        if (direction == 0 && scale_inv != NULL) {
+            for (int i = 0; i < group_size; i++) x[i] = in[i] * scale_inv[i % group_size];
+        } else {
+            for (int i = 0; i < group_size; i++) x[i] = in[i];
+        }
+
         // Apply first signs
-        for (int i = 0; i < group_size; i++) x[i] = in[i] * s_first[i];
+        for (int i = 0; i < group_size; i++) x[i] *= s_first[i];
 
         // WHT butterfly (log2(group_size) stages)
         for (int h = 1; h < group_size; h *= 2) {
@@ -10684,7 +10693,12 @@ static void ggml_compute_forward_turbo_wht_f32(
         // Normalize + second signs
         float * out = dst_data + base;
         for (int i = 0; i < group_size; i++) {
-            out[i] = x[i] * inv_sqrt * s_second[i];
+            float val = x[i] * inv_sqrt * s_second[i];
+            // InnerQ inverse: apply scale_inv AFTER WHT+signs (for V un-rotation)
+            if (direction == 1 && scale_inv != NULL) {
+                val *= scale_inv[i % group_size];
+            }
+            out[i] = val;
         }
     }
 

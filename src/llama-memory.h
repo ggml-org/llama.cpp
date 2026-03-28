@@ -64,6 +64,10 @@ struct llama_memory_context_i {
     // Returns null for non-turbo memory types. Override in KV cache contexts.
     virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
     virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
+
+    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization
+    // Returns nullptr when InnerQ is not active. Override in KV cache contexts.
+    virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;

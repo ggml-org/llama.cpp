@@ -9,6 +9,9 @@
 #pragma once
 
 #include "common.cuh"
+#include "turbo-innerq.cuh"
+#include <cstdlib>
+#include <cmath>
 
 // ---- Quantization ratios for dequantize_block template ----
 #define QR_TURBO3 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
@@ -132,6 +135,160 @@ static __device__ __forceinline__ void turbo_rotate_forward_64(float * x) {
     for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS1_64[i];
     turbo_fwht_64(x);
     for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS2_64[i];
+}
+
+// ---- InnerQ per-channel equalization ----
+// Equalizes K channel variances before WHT rotation to reduce quantization error.
+// Enabled via TURBO_INNERQ=N env var (N = calibration token count).
+// Math: <Q/s, s*K> = <Q, K> preserves dot products.
+// INNERQ_MAX_CHANNELS is defined in turbo-innerq.cuh
+
+static __device__ float d_innerq_scale[INNERQ_MAX_CHANNELS];
+static __device__ float d_innerq_scale_inv[INNERQ_MAX_CHANNELS];
+static __device__ float d_innerq_sq_accum[INNERQ_MAX_CHANNELS];
+static __device__ int   d_innerq_count;
+static __device__ int   d_innerq_active;       // 0 = scales are identity, 1 = scales applied
+static __device__ int   d_innerq_calibrating;  // 1 = accumulating K² stats
+
+static int  innerq_enabled       = 0;  // host: 0=off, 1=calibrating, 2=active
+static int  innerq_target_tokens = 0;
+static float innerq_strength     = 0.5f;
+static bool  innerq_initialized  = false;
+
+// Host: read TURBO_INNERQ env, start calibration if enabled
+static void turbo_innerq_init(void) {
+    if (innerq_initialized) return;
+    innerq_initialized = true;
+
+    const char * env = getenv("TURBO_INNERQ");
+    if (!env || atoi(env) <= 0) {
+        innerq_enabled = 0;
+        return;
+    }
+    innerq_target_tokens = atoi(env);
+    innerq_enabled = 1;  // calibrating
+
+    const char * env_str = getenv("TURBO_INNERQ_STRENGTH");
+    if (env_str) innerq_strength = atof(env_str);
+    if (innerq_strength <= 0.0f || innerq_strength > 1.0f) innerq_strength = 0.5f;
+
+    // Zero accumulators and set calibrating flag on device
+    float zeros[INNERQ_MAX_CHANNELS] = {0};
+    int zero = 0, one = 1;
+    cudaMemcpyToSymbol(d_innerq_sq_accum, zeros, sizeof(zeros));
+    cudaMemcpyToSymbol(d_innerq_count, &zero, sizeof(int));
+    cudaMemcpyToSymbol(d_innerq_active, &zero, sizeof(int));
+    cudaMemcpyToSymbol(d_innerq_calibrating, &one, sizeof(int));
+
+    GGML_LOG_INFO("%s: InnerQ calibration started (target=%d tokens, strength=%.2f)\n",
+                   __func__, innerq_target_tokens, innerq_strength);
+}
+
+// Host: finalize calibration — compute scales, upload, activate
+static void turbo_innerq_finalize(int group_size) {
+    // Read accumulators from device
+    float sq_accum[INNERQ_MAX_CHANNELS];
+    int count = 0;
+    cudaMemcpyFromSymbol(sq_accum, d_innerq_sq_accum, group_size * sizeof(float));
+    cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int));
+
+    if (count <= 0) {
+        GGML_LOG_WARN("%s: InnerQ calibration got 0 tokens, disabling\n", __func__);
+        innerq_enabled = 0;
+        int zero = 0;
+        cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+        return;
+    }
+
+    // Compute per-channel RMS
+    float rms[INNERQ_MAX_CHANNELS];
+    float mean_rms = 0.0f;
+    float max_ratio = 0.0f, min_ratio = 1e30f;
+    for (int i = 0; i < group_size; i++) {
+        rms[i] = sqrtf(sq_accum[i] / (float)count);
+        mean_rms += rms[i];
+    }
+    mean_rms /= (float)group_size;
+
+    // Compute scale[i] = (mean_rms / channel_rms[i])^strength, clamp to [0.5, 2.0]
+    float scale[INNERQ_MAX_CHANNELS];
+    float scale_inv[INNERQ_MAX_CHANNELS];
+    for (int i = 0; i < group_size; i++) {
+        float ratio = (rms[i] > 1e-10f) ? (mean_rms / rms[i]) : 1.0f;
+        float s = powf(ratio, innerq_strength);
+        if (s < 0.5f) s = 0.5f;
+        if (s > 2.0f) s = 2.0f;
+        scale[i] = s;
+        scale_inv[i] = 1.0f / s;
+        if (ratio > max_ratio) max_ratio = ratio;
+        if (ratio < min_ratio) min_ratio = ratio;
+    }
+
+    // Auto-skip if max channel ratio < 1.2 (already balanced)
+    if (max_ratio < 1.2f && min_ratio > (1.0f / 1.2f)) {
+        GGML_LOG_INFO("%s: InnerQ auto-disabled (channels already balanced, max_ratio=%.3f)\n",
+                       __func__, max_ratio);
+        innerq_enabled = 0;
+        int zero = 0;
+        cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+        return;
+    }
+
+    // Stop calibrating, upload scales, activate
+    int zero = 0, one = 1;
+    cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+    cudaMemcpyToSymbol(d_innerq_scale, scale, group_size * sizeof(float));
+    cudaMemcpyToSymbol(d_innerq_scale_inv, scale_inv, group_size * sizeof(float));
+    cudaDeviceSynchronize();  // ensure scales are visible before activating
+    cudaMemcpyToSymbol(d_innerq_active, &one, sizeof(int));
+
+    innerq_enabled = 2;  // active
+
+    // Publish scale_inv to shared host state for cross-TU tensor update
+    turbo_innerq_publish(scale_inv, group_size);
+
+    GGML_LOG_INFO("%s: InnerQ finalized (%d tokens, max_ratio=%.3f, min_ratio=%.3f)\n",
+                   __func__, count, max_ratio, min_ratio);
+}
+
+// Host: called before each set_rows kernel launch
+static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
+    if (!innerq_initialized) {
+        turbo_innerq_init();
+    }
+    if (innerq_enabled == 0) return;
+
+    // InnerQ only works when each WHT group = one head (group_size == head_dim).
+    // For standard models: ne00 = n_heads * head_dim, group_size = head_dim → ne00 % group_size == 0, fine.
+    // For non-standard models (head_dim > group_size, e.g. GLM 576 → 64-group):
+    //   ne00 = head_dim (single head), group_size = 64, ne00/group_size = 9 groups per head → WRONG.
+    // Detect: if ne00 / group_size doesn't divide evenly into standard head counts (1,2,4,8,16,32,64,128),
+    // it's likely multi-group-per-head. Simpler check: group_size < 128 means head_dim > 128.
+    const bool multi_group_per_head = (group_size < 128);  // 64-group → head_dim > 128, multi-group
+    if (multi_group_per_head) {
+        if (innerq_enabled == 1) {
+            GGML_LOG_WARN("%s: InnerQ disabled (ne00=%lld != group_size=%d, multi-group heads)\n",
+                           __func__, (long long)ne00, group_size);
+            innerq_enabled = 0;
+            int zero = 0;
+            cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+        }
+        return;
+    }
+
+    // Check if calibration is complete
+    if (innerq_enabled == 1) {
+        int count = 0;
+        cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int));
+        if (count >= innerq_target_tokens) {
+            turbo_innerq_finalize(group_size);
+        }
+    }
+}
+
+// Host: check if InnerQ is currently active (finalized)
+static bool turbo_innerq_is_active(void) {
+    return innerq_enabled == 2;
 }
 
 // ---- Nearest 3-bit centroid index ----
