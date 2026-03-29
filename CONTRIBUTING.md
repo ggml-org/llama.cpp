@@ -74,7 +74,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 *Contributors* and *collaborators*, as defined above, must disclose the origin of their code, if they did not write it themselves, to avoid potential licensing conflicts or intellectual property right violations.
 
-Contributions that can be shown to originate from one or more the following sources, in whole or in part, will not be accepted:
+Contributions that can be shown to originate from one or more of the following sources, in whole or in part, will not be accepted:
 - [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)
 - [Iwan Kawrakow](https://github.com/ikawrakow)
 
