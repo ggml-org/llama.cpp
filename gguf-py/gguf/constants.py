@@ -195,6 +195,10 @@ class Keys:
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
         TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
+        SPARSE_BLOCK_SIZE            = "{arch}.attention.sparse_block_size"
+        SPARSE_NUM_LOCAL_BLOCKS      = "{arch}.attention.sparse_num_local_blocks"
+        SPARSE_NUM_GLOBAL_BLOCKS     = "{arch}.attention.sparse_num_global_blocks"
+        SPARSE_NUM_GLOBAL_PATTERNS   = "{arch}.attention.sparse_num_global_patterns"
 
         class Indexer:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
@@ -542,6 +546,7 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
     MELLUM           = auto()
+    RUGPT3XL         = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1125,6 +1130,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
+    MODEL_ARCH.RUGPT3XL:         "rugpt3xl",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2406,6 +2412,18 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.GPT2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.RUGPT3XL: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.POS_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
