@@ -223,6 +223,66 @@ static inline void setup_cache_scp(void)
 }
 
 //******************************************************************************
+// L2 Scratchpad (L2 SCP) Address Computation
+//
+// Each shire has 4 MB of SRAM that can be split across L2 cache, L3 cache,
+// and scratchpad.  The scratchpad region occupies 0x00_8000_0000~0x00_FFFF_FFFF
+// and is accessible via regular load/store from any minion core.
+//
+// Two addressing formats (differentiated by address bit 30):
+//
+// Format 0 (bit[30]=0): Direct shire addressing
+//   [29:23] = shire ID (0–33, or 0x7F for local shire)
+//   [22:0]  = byte offset within shire's scratchpad
+//
+// Format 1 (bit[30]=1): Striped (round-robin) addressing
+//   [29:28] = shire ID[6:5]
+//   [27:11] = offset[22:6]   (cache-line-aligned upper bits)
+//   [10:6]  = shire ID[4:0]
+//   [5:0]   = offset[5:0]    (byte within cache line)
+//   Consecutive 64-byte cache lines cycle through different shires,
+//   distributing bandwidth across the mesh.
+//
+// Shire ID 0x7F always targets the local shire (instead of figureing out which
+// shire you are on).
+//******************************************************************************
+
+#define L2SCP_BASE         0x0080000000ULL
+#define L2SCP_SHIRE_LOCAL  0x7FULL
+
+// Format 0: direct address into a specific shire's L2 SCP.
+//   shire: 0–33 for explicit shire, L2SCP_SHIRE_LOCAL (0x7F) for local
+//   offset: byte offset within the shire's scratchpad
+static inline void * __attribute__((always_inline))
+et_shire_l2scp(uint64_t shire, uint64_t offset)
+{
+    return (void *)(L2SCP_BASE
+                    | ((shire & 0x7F) << 23)
+                    | (offset & 0x7FFFFF));
+}
+
+// Format 0: local shire shorthand — no cross-shire traffic.
+static inline void * __attribute__((always_inline))
+et_shire_l2scp_local(uint64_t offset)
+{
+    return (void *)(L2SCP_BASE
+                    | (L2SCP_SHIRE_LOCAL << 23)
+                    | (offset & 0x7FFFFF));
+}
+
+// Format 1: flat offset into a hardware-striped global address space.
+// Consecutive 64-byte cache lines automatically land on different shires,
+// distributing bandwidth across the mesh.  No shire parameter — the
+// hardware derives the target shire from the address bits.
+static inline void * __attribute__((always_inline))
+et_global_l2scp(uint64_t offset)
+{
+    return (void *)(L2SCP_BASE
+                    | (1ULL << 30)
+                    | (offset & 0x3FFFFFFF));
+}
+
+//******************************************************************************
 // Atomic Operations
 //******************************************************************************
 

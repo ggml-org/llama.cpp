@@ -991,7 +991,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                     op->nb[0] == sizeof(float) &&
                     op->src[0]->ne[0] == op->src[1]->ne[0] &&  // dk matches
                     op->src[2]->ne[0] == op->ne[0] &&           // dv matches
-                    op->src[2]->ne[0] <= 128 &&                 // dv limit
+                    op->src[2]->ne[0] <= 256 &&                 // dv limit
                     op->src[0]->ne[0] <= 256 &&                 // dk limit
                     nhq % nhk == 0 &&                           // GQA ratio is integer
                     op->src[0]->ne[1] == op->ne[2] &&
@@ -1186,9 +1186,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
