@@ -1,3 +1,7 @@
+> **SYCL note:** This fork adds SYCL (Intel GPU) support for `GGML_OP_SSM_SCAN`, enabling Mamba-1 and Mamba-2 SSM layers to run fully on Intel Arc without CPU fallback. Eliminates 36 graph splits per inference when running Mamba-2 hybrid models (e.g. Granite 4.0) on the SYCL backend. See `ggml/src/ggml-sycl/ssm_scan.cpp` for the implementation.
+
+---
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
