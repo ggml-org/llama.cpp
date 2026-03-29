@@ -811,7 +811,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
     const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
     return static_cast<float>(xf) / 2;
-#else 
+#else
     if (x == 0 || (x == 0x7F && x != 0xFF)) { // Convert NaN to 0.0f
         return 0.0f;
     }
