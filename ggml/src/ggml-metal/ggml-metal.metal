@@ -552,6 +552,35 @@ constant half turbo_mag_4bit_h[8] = {
     0.068756h, 0.089527h, 0.117195h, 0.173926h
 };
 
+// Half-precision 2-bit centroid LUT for vec path
+constant half turbo_centroids_2bit_h[4] = {
+    -0.133462h, -0.039994h, 0.039994h, 0.133462h
+};
+
+// Quantize 32 elements into one block_turbo2_0 (NO rotation — rotation happens
+// at the 128-element group level in kernel_set_rows_turbo)
+void quantize_turbo2_0(device const float * src, device block_turbo2_0 & dst) {
+#pragma METAL fp math_mode(safe)
+    float norm_sq = 0.0f;
+    for (int j = 0; j < QK_TURBO2; j++) norm_sq += src[j] * src[j];
+    float norm = sqrt(norm_sq);
+    float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
+    dst.norm = half(norm);
+
+    for (int j = 0; j < QK_TURBO2 / 4; j++) dst.qs[j] = 0;
+
+    for (int j = 0; j < QK_TURBO2; j++) {
+        float val = src[j] * inv_norm;
+        uint8_t idx;
+        if      (val < turbo_mid_2bit[0]) idx = 0;
+        else if (val < turbo_mid_2bit[1]) idx = 1;
+        else if (val < turbo_mid_2bit[2]) idx = 2;
+        else                              idx = 3;
+
+        dst.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+    }
+}
+
 // Quantize 32 elements into one block_turbo3_0 (NO rotation — rotation happens
 // at the 128-element group level in kernel_set_rows_turbo)
 void quantize_turbo3_0(device const float * src, device block_turbo3_0 & dst) {
@@ -671,6 +700,44 @@ static void turbo_fwht_128_half4(thread half4 * v) {
     for (int i = 0; i < 32; i++) {
         v[i] *= inv_sqrt_128;
     }
+}
+
+// ----- turbo2 dequantize -----
+// 2-bit indices (4 centroids), no signs byte. Simpler than turbo3.
+// Block size 32, nl=2 for non-vec (32/16), nl=8 for vec (32/4).
+
+// Non-vec: 16 elements per call (il ∈ {0,1}), returns type4x4
+template <typename type4x4>
+void dequantize_turbo2_0(device const block_turbo2_0 * xb, short il, thread type4x4 & reg) {
+    const float norm = float(xb->norm);
+    // il=0 → elements 0-15 (qs bytes 0-3)
+    // il=1 → elements 16-31 (qs bytes 4-7)
+    const int qs_off = il * 4;
+    float4x4 reg_f;
+    for (int g = 0; g < 4; g++) {
+        const uint8_t qb = xb->qs[qs_off + g];
+        reg_f[g] = float4(
+            turbo_centroids_2bit[(qb      ) & 0x03] * norm,
+            turbo_centroids_2bit[(qb >> 2) & 0x03] * norm,
+            turbo_centroids_2bit[(qb >> 4) & 0x03] * norm,
+            turbo_centroids_2bit[(qb >> 6)       ] * norm
+        );
+    }
+    reg = (type4x4) reg_f;
+}
+
+// Vec: 4 elements per call (il ∈ {0..7}), returns type4
+template <typename type4>
+void dequantize_turbo2_0_t4(device const block_turbo2_0 * xb, short il, thread type4 & reg) {
+    const float norm = float(xb->norm);
+    // il selects which byte of qs (each byte has 4 x 2-bit values)
+    const uint8_t qb = xb->qs[il];
+    reg = type4(float4(
+        float(turbo_centroids_2bit_h[(qb      ) & 0x03]) * norm,
+        float(turbo_centroids_2bit_h[(qb >> 2) & 0x03]) * norm,
+        float(turbo_centroids_2bit_h[(qb >> 4) & 0x03]) * norm,
+        float(turbo_centroids_2bit_h[(qb >> 6)       ]) * norm
+    ));
 }
 
 // Block-32 dequant: no WHT needed (graph handles rotation). Just centroid lookup + norm scale.
@@ -7189,6 +7256,17 @@ template [[host_name("kernel_flash_attn_ext_turbo3_dk256_dv256")]] kernel flash_
 template [[host_name("kernel_flash_attn_ext_turbo3_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, 2, dequantize_turbo3_0, block_turbo3_0, 2, dequantize_turbo3_0, 320, 256>;
 template [[host_name("kernel_flash_attn_ext_turbo3_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, 2, dequantize_turbo3_0, block_turbo3_0, 2, dequantize_turbo3_0, 576, 512>;
 
+// TurboQuant2 non-vec flash attention (block size 32, nl=2 matching turbo3)
+template [[host_name("kernel_flash_attn_ext_turbo2_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 32,  32>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 64,  64>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk96_dv96"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 96,  96>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 192, 192>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 192, 128>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 320, 256>;
+template [[host_name("kernel_flash_attn_ext_turbo2_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 2, dequantize_turbo2_0, block_turbo2_0, 2, dequantize_turbo2_0, 576, 512>;
+
 // TurboQuant4 non-vec flash attention (block size 128, nl=8)
 template [[host_name("kernel_flash_attn_ext_turbo4_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_turbo4_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 64,  64>;
@@ -7886,6 +7964,12 @@ template [[host_name("kernel_flash_attn_ext_vec_q5_1_dk576_dv512")]] kernel flas
 template [[host_name("kernel_flash_attn_ext_vec_q8_0_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q8_0, 8, dequantize_q8_0_t4, block_q8_0,  8, dequantize_q8_0_t4, 576, 512, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_turbo3_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo3_0, 8, dequantize_turbo3_0_t4, block_turbo3_0, 8, dequantize_turbo3_0_t4, 576, 512, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_turbo4_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0, 32, dequantize_turbo4_0_t4, 576, 512, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 192, 192, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk192_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 192, 128, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 320, 256, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_turbo2_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0_t4, block_turbo2_0, 8, dequantize_turbo2_0_t4, 576, 512, 2>;
 
 #undef FA_TYPES
 #undef FA_TYPES_F32
@@ -10002,6 +10086,77 @@ kernel void kernel_set_rows_turbo(
     }
 }
 
+// TurboQuant2 SET_ROWS kernel — 2-bit PolarQuant, 4 centroids, no signs byte.
+// Same 128-element group WHT rotation as turbo3, but simpler quantization.
+template<typename TI>
+kernel void kernel_set_rows_turbo2(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI      i1  = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+          device block_turbo2_0 * dst_row = (      device block_turbo2_0 *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
+    const device float           * src_row = (const device float           *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    // Process in groups of 4 blocks (128 elements) for rotation
+    const int blocks_per_group = QK_TURBO2_GROUP / QK_TURBO2;  // 128/32 = 4
+    const int n_groups = args.nk0 / blocks_per_group;
+
+    for (int grp = tiitg%tptg.x; grp < n_groups; grp += tptg.x) {
+        const device float * grp_src = src_row + QK_TURBO2_GROUP * grp;
+
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_TURBO2_GROUP; j++) norm_sq += grp_src[j] * grp_src[j];
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+
+        float x[128];
+        for (int j = 0; j < 128; j++) x[j] = grp_src[j] * inv_norm;
+        turbo_rotate_forward(x, turbo_wht_signs1, turbo_wht_signs2);
+
+        float recon_norm_sq = 0.0f;
+
+        for (int b = 0; b < blocks_per_group; b++) {
+            device block_turbo2_0 & blk = dst_row[grp * blocks_per_group + b];
+            const int off = b * QK_TURBO2;
+
+            for (int j = 0; j < QK_TURBO2 / 4; j++) blk.qs[j] = 0;
+
+            for (int j = 0; j < QK_TURBO2; j++) {
+                float rv = x[off + j];
+                uint8_t idx;
+                if      (rv < turbo_mid_2bit[0]) idx = 0;
+                else if (rv < turbo_mid_2bit[1]) idx = 1;
+                else if (rv < turbo_mid_2bit[2]) idx = 2;
+                else                              idx = 3;
+
+                blk.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+
+                float c = turbo_centroids_2bit[idx];
+                recon_norm_sq += c * c;
+            }
+        }
+
+        float recon_norm = sqrt(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            dst_row[grp * blocks_per_group + b].norm = half(corrected_norm);
+        }
+    }
+}
+
 // TurboQuant4 SET_ROWS kernel — processes 128 elements per block.
 // Unlike turbo3 (4x32 blocks), turbo4 uses single 128-element blocks
 // with packed 3-bit indices and QJL signs.
@@ -10898,6 +11053,12 @@ typedef decltype(kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quant
 
 template [[host_name("kernel_set_rows_turbo3_i64")]] kernel set_rows_turbo3_t kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
 template [[host_name("kernel_set_rows_turbo3_i32")]] kernel set_rows_turbo3_t kernel_set_rows_turbo<int32_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
+
+// TurboQuant2 set_rows instantiations (dedicated kernel, 4x32-element blocks, no signs)
+typedef decltype(kernel_set_rows_turbo2<int64_t>) set_rows_turbo2_t;
+
+template [[host_name("kernel_set_rows_turbo2_i64")]] kernel set_rows_turbo2_t kernel_set_rows_turbo2<int64_t>;
+template [[host_name("kernel_set_rows_turbo2_i32")]] kernel set_rows_turbo2_t kernel_set_rows_turbo2<int32_t>;
 
 // TurboQuant4 set_rows instantiations (dedicated kernel, 128-element blocks with QJL)
 typedef decltype(kernel_set_rows_turbo4<int64_t>) set_rows_turbo4_t;

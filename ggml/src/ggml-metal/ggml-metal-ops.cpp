@@ -2548,7 +2548,7 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     // loop iterations than the non-vec nl=2 path. On M2 Pro, this loop overhead
     // dominates — the non-vec path may be faster even for batch=1.
     const ggml_type ktype = op->src[1]->type;
-    if (ktype == GGML_TYPE_TURBO3_0 || ktype == GGML_TYPE_TURBO4_0) {
+    if (ktype == GGML_TYPE_TURBO2_0 || ktype == GGML_TYPE_TURBO3_0 || ktype == GGML_TYPE_TURBO4_0) {
         const char * force_nonvec = getenv("TURBO_FORCE_NONVEC");
         if (force_nonvec && force_nonvec[0] == '1') {
             return false;  // force non-vec path
