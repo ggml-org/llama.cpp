@@ -1198,14 +1198,21 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type) {
-                // Allow asymmetric K/V for supported turbo quantization pairs
+                // Allow asymmetric K/V for supported mixed pairs:
+                // - turbo x turbo (any combination)
+                // - q8_0 x turbo (either direction)
                 const bool k_is_turbo = (op->src[1]->type == GGML_TYPE_TURBO2_0 ||
                                          op->src[1]->type == GGML_TYPE_TURBO3_0 ||
                                          op->src[1]->type == GGML_TYPE_TURBO4_0);
                 const bool v_is_turbo = (op->src[2]->type == GGML_TYPE_TURBO2_0 ||
                                          op->src[2]->type == GGML_TYPE_TURBO3_0 ||
                                          op->src[2]->type == GGML_TYPE_TURBO4_0);
-                if (!k_is_turbo || !v_is_turbo) {
+                const bool k_is_q8 = (op->src[1]->type == GGML_TYPE_Q8_0);
+                const bool v_is_q8 = (op->src[2]->type == GGML_TYPE_Q8_0);
+                const bool supported = (k_is_turbo && v_is_turbo) ||
+                                       (k_is_q8 && v_is_turbo) ||
+                                       (k_is_turbo && v_is_q8);
+                if (!supported) {
                     return false;
                 }
             }

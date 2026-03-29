@@ -2694,14 +2694,19 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
 
-    // Allow asymmetric K/V quantization for supported turbo pairs
+    // Allow asymmetric K/V quantization for supported mixed pairs
     {
         const ggml_type type_k = op->src[1]->type;
         const ggml_type type_v = op->src[2]->type;
         if (type_k != type_v) {
             const bool k_is_turbo = (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0);
             const bool v_is_turbo = (type_v == GGML_TYPE_TURBO2_0 || type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0);
-            GGML_ASSERT(k_is_turbo && v_is_turbo && "asymmetric K/V types only supported for turbo quantization pairs");
+            const bool k_is_q8 = (type_k == GGML_TYPE_Q8_0);
+            const bool v_is_q8 = (type_v == GGML_TYPE_Q8_0);
+            const bool supported = (k_is_turbo && v_is_turbo) ||
+                                   (k_is_q8 && v_is_turbo) ||
+                                   (k_is_turbo && v_is_q8);
+            GGML_ASSERT(supported && "asymmetric K/V types only supported for turbo and q8_0 mixed pairs");
         }
     }
 
