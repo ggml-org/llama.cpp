@@ -28,7 +28,7 @@ extern "C" {
         void * profiling_context;
 
         // callback for recording a profile record from C code (set by backend when profiling)
-        // params: context, type, name, split_id, start_ns, end_ns, bytes, extra, ne_src0[4], ne_src1[4]
+        // params: context, type, name, split_id, start_ns, end_ns, bytes, extra, ne_src0[4], ne_src1[4], ne_src2[4]
         void (*profiling_record_fn)(void *        context,
                                     int           type,
                                     const char *  name,
@@ -38,7 +38,8 @@ extern "C" {
                                     uint64_t      bytes,
                                     const char *  extra,
                                     const int64_t ne_src0[4],
-                                    const int64_t ne_src1[4]);
+                                    const int64_t ne_src1[4],
+                                    const int64_t ne_src2[4]);
     };
 
     // numa strategies
