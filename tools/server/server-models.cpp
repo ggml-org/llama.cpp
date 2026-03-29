@@ -145,6 +145,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_API_KEY");
     preset.unset_option("LLAMA_ARG_MODELS_DIR");
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
+    preset.unset_option("LLAMA_ARG_MODELS_MEMORY_MARGIN");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
     if (unset_model_args) {
@@ -260,9 +261,39 @@ server_models::server_models(
         bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
         bin_path = argv[0];
-        LOG_WRN("failed to get server executable path: %s\n", e.what());
-        LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
+        SRV_WRN("failed to get server executable path: %s\n", e.what());
+        SRV_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
+
+    const size_t memory_margin = (size_t) base_params.models_memory_margin * 1024 * 1024;
+
+    if (memory_margin > 0) {
+        ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        ggml_backend_buffer_type_t cpu_buft = cpu_dev ? ggml_backend_dev_buffer_type(cpu_dev) : nullptr;
+
+        const size_t n_devs = ggml_backend_dev_count();
+        for (size_t i = 0; i < n_devs; i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            ggml_backend_buffer_type_t dev_buft = ggml_backend_dev_buffer_type(dev);
+            if (dev_buft) {
+                buft_by_name[ggml_backend_buft_name(dev_buft)] = dev_buft;
+            }
+            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(dev);
+            if (host_buft && cpu_buft) {
+                buft_by_name[ggml_backend_buft_name(host_buft)] = cpu_buft;
+            }
+
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            if (total > 0 && dev_buft) {
+                const size_t available = (free > memory_margin) ? free - memory_margin : 0;
+                bmm_available[dev_buft] = available;
+                SRV_DBG("buft %s: available memory after margin=%zu MiB\n",
+                    ggml_backend_buft_name(dev_buft), available / (1024 * 1024));
+            }
+        }
+    }
+
     load_models();
 }
 
@@ -456,6 +487,7 @@ void server_models::load_models() {
                 /* port          */ 0,
                 /* status        */ SERVER_MODEL_STATUS_UNLOADED,
                 /* last_used     */ 0,
+                /* bmm_req       */ {},
                 /* args          */ std::vector<std::string>(),
                 /* loaded_info   */ {},
                 /* progress      */ {},
@@ -623,6 +655,7 @@ void server_models::load_models() {
                     /* port          */ 0,
                     /* status        */ SERVER_MODEL_STATUS_UNLOADED,
                     /* last_used     */ 0,
+                    /* bmm_req       */ {},
                     /* args          */ std::vector<std::string>(),
                     /* loaded_info   */ {},
                     /* progress      */ {},
@@ -797,30 +830,87 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
-void server_models::unload_lru() {
-    if (base_params.models_max <= 0) {
-        return; // no limit
-    }
-    // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
-    size_t count_active = 0;
-    {
-        std::unique_lock<std::mutex> lk(mutex);
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
-                }
+int server_models::can_fit(const buft_memory_map & bmm_req) const {
+    buft_memory_map bmm_total;
+    for (const auto & m : mapping) {
+        if (m.second.meta.is_running()) {
+            for (const auto & [buft, mem] : m.second.meta.bmm_req) {
+                bmm_total[buft] += mem;
             }
         }
     }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
-        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
+
+    auto get = [](const buft_memory_map & dmm, ggml_backend_buffer_type_t buft) -> size_t {
+        auto it = dmm.find(buft);
+        return it != dmm.end() ? it->second : 0;
+    };
+
+    int res = 0;
+
+    for (const auto & [buft, limit] : bmm_available) {
+        const size_t mem_total = get(bmm_total, buft);
+        const size_t mem_new   = get(bmm_req,   buft);
+
+        SRV_DBG("buft %s: total=%zu MiB, new=%zu MiB, limit=%zu MiB\n",
+            ggml_backend_buft_name(buft),
+            mem_total / (1024 * 1024), mem_new / (1024 * 1024), limit / (1024 * 1024));
+
+        if (mem_total + mem_new > limit) {
+            res++;
+        }
+    }
+
+    return res;
+}
+
+bool server_models::limits_exceeded(const buft_memory_map & bmm_req) const {
+    const bool check_active = base_params.models_max > 0;
+    const bool check_memory = base_params.models_memory_margin > 0;
+
+    if (!check_active && !check_memory) {
+        return false;
+    }
+
+    int count_active = 0;
+    for (const auto & m : mapping) {
+        if (m.second.meta.is_running()) {
+            count_active++;
+        }
+    }
+
+    const bool active_exceeded = check_active && count_active >= base_params.models_max;
+    const bool memory_exceeded = check_memory && can_fit(bmm_req) > 0;
+
+    return active_exceeded || memory_exceeded;
+}
+
+void server_models::unload_lru(const buft_memory_map & bmm_req) {
+    if (base_params.models_memory_margin > 0) {
+        GGML_ASSERT(!bmm_available.empty());
+    }
+
+    while (true) {
+        std::string lru_model_name;
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            if (!limits_exceeded(bmm_req)) {
+                break;
+            }
+            int64_t lru_last_used = ggml_time_ms();
+            for (const auto & m : mapping) {
+                if (m.second.meta.is_running() && m.second.meta.last_used < lru_last_used) {
+                    lru_model_name = m.first;
+                    lru_last_used  = m.second.meta.last_used;
+                }
+            }
+        }
+
+        if (lru_model_name.empty()) {
+            break;
+        }
+
+        SRV_INF("limits exceeded, removing LRU name=%s\n", lru_model_name.c_str());
         unload(lru_model_name);
-        // wait for unload to complete
         {
             std::unique_lock<std::mutex> lk(mutex);
             cv.wait(lk, [this, &lru_model_name]() {
@@ -829,6 +919,88 @@ void server_models::unload_lru() {
         }
     }
 }
+
+buft_memory_map server_models::estimate_model_memory(const std::string & name) {
+    std::vector<std::string> child_args;
+    std::vector<std::string> child_env;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        auto & meta = mapping[name].meta;
+        child_args = meta.preset.to_args(bin_path);
+        child_env  = base_env;
+    }
+    child_args.push_back("--measure-only");
+    child_args.push_back("--offline");
+
+    SRV_INF("estimating memory for model name=%s\n", name.c_str());
+
+    std::vector<char *> argv = to_char_ptr_array(child_args);
+    std::vector<char *> envp = to_char_ptr_array(child_env);
+
+    subprocess_s proc;
+    int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
+    if (subprocess_create_ex(argv.data(), options, envp.data(), &proc) != 0) {
+        SRV_ERR("failed to spawn measure process for model name=%s\n", name.c_str());
+        return {};
+    }
+
+    buft_memory_map result;
+    FILE * out = subprocess_stdout(&proc);
+    if (out) {
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), out) != nullptr) {
+            LOG("[measure:%s] %s", name.c_str(), buffer);
+            std::string line(buffer);
+            if (string_starts_with(line, "measure:")) {
+                std::istringstream iss(line.substr(strlen("measure:")));
+                std::string buft_name;
+                size_t size = 0;
+                if (iss >> buft_name >> size) {
+                    auto it = buft_by_name.find(buft_name);
+                    if (it != buft_by_name.end()) {
+                        result[it->second] += size;
+                    } else {
+                        SRV_WRN("unknown buft name '%s' from measure child for model name=%s\n",
+                            buft_name.c_str(), name.c_str());
+                    }
+                }
+            }
+        }
+    }
+
+    int exit_code = 0;
+    subprocess_join(&proc, &exit_code);
+    subprocess_destroy(&proc);
+
+    if (exit_code != 0) {
+        SRV_ERR("measure process for model name=%s exited with code %d\n", name.c_str(), exit_code);
+        return {};
+    }
+
+    SRV_INF("memory estimation complete for model name=%s\n", name.c_str());
+    return result;
+}
+
+void server_models::join_completed_bg_tasks() {
+    std::vector<std::unique_ptr<bg_task>> to_join;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        for (auto it = bg_tasks.begin(); it != bg_tasks.end(); ) {
+            if (it->second->done.load()) {
+                to_join.push_back(std::move(it->second));
+                it = bg_tasks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (auto & task : to_join) {
+        if (task->th.joinable()) {
+            task->th.join();
+        }
+    }
+}
+
 
 void server_models::load(const std::string & name) {
     load(name, load_options{});
@@ -839,8 +1011,29 @@ void server_models::load(const std::string & name, const load_options & opts) {
         if (!has_model(name)) {
             throw std::runtime_error("model name=" + name + " is not found");
         }
-        unload_lru();
     }
+
+    join_completed_bg_tasks();
+
+    buft_memory_map bmm_req;
+    if (base_params.models_memory_margin > 0) {
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            bmm_req = mapping[name].meta.bmm_req;
+        }
+        if (bmm_req.empty()) {
+            bmm_req = estimate_model_memory(name);
+            if (bmm_req.empty()) {
+                SRV_WRN("failed to estimate memory for model %s, memory limits will not apply\n", name.c_str());
+            }
+            {
+                std::lock_guard<std::mutex> lk(mutex);
+                mapping[name].meta.bmm_req = bmm_req;
+            }
+        }
+    }
+
+    unload_lru(bmm_req);
 
     std::unique_lock<std::mutex> lk(mutex);
     // edge case: block until any in-progress reload has finished so we always load
@@ -857,16 +1050,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // exceeding models_max. Without this, the window between unload_lru()
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
-    if (base_params.models_max > 0) {
-        size_t count_active = 0;
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-            }
-        }
-        if (count_active >= (size_t)base_params.models_max) {
-            throw std::runtime_error("model limit reached, try again later");
-        }
+    if (limits_exceeded(bmm_req)) {
+        throw std::runtime_error("model limit reached, try again later");
     }
 
     // prepare new instance info
@@ -1066,6 +1251,7 @@ void server_models::unload(const std::string & name) {
 
 void server_models::unload_all() {
     std::vector<std::thread> to_join;
+    std::vector<std::unique_ptr<bg_task>> bg_to_join;
     {
         std::lock_guard<std::mutex> lk(mutex);
         for (auto & [name, inst] : mapping) {
@@ -1081,15 +1267,26 @@ void server_models::unload_all() {
             // moving the thread to join list to avoid deadlock
             to_join.push_back(std::move(inst.th));
         }
+        for (auto & [name, task] : bg_tasks) {
+            bg_to_join.push_back(std::move(task));
+        }
+        bg_tasks.clear();
     }
     for (auto & th : to_join) {
         if (th.joinable()) {
             th.join();
         }
     }
+    for (auto & task : bg_to_join) {
+        if (task && task->th.joinable()) {
+            task->th.join();
+        }
+    }
 }
 
 void server_models::update_status(const std::string & name, const update_status_args & args) {
+    join_completed_bg_tasks();
+
     std::unique_lock<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {

@@ -90,7 +90,17 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
-// Set whether the context outputs nextn embeddings or not
+// Returns the projected memory use (model + context + compute) in bytes
+// for the given device within this context. Returns 0 if the device is not used.
+LLAMA_API uint64_t llama_context_device_memory(
+        const struct llama_context * ctx,
+        ggml_backend_dev_t           device);
+
+//
+// pre-norm embeddings (hidden state before the final output norm)
+//
+
+// Set whether the context outputs pre-norm embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
 LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
