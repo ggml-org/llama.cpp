@@ -34788,6 +34788,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
         ggml_sycl_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float) * ggml_nelements(src1));
         ggml_sycl_pool_alloc<char> dst_contiguous(ctx.pool(), sizeof(float) * ggml_nelements(dst));
+        // Zero dst buffer: skipped experts (null cache pointer) leave rows unwritten.
+        // Without zeroing, pool memory retains stale data → NaN in output.
+        SYCL_CHECK(CHECK_TRY_ERROR(stream->memset(dst_contiguous.get(), 0, sizeof(float) * ggml_nelements(dst))));
         src1_row.data = src1_contiguous.get();
 
         dst_row.data = dst_contiguous.get();
