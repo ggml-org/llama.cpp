@@ -8,7 +8,7 @@
 //   - Q: F32 (converted to F16 internally)
 //   - K, V: F16
 //   - dk must be a multiple of 32 (TensorFMA16A32 K-tile)
-//   - dv ≤ 128
+//   - dv ≤ 256 (accumulator in shire-local L2 SCP)
 //   - Only hart 0 per minion (matrix engine restriction)
 //
 // Parallelization: each minion independently processes one (qpos, head, batch)
@@ -34,9 +34,12 @@
 #define A_L1_START 0
 #define B_L1_START 16
 
-// Max head dimensions for stack buffers
-#define FA_DV_MAX 128   // max value head dim (dv)
+// Max head dimensions
+#define FA_DV_MAX 256   // max value head dim (dv)
 #define FA_DK_MAX 256   // max key head dim (dk) - some models use hsk > hsv
+
+// Per-minion accumulator stride in L2 SCP (1024 bytes for dv=256 F32).
+#define L2SCP_ACC_STRIDE  (FA_DV_MAX * sizeof(float))
 
 typedef uint16_t et_fp16_t;
 
@@ -487,7 +490,8 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
         // Output pointer
         float * out = (float *)(dst_data + iq2*dst->nb[1] + iq1*dst->nb[2] + iq3*dst->nb[3]);
 
-        float acc[FA_DV_MAX] __attribute__((aligned(32)));
+        // Accumulator lives in shire-local L2 SCP. Else we run out of stack space.
+        float * acc = (float *)et_shire_l2scp_local(local_minion * L2SCP_ACC_STRIDE);
         zero_acc_vec(acc, dv);
         float M = ET_NEG_INF_F;
         float S = 0.0f;
