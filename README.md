@@ -206,6 +206,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [cztomsik/ava](https://github.com/cztomsik/ava) (MIT)
 - [Dot](https://github.com/alexpinel/Dot) (GPL)
 - [eva](https://github.com/ylsdamxssjxxdd/eva) (MIT)
+- [InferrLM](https://github.com/sbhjt-gr/InferrLM) (AGPL)
 - [iohub/collama](https://github.com/iohub/coLLaMA) (Apache-2.0)
 - [janhq/jan](https://github.com/janhq/jan) (AGPL)
 - [johnbean393/Sidekick](https://github.com/johnbean393/Sidekick) (MIT)
