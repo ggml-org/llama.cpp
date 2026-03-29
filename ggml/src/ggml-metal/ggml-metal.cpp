@@ -597,6 +597,7 @@ ggml_backend_t ggml_backend_metal_init(void) {
         /* .interface = */ ggml_backend_metal_i,
         /* .device    = */ dev,
         /* .context   = */ ctx,
+        /* .profiler  = */ NULL,
     };
 
     ggml_backend_metal_set_n_cb(backend, 1);
@@ -691,6 +692,7 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         /* .interface = */ ggml_backend_metal_i,
         /* .device    = */ dev,
         /* .context   = */ ctx,
+        /* .profiler  = */ NULL,
     };
 
     ggml_backend_metal_set_n_cb(backend, 1);

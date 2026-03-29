@@ -96,6 +96,7 @@ struct ggml_cuda_profiler_state {
     static constexpr int MAX_PENDING_EVENTS = 4096;
     std::vector<cudaEvent_t> start_events;
     std::vector<cudaEvent_t> end_events;
+    std::vector<uint64_t>    cpu_timestamps;  // CPU-side timestamps for global ordering
     int event_count = 0;
 
     std::vector<ggml_profile_record> records;
@@ -105,17 +106,19 @@ struct ggml_cuda_profiler_state {
         this->stream = stream;
         start_events.reserve(MAX_PENDING_EVENTS);
         end_events.reserve(MAX_PENDING_EVENTS);
+        cpu_timestamps.reserve(MAX_PENDING_EVENTS);
     }
 
     void reset() {
         for (auto & ev : start_events) {
-            cudaEventDestroy(ev);
+            (void) cudaEventDestroy(ev);
         }
         for (auto & ev : end_events) {
-            cudaEventDestroy(ev);
+            (void) cudaEventDestroy(ev);
         }
         start_events.clear();
         end_events.clear();
+        cpu_timestamps.clear();
         event_count = 0;
         records.clear();
         record_event_indices.clear();
@@ -127,17 +130,18 @@ struct ggml_cuda_profiler_state {
 
     void record_start() {
         cudaEvent_t ev;
-        cudaEventCreate(&ev);
-        cudaEventRecord(ev, stream);
+        (void) cudaEventCreate(&ev);
+        (void) cudaEventRecord(ev, stream);
         start_events.push_back(ev);
+        cpu_timestamps.push_back(ggml_profiler_time_ns());
         event_count++;
     }
 
     void record_end(const char * name, int backend_id, int split_id, uint64_t bytes, const char * extra,
                     const int64_t ne_src0[4], const int64_t ne_src1[4]) {
         cudaEvent_t ev;
-        cudaEventCreate(&ev);
-        cudaEventRecord(ev, stream);
+        (void) cudaEventCreate(&ev);
+        (void) cudaEventRecord(ev, stream);
         end_events.push_back(ev);
         record_event_indices.push_back(records.size());
 
@@ -156,15 +160,16 @@ struct ggml_cuda_profiler_state {
     }
 
     void finalize() {
-        cudaStreamSynchronize(stream);
+        (void) cudaStreamSynchronize(stream);
 
         for (int i = 0; i < (int)record_event_indices.size(); i++) {
             float ms = 0.0f;
-            cudaEventElapsedTime(&ms, start_events[i], end_events[i]);
-            uint64_t ns = (uint64_t)(ms * 1e6f);
+            (void) cudaEventElapsedTime(&ms, start_events[i], end_events[i]);
+            uint64_t duration_ns = (uint64_t)(ms * 1e6f);
             int rec_idx = record_event_indices[i];
-            records[rec_idx].start_ns = 0;
-            records[rec_idx].end_ns = ns;
+            // Use CPU-side timestamp for global ordering, GPU-measured duration for accuracy
+            records[rec_idx].start_ns = cpu_timestamps[i];
+            records[rec_idx].end_ns   = cpu_timestamps[i] + duration_ns;
         }
     }
 };

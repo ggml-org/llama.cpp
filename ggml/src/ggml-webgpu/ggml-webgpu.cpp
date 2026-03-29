@@ -3217,6 +3217,7 @@ static ggml_backend_t ggml_backend_webgpu_backend_init(ggml_backend_dev_t dev, c
         /* .interface = */ ggml_backend_webgpu_i,
         /* .device    = */ dev,
         /* .context   = */ backend_ctx,
+        /* .profiler  = */ nullptr,
     };
     return backend;
 }

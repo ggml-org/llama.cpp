@@ -1575,12 +1575,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
 
                     // group consecutive experts and copy them together
+                    size_t total_copied_bytes = 0;
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
                         const size_t expert_offset = first_id * expert_size;
                         const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
                         const size_t padding = std::min<size_t>(expert_size, 512);
                         const size_t padding_end = last_id < n_expert - 1 ? padding : 0;
 
+                        total_copied_bytes += expert_size_copy + padding_end;
                         ggml_backend_tensor_set_async(split_backend,
                             input_cpy,
                             (const uint8_t *)input->data + expert_offset, expert_offset,
@@ -1588,6 +1590,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             // this is necessary for MMQ in the CUDA backend
                             expert_size_copy + padding_end);
                     };
+
+                    uint64_t moe_copy_start = 0;
+                    if (sched->profiling_enabled) {
+                        moe_copy_start = ggml_profiler_time_ns();
+                    }
 
                     int id = 0;
                     while (!ggml_bitset_get(used_ids.data(), id)) {
@@ -1612,9 +1619,34 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_id = id;
                     }
                     copy_experts(first_id, last_id);
+
+                    if (sched->profiling_enabled) {
+                        uint64_t moe_copy_end = ggml_profiler_time_ns();
+
+                        enum ggml_backend_dev_type src_type = ggml_backend_dev_type(input_backend->device);
+                        enum ggml_backend_dev_type dst_type = ggml_backend_dev_type(split_backend->device);
+                        const char *               copy_dir = "copy_D2D";
+                        if (src_type == GGML_BACKEND_DEVICE_TYPE_CPU && dst_type != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                            copy_dir = "copy_H2D";
+                        } else if (src_type != GGML_BACKEND_DEVICE_TYPE_CPU &&
+                                   dst_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                            copy_dir = "copy_D2H";
+                        }
+
+                        sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
+                                                        split_id, moe_copy_start, moe_copy_end,
+                                                        (uint64_t) total_copied_bytes, NULL, {0}, {0} });
+                    }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
+
+                    // Capture timestamp before async attempt so we can record launch time
+                    uint64_t copy_start = 0;
+                    if (sched->profiling_enabled) {
+                        copy_start = ggml_profiler_time_ns();
+                    }
+
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
                         ggml_backend_synchronize(input_backend);
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -1623,7 +1655,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             ggml_backend_synchronize(split_backend);
                         }
                         if (sched->profiling_enabled) {
-                            uint64_t copy_start = ggml_profiler_time_ns();
+                            // Re-take start after sync for accurate sync copy measurement
+                            copy_start = ggml_profiler_time_ns();
                             ggml_backend_tensor_copy(input, input_cpy);
                             uint64_t copy_end = ggml_profiler_time_ns();
 
@@ -1643,11 +1676,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             ggml_backend_tensor_copy(input, input_cpy);
                         }
                     } else {
-                        // async copy completed - record it with available timing
+                        // async copy was launched — record the time spanning the async call
                         if (sched->profiling_enabled) {
-                            uint64_t copy_start = ggml_profiler_time_ns();
-                            // The async copy was already initiated; we just record the launch time
-                            uint64_t copy_end   = ggml_profiler_time_ns();
+                            uint64_t copy_end = ggml_profiler_time_ns();
 
                             enum ggml_backend_dev_type src_type = ggml_backend_dev_type(input_backend->device);
                             enum ggml_backend_dev_type dst_type = ggml_backend_dev_type(split_backend->device);
@@ -1716,8 +1747,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     // Profiling: collect records from all backends and append to accumulated records
     if (sched->profiling_enabled) {
-        sched->copy_records.clear();
-
         // Collect backend operation records
         for (int b = 0; b < sched->n_backends; b++) {
             ggml_backend_t backend = sched->backends[b];
