@@ -2187,9 +2187,10 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
-
         auto * k = layer.k_stream[cr.strm];
+
+        // Use actual tensor width (may be padded for turbo types: e.g. 576→640)
+        const uint32_t n_embd_k_gqa = (uint32_t) k->ne[0];
 
         // Write key type
         const int32_t k_type_i = (int32_t) k->type;
@@ -2211,12 +2212,13 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
 
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
-
             auto * v = layer.v_stream[cr.strm];
             if (!v) {
                 continue;
             }
+
+            // Use actual tensor width (may be padded for turbo types)
+            const uint32_t n_embd_v_gqa = (uint32_t) v->ne[0];
 
             // Write value type
             const int32_t v_type_i = (int32_t) v->type;
@@ -2419,9 +2421,10 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
-
         auto * k = layer.k_stream[strm];
+
+        // Use actual tensor width (may be padded for turbo types)
+        const uint32_t n_embd_k_gqa = (uint32_t) k->ne[0];
 
         // Read type of key
         int32_t k_type_i_ref;
@@ -2460,12 +2463,13 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
 
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
-
             auto * v = layer.v_stream[strm];
             if (!v) {
                 continue;
             }
+
+            // Use actual tensor width (may be padded for turbo types)
+            const uint32_t n_embd_v_gqa = (uint32_t) v->ne[0];
 
             // Read type of value
             int32_t v_type_i_ref;
