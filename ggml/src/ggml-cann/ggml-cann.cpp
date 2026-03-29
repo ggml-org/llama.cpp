@@ -2884,7 +2884,8 @@ ggml_backend_t ggml_backend_cann_init(int32_t device) {
         new ggml_backend{ /* .guid      = */ ggml_backend_cann_guid(),
                           /* .interface = */ ggml_backend_cann_interface,
                           /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_cann_reg(), device),
-                          /* .context   = */ ctx };
+                          /* .context   = */ ctx,
+                          /* .profiler  = */ nullptr };
 
     return cann_backend;
 }

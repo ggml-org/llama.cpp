@@ -673,6 +673,7 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
         /* .interface = */ ggml_backend_openvino_interface,
         /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_openvino_reg(), device),
         /* .context   = */ ctx,
+        /* .profiler  = */ nullptr,
     };
 
     return openvino_backend;

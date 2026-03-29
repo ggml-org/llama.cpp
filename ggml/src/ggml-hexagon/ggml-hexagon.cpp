@@ -3004,6 +3004,7 @@ static ggml_backend_t ggml_backend_hexagon_device_init(ggml_backend_dev_t dev, c
         /* .interface = */ hexagon_backend_i,
         /* .device    = */ dev,
         /* .context   = */ sess,
+        /* .profiler  = */ nullptr,
     };
 
     GGML_UNUSED(params);
