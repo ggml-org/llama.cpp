@@ -74,6 +74,71 @@ static inline float compute_block_dot_product_q8_0(const block_q8_0* a_block, co
     return final_sum * scale;
 }
 
+// Compute full-row dot product: sum over K_blocks Q8_0 blocks against F32 vector.
+// Hoists mask save/restore and gather pattern load outside the block loop.
+// Accumulates scaled partial products in a vector register and does a single
+// horizontal reduce at the end — saves ~1000 instructions per row vs per-block.
+static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
+                                         const float* b_col,
+                                         int64_t K_blocks) {
+    static const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    __asm__ volatile("flw.ps f31, %[g]\n" : : [g] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
+    __asm__ volatile("fbci.pi f20, 0" ::: "f20");  // vector accumulator
+
+    for (int64_t kb = 0; kb < K_blocks; kb++) {
+        const block_q8_0* blk = q_row + kb;
+        const float* b_ptr = b_col + (kb << 5);
+
+        __asm__ volatile("fbci.pi f10, 0" ::: "f10");  // per-block accumulator
+
+        for (int chunk = 0; chunk < 4; chunk++) {
+            int off = chunk << 3;
+            __asm__ volatile(
+                "flw.ps f12, %[bv]\n"
+                "fgb.ps f11, f31(%[ap])\n"
+                "fcvt.ps.pw f11, f11\n"
+                "fmadd.ps f10, f11, f12, f10\n"
+                :
+                : [ap] "r"(&blk->qs[off]),
+                  [bv] "m"(*(const float(*)[8])&b_ptr[off])
+                : "f10", "f11", "f12"
+            );
+        }
+
+        // f20 += f10 * broadcast(scale) — hardware fp16→fp32 via FCVT.PS.F16
+        uint32_t scale_raw = (uint32_t)blk->d;
+        __asm__ volatile(
+            "fbcx.ps f15, %[sb]\n"
+            "fcvt.ps.f16 f15, f15\n"
+            "fmadd.ps f20, f10, f15, f20\n"
+            :
+            : [sb] "r"(scale_raw)
+            : "f15", "f20"
+        );
+    }
+
+    // Single horizontal reduce
+    float result;
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+
+    __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
+    return result;
+}
+
 
 // Compute dot product between f16 block and f32 column vector (NAIVE VERSION)
 // Scalar implementation for debugging - no vectorization
