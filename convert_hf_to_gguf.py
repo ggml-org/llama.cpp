@@ -5284,7 +5284,7 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
+@ModelBase.register("Phi3ForCausalLM", "Phi3MediumForCausalLM", "Phi4ForCausalLMV")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
