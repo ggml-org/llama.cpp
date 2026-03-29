@@ -501,6 +501,23 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         auto * ll_ctx = ctx_server.get_llama_context();
         if (ll_ctx != nullptr) {
+            // export profiling data if profiling was enabled
+            if (params.profiling) {
+                ggml_backend_sched_t sched = llama_context_get_sched(ll_ctx);
+                if (sched != nullptr) {
+                    if (params.profiling_output.empty()) {
+                        ggml_backend_sched_print_profiling(sched);
+                    } else {
+                        int ret = ggml_backend_sched_export_profiling_json(sched, params.profiling_output.c_str());
+                        if (ret == 0) {
+                            SRV_INF("profiling data exported to: %s\n", params.profiling_output.c_str());
+                        } else {
+                            SRV_ERR("failed to export profiling data to: %s\n", params.profiling_output.c_str());
+                        }
+                    }
+                }
+            }
+
             common_memory_breakdown_print(ll_ctx);
         }
     }

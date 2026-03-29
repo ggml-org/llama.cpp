@@ -1,6 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
+#include "ggml-profiler.h"
 #include "repack.h"
 #include "traits.h"
 #include "ggml-impl.h"
@@ -107,6 +108,11 @@ struct ggml_backend_cpu_context {
     void *              abort_callback_data;
 
     bool                use_ref;  // use reference implementation
+
+    // Profiling state
+    bool                             profiling_enabled;
+    int                              profiling_split_id;
+    std::vector<ggml_profile_record> profiling_records;
 };
 
 static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
@@ -167,6 +173,34 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
     GGML_UNUSED(backend);
 }
 
+// Callback function for recording CPU profiling events from C code (ggml-cpu.c)
+static void ggml_cpu_profiler_record_callback(void *        context,
+                                              int           type,
+                                              const char *  name,
+                                              int           split_id,
+                                              uint64_t      start_ns,
+                                              uint64_t      end_ns,
+                                              uint64_t      bytes,
+                                              const char *  extra,
+                                              const int64_t ne[4]) {
+    auto *              cpu_ctx = (ggml_backend_cpu_context *) context;
+    ggml_profile_record rec;
+    rec.type       = (enum ggml_profile_event_type) type;
+    rec.name       = name;
+    rec.backend_id = 0;  // will be overwritten by scheduler
+    rec.split_id   = split_id != -1 ? split_id : cpu_ctx->profiling_split_id;
+    rec.start_ns   = start_ns;
+    rec.end_ns     = end_ns;
+    rec.bytes      = bytes;
+    rec.extra      = extra;
+    if (ne) {
+        memcpy(rec.ne, ne, sizeof(rec.ne));
+    } else {
+        memset(rec.ne, 0, sizeof(rec.ne));
+    }
+    cpu_ctx->profiling_records.push_back(rec);
+}
+
 static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
@@ -186,6 +220,9 @@ static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, s
     cplan.abort_callback      = cpu_ctx->abort_callback;
     cplan.abort_callback_data = cpu_ctx->abort_callback_data;
     cplan.use_ref             = cpu_ctx->use_ref;
+
+    cplan.profiling_context   = cpu_ctx->profiling_enabled ? cpu_ctx : NULL;
+    cplan.profiling_record_fn = cpu_ctx->profiling_enabled ? ggml_cpu_profiler_record_callback : NULL;
 
     return ggml_graph_compute(cgraph, &cplan);
 }
@@ -230,18 +267,58 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
     ctx->use_ref             = false;
+    ctx->profiling_enabled   = false;
+    ctx->profiling_split_id  = -1;
 
     ggml_backend_t cpu_backend = new ggml_backend {
-        /* .guid    = */ ggml_backend_cpu_guid(),
-        /* .iface   = */ ggml_backend_cpu_i,
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context = */ ctx,
+        /* .guid     = */ ggml_backend_cpu_guid(),
+        /* .iface    = */ ggml_backend_cpu_i,
+        /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
 
     if (cpu_backend == NULL) {
         delete ctx;
         return NULL;
     }
+
+    // Register profiler
+    static auto cpu_prof_enable = [](void * ctx, bool enable) {
+        auto * cpu_ctx             = (ggml_backend_cpu_context *) ctx;
+        cpu_ctx->profiling_enabled = enable;
+        if (!enable) {
+            cpu_ctx->profiling_records.clear();
+        }
+    };
+    static auto cpu_prof_reset = [](void * ctx) {
+        auto * cpu_ctx = (ggml_backend_cpu_context *) ctx;
+        cpu_ctx->profiling_records.clear();
+        cpu_ctx->profiling_split_id = -1;
+    };
+    static auto cpu_prof_set_split_id = [](void * ctx, int split_id) {
+        auto * cpu_ctx              = (ggml_backend_cpu_context *) ctx;
+        cpu_ctx->profiling_split_id = split_id;
+    };
+    static auto cpu_prof_get_records = [](void * ctx, const ggml_profile_record ** out) -> int {
+        auto * cpu_ctx = (ggml_backend_cpu_context *) ctx;
+        *out           = cpu_ctx->profiling_records.data();
+        return (int) cpu_ctx->profiling_records.size();
+    };
+    static auto cpu_prof_free = [](void * ctx) {
+        // Nothing to free - records are in the CPU context's vector
+        (void) ctx;
+    };
+
+    auto * profiler = new ggml_backend_profiler{
+        /* .context      = */ ctx,
+        /* .enable       = */ cpu_prof_enable,
+        /* .reset        = */ cpu_prof_reset,
+        /* .set_split_id = */ cpu_prof_set_split_id,
+        /* .get_records  = */ cpu_prof_get_records,
+        /* .free_context = */ cpu_prof_free,
+    };
+    ggml_backend_set_profiler(cpu_backend, profiler);
 
     return cpu_backend;
 }
