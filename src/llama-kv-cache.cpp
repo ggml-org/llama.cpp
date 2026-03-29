@@ -222,18 +222,17 @@ llama_kv_cache::llama_kv_cache(
             throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
-        // TurboQuant requires head_dim (n_embd_head_k) divisible by 64 (or 128 for turbo2).
-        // turbo2 (2-bit) at 64-group WHT doesn't have enough resolution — require 128-aligned.
+        // TurboQuant requires head_dim divisible by 128 for quality.
+        // 64-group WHT (head_dim=192/576) passes NIAH but has catastrophic PPL on some
+        // models (DeepSeek 192-dim: 344K vs 9.9 baseline). Fall back to q8_0.
         const bool is_turbo_type = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0 ||
                                     type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0 || type_v == GGML_TYPE_TURBO2_0);
-        const bool is_turbo2 = (type_k == GGML_TYPE_TURBO2_0 || type_v == GGML_TYPE_TURBO2_0);
         const uint32_t n_embd_head_k = hparams.n_embd_head_k(il);
-        const uint32_t min_align = is_turbo2 ? 128 : 64;  // turbo2 requires 128-group WHT
-        if (is_turbo_type && n_embd_head_k % min_align != 0) {
+        if (is_turbo_type && n_embd_head_k % 128 != 0) {
             if (il == 0) {
-                LLAMA_LOG_WARN("%s: turbo%s KV cache requires head_dim divisible by %u, "
+                LLAMA_LOG_WARN("%s: turbo KV cache requires head_dim divisible by 128, "
                                "but this model has n_embd_head_k=%u — falling back to q8_0\n",
-                               __func__, is_turbo2 ? "2" : "3", min_align, n_embd_head_k);
+                               __func__, n_embd_head_k);
             }
             type_k = GGML_TYPE_Q8_0;
             type_v = GGML_TYPE_Q8_0;
