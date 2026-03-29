@@ -847,6 +847,14 @@ class unified_cache {
         return budget_ > used ? budget_ - used : 0;
     }
 
+    // Fraction of budget currently used (0.0 to 1.0+)
+    float budget_utilization() const {
+        return budget_ > 0 ? static_cast<float>(used_.load(std::memory_order_relaxed)) / static_cast<float>(budget_) : 0.0f;
+    }
+
+    // Drain pending deferred frees (public accessor for prestage drain)
+    void process_deferred_frees_public() { process_deferred_frees(); }
+
     // Raw VRAM budget before runtime reservations
     size_t base_budget() const { return base_budget_; }
 
@@ -897,6 +905,11 @@ class unified_cache {
     // Access the internal SYCL queue (for deferred free of temp allocations
     // made on this queue's context, e.g. GPU-side reorder temp buffers).
     sycl::queue & get_queue() { return queue_; }
+
+    // Register the compute queue so deferred frees wait for in-flight kernels.
+    // Without this, evicted VRAM pointers can be freed while GPU kernels on the
+    // compute queue still reference them → GPU page fault → DEVICE_LOST.
+    void set_compute_queue(sycl::queue * q) { compute_queue_ = q; }
 
     void reset_stats();
     // Debug/testing helper: verify internal maps are consistent.
@@ -1089,6 +1102,7 @@ class unified_cache {
     }
 
     sycl::queue &                queue_;
+    sycl::queue *                compute_queue_ = nullptr;  // Inference compute queue (for deferred free barriers)
     std::unique_ptr<sycl::queue> dma_queue_;                // Separate in-order queue for cache DMA ops (CCS)
     std::unique_ptr<sycl::queue> bcs_queue_;                // Copy-only queue targeting BCS engine (ordinal 1)
     size_t               budget_;                   // Total GPU memory budget (after reservations)

@@ -38440,6 +38440,16 @@ gpu_dispatch:
 
         GGML_ASSERT(ok);
 
+        // MoE engine timeout guard: for large MoE graphs (>500 nodes), the
+        // accumulated GPU work from PCIe zero-copy expert reads can exceed the
+        // xe driver's job_timeout_ms (10s max). Periodic queue drain resets
+        // the engine timeout counter. Only applies to MoE-sized graphs to
+        // avoid overhead on small dense-model graphs.
+        // Cost: ~0.1ms per drain on idle queue, negligible vs 10+ seconds saved.
+        if (cgraph->n_nodes > 500 && (i + 1) % 250 == 0 && !g_ggml_sycl_graph_recording) {
+            try { sycl_ctx->stream()->wait(); } catch (...) {}
+        }
+
         // D+: Mark queue as dirty after any GPU submission.  The next CPU
         // direct-dispatch node will drain it before reading host-pinned output.
         // Guard includes cpu_offload_active because node_on_cpu (the reader) is
@@ -45042,6 +45052,20 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     if (g_sycl_graph_inflight.load(std::memory_order_relaxed) > 1) {
         g_sycl_graph_multithreaded.store(true, std::memory_order_relaxed);
     }
+
+    // Register compute queue with unified cache so deferred frees wait for
+    // in-flight GPU kernels. Without this, cache eviction during MoE prestage
+    // can free VRAM while MUL_MAT_ID kernels still reference those pointers.
+    {
+        const int n_devs = ggml_sycl_info().total_gpu_count;
+        for (int d = 0; d < n_devs && d < GGML_SYCL_MAX_DEVICES; d++) {
+            auto * cache = ggml_sycl::get_unified_cache_for_device(d);
+            if (cache) {
+                cache->set_compute_queue(sycl_ctx->stream());
+            }
+        }
+    }
+
     bool graph_executed = false;
 
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Creating lambda...\n");

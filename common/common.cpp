@@ -1556,6 +1556,29 @@ common_init_result_ptr common_init_from_params(common_params & params) {
     // OOM from trying to stage all 128 experts simultaneously while still allowing
     // JIT compilation during warmup.
 
+    // Skip warmup for MoE models: the warmup creates a monolithic graph (all layers
+    // in one graph_compute_impl call) that accumulates >10s of non-preemptible GPU work
+    // on the CCS engine. This exceeds xe driver's job_timeout_ms (10s max), triggering
+    // a GT engine reset → DEVICE_LOST.  First real inference handles cold-cache staging
+    // incrementally through backend_sched graph splits (~55 nodes each) which stay well
+    // within the timeout.
+    {
+        char expert_buf[32] = {};
+        int n_expert = llama_model_meta_val_str(model, "gpt-oss.expert_count", expert_buf, sizeof(expert_buf));
+        if (n_expert <= 0) {
+            n_expert = llama_model_meta_val_str(model, "llama.expert_count", expert_buf, sizeof(expert_buf));
+        }
+        if (n_expert <= 0) {
+            n_expert = llama_model_meta_val_str(model, "qwen2moe.expert_count", expert_buf, sizeof(expert_buf));
+        }
+        const bool is_moe = (n_expert > 0 && std::atoi(expert_buf) > 0);
+        if (params.warmup && is_moe) {
+            LOG_WRN("%s: skipping warmup for MoE model (%s experts) — first inference handles cold cache incrementally\n",
+                    __func__, expert_buf);
+            params.warmup = false;
+        }
+    }
+
     if (params.warmup) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 

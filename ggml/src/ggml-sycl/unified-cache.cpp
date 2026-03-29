@@ -5190,7 +5190,28 @@ sycl::event unified_cache::submit_barrier(const std::vector<sycl::event> & deps)
 }
 
 sycl::event unified_cache::submit_barrier_all() {
-    return queue_.ext_oneapi_submit_barrier(std::vector<sycl::event>{});
+    // Submit barrier that depends on ALL queues — cache, BCS, and compute.
+    // This ensures deferred frees don't execute until in-flight GPU kernels
+    // on the compute queue have completed. Without the compute queue barrier,
+    // evicted VRAM pointers can be freed while MUL_MAT_ID kernels on the
+    // compute queue still reference them (expert pointer table use-after-free).
+    std::vector<sycl::event> no_deps;
+    std::vector<sycl::event> deps;
+    try {
+        deps.push_back(queue_.ext_oneapi_submit_barrier(no_deps));
+    } catch (...) {}
+    if (bcs_queue_) {
+        try {
+            deps.push_back(bcs_queue_->ext_oneapi_submit_barrier(no_deps));
+        } catch (...) {}
+    }
+    if (compute_queue_) {
+        try {
+            deps.push_back(compute_queue_->ext_oneapi_submit_barrier(no_deps));
+        } catch (...) {}
+    }
+    // Return a barrier on the cache queue that depends on all collected events
+    return queue_.ext_oneapi_submit_barrier(deps);
 }
 
 void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
@@ -7334,6 +7355,22 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     sycl::queue * staging_queue = static_cast<sycl::queue *>(queue_ptr);
 
     // Step 3: Stage missing experts via ensure_cached_layout to get fill events.
+    // CRITICAL: If the cache is near capacity, ensure_cached_layout triggers
+    // eviction which calls enqueue_deferred_free. Drain ALL queues (compute,
+    // cache, BCS) before staging so no stale pointers are freed while kernels run.
+    if (!experts_to_stage.empty() && cache->budget_utilization() > 0.5f) {
+        GGML_LOG_INFO("[PRESTAGE-DRAIN] Layer %d: draining queues before staging %zu experts "
+                      "(utilization=%.1f%%)\n",
+                      layer_id, experts_to_stage.size(), cache->budget_utilization() * 100.0f);
+        try { cache->get_queue().wait(); } catch (...) {}
+        if (staging_queue) {
+            try { staging_queue->wait(); } catch (...) {}
+        }
+        try { cache->get_bcs_queue().wait(); } catch (...) {}
+        // Process any pending deferred frees NOW while all queues are idle
+        cache->process_deferred_frees_public();
+    }
+
     // Yield every 4 experts to drain all queues (CCS + BCS + staging) and
     // prevent xe driver GT engine resets from unbounded command list growth
     // during inference dispatch.  The ensure_cached_layout path submits
