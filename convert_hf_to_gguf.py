@@ -2740,6 +2740,17 @@ class FalconOCRMmprojModel(MmprojModel):
             w = w.reshape(data_torch.shape)                 # flatten back to 2-D
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, bid=0), w)
             return
+
+        if name == "tok_embeddings.weight":
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+            prefix_str = "<|image_cls|><|image_reg_1|><|image_reg_2|><|image_reg_3|><|image_reg_4|>"
+            ids = tokenizer.encode(prefix_str, add_special_tokens=False)
+            prefix_embd = data_torch[ids].contiguous()
+            logger.info(f"Extracted {len(ids)} prefix embeddings (token IDs: {ids})")
+            yield ("v.prefix_embd", prefix_embd)
+            return
+
         return
 
 

@@ -572,10 +572,6 @@ extern "C" {
     // Returns label of classifier output by index (<n_cls_out). Returns nullptr if no label provided
     LLAMA_API const char * llama_model_cls_label(const struct llama_model * model, uint32_t i);
 
-    // Copy the embedding vector for the given token into output (must be at least n_embd floats)
-    // Returns false if the token is out of range or if the model has no token embeddings
-    LLAMA_API bool llama_model_token_to_embd(const struct llama_model * model, llama_token token, float * output);
-
     LLAMA_API enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab);
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);

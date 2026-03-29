@@ -396,6 +396,9 @@ struct clip_model {
     ggml_tensor * mm_patch_merger_w = nullptr;
     ggml_tensor * mm_patch_merger_b = nullptr;
 
+    // falcon-ocr: pre-computed cls+reg prefix embeddings [n_embd, n_prefix]
+    ggml_tensor * prefix_embd = nullptr;
+
     // ultravox / whisper encoder
     ggml_tensor * conv1d_1_w = nullptr;
     ggml_tensor * conv1d_1_b = nullptr;

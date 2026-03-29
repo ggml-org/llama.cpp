@@ -71,6 +71,9 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
 // this should be equal to the embedding dimension of the text model
 int clip_n_mmproj_embd(const struct clip_ctx * ctx);
 
+// number of pre-computed prefix embeddings (0 if none)
+int clip_n_prefix_tokens(const struct clip_ctx * ctx);
+
 struct clip_image_size      * clip_image_size_init(void);
 struct clip_image_u8        * clip_image_u8_init (void);
 struct clip_image_f32       * clip_image_f32_init(void);

@@ -1855,6 +1855,7 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_FALCON_OCR:
                 {
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.prefix_embd = get_tensor(TN_PREFIX_EMBD);
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
@@ -2624,7 +2625,9 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_FALCON_OCR:
             {
-                // n_merge=1, no patch merging
+                if (ctx->model.prefix_embd) {
+                    n_patches += clip_n_prefix_tokens(ctx);
+                }
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
@@ -3265,6 +3268,13 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         default:
             GGML_ABORT("Unknown projector type");
     }
+}
+
+int clip_n_prefix_tokens(const struct clip_ctx * ctx) {
+    if (ctx->model.prefix_embd) {
+        return (int)ctx->model.prefix_embd->ne[1];
+    }
+    return 0;
 }
 
 int clip_is_minicpmv(const struct clip_ctx * ctx) {

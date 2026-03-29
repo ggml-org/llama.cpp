@@ -38,8 +38,8 @@ struct mtmd_image_tokens {
     uint32_t ny; // number of tokens in y direction
     bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
     bool use_spatial_3d_pos = false; // spatial 3D RoPE: all patches share one temporal position (n_pos = 1)
-    std::vector<llama_token> prefix_tokens; // tokens to prepend (e.g. cls+regs for bidirectional attention with patches)
-    uint32_t n_tokens() const { return (uint32_t)prefix_tokens.size() + nx * ny; }
+    uint32_t n_prefix = 0; // number of pre-computed prefix embeddings (e.g. cls+regs)
+    uint32_t n_tokens() const { return n_prefix + nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
@@ -49,7 +49,7 @@ struct mtmd_image_tokens {
             ny,
             use_mrope_pos,
             use_spatial_3d_pos,
-            prefix_tokens,
+            n_prefix,
             batch_f32.clone(),
             id
         };
@@ -405,7 +405,7 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_FALCON_OCR:
                 {
-                    img_beg = "<|image_cls|><|image_reg_1|><|image_reg_2|><|image_reg_3|><|image_reg_4|>";
+                    // img_beg is empty: prefix embeddings are pre-computed in the mmproj GGUF
                     img_end = "<|end_of_image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_falcon_ocr>(ctx_v);
                 } break;
@@ -647,18 +647,8 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
-            // Falcon OCR: prefix tokens (cls+regs) must share the same non-causal
-            // attention batch as image patches, so we store them inside the IMAGE
-            // chunk rather than emitting a separate TEXT chunk
-            // This avoids having to later merge the prefix tokens with the image patches.
-            std::vector<llama_token> img_beg_prefix_tokens;
             if (!ctx->img_beg.empty()) {
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_FALCON_OCR) {
-                    img_beg_prefix_tokens = mtmd_tokenize_text_internal(
-                        vocab, ctx->img_beg, false, true);
-                } else {
-                    add_text(ctx->img_beg, true);
-                }
+                add_text(ctx->img_beg, true);
             }
 
             // convert mtmd_bitmap to clip_image_u8
@@ -755,7 +745,7 @@ struct mtmd_tokenizer {
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->use_spatial_3d_pos = true;
-                    image_tokens->prefix_tokens = std::move(img_beg_prefix_tokens);
+                    image_tokens->n_prefix = (uint32_t)clip_n_prefix_tokens(ctx->ctx_v);
                 } else {
                     // other models, we only need the total number of tokens
                     image_tokens->nx = n_tokens;
@@ -955,12 +945,10 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     }
     auto proj_type = clip_get_projector_type(ctx_clip);
     int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
-    const size_t n_prefix = image_tokens->prefix_tokens.size();
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    // encode patches at offset (leaving room for prefix embeddings at the start)
-    float * encode_dest = ctx->image_embd_v.data() + n_prefix * n_mmproj_embd;
+    float * encode_dest = ctx->image_embd_v.data();
 
     if (clip_is_llava(ctx_clip)
         || clip_is_minicpmv(ctx_clip)
@@ -982,20 +970,6 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
             ctx->n_threads,
             &image_tokens->batch_f32,
             encode_dest);
-    }
-
-    // prepend prefix token embeddings (e.g. cls+regs for bidirectional attention)
-    if (ok && n_prefix > 0) {
-        for (size_t t = 0; t < n_prefix; t++) {
-            if (!llama_model_token_to_embd(ctx->text_model,
-                    image_tokens->prefix_tokens[t],
-                    ctx->image_embd_v.data() + t * n_mmproj_embd)) {
-                LOG_ERR("%s: failed to get embedding for prefix token %d\n",
-                    __func__, image_tokens->prefix_tokens[t]);
-                return 1;
-            }
-        }
-        LOG_INF("%s: prepended %zu prefix token embeddings\n", __func__, n_prefix);
     }
 
     return ok ? 0 : 1;
@@ -1239,7 +1213,7 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
 }
 
 size_t mtmd_image_tokens_get_n_prefix(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->prefix_tokens.size();
+    return image_tokens->n_prefix;
 }
 
 const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {

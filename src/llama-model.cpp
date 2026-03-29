@@ -8929,20 +8929,6 @@ int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
 
-bool llama_model_token_to_embd(const llama_model * model, llama_token token, float * output) {
-    if (!model->tok_embd) {
-        return false;
-    }
-    const int64_t n_embd  = model->tok_embd->ne[0];
-    const int64_t n_vocab = model->tok_embd->ne[1];
-    if (token < 0 || token >= n_vocab) {
-        return false;
-    }
-    ggml_backend_tensor_get(model->tok_embd, output,
-        (size_t)token * n_embd * sizeof(float), n_embd * sizeof(float));
-    return true;
-}
-
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
 }
