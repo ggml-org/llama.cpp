@@ -27,13 +27,6 @@ uint64_t ggml_profiler_time_ns(void) {
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&count);
     return (uint64_t) (count.QuadPart * 1000000000ULL / freq.QuadPart);
-#elif defined(__APPLE__)
-    clock_serv_t    cclock;
-    mach_timespec_t mts;
-    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
-    clock_get_time(cclock, &mts);
-    mach_port_deallocate(mach_task_self(), cclock);
-    return (uint64_t) mts.tv_sec * 1000000000ULL + (uint64_t) mts.tv_nsec;
 #elif defined(CLOCK_MONOTONIC_RAW)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
