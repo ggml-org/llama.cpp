@@ -73,68 +73,73 @@ int entry_point(struct ggml_et_rms_norm_params* params, void* env) {
     // RMS norm processes rows independently
     // Parallelize across rows using simple striding
     // TODO: ensure lines don't cross cache lines
+    // Precompute reciprocal of row length (constant across all rows)
+    const float inv_ne0 = et_fdiv(1.0f, (float)(int32_t)ne0);
+
     for (int64_t i3 = 0; i3 < ne3; i3++) {
         for (int64_t i2 = 0; i2 < ne2; i2++) {
             for (int64_t i1 = thread_id; i1 < ne1; i1 += num_threads) {
 
-            // Calculate base pointers for this row using stride-based addressing
             const float* src_ptr = (const float*)((const char*)src0_data + i3*nb03 + i2*nb02 + i1*nb01);
             float* dst_ptr = (float*)((char*)dst_data + i3*nb3 + i2*nb2 + i1*nb1);
 
-            // Step 1: Compute sum of squares for this row using 8-wide vectors
-            // ne0 is guaranteed to be a multiple of 16 (cache-aligned)
+            // Set mask to enable all 8 vector lanes
+            unsigned long saved_mask;
+            __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+            __asm__ volatile("mov.m.x m0, x0, 0xFF");
 
-            // Zero the accumulator register
-            float zero = 0.0f;
-            __asm__ volatile("fbc.ps f10, %[z]\n" : : [z] "m"(zero) : "f10");
+            // Step 1: Compute sum of squares using 8-wide vectors
+            __asm__ volatile("fbci.pi f10, 0" ::: "f10");
 
             for (int32_t i0 = 0; i0 < (int32_t)ne0; i0 += 8) {
                 __asm__ volatile(
-                    "flw.ps f11, %[x_vec]\n"            // Load 8 input values
-                    "fmadd.ps f10, f11, f11, f10\n"     // acc += x * x (fused multiply-add)
+                    "flw.ps f11, %[x_vec]\n"
+                    "fmadd.ps f10, f11, f11, f10\n"
                     :
                     : [x_vec] "m"(*(const float(*)[8])&src_ptr[i0])
                     : "f10", "f11"
                 );
             }
 
-            // Horizontal sum of 8 accumulated values in f10
+            // Horizontal reduce
             float sum;
-            __asm__ __volatile__(
-                "fswizz.ps f1, f10, 0xB1 \n\t"         // Swaps: e0<->e1 and e2<->e3
+            __asm__ __volatile__ (
+                "fswizz.ps f1, f10, 0xB1 \n\t"
                 "fadd.ps   f2, f10, f1, rne \n\t"
-                "fswizz.ps f3, f2, 0x4E \n\t"           // Swaps: e0,e1 <-> e2,e3
+                "fswizz.ps f3, f2, 0x4E \n\t"
                 "fadd.ps   f4, f2, f3, rne \n\t"
-                "fmvz.x.ps t0, f4, 4 \n\t"              // Move upper 128b half to scalar
-                "fbcx.ps   f5, t0 \n\t"                  // Broadcast to vector
+                "fmvz.x.ps t0, f4, 4 \n\t"
+                "fbcx.ps   f5, t0 \n\t"
                 "fadd.ps   %[vout], f4, f5, rne \n\t"
                 : [vout] "=f" (sum)
                 :: "t0", "f1", "f2", "f3", "f4", "f5"
             );
 
-            // Step 2: Compute mean of squares and scale factor
-            const float mean = et_fdiv(sum, (float)(int32_t)ne0);
-            const float scale = et_powf(mean + eps, -0.5f);
+            // Step 2: scale = rsqrt(mean + eps)
+            const float scale = et_powf(sum * inv_ne0 + eps, -0.5f);
 
-            // Numerical stability check
             if (!(scale > 0.0f)) {
-                return -1; // Invalid scale factor
+                __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
+                return -1;
             }
 
-            // Step 3: Apply scaling using 8-wide vectors
+            // Step 3: Apply scaling — broadcast scale once, reuse across loop
+            uint32_t scale_bits;
+            __asm__ volatile("fmv.x.s %0, %1" : "=r"(scale_bits) : "f"(scale));
+            __asm__ volatile("fbcx.ps f13, %[sb]\n" : : [sb] "r"(scale_bits) : "f13");
+
             for (int32_t i0 = 0; i0 < (int32_t)ne0; i0 += 8) {
                 __asm__ volatile(
-                    "flw.ps f12, %[x_vec]\n"            // Load 8 input values
-                    "fbc.ps f13, %[scale_ptr]\n"        // Broadcast scale to all 8 elements
-                    "fmul.ps f14, f12, f13\n"           // x * scale (8-wide)
-                    "fsw.ps f14, %[result]\n"           // Store 8 scaled results
-
+                    "flw.ps f12, %[x_vec]\n"
+                    "fmul.ps f14, f12, f13\n"
+                    "fsw.ps f14, %[result]\n"
                     : [result] "=m"(*(float(*)[8])&dst_ptr[i0])
-                    : [x_vec] "m"(*(const float(*)[8])&src_ptr[i0]),
-                      [scale_ptr] "m"(scale)
-                    : "f12", "f13", "f14"
+                    : [x_vec] "m"(*(const float(*)[8])&src_ptr[i0])
+                    : "f12", "f14"
                 );
             }
+
+            __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
             }
         }
     }
