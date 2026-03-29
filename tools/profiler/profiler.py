@@ -358,43 +358,41 @@ class ProfileData:
                 "args": {"name": backend_names[bid]},
             })
 
-        # Group records by (backend_id, split_id) and lay them out sequentially
-        # since we don't have reliable global timestamps across backends.
-        # Within each group, events are cumulative.
-        from collections import OrderedDict
-        groups: OrderedDict[tuple, list[ProfileRecord]] = OrderedDict()
+        # Use real timestamps, but prevent overlaps within each track.
+        # GPU kernels are launched rapidly (small start_ns gaps) but have long
+        # durations, so naive real timestamps overlap.  Sweep-line per track:
+        # sort by start_ns, then place each event at max(start, prev_end).
+        from collections import defaultdict
+        tracks: dict[tuple, list[ProfileRecord]] = defaultdict(list)
         for rec in self.records:
-            key = (rec.backend_id, rec.split_id)
-            groups.setdefault(key, []).append(rec)
+            tracks[(rec.backend_id, rec.split_id)].append(rec)
 
-        # Assign timestamps: each group starts after the previous one,
-        # and events within a group are sequential (cumulative duration).
-        global_ts = 0.0  # microseconds
-        for key, recs in groups.items():
-            backend_id, split_id = key
-            pid = pid_map[backend_id]
-            tid = f"split_{split_id}"
+        for key in tracks:
+            tracks[key].sort(key=lambda r: r.start_ns)
 
+        for key, recs in tracks.items():
+            pid = pid_map[key[0]]
+            tid = f"split_{key[1]}"
+            cursor = 0.0
             for rec in recs:
+                ts = max(rec.start_ns / 1000.0, cursor)
+                dur = rec.duration_ns / 1000.0
                 cat = "copy" if rec.type == COPY_EVENT else "compute"
                 events.append({
                     "ph": "X",  # complete event
                     "pid": pid,
                     "tid": tid,
                     "name": rec.name,
-                    "ts": global_ts,
-                    "dur": rec.duration_ns / 1000.0,  # us
+                    "ts": ts,
+                    "dur": dur,
                     "cat": cat,
                     "args": {
                         "bytes": rec.bytes,
-                        "duration_us": rec.duration_ns / 1000.0,
+                        "duration_us": dur,
                         "shape": rec.shape_str,
                     },
                 })
-                global_ts += rec.duration_ns / 1000.0
-
-            # Add a small gap between groups for visual separation
-            global_ts += 1.0
+                cursor = ts + dur
 
         trace = {"traceEvents": events}
         with open(filepath, "w") as f:
@@ -944,8 +942,8 @@ Examples:
                         help="Export as Chrome Trace Event format")
     parser.add_argument("--html-viewer", metavar="FILE",
                         help="Export as interactive HTML timeline viewer")
-    parser.add_argument("--html-max-records", type=int, default=5000,
-                        help="Max records per backend in HTML viewer (0=unlimited, downsample to reduce file size)")
+    parser.add_argument("--html-max-records", type=int, default=0,
+                        help="Max records in HTML viewer (0=unlimited, set to downsample for huge traces)")
     parser.add_argument("--top-ops", type=int, default=0,
                         help="Show top N operations (0 = show summary)")
     parser.add_argument("--top-kernels", type=int, default=0,
