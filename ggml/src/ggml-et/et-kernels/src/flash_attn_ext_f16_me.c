@@ -36,7 +36,7 @@
 
 // Max head dimensions for stack buffers
 #define FA_DV_MAX 128   // max value head dim (dv)
-#define FA_DK_MAX 256   // max key head dim (dk) — some models use hsk > hsv
+#define FA_DK_MAX 256   // max key head dim (dk) - some models use hsk > hsv
 
 typedef uint16_t et_fp16_t;
 
@@ -202,6 +202,40 @@ pack_k_for_transpose16(et_fp16_t * out,
         for (int l = 0; l < TILE_K / 2; ++l) {
             even_row[l] = 0;
             odd_row[l]  = 0;
+        }
+    }
+}
+
+// Build interleaved B panel for TensorFMA16A32 (weights @ V).
+//
+// K dimension  = kv_count KV positions (up to TILE_KV = 16)
+// N dimension  = 16 dv values per chunk
+// Output       = 8 SCP lines × 32 halfwords (512 bytes, 64-byte stride)
+//
+//   out[l*32 + n*2 + r] = V[kv_base + 2*l + r][dv_start + n]
+//   l = 0..7 (K/2), n = 0..15 (output cols), r = 0..1 (even/odd K)
+//
+// Zero-pads KV positions beyond kv_count.
+static inline void __attribute__((always_inline))
+pack_v_interleaved(et_fp16_t *out,
+                   const char *v_head,
+                   int64_t kv_base,
+                   int64_t dv_start,
+                   int64_t kv_count,
+                   int64_t nb1_v)
+{
+    for (int k = 0; k < TILE_KV; ++k) {
+        const int l = k >> 1;
+        const int r = k & 1;
+        et_fp16_t * const dst = out + l * 32 + r;
+        if (k < (int)kv_count) {
+            const et_fp16_t *v_row =
+                (const et_fp16_t *)(v_head + (kv_base + k) * nb1_v) + dv_start;
+            for (int n = 0; n < 16; ++n)
+                dst[n * 2] = v_row[n];
+        } else {
+            for (int n = 0; n < 16; ++n)
+                dst[n * 2] = 0;
         }
     }
 }
@@ -518,65 +552,32 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                 pack_k_for_transpose16(kpanel, k_head, kv_base, dk_chunk,
                                        kv_count, k->nb[1]);
 
-                // Prefetch K data for the NEXT dk_chunk while tensor engine
-                // processes the current one (overlaps DRAM latency with compute)
                 if (dk_chunk + TILE_K < dk) {
                     prefetch_k_to_l2(k_head, kv_base, dk_chunk + TILE_K,
                                      kv_count, k->nb[1]);
                 }
 
                 FENCE;
-                // split as `flush_to_l2` can only do 16 lines at a time
                 flush_to_l2(kpanel, 16, 64);
                 flush_to_l2(kpanel + 16 * 32, 16, 64);
 
-                // Load Q_f16 chunk into L1SCP as A (1 row × 64B)
                 tensor_load(
-                    false, false,
-                    A_L1_START,
-                    TENSOR_LOAD_PLAIN,
-                    0,
-                    (uint64_t)(q_f16 + dk_chunk),
-                    0,
-                    0,  // 1 row (num_lines = 0 means 1 line)
-                    64, // stride (doesn't matter for 1 row)
-                    0
-                );
+                    false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
+                    (uint64_t)(q_f16 + dk_chunk), 0, 0, 64, 0);
                 tensor_wait(TENSOR_LOAD_WAIT_0);
 
-                // Make sure the current panel flush completed before tensor_load.
                 WAIT_CACHEOPS;
 
-                // New pack + TRANSPOSE16
                 tensor_load(
-                    false, false,
-                    B_L1_START,
-                    TENSOR_LOAD_TRANSPOSE16,
-                    0,
-                    (uint64_t)kpanel,
-                    0,
-                    15,  // 16 output lines
-                    64,  // stride between source rows
-                    0
-                );
+                    false, false, B_L1_START, TENSOR_LOAD_TRANSPOSE16, 0,
+                    (uint64_t)kpanel, 0, 15, 64, 0);
                 tensor_wait(TENSOR_LOAD_WAIT_0);
 
-
                 tensor_fma(
-                    (kv_count < TILE_KV),  // use_tmask for partial tiles
-                    3,                      // b_num_col (16 output cols)
-                    0,                      // a_num_rows (1 query row)
-                    15,                     // a_num_cols (32 F16 elements)
-                    0,                      // offset
-                    false,                  // tenc_loc
-                    false,                  // tenb_unsigned
-                    false,                  // tena_unsigned
-                    false,                  // tenb_loc (B in L1SCP)
-                    B_L1_START,
-                    A_L1_START,
-                    TENSOR_FMA_OP_FP16,
-                    (dk_chunk == 0)         // first_pass
-                );
+                    (kv_count < TILE_KV), 3, 0, 15, 0,
+                    false, false, false, false,
+                    B_L1_START, A_L1_START,
+                    TENSOR_FMA_OP_FP16, (dk_chunk == 0));
                 tensor_wait(TENSOR_FMA_WAIT);
             }
 
@@ -603,42 +604,204 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                 );
             }
 
+            // Prefetch V rows for this tile
+            for (int64_t d = 0; d < dv; d += 32)
+                prefetch_k_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
+
+            // Prefetch K for NEXT KV tile's first dk_chunk
+            if (kv_base + TILE_KV < nk) {
+                int64_t next_count = (kv_base + 2*TILE_KV <= nk)
+                    ? TILE_KV : (nk - kv_base - TILE_KV);
+                prefetch_k_to_l2(k_head, kv_base + TILE_KV, 0,
+                                 next_count, k->nb[1]);
+            }
+
             // ============================================================
-            // Online softmax + vectorized V accumulation
-            //
-            // Each asm block is self-contained: loads its inputs from memory,
-            // saves/restores the SIMD mask register, and declares all used
-            // f-regs as clobbers. No f-reg state leaks between blocks.
+            // Two-phase softmax + V accumulation
             // ============================================================
-            for (int64_t j = 0; j < kv_count; ++j) {
-                float s = scores[j];
 
-                if (has_mask) {
-                    float mv = get_mask_val_from_base(mask, mask_base, kv_base + j);
-                    if (mv == ET_NEG_INF_F || mv != mv) continue;
-                    s += mv;
+            // Phase A: compute softmax weights for all positions
+            float weights[TILE_KV] __attribute__((aligned(64)));
+            {
+                // A1: apply mask to scores, find tile-local max
+                float tile_max = ET_NEG_INF_F;
+                for (int64_t j = 0; j < kv_count; ++j) {
+                    float s = scores[j];
+                    if (has_mask) {
+                        float mv = get_mask_val_from_base(mask, mask_base, kv_base + j);
+                        if (mv == ET_NEG_INF_F || mv != mv) {
+                            scores[j] = ET_NEG_INF_F;
+                            continue;
+                        }
+                        s += mv;
+                    }
+                    scores[j] = s;
+                    if (s > tile_max) tile_max = s;
                 }
+                // Pad unused slots so SIMD processes clean data
+                for (int64_t j = kv_count; j < TILE_KV; ++j)
+                    scores[j] = ET_NEG_INF_F;
 
-                const float Mold = M;
-                float ms, vs;
+                if (tile_max > ET_NEG_INF_F) {
+                    // A2: rescale accumulator if this tile has a new global max
+                    if (tile_max > M) {
+                        float rescale = exp2f_et((M - tile_max) * 1.4426950408889634f);
+                        scale_acc_vec(acc, dv, rescale);
+                        S *= rescale;
+                        M = tile_max;
+                    }
 
-                if (s > M) {
-                    M = s;
-                    ms = exp2f_et((Mold - M) * 1.4426950408889634f);
-                    vs = 1.0f;
-                } else {
-                    ms = 1.0f;
-                    vs = exp2f_et((s - M) * 1.4426950408889634f);
+                    // A3: SIMD exp2
+                    {
+                        const float log2e = 1.4426950408889634f;
+                        unsigned long _ms;
+                        __asm__ volatile(
+                            "mova.x.m  %[ms]              \n\t"
+                            "mov.m.x   m0, x0, 0xFF       \n\t"
+                            "fbc.ps    f4, 0(%[pM])       \n\t"
+                            "fbc.ps    f5, 0(%[pL])       \n\t"
+                            "flw.ps    f2, 0(%[sc])       \n\t"
+                            "flw.ps    f3, 32(%[sc])      \n\t"
+                            "fsub.ps   f2, f2, f4         \n\t"
+                            "fsub.ps   f3, f3, f4         \n\t"
+                            "fmul.ps   f2, f2, f5         \n\t"
+                            "fmul.ps   f3, f3, f5         \n\t"
+                            "fexp.ps   f2, f2             \n\t"
+                            "fexp.ps   f3, f3             \n\t"
+                            "fsw.ps    f2, 0(%[wt])       \n\t"
+                            "fsw.ps    f3, 32(%[wt])      \n\t"
+                            "mova.m.x  %[ms]              \n\t"
+                            : [ms] "=&r"(_ms)
+                            : [pM] "r"(&M), [pL] "r"(&log2e),
+                              [sc] "r"(scores), [wt] "r"(weights)
+                            : "f2", "f3", "f4", "f5", "memory"
+                        );
+                        for (int64_t j = 0; j < TILE_KV; ++j)
+                            S += weights[j];
+                    }
+
+                    // Phase B: weights @ V via TensorFMA16A32
+                    //
+                    // A = weights[1×16] (F16), B = V[16×16] per dv chunk
+                    // AROWS=0, ACOLS=7 (K=16), BCOLS=3 (N=16)
+                    //
+                    // Reuse kpanel buffer (dead after QK^T dk loop)
+                    // to avoid stack overflow on minion cores.
+                    {
+                        // B1: convert weights F32 → F16
+                        // w_f16 at kpanel[0..31] (64 bytes)
+                        et_fp16_t *w_f16 = kpanel;
+                        convert_q_row_f32_to_f16(w_f16, weights, TILE_KV);
+
+                        FENCE;
+                        flush_to_l2(w_f16, 1, 64);
+                        WAIT_CACHEOPS;
+
+                        // Load A (weights) — constant across dv chunks
+                        tensor_load(false, false, A_L1_START,
+                                    TENSOR_LOAD_PLAIN, 0,
+                                    (uint64_t)w_f16, 0, 0, 64, 0);
+                        tensor_wait(TENSOR_LOAD_WAIT_0);
+
+                        // B2: process dv in chunks of 16
+                        if (kv_count == TILE_KV) {
+                            // Full tile: pipelined with double-buffered B
+                            // B_buf0 = SCP 8..15, B_buf1 = SCP 16..23
+                            const uintptr_t v_base = (uintptr_t)v_head
+                                + kv_base * v->nb[1];
+                            const uint64_t nb1_v = (uint64_t)v->nb[1];
+                            uint64_t b_cur = 8;
+
+                            // Preload first chunk
+                            tensor_load(false, false, b_cur,
+                                        TENSOR_LOAD_INTERLEAVE16, 0,
+                                        (uint64_t)v_base,
+                                        0, 7, nb1_v, 0);
+                            tensor_wait(TENSOR_LOAD_WAIT_0);
+
+                            for (int64_t dv_off = 0; dv_off < dv; dv_off += 16) {
+                                const uint64_t b_nxt = b_cur ^ 24;
+
+                                // Start loading next chunk while fma runs
+                                if (dv_off + 16 < dv) {
+                                    tensor_load(false, false, b_nxt,
+                                                TENSOR_LOAD_INTERLEAVE16, 0,
+                                                (uint64_t)(v_base + (dv_off + 16) * 2),
+                                                0, 7, nb1_v, 1);
+                                }
+
+                                tensor_fma(false, 3, 0, 7, 0,
+                                           false, false, false, false,
+                                           b_cur, A_L1_START,
+                                           TENSOR_FMA_OP_FP16, true);
+                                tensor_wait(TENSOR_FMA_WAIT);
+
+                                __asm__ volatile("" ::: "f0", "f1");
+                                {
+                                    unsigned long _ms;
+                                    __asm__ volatile(
+                                        "mova.x.m  %[ms]            \n\t"
+                                        "mov.m.x   m0, x0, 0xFF     \n\t"
+                                        "flw.ps    f2, 0(%[pa])     \n\t"
+                                        "flw.ps    f3, 32(%[pa])    \n\t"
+                                        "fadd.ps   f0, f0, f2       \n\t"
+                                        "fadd.ps   f1, f1, f3       \n\t"
+                                        "fsw.ps    f0, 0(%[pa])     \n\t"
+                                        "fsw.ps    f1, 32(%[pa])    \n\t"
+                                        "mova.m.x  %[ms]            \n\t"
+                                        : [ms] "=&r"(_ms)
+                                        : [pa] "r"(acc + dv_off)
+                                        : "f0", "f1", "f2", "f3", "memory"
+                                    );
+                                }
+
+                                if (dv_off + 16 < dv) {
+                                    tensor_wait(TENSOR_LOAD_WAIT_1);
+                                    b_cur = b_nxt;
+                                }
+                            }
+                        } else {
+                            // Partial tile: software pack, no pipeline
+                            for (int64_t dv_off = 0; dv_off < dv; dv_off += 16) {
+                                et_fp16_t *vpanel = kpanel + 256;
+                                pack_v_interleaved(vpanel, v_head, kv_base,
+                                                   dv_off, kv_count, v->nb[1]);
+                                FENCE;
+                                flush_to_l2(vpanel, 8, 64);
+                                WAIT_CACHEOPS;
+                                tensor_load(false, false, B_L1_START,
+                                            TENSOR_LOAD_PLAIN, 0,
+                                            (uint64_t)vpanel, 0, 7, 64, 0);
+                                tensor_wait(TENSOR_LOAD_WAIT_0);
+
+                                tensor_fma(false, 3, 0, 7, 0,
+                                           false, false, false, false,
+                                           B_L1_START, A_L1_START,
+                                           TENSOR_FMA_OP_FP16, true);
+                                tensor_wait(TENSOR_FMA_WAIT);
+
+                                __asm__ volatile("" ::: "f0", "f1");
+                                {
+                                    unsigned long _ms;
+                                    __asm__ volatile(
+                                        "mova.x.m  %[ms]            \n\t"
+                                        "mov.m.x   m0, x0, 0xFF     \n\t"
+                                        "flw.ps    f2, 0(%[pa])     \n\t"
+                                        "flw.ps    f3, 32(%[pa])    \n\t"
+                                        "fadd.ps   f0, f0, f2       \n\t"
+                                        "fadd.ps   f1, f1, f3       \n\t"
+                                        "fsw.ps    f0, 0(%[pa])     \n\t"
+                                        "fsw.ps    f1, 32(%[pa])    \n\t"
+                                        "mova.m.x  %[ms]            \n\t"
+                                        : [ms] "=&r"(_ms)
+                                        : [pa] "r"(acc + dv_off)
+                                        : "f0", "f1", "f2", "f3", "memory"
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
-
-                const char * pv = v_head + (kv_base + j) * v->nb[1];
-                if (ms != 1.0f) {
-                    rescale_accumulate_v_row_f16_contig(acc, pv, dv, ms);
-                } else {
-                    accumulate_v_row_f16_contig(acc, pv, dv, vs);
-                }
-
-                S = S * ms + vs;
             }
         }
 
