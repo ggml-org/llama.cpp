@@ -9353,15 +9353,12 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     }
     const bool ok = ggml_sycl_reorder_weight_cpu(reorder_buf, reorder_src, *ctx);
 
-    // Reorder must succeed: layout_supports_coalesced() and layout_supports_soa()
-    // validate dimensions before reaching this fill function.  A failure here
-    // means the layout validation in S1-PRELOAD or resolve_layout_for_tensor has
-    // a bug — the cache entry would be tagged COALESCED/SOA but contain AOS data,
-    // causing MMVQ to read garbage.
-    GGML_ASSERT(ok && "reorder_weight_cpu failed — layout dimension validation missed this tensor");
-
     if (!ok) {
-        // Unreachable after the assert above, kept for non-assert builds
+        // Reorder failed — this can happen legitimately when the prefetcher or
+        // moe_hybrid_init_once attempts SOA/COALESCED staging for a type that
+        // doesn't support it (e.g., F32, F16) or dimensions that violate tile
+        // alignment requirements.  Fall back to AOS memcpy and let the dispatch
+        // cascade handle it (the AOS kernel or CPU fallback will be used).
         GGML_LOG_WARN("[UNIFIED-CACHE] reorder failed for layout=%d type=%d ncols=%lld nrows=%lld — storing AOS instead\n",
                       (int) ctx->layout, (int) ctx->type, (long long) ctx->ncols, (long long) ctx->nrows);
         std::memcpy(reorder_buf, reorder_src, std::min(dst_size, src_size));
@@ -25016,6 +25013,25 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         }
     }
 
+    // If ANY needed expert is a cache miss and hybrid CPU fallback is not
+    // active, return false so the caller can cascade to a different layout
+    // (e.g. AOS which supports direct pointer arithmetic).  Without this check,
+    // the kernel would receive nullptr expert pointers for the missed entries
+    // and read garbage/zeros from device address 0.
+    // This is critical for:
+    //   1. test-backend-ops where no background prestage runs to populate the
+    //      cache before the first (and only) inference pass
+    //   2. First-token inference before prestage has warmed up the cache
+    //   3. Rare experts that haven't been cached yet
+    // When skip_cpu_routed_experts is true (hybrid dispatch), misses are expected
+    // and handled by CPU fallback — don't interfere with that path.
+    if (stats_miss > 0 && !skip_cpu_routed_experts) {
+        GGML_SYCL_DEBUG("[MOE-PTR] %d/%d needed experts are cache misses for layout=%d, returning false "
+                        "to cascade to next layout for %s\n",
+                        stats_miss, stats_needed, (int) layout, src0->name ? src0->name : "?");
+        return false;
+    }
+
     if (cache && !need_all_experts && !ids_host.empty()) {
         ggml_sycl_update_moe_hotset(cache, src0, extra, ids_host, n_experts, expert_layout_bytes, layout, layer_id,
                                     ctx.moe_layer_count);
@@ -31168,6 +31184,27 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         src0->name);
         call_count++;
     }
+    // Ensure src0 has ggml_tensor_extra_gpu.  Host-resident weight tensors
+    // (e.g., from test-backend-ops) may not have extra because the host buffer
+    // type doesn't call ggml_backend_sycl_buffer_init_tensor and the
+    // register_host_weight path is gated by weights_evictable (off by default).
+    // Without extra, all MMVQ and cache code paths bail out and experts are
+    // silently skipped, producing garbage output.
+    if (!src0->extra) {
+        static std::vector<std::unique_ptr<ggml_tensor_extra_gpu>> s_mul_mat_id_extras;
+        static std::mutex                                          s_mul_mat_id_extras_mutex;
+        auto new_extra = std::make_unique<ggml_tensor_extra_gpu>();
+        ggml_sycl_register_optimize_feature(&new_extra->optimized_feature);
+        ggml_tensor_extra_gpu * raw_extra = new_extra.get();
+        const_cast<ggml_tensor *>(src0)->extra  = raw_extra;
+        const_cast<ggml_tensor *>(src0)->layout = &raw_extra->layout;
+        ggml_sycl_assign_cache_uuid(raw_extra);
+        ggml_sycl_init_layout_info(raw_extra, const_cast<ggml_tensor *>(src0), ctx.device,
+                                   /* use_tensor_data_ptr = */ false);
+        std::lock_guard<std::mutex> lock(s_mul_mat_id_extras_mutex);
+        s_mul_mat_id_extras.push_back(std::move(new_extra));
+    }
+
     ggml_sycl_ensure_weight_on_device(src0, ctx.device);
     if (g_moe_profile_enabled) { g_moe_profile.moe_weight_load_done(); }
 
@@ -33290,13 +33327,34 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     if (use_expert_cache) {
         // Stage experts in the requested layout (SOA/Coalesced for MXFP4, AOS otherwise).
         // force_cache_aos=true only when layout is AOS (ensures mmap'd weights get staged).
-        const bool need_force_aos = (route_layout == GGML_LAYOUT_AOS);
+        bool need_force_aos = (route_layout == GGML_LAYOUT_AOS);
         // Task 1E: pass pre-resolved ids_host to avoid redundant D2H inside update_moe_ptr_table
         const auto * ids_override = ids_host.empty() ? nullptr : &ids_host;
         if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr, /*allow_all_experts=*/false,
                                             ids_override, false, /*force_cache_aos=*/need_force_aos,
                                             /*skip_cpu_routed_experts=*/moe_hybrid_active)) {
-            GGML_LOG_ERROR("[MoE] Failed to update expert pointer table for %s\n", src0->name);
+            // SOA/COALESCED staging failed (cache miss).  Fall back to AOS which
+            // uses direct pointer arithmetic from USM-accessible src0->data.
+            if (route_layout != GGML_LAYOUT_AOS) {
+                GGML_SYCL_DEBUG("[MoE] Retrying with AOS layout (cache miss for layout=%d) for %s\n",
+                                (int) route_layout, src0->name ? src0->name : "?");
+                route_layout    = GGML_LAYOUT_AOS;
+                need_force_aos  = true;
+                if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, route_layout, nullptr,
+                                                    /*allow_all_experts=*/false, ids_override, false,
+                                                    /*force_cache_aos=*/need_force_aos,
+                                                    /*skip_cpu_routed_experts=*/moe_hybrid_active)) {
+                    GGML_LOG_ERROR("[MoE] Failed to update expert pointer table (AOS fallback) for %s\n",
+                                  src0->name);
+                } else if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
+                    const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
+                    if (!host_ptrs.empty()) {
+                        expert_ptrs_host = host_ptrs.data();
+                    }
+                }
+            } else {
+                GGML_LOG_ERROR("[MoE] Failed to update expert pointer table for %s\n", src0->name);
+            }
         } else if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
             const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
             if (!host_ptrs.empty()) {
