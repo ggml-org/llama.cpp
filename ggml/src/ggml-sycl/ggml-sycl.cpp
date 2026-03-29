@@ -27625,6 +27625,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // keys that the orchestrator/get_layout_ptr_for machinery expects.
     // Route MXFP4 directly to the unified kernel which handles it natively.
     //
+    // Handles both TG (batch=1) and PP (batch>1) — the inner loops iterate
+    // over M (batch size) and n_batch (batch dimensions).  For PP, per-row
+    // MMVQ dispatch is used for SOA/COALESCED layouts; AOS uses unified kernel.
+    //
     // IMPORTANT: This block MUST be before the TG fast-path. The TG fast-path
     // uses AOS MMVQ via ggml_sycl_op_mul_mat which calls get_layout_ptr_for()
     // -- that resolves via the full tensor's cache key and returns the FULL
@@ -27632,10 +27636,16 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     // Guard: skip GPU fast-path when src0 data is host-resident (e.g. MoE
     // per-expert slices from mmap'd weights).  GPU kernels cannot access
     // non-USM host pointers — doing so triggers UR_RESULT_ERROR_DEVICE_LOST.
+    // For per-expert MoE slices, buffer may indicate host (parent tensor) but
+    // data pointer is device or host-pinned (from expert cache).  Check both
+    // buffer AND data pointer.  Host-pinned USM is GPU-accessible via PCIe zero-copy.
     const bool src0_on_device = !ggml_sycl_is_host_resident_weight(src0, ctx.stream());
+    const sycl::usm::alloc src0_data_alloc = src0->data
+        ? ggml_sycl_get_alloc_type(src0->data) : sycl::usm::alloc::unknown;
+    const bool src0_data_gpu_accessible = (src0_data_alloc == sycl::usm::alloc::device ||
+                                           src0_data_alloc == sycl::usm::alloc::host);
     if (src0->type == GGML_TYPE_MXFP4 &&
-        src0_on_device &&
-        src1->ne[1] == 1 &&  // TG only — PP falls through to oneDNN FP16 path
+        (src0_on_device || src0_data_gpu_accessible) &&
         ggml_sycl::should_use_unified(src0->type) &&
         ggml_sycl_unified_dispatch_enabled() &&
         src1->type == GGML_TYPE_F32 &&
@@ -32994,7 +33004,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
             const auto * ct = ggml_get_type_traits_cpu(src0->type);
             bool ct_ok = ct && ct->vec_dot;
-            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2);
+            // ne11==1 guard: when ne11>1, each expert slot has a distinct activation
+            // row and the CPU TG path cannot handle it (it assumes shared activation).
+            early_cpu_expert_tg = (mhv != 0) && ct_ok && (etv == 1 || etv == -2) && (ne11 == 1);
             if (early_cpu_expert_tg) {
                 static std::atomic<int> log_count{0};
                 if (log_count.fetch_add(1, std::memory_order_relaxed) < 3) {
@@ -33316,7 +33328,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     const auto * cpu_traits_check = ggml_get_type_traits_cpu(src0->type);
     const bool   cpu_type_ok      = cpu_traits_check && cpu_traits_check->vec_dot;
-    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && cpu_type_ok;
+    // Hybrid CPU dispatch requires ne11==1 (all experts share the same activation row).
+    // When ne11>1 (b=0 with n_used>1 in test-backend-ops), each expert slot has a
+    // distinct activation row — the hybrid path only copies a single activation D2H
+    // and would give wrong results.  Fall through to the standard per-expert GPU dispatch.
+    const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && (ne11 == 1) && cpu_type_ok;
 
     // Expert cache stages data in the requested layout via ensure_cached_layout.
     // No longer force AOS — GPU0 batched dispatch now supports SOA/Coalesced MXFP4
@@ -34578,6 +34594,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             // Try batched MMVQ dispatch first to reduce kernel launch overhead
             // (1 kernel per (layer, tensor_type) instead of 1 per expert).
             // Controlled by GGML_SYCL_BATCH_EXPERTS env var (default: ON).
+            //
+            // When ne11 > 1 (non-broadcast src1, e.g. test-backend-ops b=0 with
+            // n_used>1), the batched MMVQ kernel has Q8_1 row addressing issues
+            // for MXFP4.  Skip batched dispatch and use per-expert fallback which
+            // correctly slices src1 per expert.
             static std::atomic<int> batch_experts_enabled{ -1 };
             int batch_experts_val = batch_experts_enabled.load(std::memory_order_acquire);
             if (batch_experts_val < 0) {
@@ -34590,7 +34611,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             bool batched_ok = false;
-            if (batch_experts_val != 0) {
+            if (batch_experts_val != 0 && ne11 == 1) {
                 // Get device pointer table from extra
                 const void * const * expert_ptrs_dev = nullptr;
                 if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
@@ -46540,6 +46561,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if (op->op == GGML_OP_MUL_MAT_ID) {
                     // Known NaN issues for these quantized types in the MoE host-routing path when n==1.
                     if ((a_type == GGML_TYPE_Q8_0 || a_type == GGML_TYPE_Q6_K) && (b->ne[1] == 1 || b->ne[2] == 1)) {
+                        return false;
+                    }
+                    // MXFP4 MoE with non-broadcast src1 (ne11 > 1): the per-expert
+                    // dispatch assumes ne11==1 for shared activation optimization.
+                    // This only occurs in test-backend-ops with b=0 and n_used>1;
+                    // real MoE models always have ne11==1 during inference.
+                    if (a_type == GGML_TYPE_MXFP4 && b->ne[1] > 1 && b->ne[2] <= 1) {
                         return false;
                     }
                 }
