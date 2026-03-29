@@ -1253,10 +1253,17 @@ host_cache::host_cache(sycl::queue & queue, size_t budget_bytes) :
         std::atexit(unified_cache_atexit_handler);
     }
 
-    // Create pinned pool with same budget
-    // This uses 8GB chunks to bypass Intel Level Zero's ~11GB per-allocation limit
+    // Create pinned pool with capped budget.
+    // Without the cap, the pool inherits the full host memory budget (~227 GB)
+    // and grows unboundedly during MoE warmup profiling (36 layers × 538 MB
+    // = 19.4 GB of pinned host memory).  Cap at 4 GB — enough for working set
+    // of 2-3 layers of expert staging plus CPU dispatch buffers.
+    const size_t pinned_cap = size_t(16) << 30;  // 16 GB
+    const size_t pinned_budget = std::min(budget_bytes, pinned_cap);
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] DEBUG: Creating pinned pool\n");
-    pinned_pool_ = std::make_unique<pinned_chunk_pool>(queue_, budget_bytes);
+    pinned_pool_ = std::make_unique<pinned_chunk_pool>(queue_, pinned_budget);
+    GGML_LOG_INFO("[SYCL] Pinned chunk pool created with %.1f GB budget\n",
+                  pinned_budget / (1024.0 * 1024.0 * 1024.0));
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Host cache initialized: budget=%.1f MB (using pinned pool)\n",
                     budget_ / (1024.0f * 1024.0f));
@@ -3088,24 +3095,43 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             bool           is_host_resident = false;
             bool           is_pool_alloc    = false;
             cache_location host_location    = cache_location::HOST_MMAP;
-            // In S1 mode (all-weights-host), skip pool allocation so entries use
-            // standalone malloc_device.  Pool entries can't be individually freed,
-            // which causes OOM when switching layouts between PP (AOS/oneDNN) and
-            // TG (SOA) — the abandoned pool space isn't reclaimable.
-            // Exception: force_pool=true (S1-PRELOAD) overrides skip_pool because
-            // preloaded weights are pinned and never freed during inference, so
-            // pool allocation is safe and avoids ~27ms GEM_CREATE per tensor.
-            const bool skip_pool = ggml_backend_sycl_all_weights_host() && !request.force_pool;
+            // In S1 mode (all-weights-host), skip pool for DENSE weights that may
+            // switch layouts between PP (AOS/oneDNN) and TG (SOA). Pool entries
+            // can't be individually freed, so layout switches would leak pool space.
+            // MoE EXPERT entries and S1-PRELOAD entries always use pool because:
+            // - Experts stay AOS throughout inference (no layout switch)
+            // - S1-PRELOAD weights are pinned (never freed)
+            // - Without pool, each expert gets individual sycl::malloc_device
+            //   causing 21% of PP time in kernel_init_pages (VRAM page clearing)
+            const bool is_expert = (request.type == cache_entry_type::MOE_EXPERT);
+            const bool skip_pool = ggml_backend_sycl_all_weights_host()
+                                   && !request.force_pool
+                                   && !is_expert;
             if (!force_host && layout_pool_ && !skip_pool) {
-                // Use layout pool for contiguous sub-allocation (reduces TLB misses)
-                auto pool_result = layout_pool_->allocate(request.dst_size);
-                new_device_ptr   = pool_result.ptr;
-                if (new_device_ptr) {
-                    is_pool_alloc = true;
-                    // Account for any new physical memory consumed by new chunks
-                    if (pool_result.new_physical_bytes > 0) {
-                        used_.fetch_add(pool_result.new_physical_bytes, std::memory_order_relaxed);
+                // Budget guard: check if a potential new pool chunk would exceed budget.
+                // The pool allocates 256+ MB chunks but the budget check at the caller
+                // only validated the expert size (4.3 KB). Without this guard, the pool
+                // can silently blow past the budget by allocating large chunks.
+                const size_t pool_headroom = (budget_ > used_.load(std::memory_order_relaxed))
+                                             ? budget_ - used_.load(std::memory_order_relaxed)
+                                             : 0;
+                const bool pool_has_space = layout_pool_->can_fit(request.dst_size);
+                if (pool_has_space || pool_headroom >= layout_pool_->get_default_chunk_size()) {
+                    auto pool_result = layout_pool_->allocate(request.dst_size);
+                    new_device_ptr   = pool_result.ptr;
+                    if (new_device_ptr) {
+                        is_pool_alloc = true;
+                        if (pool_result.new_physical_bytes > 0) {
+                            used_.fetch_add(pool_result.new_physical_bytes, std::memory_order_relaxed);
+                        }
                     }
+                } else {
+                    // Pool would need a new chunk but budget doesn't allow it.
+                    // Fall through to host fallback instead of OOM.
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Pool chunk would exceed budget "
+                                    "(headroom=%.1f MB, chunk=%.1f MB), using host fallback\n",
+                                    pool_headroom / (1024.0f * 1024.0f),
+                                    layout_pool_->get_default_chunk_size() / (1024.0f * 1024.0f));
                 }
             }
             if (!force_host && !new_device_ptr) {

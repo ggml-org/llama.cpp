@@ -64,7 +64,7 @@ inline void moe_convert_f32_to_f16(const char *  tokens_f32,  // Raw byte pointe
 
 // Sort tokens by expert ID for efficient batched GEMM
 // Returns total number of (token, expert) pairs processed
-template <int MAX_EXPERTS = 64>
+template <int MAX_EXPERTS = 256>
 void moe_count_tokens_per_expert(const char *  ids_base,       // Raw ids base pointer
                                  size_t        ids_nb0,        // Byte stride between id slots
                                  size_t        ids_nb1,        // Byte stride between tokens
@@ -265,7 +265,7 @@ inline sycl::event moe_convert_f32_to_f16_async(const char *  tokens_f32,
 }
 
 // Async token counting - returns event for chaining
-template <int MAX_EXPERTS = 64>
+template <int MAX_EXPERTS = 256>
 sycl::event moe_count_tokens_per_expert_async(const char *  ids_base,
                                                size_t        ids_nb0,
                                                size_t        ids_nb1,

@@ -59,10 +59,11 @@ class pinned_chunk_pool {
 
   private:
     struct chunk {
-        void * base;   // malloc_host result
-        size_t size;   // CHUNK_SIZE
-        size_t used;   // Bump pointer offset
-        size_t freed;  // Bytes deallocated (for tracking, not reclaimed)
+        void *   base;         // malloc_host result
+        size_t   size;         // CHUNK_SIZE
+        size_t   used;         // Bump pointer offset
+        size_t   freed;        // Number of deallocations (count, not bytes)
+        size_t   alloc_count;  // Total allocations from this chunk
     };
 
     // Allocate a new chunk (>= min_size). Returns false if over budget or allocation fails.

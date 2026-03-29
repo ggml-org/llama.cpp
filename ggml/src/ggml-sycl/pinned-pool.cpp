@@ -115,6 +115,7 @@ void * pinned_chunk_pool::allocate(size_t size, size_t alignment) {
         if (aligned_offset + alloc_size <= c.size) {
             void * ptr = static_cast<char *>(c.base) + aligned_offset;
             c.used     = aligned_offset + alloc_size;
+            c.alloc_count++;
             if (guard_size > 0) {
                 std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
             }
@@ -147,23 +148,34 @@ void * pinned_chunk_pool::allocate(size_t size, size_t alignment) {
     }
     void * ptr = c.base;
     c.used     = alloc_size;
+    c.alloc_count++;
     if (guard_size > 0) {
         std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
     }
     return ptr;
 }
 
-void pinned_chunk_pool::deallocate(void * ptr, size_t size) {
+void pinned_chunk_pool::deallocate(void * ptr, size_t /* size */) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Find containing chunk
+    // Find containing chunk and track outstanding allocations
     for (auto & c : chunks_) {
         char * base = static_cast<char *>(c.base);
         char * p    = static_cast<char *>(ptr);
         if (p >= base && p < base + c.size) {
-            c.freed += size;
-            // Note: bump allocator doesn't reclaim individual allocations.
-            // Chunk is only released when pool is destroyed.
+            c.freed++;  // Track number of frees, not bytes (avoids alignment mismatch)
+            // Reclaim chunk when all allocations have been freed.
+            // alloc_count tracks total allocations from this chunk.
+            // When freed == alloc_count, the entire chunk is unused → reset.
+            // This is critical for MoE warmup profiling which stages entire
+            // layers (~538 MB each) through pinned staging buffers. Without
+            // reclamation, 36 layers × 538 MB = 19.4 GB of pinned memory
+            // is allocated and never reused (bump allocator pathology).
+            if (c.freed >= c.alloc_count) {
+                c.used        = 0;
+                c.freed       = 0;
+                c.alloc_count = 0;
+            }
             return;
         }
     }
@@ -273,7 +285,7 @@ bool pinned_chunk_pool::grow(size_t min_size) {
                       chunk_size / (1024.0 * 1024.0));
     }
 
-    chunks_.push_back({ ptr, chunk_size, 0, 0 });
+    chunks_.push_back({ ptr, chunk_size, 0, 0, 0 });
     total_allocated_ += chunk_size;
 
     GGML_LOG_INFO("[SYCL] Allocated pinned chunk %zu (size=%.1f MB, total=%.1f GB)\n",

@@ -38440,15 +38440,10 @@ gpu_dispatch:
 
         GGML_ASSERT(ok);
 
-        // MoE engine timeout guard: for large MoE graphs (>500 nodes), the
-        // accumulated GPU work from PCIe zero-copy expert reads can exceed the
-        // xe driver's job_timeout_ms (10s max). Periodic queue drain resets
-        // the engine timeout counter. Only applies to MoE-sized graphs to
-        // avoid overhead on small dense-model graphs.
-        // Cost: ~0.1ms per drain on idle queue, negligible vs 10+ seconds saved.
-        if (cgraph->n_nodes > 500 && (i + 1) % 250 == 0 && !g_ggml_sycl_graph_recording) {
-            try { sycl_ctx->stream()->wait(); } catch (...) {}
-        }
+        // NOTE: MoE engine timeout guard removed — requires patched xe.ko with
+        // CONFIG_DRM_XE_JOB_TIMEOUT_MAX=600000 (10 minutes). Without the patched
+        // module, the default 10s timeout can trigger CCS engine resets during
+        // large MoE PP graph computation. See /tmp/xe-rebuild/ for the patch.
 
         // D+: Mark queue as dirty after any GPU submission.  The next CPU
         // direct-dispatch node will drain it before reading host-pinned output.

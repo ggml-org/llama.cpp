@@ -2827,8 +2827,9 @@ struct ggml_backend_sycl_context {
         int32_t * expert_tile_offsets = nullptr;  // [MAX_EXPERTS + 1] prefix sum of tiles per expert
         int32_t * total_tiles         = nullptr;  // [1] scalar: total work tiles across all experts
 
-        // Maximum supported experts for pre-allocation
-        static constexpr int MAX_EXPERTS = 64;
+        // Maximum supported experts for pre-allocation.
+        // Must be >= n_expert for the model (GPT-OSS 120B has 128).
+        static constexpr int MAX_EXPERTS = 256;
 
         // Buffer dimensions (for reallocation check)
         int64_t max_total_pairs  = 0;
