@@ -27,7 +27,8 @@ typedef struct ggml_profile_record {
     uint64_t                     end_ns;      // end timestamp in nanoseconds
     uint64_t                     bytes;       // bytes transferred (for copy) or tensor size (for ops)
     const char *                 extra;       // fusion name for fused ops, or NULL
-    int64_t                      ne[4];       // output tensor dimensions [ne0, ne1, ne2, ne3]
+    int64_t                      ne_src0[4];  // src[0] tensor dimensions (e.g. weight matrix for MUL_MAT)
+    int64_t                      ne_src1[4];  // src[1] tensor dimensions (e.g. input matrix for MUL_MAT)
 } ggml_profile_record;
 
 // Backend profiler interface - each backend optionally implements this

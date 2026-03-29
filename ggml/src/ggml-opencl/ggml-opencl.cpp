@@ -7491,7 +7491,8 @@ ggml_backend_t ggml_backend_opencl_init(void) {
         /* .guid    = */ ggml_backend_opencl_guid(),
         /* .iface   = */ ggml_backend_opencl_i,
         /* .device  = */ dev,
-        /* .context = */ backend_ctx
+        /* .context  = */ backend_ctx,
+        /* .profiler = */ nullptr,
     };
 
     return backend;
@@ -10767,6 +10768,7 @@ static ggml_backend_t ggml_backend_opencl_device_init(ggml_backend_dev_t dev, co
         /* .interface = */ ggml_backend_opencl_i,
         /* .device    = */ dev,
         /* .context   = */ backend_ctx,
+        /* .profiler  = */ nullptr,
     };
 
     ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
