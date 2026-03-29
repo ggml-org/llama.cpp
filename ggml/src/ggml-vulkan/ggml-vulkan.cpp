@@ -16640,6 +16640,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                     static const int64_t zero_ne[4] = {0, 0, 0, 0};
                     const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
                     const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
+                    const int64_t * src2_ne = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? node->src[2]->ne : zero_ne;
                     uint64_t cpu_ts = (i < (int)ctx->profiler_state->cpu_timestamps.size())
                                     ? ctx->profiler_state->cpu_timestamps[i] : 0;
 
@@ -16654,6 +16655,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                     rec.extra      = name;  // fusion name or NULL
                     memcpy(rec.ne_src0, src0_ne, sizeof(rec.ne_src0));
                     memcpy(rec.ne_src1, src1_ne, sizeof(rec.ne_src1));
+                    memcpy(rec.ne_src2, src2_ne, sizeof(rec.ne_src2));
                     ctx->profiler_state->records.push_back(rec);
                 }
             }
@@ -16682,27 +16684,31 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 if (has_profiler && !nodes.empty()) {
                     uint64_t cpu_ts = (i < (int)ctx->profiler_state->cpu_timestamps.size())
                                     ? ctx->profiler_state->cpu_timestamps[i] : 0;
-                    // In concurrent mode, distribute duration evenly across ops in group
-                    uint64_t per_op_ns = duration_ns / nodes.size();
-                    for (size_t j = 0; j < nodes.size(); j++) {
-                        auto * node = nodes[j];
-                        static const int64_t zero_ne[4] = {0, 0, 0, 0};
-                        const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
-                        const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
+                    // In concurrent mode, report the group as a single combined operation
+                    auto * node = nodes[0];
+                    static const int64_t zero_ne[4] = {0, 0, 0, 0};
+                    const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
+                    const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
+                    const int64_t * src2_ne = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? node->src[2]->ne : zero_ne;
 
-                        ggml_profile_record rec;
-                        rec.type       = GGML_PROFILE_EVENT_OP;
-                        rec.name       = ggml_op_name(node->op);
-                        rec.backend_id = -1;
-                        rec.split_id   = ctx->profiler_state->split_id;
-                        rec.start_ns   = cpu_ts + j * per_op_ns;
-                        rec.end_ns     = cpu_ts + (j + 1) * per_op_ns;
-                        rec.bytes      = ggml_nbytes(node);
-                        rec.extra      = names[j];
-                        memcpy(rec.ne_src0, src0_ne, sizeof(rec.ne_src0));
-                        memcpy(rec.ne_src1, src1_ne, sizeof(rec.ne_src1));
-                        ctx->profiler_state->records.push_back(rec);
+                    uint64_t total_bytes = 0;
+                    for (size_t j = 0; j < nodes.size(); j++) {
+                        total_bytes += ggml_nbytes(nodes[j]);
                     }
+
+                    ggml_profile_record rec;
+                    rec.type       = GGML_PROFILE_EVENT_OP;
+                    rec.name       = ggml_op_name(node->op);
+                    rec.backend_id = -1;
+                    rec.split_id   = ctx->profiler_state->split_id;
+                    rec.start_ns   = cpu_ts;
+                    rec.end_ns     = cpu_ts + duration_ns;
+                    rec.bytes      = total_bytes;
+                    rec.extra      = names[0];  // fusion name of first op, or NULL
+                    memcpy(rec.ne_src0, src0_ne, sizeof(rec.ne_src0));
+                    memcpy(rec.ne_src1, src1_ne, sizeof(rec.ne_src1));
+                    memcpy(rec.ne_src2, src2_ne, sizeof(rec.ne_src2));
+                    ctx->profiler_state->records.push_back(rec);
                 }
             }
         }

@@ -141,7 +141,7 @@ struct ggml_cuda_profiler_state {
     }
 
     void record_end(const char * name, int backend_id, int split_id, uint64_t bytes, const char * extra,
-                    const int64_t ne_src0[4], const int64_t ne_src1[4]) {
+                    const int64_t ne_src0[4], const int64_t ne_src1[4], const int64_t ne_src2[4]) {
         cudaEvent_t ev;
         (void) cudaEventCreate(&ev);
         (void) cudaEventRecord(ev, stream);
@@ -159,6 +159,7 @@ struct ggml_cuda_profiler_state {
         rec.extra = extra;
         if (ne_src0) { memcpy(rec.ne_src0, ne_src0, sizeof(rec.ne_src0)); } else { memset(rec.ne_src0, 0, sizeof(rec.ne_src0)); }
         if (ne_src1) { memcpy(rec.ne_src1, ne_src1, sizeof(rec.ne_src1)); } else { memset(rec.ne_src1, 0, sizeof(rec.ne_src1)); }
+        if (ne_src2) { memcpy(rec.ne_src2, ne_src2, sizeof(rec.ne_src2)); } else { memset(rec.ne_src2, 0, sizeof(rec.ne_src2)); }
         records.push_back(rec);
     }
 
@@ -4500,7 +4501,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                         ggml_nbytes(node),
                         nullptr,
                         node->src[0] ? node->src[0]->ne : nullptr,
-                        node->src[1] ? node->src[1]->ne : nullptr
+                        node->src[1] ? node->src[1]->ne : nullptr,
+                        (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? node->src[2]->ne : nullptr
                     );
                 }
 

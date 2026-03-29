@@ -679,11 +679,17 @@ int llama_cli(int argc, char ** argv) {
             if (params.profiling_output.empty()) {
                 ggml_backend_sched_print_profiling(sched);
             } else {
-                int ret = ggml_backend_sched_export_profiling_json(sched, params.profiling_output.c_str());
-                if (ret == 0) {
-                    console::log("\nProfiling data exported to: %s\n", params.profiling_output.c_str());
+                const std::string & path = params.profiling_output;
+                int ret;
+                if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".txt") == 0) {
+                    ret = ggml_backend_sched_export_profiling_text(sched, path.c_str());
                 } else {
-                    console::error("\nFailed to export profiling data to: %s\n", params.profiling_output.c_str());
+                    ret = ggml_backend_sched_export_profiling_json(sched, path.c_str());
+                }
+                if (ret == 0) {
+                    console::log("\nProfiling data exported to: %s\n", path.c_str());
+                } else {
+                    console::error("\nFailed to export profiling data to: %s\n", path.c_str());
                 }
             }
         }

@@ -3078,9 +3078,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                     static const int64_t zero_ne[4] = {0, 0, 0, 0};
                     const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
                     const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
+                    const int64_t * src2_ne = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? node->src[2]->ne : zero_ne;
                     cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
                                                ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
-                                               src0_ne, src1_ne);
+                                               src0_ne, src1_ne, src2_ne);
                 }
             }
 
