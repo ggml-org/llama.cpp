@@ -1,4 +1,6 @@
-# Contributors
+# CONTRIBUTION POLICY
+
+## Contributors
 
 The project differentiates between 3 levels of contributors:
 
@@ -6,7 +8,7 @@ The project differentiates between 3 levels of contributors:
 - Collaborators (Triage): people with significant contributions, who may be responsible for some parts of the code, and are expected to maintain and review contributions for the code they own
 - Maintainers: responsible for reviewing and merging PRs, after approval from the code owners
 
-# AI Usage Policy
+## AI Usage Policy
 
 > [!IMPORTANT]
 > This project does **not** accept pull requests that are fully or predominantly AI-generated. AI tools may be utilized solely in an assistive capacity.
@@ -26,7 +28,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
-# Pull requests (for contributors & collaborators)
+## Pull requests (for contributors & collaborators)
 
 Before submitting your PR:
 - Search for existing PRs to prevent duplicating efforts
@@ -54,7 +56,7 @@ After submitting your PR:
 - If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for fixing related issues and reviewing related PRs
 
-# Pull requests (for maintainers)
+## Pull requests (for maintainers)
 
 - Squash-merge PRs
 - Use the following format for the squashed commit title: `<module> : <commit title> (#<issue_number>)`. For example: `utils : fix typo in utils.py (#1234)`
@@ -68,7 +70,17 @@ Maintainers reserve the right to decline review or close pull requests for any r
 - The pull request duplicates an existing one.
 - The contributor fails to adhere to this contributing guide or the AI policy.
 
-# Coding guidelines
+## Code Origin Disclosure Policy
+
+*Contributors* and *collaborators*, as defined above, must disclose the origin of their code, if they did not write it themselves, to avoid potential licensing conflicts or intellectual property right violations.
+
+Contributions that can be shown to originate from one or more the following sources, in whole or in part, will not be accepted:
+- [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)
+- [Iwan Kawrakow](https://github.com/ikawrakow)
+
+Note that maintainers reserve the right to reject code on the basis of its origin, even if not explicitly listed above.
+
+## Coding guidelines
 
 - Avoid adding third-party dependencies, extra files, extra headers, etc.
 - Always consider cross-compatibility with other operating systems and architectures
@@ -97,7 +109,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 ![matmul](media/matmul.png)
 
-# Naming guidelines
+## Naming guidelines
 
 - Use `snake_case` for function, variable and type names
 - Naming usually optimizes for longest common prefix (see https://github.com/ggml-org/ggml/pull/302#discussion_r1243240963)
@@ -156,7 +168,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 - _(TODO: abbreviations usage)_
 
-# Preprocessor directives
+## Preprocessor directives
 
 - _(TODO: add guidelines with examples and apply them to the codebase)_
 
@@ -165,7 +177,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
     #endif // FOO
     ```
 
-# Code maintenance
+## Code maintenance
 
 - Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file responsible for:
   - Reviewing and merging related PRs
@@ -182,13 +194,13 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 - For changes in server, please make sure to refer to the [server development documentation](./tools/server/README-dev.md)
 
-# Documentation
+## Documentation
 
 - Documentation is a community effort
 - When you need to look into the source code to figure out how to use an API consider adding a short summary to the header file for future reference
 - When you notice incorrect or outdated documentation, please update it
 
-# Resources
+## Further resources
 
 The Github issues, PRs and discussions contain a lot of information that can be useful to get familiar with the codebase. For convenience, some of the more important information is referenced from Github projects:
 
