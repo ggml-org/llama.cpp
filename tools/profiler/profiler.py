@@ -223,7 +223,7 @@ class ProfileData:
 
             # Track the ne from the longest individual call
             if rec.duration_ns >= s.max_ns:
-                s.representative_ne = list(rec.ne)
+                s.representative_ne = list(rec.ne_src0)
 
         return sorted(groups.values(), key=lambda s: s.total_ns, reverse=True)
 
