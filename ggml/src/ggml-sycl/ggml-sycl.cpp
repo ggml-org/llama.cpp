@@ -10327,7 +10327,9 @@ static void ggml_sycl_preload_model_weights() {
 
             // Yield counter: periodically wait + finalize to prevent unbounded
             // CCS command list growth that triggers xe driver GT engine resets.
-            constexpr size_t S1_YIELD_INTERVAL = 50;
+            // With pool allocation (force_pool), per-tensor malloc_device is
+            // eliminated so submissions are much faster — yield less often.
+            constexpr size_t S1_YIELD_INTERVAL = 128;
             size_t           s1_submit_count   = 0;
 
             // Submit all H2D copies for this device without waiting
@@ -10379,6 +10381,7 @@ static void ggml_sycl_preload_model_weights() {
                         req.layout           = GGML_LAYOUT_AOS;
                         req.validate_content = false;
                         req.skip_fill_wait   = true;  // Async — no wait per expert
+                        req.force_pool       = true;  // Pool alloc: avoid per-expert GEM_CREATE
 
                         auto result = cache->ensure_cached_layout(req, {}, bcs_q);
                         if (result.status == ggml_sycl::cache_layout_status::READY ||
@@ -10468,6 +10471,7 @@ static void ggml_sycl_preload_model_weights() {
                     req.layout           = preload_layout;
                     req.validate_content = false;
                     req.skip_fill_wait   = true;  // Async -- no wait per tensor
+                    req.force_pool       = true;  // Pool alloc: avoid per-tensor GEM_CREATE
                     if (use_soa || use_coalesced) {
                         req.fill_fn  = ggml_sycl_fill_reordered_host;
                         req.fill_ctx = &reorder_ctx;

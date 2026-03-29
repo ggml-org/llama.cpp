@@ -3092,7 +3092,10 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             // standalone malloc_device.  Pool entries can't be individually freed,
             // which causes OOM when switching layouts between PP (AOS/oneDNN) and
             // TG (SOA) — the abandoned pool space isn't reclaimable.
-            const bool skip_pool = ggml_backend_sycl_all_weights_host();
+            // Exception: force_pool=true (S1-PRELOAD) overrides skip_pool because
+            // preloaded weights are pinned and never freed during inference, so
+            // pool allocation is safe and avoids ~27ms GEM_CREATE per tensor.
+            const bool skip_pool = ggml_backend_sycl_all_weights_host() && !request.force_pool;
             if (!force_host && layout_pool_ && !skip_pool) {
                 // Use layout pool for contiguous sub-allocation (reduces TLB misses)
                 auto pool_result = layout_pool_->allocate(request.dst_size);

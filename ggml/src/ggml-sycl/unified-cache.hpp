@@ -292,6 +292,7 @@ struct cache_layout_request {
     bool                  validate_content = false;
     bool                  prefer_host      = false;
     bool                  skip_fill_wait   = false;  // When true, skip fill_event.wait() — caller collects events
+    bool                  force_pool       = false;  // When true, use pool even in S1 mode (for S1-PRELOAD pinned weights)
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
