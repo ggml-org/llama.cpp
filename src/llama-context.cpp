@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "ggml-profiler.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
@@ -2189,6 +2190,11 @@ ggml_status llama_context::graph_compute(
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
 
+    // If profiling is enabled, synchronize to ensure records are complete
+    if (ggml_backend_sched_get_profiling(sched.get())) {
+        ggml_backend_sched_synchronize(sched.get());
+    }
+
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
 
     return status;
@@ -3023,6 +3029,10 @@ const llama_model * llama_get_model(const llama_context * ctx) {
 
 enum llama_pooling_type llama_pooling_type(const llama_context * ctx) {
     return ctx->pooling_type();
+}
+
+ggml_backend_sched_t llama_context_get_sched(const llama_context * ctx) {
+    return ctx->get_sched();
 }
 
 void llama_attach_threadpool(

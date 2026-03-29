@@ -12,6 +12,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "ggml-profiler.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -229,6 +230,15 @@ const char * ggml_backend_name(ggml_backend_t backend) {
 void ggml_backend_free(ggml_backend_t backend) {
     if (backend == NULL) {
         return;
+    }
+
+    // Clean up profiler if present (before backend frees its context)
+    if (backend->profiler != NULL) {
+        if (backend->profiler->free_context != NULL) {
+            backend->profiler->free_context(backend->profiler->context);
+        }
+        delete backend->profiler;
+        backend->profiler = NULL;
     }
 
     backend->iface.free(backend);
@@ -736,6 +746,11 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    // profiling
+    bool                             profiling_enabled;
+    std::vector<ggml_profile_record> copy_records;       // copy events recorded by the scheduler
+    std::vector<ggml_profile_record> profiling_records;  // merged records from all sources
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1450,10 +1465,27 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
+    // Profiling: reset copy records for this compute pass
+    if (sched->profiling_enabled) {
+        sched->copy_records.clear();
+    }
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        // Profiling: set split ID and enable backend profiling
+        if (sched->profiling_enabled) {
+            if (split_backend->profiler != NULL) {
+                if (split_backend->profiler->enable != NULL) {
+                    split_backend->profiler->enable(split_backend->profiler->context, true);
+                }
+                if (split_backend->profiler->set_split_id != NULL) {
+                    split_backend->profiler->set_split_id(split_backend->profiler->context, split_id);
+                }
+            }
+        }
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -1468,7 +1500,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                ggml_backend_tensor_copy(input, input_cpy);
+                if (sched->profiling_enabled) {
+                    uint64_t copy_start = ggml_profiler_time_ns();
+                    ggml_backend_tensor_copy(input, input_cpy);
+                    uint64_t copy_end = ggml_profiler_time_ns();
+
+                    enum ggml_backend_dev_type src_type = ggml_backend_dev_type(input_backend->device);
+                    enum ggml_backend_dev_type dst_type = ggml_backend_dev_type(split_backend->device);
+                    const char *               copy_dir = "copy_D2D";
+                    if (src_type == GGML_BACKEND_DEVICE_TYPE_CPU && dst_type != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                        copy_dir = "copy_H2D";
+                    } else if (src_type != GGML_BACKEND_DEVICE_TYPE_CPU && dst_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                        copy_dir = "copy_D2H";
+                    }
+
+                    sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id, split_id,
+                                                    copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                } else {
+                    ggml_backend_tensor_copy(input, input_cpy);
+                }
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -1572,7 +1622,46 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         } else {
                             ggml_backend_synchronize(split_backend);
                         }
-                        ggml_backend_tensor_copy(input, input_cpy);
+                        if (sched->profiling_enabled) {
+                            uint64_t copy_start = ggml_profiler_time_ns();
+                            ggml_backend_tensor_copy(input, input_cpy);
+                            uint64_t copy_end = ggml_profiler_time_ns();
+
+                            enum ggml_backend_dev_type src_type = ggml_backend_dev_type(input_backend->device);
+                            enum ggml_backend_dev_type dst_type = ggml_backend_dev_type(split_backend->device);
+                            const char *               copy_dir = "copy_D2D";
+                            if (src_type == GGML_BACKEND_DEVICE_TYPE_CPU && dst_type != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                                copy_dir = "copy_H2D";
+                            } else if (src_type != GGML_BACKEND_DEVICE_TYPE_CPU &&
+                                       dst_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                                copy_dir = "copy_D2H";
+                            }
+
+                            sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                        } else {
+                            ggml_backend_tensor_copy(input, input_cpy);
+                        }
+                    } else {
+                        // async copy completed - record it with available timing
+                        if (sched->profiling_enabled) {
+                            uint64_t copy_start = ggml_profiler_time_ns();
+                            // The async copy was already initiated; we just record the launch time
+                            uint64_t copy_end   = ggml_profiler_time_ns();
+
+                            enum ggml_backend_dev_type src_type = ggml_backend_dev_type(input_backend->device);
+                            enum ggml_backend_dev_type dst_type = ggml_backend_dev_type(split_backend->device);
+                            const char *               copy_dir = "copy_D2D";
+                            if (src_type == GGML_BACKEND_DEVICE_TYPE_CPU && dst_type != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                                copy_dir = "copy_H2D";
+                            } else if (src_type != GGML_BACKEND_DEVICE_TYPE_CPU &&
+                                       dst_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                                copy_dir = "copy_D2H";
+                            }
+
+                            sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                        }
                     }
                 }
             }
@@ -1622,6 +1711,34 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
             }
+        }
+    }
+
+    // Profiling: collect records from all backends and append to accumulated records
+    if (sched->profiling_enabled) {
+        sched->copy_records.clear();
+
+        // Collect backend operation records
+        for (int b = 0; b < sched->n_backends; b++) {
+            ggml_backend_t backend = sched->backends[b];
+            if (backend->profiler != NULL && backend->profiler->get_records != NULL) {
+                const ggml_profile_record * backend_recs = NULL;
+                int count = backend->profiler->get_records(backend->profiler->context, &backend_recs);
+                for (int r = 0; r < count; r++) {
+                    ggml_profile_record rec = backend_recs[r];
+                    rec.backend_id          = b;  // stamp correct scheduler backend index
+                    sched->profiling_records.push_back(rec);
+                }
+                // Reset backend records (but keep profiling enabled for next compute)
+                if (backend->profiler->reset != NULL) {
+                    backend->profiler->reset(backend->profiler->context);
+                }
+            }
+        }
+
+        // Append copy records
+        for (const auto & rec : sched->copy_records) {
+            sched->profiling_records.push_back(rec);
         }
     }
 
@@ -1691,6 +1808,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
     sched->op_offload = op_offload;
+    sched->profiling_enabled = (getenv("GGML_PROFILE") != NULL);
 
     ggml_backend_sched_reset(sched);
 
@@ -2267,4 +2385,217 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
 ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+}
+
+//
+// Scheduler profiling
+//
+
+void ggml_backend_sched_set_profiling(ggml_backend_sched_t sched, bool enable) {
+    GGML_ASSERT(sched);
+    sched->profiling_enabled = enable;
+
+    if (!enable) {
+        ggml_backend_sched_reset_profiling(sched);
+    }
+}
+
+bool ggml_backend_sched_get_profiling(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return sched->profiling_enabled;
+}
+
+int ggml_backend_sched_get_profiling_records(ggml_backend_sched_t sched, const ggml_profile_record ** records) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(records != NULL);
+
+    *records = sched->profiling_records.data();
+    return (int) sched->profiling_records.size();
+}
+
+void ggml_backend_sched_reset_profiling(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    sched->profiling_records.clear();
+    sched->copy_records.clear();
+}
+
+void ggml_backend_sched_print_profiling(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+
+    if (sched->profiling_records.empty()) {
+        GGML_LOG_INFO("[profiler] No profiling data available\n");
+        return;
+    }
+
+    GGML_LOG_INFO("\n=== Profiling Summary ===\n");
+
+    // Aggregate by (name, type, backend_id)
+    struct op_stats {
+        const char *                 name;
+        enum ggml_profile_event_type type;
+        int                          backend_id;
+        uint64_t                     total_ns;
+        uint64_t                     min_ns;
+        uint64_t                     max_ns;
+        int                          count;
+        uint64_t                     total_bytes;
+        int64_t                      representative_ne[4];
+    };
+
+    std::vector<op_stats> stats;
+    for (const auto & rec : sched->profiling_records) {
+        bool found = false;
+        for (auto & s : stats) {
+            if (s.type == rec.type && s.backend_id == rec.backend_id && strcmp(s.name, rec.name) == 0) {
+                uint64_t dur = (rec.end_ns > rec.start_ns) ? (rec.end_ns - rec.start_ns) : 0;
+                s.total_ns += dur;
+                s.min_ns = std::min(s.min_ns, dur);
+                s.max_ns = std::max(s.max_ns, dur);
+                s.count++;
+                s.total_bytes += rec.bytes;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            uint64_t dur = (rec.end_ns > rec.start_ns) ? (rec.end_ns - rec.start_ns) : 0;
+            op_stats s;
+            s.name        = rec.name;
+            s.type        = rec.type;
+            s.backend_id  = rec.backend_id;
+            s.total_ns    = dur;
+            s.min_ns      = dur;
+            s.max_ns      = dur;
+            s.count       = 1;
+            s.total_bytes = rec.bytes;
+            memcpy(s.representative_ne, rec.ne, sizeof(s.representative_ne));
+            stats.push_back(s);
+        }
+    }
+
+    // Sort by total time descending
+    std::sort(stats.begin(), stats.end(),
+              [](const op_stats & a, const op_stats & b) { return a.total_ns > b.total_ns; });
+
+    uint64_t grand_total = 0;
+    for (const auto & s : stats) {
+        grand_total += s.total_ns;
+    }
+
+    const char * type_str[] = { "OP  ", "COPY" };
+    for (const auto & s : stats) {
+        double pct    = 100.0 * (double) s.total_ns / (double) grand_total;
+        double avg_us = (double) s.total_ns / (double) s.count / 1000.0;
+        double min_us = (double) s.min_ns / 1000.0;
+        double max_us = (double) s.max_ns / 1000.0;
+
+        if (s.type == GGML_PROFILE_EVENT_COPY) {
+            double bw_gbps = (double) s.total_bytes / (double) s.total_ns;
+            GGML_LOG_INFO(
+                "  [%s] backend %d %-28s %7.1f%%  count=%-6d  total=%8.2f ms  avg=%8.2f us  min=%8.2f us  max=%8.2f us "
+                " %8.2f GB/s",
+                type_str[s.type], s.backend_id, s.name, pct, s.count, (double) s.total_ns / 1e6, avg_us, min_us, max_us,
+                bw_gbps);
+        } else {
+            GGML_LOG_INFO(
+                "  [%s] backend %d %-28s %7.1f%%  count=%-6d  total=%8.2f ms  avg=%8.2f us  min=%8.2f us  max=%8.2f us",
+                type_str[s.type], s.backend_id, s.name, pct, s.count, (double) s.total_ns / 1e6, avg_us, min_us,
+                max_us);
+        }
+        // Print representative tensor shape (first record's ne)
+        if (s.representative_ne[0] > 0 || s.representative_ne[1] > 0) {
+            GGML_LOG_INFO("  [%lld x %lld", (long long) s.representative_ne[0], (long long) s.representative_ne[1]);
+            if (s.representative_ne[2] > 1) {
+                GGML_LOG_INFO(" x %lld", (long long) s.representative_ne[2]);
+            }
+            if (s.representative_ne[3] > 1) {
+                GGML_LOG_INFO(" x %lld", (long long) s.representative_ne[3]);
+            }
+            GGML_LOG_INFO("]");
+        }
+        GGML_LOG_INFO("\n");
+    }
+
+    GGML_LOG_INFO("  ---\n");
+    GGML_LOG_INFO("  Total: %.2f ms  (%d records, %d unique ops)\n\n", (double) grand_total / 1e6,
+                  (int) sched->profiling_records.size(), (int) stats.size());
+}
+
+int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * fp) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(fp != NULL);
+
+    uint64_t total_ns = 0;
+    for (const auto & rec : sched->profiling_records) {
+        total_ns += (rec.end_ns > rec.start_ns) ? (rec.end_ns - rec.start_ns) : 0;
+    }
+
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"version\": 2,\n");
+    fprintf(fp, "  \"profiler\": \"ggml\",\n");
+    fprintf(fp, "  \"total_records\": %d,\n", (int) sched->profiling_records.size());
+    fprintf(fp, "  \"total_ns\": %llu,\n", (unsigned long long) total_ns);
+
+    // Backend metadata
+    fprintf(fp, "  \"backends\": [\n");
+    for (int b = 0; b < sched->n_backends; b++) {
+        ggml_backend_t backend  = sched->backends[b];
+        const char *   name     = ggml_backend_name(backend);
+        const char *   dev_name = "unknown";
+        int            dev_type = 0;
+        if (backend->device != NULL) {
+            dev_name = ggml_backend_dev_name(backend->device);
+            dev_type = (int) ggml_backend_dev_type(backend->device);
+        }
+        fprintf(fp, "    {\"id\": %d, \"name\": \"%s\", \"device\": \"%s\", \"device_type\": %d}%s\n", b, name,
+                dev_name, dev_type, (b < sched->n_backends - 1) ? "," : "");
+    }
+    fprintf(fp, "  ],\n");
+
+    // Records
+    fprintf(fp, "  \"records\": [\n");
+
+    for (int i = 0; i < (int) sched->profiling_records.size(); i++) {
+        const auto & rec         = sched->profiling_records[i];
+        uint64_t     duration_ns = (rec.end_ns > rec.start_ns) ? (rec.end_ns - rec.start_ns) : 0;
+
+        fprintf(fp,
+                "    {\"type\": %d, \"name\": \"%s\", \"backend_id\": %d, \"split_id\": %d, "
+                "\"start_ns\": %llu, \"duration_ns\": %llu, \"bytes\": %llu, \"extra\": ",
+                (int) rec.type, rec.name ? rec.name : "unknown", rec.backend_id, rec.split_id,
+                (unsigned long long) rec.start_ns, (unsigned long long) duration_ns, (unsigned long long) rec.bytes);
+
+        if (rec.extra != NULL) {
+            fprintf(fp, "\"%s\"", rec.extra);
+        } else {
+            fprintf(fp, "null");
+        }
+
+        // Tensor dimensions
+        fprintf(fp, ", \"ne\": [%lld, %lld, %lld, %lld]", (long long) rec.ne[0], (long long) rec.ne[1],
+                (long long) rec.ne[2], (long long) rec.ne[3]);
+
+        fprintf(fp, "}%s\n", (i < (int) sched->profiling_records.size() - 1) ? "," : "");
+    }
+
+    fprintf(fp, "  ]\n");
+    fprintf(fp, "}\n");
+
+    return 0;
+}
+
+int ggml_backend_sched_export_profiling_json(ggml_backend_sched_t sched, const char * filepath) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(filepath != NULL);
+
+    FILE * fp = fopen(filepath, "w");
+    if (fp == NULL) {
+        GGML_LOG_ERROR("%s: failed to open %s for writing\n", __func__, filepath);
+        return -1;
+    }
+
+    int ret = ggml_backend_sched_write_profiling_json(sched, fp);
+    fclose(fp);
+
+    return ret;
 }

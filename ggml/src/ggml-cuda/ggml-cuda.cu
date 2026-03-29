@@ -1,6 +1,7 @@
 #include "ggml-cuda.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-profiler.h"
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -85,6 +86,90 @@
 #include <unordered_set>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
+
+// CUDA profiler state
+struct ggml_cuda_profiler_state {
+    bool enabled = false;
+    int split_id = -1;
+    cudaStream_t stream = nullptr;
+
+    static constexpr int MAX_PENDING_EVENTS = 4096;
+    std::vector<cudaEvent_t> start_events;
+    std::vector<cudaEvent_t> end_events;
+    int event_count = 0;
+
+    std::vector<ggml_profile_record> records;
+    std::vector<int> record_event_indices;
+
+    void init(cudaStream_t stream) {
+        this->stream = stream;
+        start_events.reserve(MAX_PENDING_EVENTS);
+        end_events.reserve(MAX_PENDING_EVENTS);
+    }
+
+    void reset() {
+        for (auto & ev : start_events) {
+            cudaEventDestroy(ev);
+        }
+        for (auto & ev : end_events) {
+            cudaEventDestroy(ev);
+        }
+        start_events.clear();
+        end_events.clear();
+        event_count = 0;
+        records.clear();
+        record_event_indices.clear();
+    }
+
+    ~ggml_cuda_profiler_state() {
+        reset();
+    }
+
+    void record_start() {
+        cudaEvent_t ev;
+        cudaEventCreate(&ev);
+        cudaEventRecord(ev, stream);
+        start_events.push_back(ev);
+        event_count++;
+    }
+
+    void record_end(const char * name, int backend_id, int split_id, uint64_t bytes, const char * extra, const int64_t ne[4]) {
+        cudaEvent_t ev;
+        cudaEventCreate(&ev);
+        cudaEventRecord(ev, stream);
+        end_events.push_back(ev);
+        record_event_indices.push_back(records.size());
+
+        ggml_profile_record rec;
+        rec.type = GGML_PROFILE_EVENT_OP;
+        rec.name = name;
+        rec.backend_id = backend_id;
+        rec.split_id = split_id;
+        rec.start_ns = 0;
+        rec.end_ns = 0;
+        rec.bytes = bytes;
+        rec.extra = extra;
+        if (ne) {
+            memcpy(rec.ne, ne, sizeof(rec.ne));
+        } else {
+            memset(rec.ne, 0, sizeof(rec.ne));
+        }
+        records.push_back(rec);
+    }
+
+    void finalize() {
+        cudaStreamSynchronize(stream);
+
+        for (int i = 0; i < (int)record_event_indices.size(); i++) {
+            float ms = 0.0f;
+            cudaEventElapsedTime(&ms, start_events[i], end_events[i]);
+            uint64_t ns = (uint64_t)(ms * 1e6f);
+            int rec_idx = record_event_indices[i];
+            records[rec_idx].start_ns = 0;
+            records[rec_idx].end_ns = ns;
+        }
+    }
+};
 
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg) {
@@ -4030,8 +4115,23 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #else
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
+                if (cuda_ctx->profiler_state != nullptr && cuda_ctx->profiler_state->enabled) {
+                    cuda_ctx->profiler_state->record_start();
+                }
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+
+                if (cuda_ctx->profiler_state != nullptr && cuda_ctx->profiler_state->enabled) {
+                    cuda_ctx->profiler_state->record_end(
+                        ggml_op_name(node->op),
+                        -1,
+                        cuda_ctx->profiler_state->split_id,
+                        ggml_nbytes(node),
+                        nullptr,
+                        node->ne
+                    );
+                }
+
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
@@ -4102,6 +4202,19 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
+    // Disable CUDA graphs when profiling (we need per-node timing)
+    bool was_graph_enabled = false;
+    if (cuda_ctx->profiler_state != nullptr && cuda_ctx->profiler_state->enabled) {
+#ifdef USE_CUDA_GRAPH
+        const void * graph_key = ggml_cuda_graph_get_key(cgraph);
+        ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+        was_graph_enabled = graph->is_enabled();
+        if (was_graph_enabled) {
+            graph->disable_due_to_gpu_arch = true;
+        }
+#endif
+    }
+
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
     const void * graph_key = nullptr;
@@ -4152,6 +4265,15 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+
+    // Restore CUDA graph enabled state after profiling
+    if (was_graph_enabled) {
+#ifdef USE_CUDA_GRAPH
+        const void * graph_key_prof = ggml_cuda_graph_get_key(cgraph);
+        ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key_prof);
+        graph->disable_due_to_gpu_arch = false;
+#endif
+    }
 
     return GGML_STATUS_SUCCESS;
 }
@@ -5301,11 +5423,67 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     }
 
     ggml_backend_t cuda_backend = new ggml_backend {
-        /* .guid    = */ ggml_backend_cuda_guid(),
-        /* .iface   = */ ggml_backend_cuda_interface,
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
-        /* .context = */ ctx,
+        /* .guid     = */ ggml_backend_cuda_guid(),
+        /* .iface    = */ ggml_backend_cuda_interface,
+        /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
+
+    // Register profiler
+    auto * prof_state = new ggml_cuda_profiler_state();
+    prof_state->init(ctx->stream());
+    ctx->profiler_state = prof_state;
+
+    static auto cuda_prof_enable = [](void * ctx, bool enable) {
+        auto * cuda_ctx = (ggml_backend_cuda_context *)ctx;
+        if (cuda_ctx->profiler_state != nullptr) {
+            cuda_ctx->profiler_state->enabled = enable;
+            if (!enable) {
+                cuda_ctx->profiler_state->reset();
+            }
+        }
+    };
+    static auto cuda_prof_reset = [](void * ctx) {
+        auto * cuda_ctx = (ggml_backend_cuda_context *)ctx;
+        if (cuda_ctx->profiler_state != nullptr) {
+            cuda_ctx->profiler_state->reset();
+            cuda_ctx->profiler_state->split_id = -1;
+        }
+    };
+    static auto cuda_prof_set_split_id = [](void * ctx, int split_id) {
+        auto * cuda_ctx = (ggml_backend_cuda_context *)ctx;
+        if (cuda_ctx->profiler_state != nullptr) {
+            cuda_ctx->profiler_state->split_id = split_id;
+        }
+    };
+    static auto cuda_prof_get_records = [](void * ctx, const ggml_profile_record ** out) -> int {
+        auto * cuda_ctx = (ggml_backend_cuda_context *)ctx;
+        if (cuda_ctx->profiler_state != nullptr) {
+            cuda_ctx->profiler_state->finalize();
+            *out = cuda_ctx->profiler_state->records.data();
+            return (int)cuda_ctx->profiler_state->records.size();
+        }
+        *out = nullptr;
+        return 0;
+    };
+    static auto cuda_prof_free = [](void * ctx) {
+        auto * cuda_ctx = (ggml_backend_cuda_context *)ctx;
+        if (cuda_ctx->profiler_state != nullptr) {
+            delete cuda_ctx->profiler_state;
+            cuda_ctx->profiler_state = nullptr;
+        }
+    };
+
+    auto * profiler = new ggml_backend_profiler {
+        /* .context      = */ ctx,
+        /* .enable       = */ cuda_prof_enable,
+        /* .reset        = */ cuda_prof_reset,
+        /* .set_split_id = */ cuda_prof_set_split_id,
+        /* .get_records  = */ cuda_prof_get_records,
+        /* .free_context = */ cuda_prof_free,
+    };
+    ggml_backend_set_profiler(cuda_backend, profiler);
 
     return cuda_backend;
 }

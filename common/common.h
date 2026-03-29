@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ggml-opt.h"
+#include "ggml-profiler.h"
 #include "ggml.h"
 #include "llama-cpp.h"
 
@@ -668,6 +669,10 @@ struct common_params {
     std::string cvector_negative_file = "tools/cvector-generator/negative.txt";
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
+
+    // profiling
+    bool        profiling = false;  // enable cross-backend profiling
+    std::string profiling_output;   // path to write profiling JSON output (empty = stdout)
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;

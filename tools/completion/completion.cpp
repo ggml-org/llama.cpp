@@ -997,6 +997,23 @@ int main(int argc, char ** argv) {
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
 
+    // Export profiling data if profiling was enabled
+    if (params.profiling) {
+        ggml_backend_sched_t sched = llama_context_get_sched(ctx);
+        if (sched != nullptr) {
+            if (params.profiling_output.empty()) {
+                ggml_backend_sched_print_profiling(sched);
+            } else {
+                int ret = ggml_backend_sched_export_profiling_json(sched, params.profiling_output.c_str());
+                if (ret == 0) {
+                    LOG("\nProfiling data exported to: %s\n", params.profiling_output.c_str());
+                } else {
+                    LOG_ERR("\nFailed to export profiling data to: %s\n", params.profiling_output.c_str());
+                }
+            }
+        }
+    }
+
     LOG("\n\n");
     common_perf_print(ctx, smpl);
 

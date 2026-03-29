@@ -6,6 +6,7 @@
 #include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
+#include "ggml-profiler.h"
 #include "quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
@@ -1159,8 +1160,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
-    ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    const ggml_vec_dot_t vec_dot      = type_traits_cpu[type].vec_dot;
+    const enum ggml_type vec_dot_type = type_traits_cpu[type].vec_dot_type;
 
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -1244,9 +1245,9 @@ void ggml_compute_forward_mul_mat(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    enum ggml_type           const vec_dot_type         = type_traits_cpu[src0->type].vec_dot_type;
-    ggml_from_float_t        const from_float           = type_traits_cpu[vec_dot_type].from_float;
-    int64_t                  const vec_dot_num_rows     = type_traits_cpu[src0->type].nrows;
+    const enum ggml_type    vec_dot_type     = type_traits_cpu[src0->type].vec_dot_type;
+    const ggml_from_float_t from_float       = type_traits_cpu[vec_dot_type].from_float;
+    const int64_t           vec_dot_num_rows = type_traits_cpu[src0->type].nrows;
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
@@ -1455,8 +1456,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     const enum ggml_type type = src0->type;
 
-    ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    const ggml_vec_dot_t vec_dot      = type_traits_cpu[type].vec_dot;
+    const enum ggml_type vec_dot_type = type_traits_cpu[type].vec_dot_type;
 
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
@@ -1523,8 +1524,8 @@ static void ggml_compute_forward_mul_mat_id(
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
-    enum ggml_type    const vec_dot_type    = type_traits_cpu[type].vec_dot_type;
-    ggml_from_float_t const from_float      = type_traits_cpu[vec_dot_type].from_float;
+    const enum ggml_type    vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    const ggml_from_float_t from_float   = type_traits_cpu[vec_dot_type].from_float;
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -2973,28 +2974,67 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     GGML_PRINT_DEBUG("thread #%d compute-start cplan %p last-graph %d\n", state->ith, (const void *)cplan, state->last_graph);
 #endif
 
-    for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
-        struct ggml_tensor * node = cgraph->nodes[node_n];
+    // Profiling state
+    if (cplan->profiling_context != NULL && cplan->profiling_record_fn != NULL) {
+        for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
+            struct ggml_tensor * node = cgraph->nodes[node_n];
 
-        if (ggml_op_is_empty(node->op)) {
-            // skip NOPs
-            continue;
+            if (ggml_op_is_empty(node->op)) {
+                continue;
+            }
+
+            if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                continue;
+            }
+
+            // Only thread 0 records timing (after barrier = total node time)
+            uint64_t t_start = 0;
+            if (state->ith == 0) {
+                t_start = ggml_profiler_time_ns();
+            }
+
+            ggml_compute_forward(&params, node);
+
+            if (node_n + 1 < cgraph->n_nodes) {
+                ggml_barrier(state->threadpool);
+            }
+
+            if (state->ith == 0) {
+                uint64_t t_end = ggml_profiler_time_ns();
+                cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
+                                           ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
+                                           node->ne);
+            }
+
+            if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
+                atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
+                tp->ec = GGML_STATUS_ABORTED;
+            }
         }
+    } else {
+        for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
+            struct ggml_tensor * node = cgraph->nodes[node_n];
 
-        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-            continue;
-        }
+            if (ggml_op_is_empty(node->op)) {
+                // skip NOPs
+                continue;
+            }
 
-        ggml_compute_forward(&params, node);
+            if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                continue;
+            }
 
-        if (state->ith == 0 && cplan->abort_callback &&
-                cplan->abort_callback(cplan->abort_callback_data)) {
-            atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
-            tp->ec    = GGML_STATUS_ABORTED;
-        }
+            ggml_compute_forward(&params, node);
 
-        if (node_n + 1 < cgraph->n_nodes) {
-            ggml_barrier(state->threadpool);
+            if (state->ith == 0 && cplan->abort_callback &&
+                    cplan->abort_callback(cplan->abort_callback_data)) {
+                atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
+                tp->ec    = GGML_STATUS_ABORTED;
+            }
+
+            if (node_n + 1 < cgraph->n_nodes) {
+                ggml_barrier(state->threadpool);
+            }
         }
     }
 
