@@ -95,6 +95,194 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     return MMVQ_PARAMETERS_GENERIC;
 }
 
+// Per-architecture maximum batch size for which MMVQ should be used for MUL_MAT_ID.
+// Returns a value <= MMVQ_MAX_BATCH_SIZE. Default is MMVQ_MAX_BATCH_SIZE.
+// Check https://github.com/ggml-org/llama.cpp/pull/20905#issuecomment-4145835627 for details
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_pascal_older(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ1_S:   return 6;
+        case GGML_TYPE_IQ1_M:   return 6;
+        case GGML_TYPE_IQ2_S:   return 4;
+        case GGML_TYPE_IQ2_XS:  return 5;
+        case GGML_TYPE_IQ2_XXS: return 5;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 4;
+        case GGML_TYPE_IQ4_NL:  return 6;
+        case GGML_TYPE_IQ4_XS:  return 5;
+        case GGML_TYPE_MXFP4:   return 4;
+        case GGML_TYPE_Q2_K:    return 4;
+        case GGML_TYPE_Q3_K:    return 4;
+        case GGML_TYPE_Q4_0:    return 6;
+        case GGML_TYPE_Q4_1:    return 6;
+        case GGML_TYPE_Q4_K:    return 5;
+        case GGML_TYPE_Q5_0:    return 6;
+        case GGML_TYPE_Q5_1:    return 6;
+        case GGML_TYPE_Q5_K:    return 5;
+        case GGML_TYPE_Q6_K:    return 4;
+        case GGML_TYPE_Q8_0:    return 4;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_turing_plus(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ2_S:   return 7;
+        case GGML_TYPE_IQ3_S:   return 6;
+        case GGML_TYPE_IQ3_XXS: return 7;
+        case GGML_TYPE_MXFP4:   return 7;
+        case GGML_TYPE_Q2_K:    return 7;
+        case GGML_TYPE_Q3_K:    return 5;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_gcn(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ1_S:   return 5;
+        case GGML_TYPE_IQ1_M:   return 5;
+        case GGML_TYPE_IQ2_S:   return 4;
+        case GGML_TYPE_IQ2_XS:  return 4;
+        case GGML_TYPE_IQ2_XXS: return 4;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 4;
+        case GGML_TYPE_IQ4_NL:  return 6;
+        case GGML_TYPE_IQ4_XS:  return 4;
+        case GGML_TYPE_Q2_K:    return 4;
+        case GGML_TYPE_Q3_K:    return 4;
+        case GGML_TYPE_Q4_0:    return 5;
+        case GGML_TYPE_Q4_1:    return 5;
+        case GGML_TYPE_Q4_K:    return 4;
+        case GGML_TYPE_Q5_K:    return 4;
+        case GGML_TYPE_Q6_K:    return 4;
+        case GGML_TYPE_Q8_0:    return 4;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_cdna(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ2_S:   return 5;
+        case GGML_TYPE_IQ2_XS:  return 5;
+        case GGML_TYPE_IQ2_XXS: return 5;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 5;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna1_rdna2(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ2_S:   return 4;
+        case GGML_TYPE_IQ2_XS:  return 4;
+        case GGML_TYPE_IQ2_XXS: return 4;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 4;
+        case GGML_TYPE_Q2_K:    return 7;
+        case GGML_TYPE_Q3_K:    return 4;
+        case GGML_TYPE_Q4_K:    return 5;
+        case GGML_TYPE_Q5_K:    return 6;
+        case GGML_TYPE_Q6_K:    return 5;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna3(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ1_S:   return 6;
+        case GGML_TYPE_IQ1_M:   return 6;
+        case GGML_TYPE_IQ2_S:   return 4;
+        case GGML_TYPE_IQ2_XS:  return 4;
+        case GGML_TYPE_IQ2_XXS: return 4;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 4;
+        case GGML_TYPE_IQ4_NL:  return 6;
+        case GGML_TYPE_IQ4_XS:  return 6;
+        case GGML_TYPE_Q4_K:    return 4;
+        case GGML_TYPE_Q5_K:    return 4;
+        case GGML_TYPE_Q6_K:    return 4;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ1_S:   return 7;
+        case GGML_TYPE_IQ1_M:   return 7;
+        case GGML_TYPE_IQ2_S:   return 4;
+        case GGML_TYPE_IQ2_XS:  return 4;
+        case GGML_TYPE_IQ2_XXS: return 4;
+        case GGML_TYPE_IQ3_S:   return 4;
+        case GGML_TYPE_IQ3_XXS: return 4;
+        case GGML_TYPE_IQ4_NL:  return 7;
+        case GGML_TYPE_IQ4_XS:  return 5;
+        case GGML_TYPE_MXFP4:   return 5;
+        case GGML_TYPE_Q3_K:    return 4;
+        case GGML_TYPE_Q4_0:    return 7;
+        case GGML_TYPE_Q4_1:    return 7;
+        case GGML_TYPE_Q4_K:    return 4;
+        case GGML_TYPE_Q5_0:    return 7;
+        case GGML_TYPE_Q5_1:    return 7;
+        case GGML_TYPE_Q5_K:    return 5;
+        case GGML_TYPE_Q6_K:    return 5;
+        case GGML_TYPE_Q8_0:    return 7;
+        default:                return MMVQ_MAX_BATCH_SIZE;
+    }
+}
+
+// Host function: returns the max batch size for the current arch+type at runtime.
+int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+    // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
+    if (cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+        return MMVQ_MAX_BATCH_SIZE;
+    }
+    if (cc >= GGML_CUDA_CC_TURING) {
+        return get_mmvq_mmid_max_batch_turing_plus(type);
+    }
+    if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+        return get_mmvq_mmid_max_batch_pascal_older(type);
+    }
+    // AMD
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
+        return get_mmvq_mmid_max_batch_rdna4(type);
+    }
+    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+        return get_mmvq_mmid_max_batch_rdna3(type);
+    }
+    if (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA2(cc)) {
+        return get_mmvq_mmid_max_batch_rdna1_rdna2(type);
+    }
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        return get_mmvq_mmid_max_batch_cdna(type);
+    }
+    if (GGML_CUDA_CC_IS_GCN(cc)) {
+        return get_mmvq_mmid_max_batch_gcn(type);
+    }
+    return MMVQ_MAX_BATCH_SIZE;
+}
+
+// Device constexpr: returns the max batch size for the current arch+type at compile time.
+template <ggml_type type>
+static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
+#if defined(RDNA4)
+    return get_mmvq_mmid_max_batch_rdna4(type);
+#elif defined(RDNA3)
+    return get_mmvq_mmid_max_batch_rdna3(type);
+#elif defined(RDNA2) || defined(RDNA1)
+    return get_mmvq_mmid_max_batch_rdna1_rdna2(type);
+#elif defined(CDNA)
+    return get_mmvq_mmid_max_batch_cdna(type);
+#elif defined(GCN)
+    return get_mmvq_mmid_max_batch_gcn(type);
+#elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == GGML_CUDA_CC_VOLTA || __CUDA_ARCH__ >= GGML_CUDA_CC_ADA_LOVELACE)
+    return MMVQ_MAX_BATCH_SIZE;
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+    return get_mmvq_mmid_max_batch_turing_plus(type);
+#else
+    return get_mmvq_mmid_max_batch_pascal_older(type);
+#endif
+}
+
 static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_dst, mmvq_parameter_table_id table_id) {
     if (table_id == MMVQ_PARAMETERS_GENERIC) {
         switch (ncols_dst) {
@@ -400,7 +588,7 @@ static __global__ void mul_mat_vec_q(
 // Block: (warp_size, ncols_dst) - each warp handles one token independently.
 // No shared memory reduction needed since each warp works alone.
 template <ggml_type type, int c_rows_per_block>
-__launch_bounds__(MMVQ_MMID_MAX_BATCH_SIZE*ggml_cuda_get_physical_warp_size(), 1)
+__launch_bounds__(get_mmvq_mmid_max_batch_for_device<type>()*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q_moe(
         const void * __restrict__ vx, const void * __restrict__ vy, const int32_t * __restrict__ ids,
         float * __restrict__ dst,
