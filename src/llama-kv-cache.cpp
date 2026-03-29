@@ -29,7 +29,14 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
     assert(tensor->ne[2] == 1);
     assert(tensor->ne[3] == 1);
 
-    auto * data = (float *) tensor->data;
+    std::vector<float> data_f32;
+
+    float * data = (float *) tensor->data;
+
+    if (tensor->type != GGML_TYPE_F32) {
+        data_f32.resize(n*n);
+        data = data_f32.data();
+    }
 
     data[0*n + 0] = 1.0 / sqrtf(n);
 
@@ -43,6 +50,10 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
                 data[(i + s)*n + (j + s)] = -val;
             }
         }
+    }
+
+    if (tensor->type != GGML_TYPE_F32) {
+        ggml_quantize_chunk(tensor->type, data, tensor->data, 0, 1, n*n, nullptr);
     }
 }
 
@@ -1744,20 +1755,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
     inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, (int64_t) get_size()*n_stream);
     ggml_set_input(inp->k_shift);
 
-    if (ggml_is_quantized(type_k())) {
-        int nrot = 64;
-
-        // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
-        do {
-            nrot *= 2;
-        } while (hparams.n_embd_head_k() % nrot == 0);
-        nrot /= 2;
-
-        inp->k_rot = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
-        ggml_set_input(inp->k_rot);
-        ggml_set_name(inp->k_rot, "rope_shift_k_rot");
-    }
+    inp->k_rot = build_input_k_rot(ctx);
 
     const auto & cparams = lctx->get_cparams();
 
