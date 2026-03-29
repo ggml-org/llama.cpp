@@ -424,13 +424,17 @@ kernel void kernel_restore_block_q8_0_trans(
 // Convert the block_q4_K format to 4 separate arrays (AOS -> SOA).
 // This kernel does not deshuffle the bits.
 // Each thread processes a super block.
+// Mask args are just to keep the signature consistent with the no-shuffle
+// version and they are not used in this kernel.
 //------------------------------------------------------------------------------
 kernel void kernel_convert_block_q4_K(
     global struct block_q4_K * src0,
     global uchar * dst_q,
     global uchar * dst_s,
     global half  * dst_d,
-    global half  * dst_dm
+    global half  * dst_dm,
+    uchar mask_0F,
+    uchar mask_F0
 ) {
     global struct block_q4_K * b = (global struct block_q4_K *) src0 + get_global_id(0);
     global uchar * q  = (global uchar *) dst_q  + QK_K/2*get_global_id(0);
@@ -451,12 +455,15 @@ kernel void kernel_convert_block_q4_K(
 
 // Restore block_q4_K from flattened arrays.
 // Each thread processes a super block.
+// Mask args are just to keep the signature consistent with the no-shuffle ones.
 kernel void kernel_restore_block_q4_K(
     global uchar * src_q,
     global uchar * src_s,
     global half  * src_d,
     global half  * src_dm,
-    global struct block_q4_K * dst
+    global struct block_q4_K * dst,
+    uchar mask_0F,
+    uchar mask_F0
 ) {
     global struct block_q4_K * b = (global struct block_q4_K *) dst + get_global_id(0);
     global uchar * q  = (global uchar *) src_q  + QK_K/2*get_global_id(0);

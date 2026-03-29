@@ -5588,6 +5588,9 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
 
+        cl_uchar mask_0F = 0x0F;
+        cl_uchar mask_F0 = 0xF0;
+
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
             int M = tensor->ne[1];
@@ -5610,12 +5613,6 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             transpose_2d_as_16b(backend_ctx, extra->d,  buf_trans_d.buffer,  size_d,  M, K/256);
             transpose_2d_as_16b(backend_ctx, extra->dm, buf_trans_dm.buffer, size_dm, M, K/256);
 
-            size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
-            size_t local_work_size[] = {1, 1, 1};
-
-            cl_uchar mask_0F = 0x0F;
-            cl_uchar mask_F0 = 0xF0;
-
             cl_kernel kernel = backend_ctx->kernel_restore_block_q4_K_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->s));
@@ -5624,6 +5621,9 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &data_device));
             CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask_0F));
             CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_uchar), &mask_F0));
+
+            size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+            size_t local_work_size[] = {1, 1, 1};
 
             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
                 global_work_size, local_work_size, 0, NULL, NULL));
@@ -5640,6 +5640,8 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->dm));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_uchar), &mask_0F));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_uchar), &mask_F0));
 
         size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
         size_t local_work_size[] = {1, 1, 1};
