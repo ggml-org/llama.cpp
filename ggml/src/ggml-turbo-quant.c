@@ -498,7 +498,9 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
 #endif
 
         /* Pack */
+#if !TURBO4_USE_4BIT
         y[block].norm  = GGML_FP32_TO_FP16(norm);
+#endif
 
 #if TURBO4_USE_4BIT
         /* 4-bit PolarQuant: nibble pack into qs[64] */
@@ -507,7 +509,6 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
             y[block].qs[i / 2] |= (uint8_t)((indices[i] & 0xF) << ((i % 2) * 4));
         }
         y[block].rnorm = GGML_FP32_TO_FP16(0.0f);
-        (void)projected;
 #else
         /* Legacy 3-bit + QJL: pack 3-bit indices + QJL signs */
         memset(y[block].qs, 0, d * 3 / 8);

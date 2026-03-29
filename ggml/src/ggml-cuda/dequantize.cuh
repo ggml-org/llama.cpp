@@ -99,6 +99,15 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
+// Turbo4: 4-bit PolarQuant (nibble packed), block size 128
+// iqs is the element index within the block (even), produces elements iqs and iqs+1
+static __device__ __forceinline__ void dequantize_turbo4_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_turbo4_0 * x = (const block_turbo4_0 *) vx;
+    const float norm = __half2float(x[ib].norm);
+    v.x = turbo4_dequant_element(&x[ib], iqs + 0, norm);
+    v.y = turbo4_dequant_element(&x[ib], iqs + 1, norm);
+}
+
 // Turbo3: 3-bit PolarQuant (2-bit qs + 1-bit sign), block size 32
 // iqs is the element index within the block (even), produces elements iqs and iqs+1
 static __device__ __forceinline__ void dequantize_turbo3_0(const void * vx, const int64_t ib, const int iqs, float2 & v){

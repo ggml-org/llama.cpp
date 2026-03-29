@@ -16,6 +16,7 @@
 // ---- Quantization ratios for dequantize_block template ----
 #define QR_TURBO3 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 #define QR_TURBO2 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
+#define QR_TURBO4 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 
 // ---- 2-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
@@ -289,6 +290,65 @@ static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
 // Host: check if InnerQ is currently active (finalized)
 static bool turbo_innerq_is_active(void) {
     return innerq_enabled == 2;
+}
+
+// ---- 4-bit centroids (Lloyd-Max for N(0, 1/128)) ----
+
+static __constant__ float TURBO_CENTROIDS_4BIT[16] = {
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+};
+
+// ---- Midpoints for nearest 4-bit centroid lookup ----
+
+static __constant__ float TURBO_MID_4BIT[15] = {
+    -0.145561f, -0.103361f, -0.079142f, -0.060009f,
+    -0.043430f, -0.028293f, -0.013964f,  0.000000f,
+     0.013964f,  0.028293f,  0.043430f,  0.060009f,
+     0.079142f,  0.103361f,  0.145561f
+};
+
+// ---- Nearest 4-bit centroid index ----
+
+static __device__ __forceinline__ uint8_t turbo_nearest_centroid_4bit(float val) {
+    if      (val < TURBO_MID_4BIT[ 0]) return  0;
+    else if (val < TURBO_MID_4BIT[ 1]) return  1;
+    else if (val < TURBO_MID_4BIT[ 2]) return  2;
+    else if (val < TURBO_MID_4BIT[ 3]) return  3;
+    else if (val < TURBO_MID_4BIT[ 4]) return  4;
+    else if (val < TURBO_MID_4BIT[ 5]) return  5;
+    else if (val < TURBO_MID_4BIT[ 6]) return  6;
+    else if (val < TURBO_MID_4BIT[ 7]) return  7;
+    else if (val < TURBO_MID_4BIT[ 8]) return  8;
+    else if (val < TURBO_MID_4BIT[ 9]) return  9;
+    else if (val < TURBO_MID_4BIT[10]) return 10;
+    else if (val < TURBO_MID_4BIT[11]) return 11;
+    else if (val < TURBO_MID_4BIT[12]) return 12;
+    else if (val < TURBO_MID_4BIT[13]) return 13;
+    else if (val < TURBO_MID_4BIT[14]) return 14;
+    else                               return 15;
+}
+
+// ---- Per-block quantize for turbo4 (128 elements, expects already-rotated input) ----
+
+static __device__ void quantize_f32_turbo4_0_block(const float * __restrict__ src,
+                                                    block_turbo4_0 * __restrict__ dst) {
+    for (int j = 0; j < QK_TURBO4 / 2; j++) dst->qs[j] = 0;
+
+    for (int j = 0; j < QK_TURBO4; j++) {
+        uint8_t idx = turbo_nearest_centroid_4bit(src[j]);
+        dst->qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
+    }
+}
+
+// ---- Inline dequant helper: extract one float from turbo4 block ----
+
+static __device__ __forceinline__ float turbo4_dequant_element(
+        const block_turbo4_0 * __restrict__ x, int j, float norm) {
+    uint8_t idx = (x->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
+    return TURBO_CENTROIDS_4BIT[idx] * norm;
 }
 
 // ---- Nearest 3-bit centroid index ----
