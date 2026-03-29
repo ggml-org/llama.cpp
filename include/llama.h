@@ -7,6 +7,9 @@
 #include "ggml-opt.h"
 #include "gguf.h"
 
+// KV cache codec interface for TurboQuant-style compression
+#include "llama-kv-codec.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

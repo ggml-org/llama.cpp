@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-kv-codec.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
@@ -356,4 +357,8 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // KV cache codec for TurboQuant-style compression
+    bool has_kv_codec = false;
+    llama_kv_codec_params kv_codec_params = {};
 };

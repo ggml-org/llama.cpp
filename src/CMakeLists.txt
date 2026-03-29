@@ -8,6 +8,7 @@ llama_add_compile_flags()
 
 add_library(llama
             ../include/llama.h
+            ../include/llama-kv-codec.h
             llama.cpp
             llama-adapter.cpp
             llama-arch.cpp
@@ -22,6 +23,7 @@ add_library(llama
             llama-io.cpp
             llama-kv-cache.cpp
             llama-kv-cache-iswa.cpp
+            llama-kv-codec.cpp
             llama-memory.cpp
             llama-memory-hybrid.cpp
             llama-memory-hybrid-iswa.cpp
