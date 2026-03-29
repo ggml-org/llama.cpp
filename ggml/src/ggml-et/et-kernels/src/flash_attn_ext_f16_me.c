@@ -17,6 +17,7 @@
 
 #include <etsoc/common/utils.h>
 #include <stdint.h>
+#include <string.h>
 #include "ggml_tensor.h"
 #include "platform.h"
 #include "tensor.h"
@@ -101,16 +102,75 @@ pack_k_for_transpose16(et_fp16_t * out,
                        int64_t kv_count,
                        int64_t nb1_k)
 {
+    // save registers we use becayse TensorFMA uses all FP registers
+    // and this function is used in the middle TensorFMAs
+    uint32_t save_f28[8] __attribute__((aligned(32)));
+    uint32_t save_f29[8] __attribute__((aligned(32)));
+    uint32_t save_f30[8] __attribute__((aligned(32)));
+    uint32_t save_f31[8] __attribute__((aligned(32)));
+    unsigned long old_mask;
+
+    __asm__ volatile(
+        "mova.x.m  %[ms]            \n\t"
+        "mov.m.x   m0, x0, 0xFF     \n\t"
+        "fsw.ps    f28, 0(%[save28])\n\t"
+        "fsw.ps    f29, 0(%[save29])\n\t"
+        "fsw.ps    f30, 0(%[save30])\n\t"
+        "fsw.ps    f31, 0(%[save31])\n\t"
+        : [ms] "=&r"(old_mask)
+        : [save28] "r"(save_f28),
+          [save29] "r"(save_f29),
+          [save30] "r"(save_f30),
+          [save31] "r"(save_f31)
+        : "f28", "f29", "f30", "f31", "memory"
+    );
+
     for (int j = 0; j < (int)kv_count; ++j) {
         const et_fp16_t * k_row =
             (const et_fp16_t *)(k_base + (kv_start + j) * nb1_k) + dk_start;
         et_fp16_t * even_row = out + (j * 2)     * 32;
         et_fp16_t * odd_row  = out + (j * 2 + 1) * 32;
-        for (int l = 0; l < TILE_K / 2; ++l) {
-            even_row[l] = k_row[2 * l + 0];
-            odd_row[l]  = k_row[2 * l + 1];
+        {
+            __asm__ volatile(
+                "flw.ps    f30, 0(%[src0])  \n\t"
+                "flw.ps    f31, 0(%[src1])  \n\t"
+                "fpackreph.pi f28, f30      \n\t"
+                "fsrli.pi  f29, f30, 16     \n\t"
+                "fpackreph.pi f29, f29      \n\t"
+                "fpackreph.pi f30, f31      \n\t"
+                "fsrli.pi  f31, f31, 16     \n\t"
+                "fpackreph.pi f31, f31      \n\t"
+                "mov.m.x   m0, x0, 0x0F     \n\t"
+                "fcmovm.ps f28, f28, f30    \n\t"
+                "fcmovm.ps f29, f29, f31    \n\t"
+                "mov.m.x   m0, x0, 0xFF     \n\t"
+                "fsw.ps    f28, 0(%[even])  \n\t"
+                "fsw.ps    f29, 0(%[odd])   \n\t"
+                :
+                : [src0] "r"(k_row),
+                  [src1] "r"(k_row + 16),
+                  [even] "r"(even_row),
+                  [odd] "r"(odd_row)
+                : "f28", "f29", "f30", "f31", "memory"
+            );
         }
     }
+
+    __asm__ volatile(
+        "flw.ps    f28, 0(%[save28])\n\t"
+        "flw.ps    f29, 0(%[save29])\n\t"
+        "flw.ps    f30, 0(%[save30])\n\t"
+        "flw.ps    f31, 0(%[save31])\n\t"
+        "mova.m.x  %[ms]            \n\t"
+        :
+        : [ms] "r"(old_mask),
+          [save28] "r"(save_f28),
+          [save29] "r"(save_f29),
+          [save30] "r"(save_f30),
+          [save31] "r"(save_f31)
+        : "f28", "f29", "f30", "f31", "memory"
+    );
+
     for (int j = (int)kv_count; j < TILE_KV; ++j) {
         et_fp16_t * even_row = out + (j * 2)     * 32;
         et_fp16_t * odd_row  = out + (j * 2 + 1) * 32;
