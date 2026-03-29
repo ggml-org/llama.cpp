@@ -215,7 +215,7 @@ struct continue_statement : public statement {
 };
 
 // do nothing
-struct noop_statement : public statement {
+struct noop_statement : public expression {
     std::string type() const override { return "Noop"; }
     value execute_impl(context &) override {
         return mk_val<value_undefined>();
