@@ -33,6 +33,7 @@ class ProfileRecord:
     extra: Optional[str]
     ne_src0: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     ne_src1: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    ne_src2: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
     @property
     def type_name(self) -> str:
@@ -48,7 +49,7 @@ class ProfileRecord:
 
     @property
     def bandwidth_gbps(self) -> float:
-        """Bandwidth in GB/s (only meaningful for copy events)."""
+        """Bandwidth in GB/s."""
         if self.duration_ns == 0 or self.bytes == 0:
             return 0.0
         return self.bytes / self.duration_ns
@@ -62,12 +63,12 @@ class ProfileRecord:
 
     @property
     def shape_str(self) -> str:
-        """Human-readable tensor shapes, e.g. '[4096, 4096] x [4096, 1]'."""
+        """Human-readable tensor shapes, e.g. '[4096, 4096] x [4096, 1] x [8, 1]'."""
         s0 = self._fmt_ne(self.ne_src0)
         s1 = self._fmt_ne(self.ne_src1)
-        if s0 and s1:
-            return s0 + " x " + s1
-        return s0 or s1
+        s2 = self._fmt_ne(self.ne_src2)
+        parts = [s for s in (s0, s1, s2) if s]
+        return " x ".join(parts)
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +82,7 @@ class ProfileRecord:
             "extra": self.extra,
             "ne_src0": self.ne_src0,
             "ne_src1": self.ne_src1,
+            "ne_src2": self.ne_src2,
         }
 
 
@@ -160,6 +162,7 @@ class ProfileData:
             # Support both old "ne" format and new "ne_src0"/"ne_src1" format
             ne_src0 = _pad_ne(r.get("ne_src0", r.get("ne", [0, 0, 0, 0])))
             ne_src1 = _pad_ne(r.get("ne_src1", [0, 0, 0, 0]))
+            ne_src2 = _pad_ne(r.get("ne_src2", [0, 0, 0, 0]))
             records.append(ProfileRecord(
                 type=r.get("type", 0),
                 name=r.get("name", "unknown"),
@@ -171,6 +174,7 @@ class ProfileData:
                 extra=r.get("extra"),
                 ne_src0=ne_src0,
                 ne_src1=ne_src1,
+                ne_src2=ne_src2,
             ))
 
         backends_raw = data.get("backends", [])
@@ -267,9 +271,9 @@ class ProfileData:
             return
 
         print(f"  {'TYPE':<5} {'BKND':>4}  {'Operation':<28} {'%Time':>7}  {'Count':>6}  "
-              f"{'Total':>10}  {'Avg':>10}  {'Min':>10}  {'Max':>10}  {'Bytes':>10}")
+              f"{'Total':>10}  {'Avg':>10}  {'Min':>10}  {'Max':>10}  {'Bandwidth':>12}")
         print(f"  {'':->5} {'':->4}  {'':->28} {'':->7}  {'':->6}  "
-              f"{'(ms)':>10}  {'(us)':>10}  {'(us)':>10}  {'(us)':>10}  {'':->10}")
+              f"{'(ms)':>10}  {'(us)':>10}  {'(us)':>10}  {'(us)':>10}  {'':->12}")
 
         for s in stats:
             pct = 100.0 * s.total_ns / self.total_ns if self.total_ns > 0 else 0
@@ -278,15 +282,14 @@ class ProfileData:
                     f"{s.count:>6}  {s.total_ms:>10.2f}  {s.avg_us:>10.2f}  "
                     f"{s.min_us:>10.2f}  {s.max_us:>10.2f}")
 
-            if s.total_bytes > 0:
+            if s.total_bytes > 0 and s.total_ns > 0:
                 bw = s.bandwidth_gbps
-                bytes_str = f"{s.total_bytes / 1e6:.1f} MB"
-                if s.event_type == COPY_EVENT:
-                    line += f"  {bw:>8.2f} GB/s"
+                if bw >= 1000.0:
+                    line += f"  {bw / 1000.0:>9.2f} TB/s"
                 else:
-                    line += f"  {bytes_str:>10}"
+                    line += f"  {bw:>9.2f} GB/s"
             else:
-                line += f"  {'':>10}"
+                line += f"  {'':>12}"
 
             # Tensor shape from longest call
             shape_dims = [n for n in s.representative_ne if n > 0]
@@ -807,19 +810,19 @@ function buildStats(){
   var ops={};
   for(var i=0;i<EVENTS.length;i++){
     var ev=EVENTS[i];
-    if(!ops[ev.n])ops[ev.n]={name:ev.n,d:0,count:0,min:Infinity,max:0,backends:{}};
+    if(!ops[ev.n])ops[ev.n]={name:ev.n,d:0,count:0,min:Infinity,max:0,bytes:0,backends:{}};
     var op=ops[ev.n];
-    op.d+=ev.d;op.count++;
+    op.d+=ev.d;op.count++;op.bytes+=(ev.b||0);
     if(ev.d<op.min)op.min=ev.d;if(ev.d>op.max)op.max=ev.d;
     var bk=String(ev.bid);
-    if(!op.backends[bk])op.backends[bk]={bid:ev.bid,d:0,count:0,min:Infinity,max:0,shapes:{}};
+    if(!op.backends[bk])op.backends[bk]={bid:ev.bid,d:0,count:0,min:Infinity,max:0,bytes:0,shapes:{}};
     var b=op.backends[bk];
-    b.d+=ev.d;b.count++;
+    b.d+=ev.d;b.count++;b.bytes+=(ev.b||0);
     if(ev.d<b.min)b.min=ev.d;if(ev.d>b.max)b.max=ev.d;
     var sh=ev.s||'\u2014';
-    if(!b.shapes[sh])b.shapes[sh]={d:0,count:0,min:Infinity,max:0};
+    if(!b.shapes[sh])b.shapes[sh]={d:0,count:0,min:Infinity,max:0,bytes:0};
     var s=b.shapes[sh];
-    s.d+=ev.d;s.count++;
+    s.d+=ev.d;s.count++;s.bytes+=(ev.b||0);
     if(ev.d<s.min)s.min=ev.d;if(ev.d>s.max)s.max=ev.d;
   }
   var sorted=[];for(var k in ops)sorted.push(ops[k]);
@@ -832,7 +835,7 @@ function buildStats(){
     var opId=rid++;
     var bkeys=[];for(var bk in op.backends)bkeys.push(bk);
     bkeys.sort(function(a,b){return op.backends[b].d-op.backends[a].d;});
-    rows.push({id:opId,p:-1,lv:0,name:op.name,d:op.d,count:op.count,
+    rows.push({id:opId,p:-1,lv:0,name:op.name,d:op.d,count:op.count,bytes:op.bytes,
       min:op.min,max:op.max,pct:op.d/TOTAL_US*100,ch:bkeys.length>0});
     for(var bi=0;bi<bkeys.length;bi++){
       var bdata=op.backends[bkeys[bi]];
@@ -840,25 +843,33 @@ function buildStats(){
       var bname=BACKENDS[bdata.bid]||('B'+bdata.bid);
       var skeys=[];for(var sk in bdata.shapes)skeys.push(sk);
       skeys.sort(function(a,b){return bdata.shapes[b].d-bdata.shapes[a].d;});
-      rows.push({id:bId,p:opId,lv:1,name:bname,d:bdata.d,count:bdata.count,
+      rows.push({id:bId,p:opId,lv:1,name:bname,d:bdata.d,count:bdata.count,bytes:bdata.bytes,
         min:bdata.min,max:bdata.max,pct:bdata.d/TOTAL_US*100,ch:skeys.length>0});
       for(var si=0;si<skeys.length;si++){
         var sdata=bdata.shapes[skeys[si]];
         var sId=rid++;
-        rows.push({id:sId,p:bId,lv:2,name:skeys[si],d:sdata.d,count:sdata.count,
+        rows.push({id:sId,p:bId,lv:2,name:skeys[si],d:sdata.d,count:sdata.count,bytes:sdata.bytes,
           min:sdata.min,max:sdata.max,pct:sdata.d/TOTAL_US*100,ch:false});
       }
     }
   }
 
   // Render
-  var h='<table><thead><tr><th style="width:30%">Operation</th>'
-    +'<th class="r" style="width:12%">% Time</th>'
-    +'<th class="r" style="width:12%">Total</th>'
-    +'<th class="r" style="width:10%">Count</th>'
-    +'<th class="r" style="width:12%">Avg</th>'
-    +'<th class="r" style="width:12%">Min</th>'
-    +'<th class="r" style="width:12%">Max</th>'
+  function fmtBW(bytes,d_us){
+    if(!bytes||!d_us)return'\u2014';
+    var gbps=bytes/(d_us*1000);
+    if(gbps>=1000)return(gbps/1000).toFixed(2)+' TB/s';
+    if(gbps>=1)return gbps.toFixed(2)+' GB/s';
+    return(gbps*1000).toFixed(1)+' MB/s';
+  }
+  var h='<table><thead><tr><th style="width:26%">Operation</th>'
+    +'<th class="r" style="width:10%">% Time</th>'
+    +'<th class="r" style="width:10%">Total</th>'
+    +'<th class="r" style="width:8%">Count</th>'
+    +'<th class="r" style="width:10%">Avg</th>'
+    +'<th class="r" style="width:10%">Min</th>'
+    +'<th class="r" style="width:10%">Max</th>'
+    +'<th class="r" style="width:10%">Bandwidth</th>'
     +'</tr></thead><tbody>';
 
   for(var ri=0;ri<rows.length;ri++){
@@ -883,6 +894,7 @@ function buildStats(){
     h+='<td class="r">'+fmtT(r.d/r.count)+'</td>';
     h+='<td class="r">'+fmtT(r.min)+'</td>';
     h+='<td class="r">'+fmtT(r.max)+'</td>';
+    h+='<td class="r">'+fmtBW(r.bytes,r.d)+'</td>';
     h+='</tr>';
   }
   h+='</tbody></table>';
