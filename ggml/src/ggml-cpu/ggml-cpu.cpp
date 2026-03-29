@@ -183,7 +183,8 @@ static void ggml_cpu_profiler_record_callback(void *        context,
                                               uint64_t      bytes,
                                               const char *  extra,
                                               const int64_t ne_src0[4],
-                                              const int64_t ne_src1[4]) {
+                                              const int64_t ne_src1[4],
+                                              const int64_t ne_src2[4]) {
     auto *              cpu_ctx = (ggml_backend_cpu_context *) context;
     ggml_profile_record rec;
     rec.type       = (enum ggml_profile_event_type) type;
@@ -203,6 +204,11 @@ static void ggml_cpu_profiler_record_callback(void *        context,
         memcpy(rec.ne_src1, ne_src1, sizeof(rec.ne_src1));
     } else {
         memset(rec.ne_src1, 0, sizeof(rec.ne_src1));
+    }
+    if (ne_src2) {
+        memcpy(rec.ne_src2, ne_src2, sizeof(rec.ne_src2));
+    } else {
+        memset(rec.ne_src2, 0, sizeof(rec.ne_src2));
     }
     cpu_ctx->profiling_records.push_back(rec);
 }
