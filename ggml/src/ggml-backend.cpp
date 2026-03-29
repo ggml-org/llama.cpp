@@ -1621,7 +1621,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
 
                     sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id, split_id,
-                                                    copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0}, {0} });
+                                                    copy_start, copy_end, ggml_nbytes(input), input->name,
+                                                    {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0} });
                 } else {
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
@@ -1741,7 +1742,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                         sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
                                                         split_id, moe_copy_start, moe_copy_end,
-                                                        (uint64_t) total_copied_bytes, NULL, {0}, {0}, {0} });
+                                                        (uint64_t) total_copied_bytes, input->name,
+                                                        {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0} });
                     }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
@@ -1777,7 +1779,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
 
                             sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0}, {0} });
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), input->name,
+                                                            {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0} });
                         } else {
                             ggml_backend_tensor_copy(input, input_cpy);
                         }
@@ -1797,7 +1800,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
 
                             sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0}, {0} });
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), input->name,
+                                                            {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0} });
                         }
                     }
                 }
