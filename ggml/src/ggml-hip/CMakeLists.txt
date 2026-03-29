@@ -62,6 +62,8 @@ list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
+# Exclude D>=576 tile kernels: exceed HIP local memory limit (67584 > 65536)
+list(FILTER SRCS EXCLUDE REGEX "dkq(576|640)")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
@@ -79,7 +81,13 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
+        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-turbo3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-turbo2_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo2_0.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
