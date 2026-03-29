@@ -114,6 +114,25 @@ static inline float et_sqrtf(float x) {
     return et_powf(x, 0.5f);
 }
 
+// Base-2 exponential: returns 2^x using the ET hardware FEXP.PS instruction.
+// No base conversion, no special-case clamping — this is the raw hardware op
+// with just the mask save/restore wrapper.  Caller is responsible for ensuring
+// x is in a range that produces a useful result (roughly [-126, 128] for fp32).
+static inline float __attribute__((always_inline))
+et_exp2f(float x) {
+    unsigned long old_mask;
+    float out;
+    __asm__ volatile(
+        "mova.x.m  %[ms]             \n\t"
+        "mov.m.x   m0, x0, 1         \n\t"
+        "fexp.ps   %[out], %[x]      \n\t"
+        "mova.m.x  %[ms]             \n\t"
+        : [ms] "=&r"(old_mask), [out] "=&f"(out)
+        : [x] "f"(x)
+    );
+    return out;
+}
+
 // Exponential function using ET hardware FEXP.PS instruction
 // Note: FEXP.PS computes 2^x, so we need to convert: exp(x) = 2^(x * log2(e))
 static inline float et_expf(float x) {

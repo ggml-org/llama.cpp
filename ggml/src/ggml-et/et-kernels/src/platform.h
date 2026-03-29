@@ -266,8 +266,35 @@ static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
 }
 
 //******************************************************************************
-// Cache Flush
+// Cache Operatons
 //******************************************************************************
+
+// Prefetch nlines cache lines into L2 starting at addr, with stride bytes
+// between each line.  Uses PrefetchVA (CSR 0x81F) with dest=L2 (bits 59:58=01).
+//
+// The hardware fetches nlines consecutive cache-line-sized (64B) blocks from
+// DRAM/L3 into L2, starting at addr and advancing by stride bytes per line.
+// This is asynchronous — use WAIT_PREFETCH_0 or WAIT_PREFETCH_1 if the hart
+// must stall until the prefetch completes.
+//
+// NOTE: nlines is encoded in a 4-bit field (max 16). Passing nlines > 16
+// silently truncates. DO NOT pass nlines > 16.
+static inline void __attribute__((always_inline))
+l2_prefetch(const void *addr, uint64_t nlines, uint64_t stride)
+{
+    uint64_t csr_val = (0x1ULL << 58) |
+                       ((uint64_t)addr & 0xFFFFFFFFFFC0ULL) |
+                       ((nlines - 1) & 0xF);
+
+    __asm__ __volatile__ (
+        "mv    x31, %[stride]\n"
+        "csrw  0x81f, %[val]\n"
+        :
+        : [stride] "r" (stride & 0xFFFFFFFFFFC0ULL),
+          [val] "r" (csr_val)
+        : "x31", "memory"
+    );
+}
 
 // Flush nlines cache lines at stride apart starting at addr from L1 to L2.
 // Uses FlushVA (CSR 0x8BF).  Caller must FENCE before (to drain stores to L1)
