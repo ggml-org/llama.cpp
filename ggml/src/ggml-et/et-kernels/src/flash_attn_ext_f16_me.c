@@ -94,6 +94,31 @@ static inline float get_mask_val_from_base(const struct ggml_tensor * mask,
 //
 // Output buffer: 32 rows × 32 halfwords (64-byte stride, 16 hw data + 16 hw pad)
 //
+
+// Prefetch K rows for one dk_chunk into L2.
+// Each KV position needs 1 cache line (64B = 32 fp16 values).
+// Uses prefetch_va (CSR 0x81F) with stride in x31 to batch all kv_count lines.
+static inline void __attribute__((always_inline))
+prefetch_k_to_l2(const char * k_head, int64_t kv_start, int64_t dk_start,
+                 int64_t kv_count, int64_t nb1_k)
+{
+    uintptr_t base = (uintptr_t)k_head + kv_start * nb1_k + dk_start * 2;
+    uint64_t num_lines_m1 = (uint64_t)(kv_count - 1);  // bits 3:0
+
+    __asm__ __volatile__ (
+        "li    x1, 0x400000000000000 \n"  // Dest = L2 (bits 59:58 = 01)
+        "mv    x31, %[stride]\n"          // Stride = nb1_k bytes
+        "or    x3, x1, %[ptr]\n"          // Combine Dest + VA
+        "or    x3, x3, %[sz]\n"           // Combine with NumLines
+        "csrw  0x81f, x3\n"              // prefetch_va
+        :
+        : [ptr] "r" (base),
+          [sz] "r" (num_lines_m1),
+          [stride] "r" ((uint64_t)nb1_k)
+        : "x1", "x3", "x31", "memory"
+    );
+}
+
 static inline void __attribute__((always_inline))
 pack_k_for_transpose16(et_fp16_t * out,
                        const char * k_base,
@@ -484,10 +509,22 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             // B = K^T_interleaved[TILE_K, kv_count] in L1SCP
             // Result: scores[1, kv_count] in vector registers
             // ============================================================
+
+            // Prefetch K data for the first dk_chunk into L2
+            prefetch_k_to_l2(k_head, kv_base, 0, kv_count, k->nb[1]);
+
             for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
 
                 pack_k_for_transpose16(kpanel, k_head, kv_base, dk_chunk,
                                        kv_count, k->nb[1]);
+
+                // Prefetch K data for the NEXT dk_chunk while tensor engine
+                // processes the current one (overlaps DRAM latency with compute)
+                if (dk_chunk + TILE_K < dk) {
+                    prefetch_k_to_l2(k_head, kv_base, dk_chunk + TILE_K,
+                                     kv_count, k->nb[1]);
+                }
+
                 FENCE;
                 // split as `flush_to_l2` can only do 16 lines at a time
                 flush_to_l2(kpanel, 16, 64);
