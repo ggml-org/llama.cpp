@@ -195,6 +195,7 @@ add_library(ggml-base
             ../include/ggml-backend.h
             ../include/ggml-cpp.h
             ../include/ggml-opt.h
+            ../include/ggml-profiler.h
             ../include/gguf.h
             ggml.c
             ggml.cpp
@@ -202,6 +203,7 @@ add_library(ggml-base
             ggml-backend.cpp
             ggml-backend-meta.cpp
             ggml-opt.cpp
+            ggml-profiler.cpp
             ggml-threading.cpp
             ggml-threading.h
             ggml-quants.c
