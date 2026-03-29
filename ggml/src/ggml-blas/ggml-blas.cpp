@@ -274,7 +274,8 @@ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend, 
             rec.end_ns     = t_end;
             rec.bytes      = ggml_nbytes(node);
             rec.extra      = NULL;
-            memcpy(rec.ne, node->ne, sizeof(rec.ne));
+            if (node->src[0]) { memcpy(rec.ne_src0, node->src[0]->ne, sizeof(rec.ne_src0)); } else { memset(rec.ne_src0, 0, sizeof(rec.ne_src0)); }
+            if (node->src[1]) { memcpy(rec.ne_src1, node->src[1]->ne, sizeof(rec.ne_src1)); } else { memset(rec.ne_src1, 0, sizeof(rec.ne_src1)); }
             ctx->profiling_records.push_back(rec);
         }
     }

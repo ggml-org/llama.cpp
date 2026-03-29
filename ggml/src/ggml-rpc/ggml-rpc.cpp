@@ -952,7 +952,8 @@ ggml_backend_t ggml_backend_rpc_init(const char * endpoint, uint32_t device) {
         /* .guid    = */ ggml_backend_rpc_guid(),
         /* .iface   = */ ggml_backend_rpc_interface,
         /* .device  = */ ggml_backend_reg_dev_get(reg, device),
-        /* .context = */ ctx
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
     return backend;
 }

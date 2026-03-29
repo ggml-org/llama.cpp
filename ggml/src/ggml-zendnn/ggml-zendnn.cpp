@@ -264,7 +264,8 @@ ggml_backend_t ggml_backend_zendnn_init(void) {
         /* .guid    = */ ggml_backend_zendnn_guid(),
         /* .iface   = */ ggml_backend_zendnn_i,
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_zendnn_reg(), 0),
-        /* .context = */ ctx,
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
 
     return backend;

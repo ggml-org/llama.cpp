@@ -14994,7 +14994,8 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
         /* .guid    = */ ggml_backend_vk_guid(),
         /* .iface   = */ ggml_backend_vk_interface,
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), dev_num),
-        /* .context = */ ctx,
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
 
     if (!ctx->device->support_async) {

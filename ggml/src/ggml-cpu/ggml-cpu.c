@@ -3001,9 +3001,14 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
             if (state->ith == 0) {
                 uint64_t t_end = ggml_profiler_time_ns();
-                cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
-                                           ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
-                                           node->ne);
+                {
+                    static const int64_t zero_ne[4] = {0, 0, 0, 0};
+                    const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
+                    const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
+                    cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
+                                               ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
+                                               src0_ne, src1_ne);
+                }
             }
 
             if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {

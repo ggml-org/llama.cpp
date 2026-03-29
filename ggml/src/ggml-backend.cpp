@@ -1515,7 +1515,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
 
                     sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id, split_id,
-                                                    copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                                                    copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0} });
                 } else {
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
@@ -1638,7 +1638,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
 
                             sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0} });
                         } else {
                             ggml_backend_tensor_copy(input, input_cpy);
                         }
@@ -1660,7 +1660,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
 
                             sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0} });
+                                                            split_id, copy_start, copy_end, ggml_nbytes(input), NULL, {0}, {0} });
                         }
                     }
                 }
@@ -2468,7 +2468,7 @@ void ggml_backend_sched_print_profiling(ggml_backend_sched_t sched) {
             s.max_ns      = dur;
             s.count       = 1;
             s.total_bytes = rec.bytes;
-            memcpy(s.representative_ne, rec.ne, sizeof(s.representative_ne));
+            memcpy(s.representative_ne, rec.ne_src0, sizeof(s.representative_ne));
             stats.push_back(s);
         }
     }
@@ -2571,9 +2571,11 @@ int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * f
             fprintf(fp, "null");
         }
 
-        // Tensor dimensions
-        fprintf(fp, ", \"ne\": [%lld, %lld, %lld, %lld]", (long long) rec.ne[0], (long long) rec.ne[1],
-                (long long) rec.ne[2], (long long) rec.ne[3]);
+        // Tensor dimensions (both source tensors)
+        fprintf(fp, ", \"ne_src0\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src0[0], (long long) rec.ne_src0[1],
+                (long long) rec.ne_src0[2], (long long) rec.ne_src0[3]);
+        fprintf(fp, ", \"ne_src1\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src1[0], (long long) rec.ne_src1[1],
+                (long long) rec.ne_src1[2], (long long) rec.ne_src1[3]);
 
         fprintf(fp, "}%s\n", (i < (int) sched->profiling_records.size() - 1) ? "," : "");
     }
