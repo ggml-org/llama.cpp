@@ -746,10 +746,6 @@ value member_expression::execute_impl(context & ctx) {
             return slice_func->invoke(args);
         } else {
             property = this->property->execute(ctx);
-            if (property->is_undefined()) {
-                JJ_DEBUG("%s", "Computed member property is undefined, returning undefined");
-                return mk_val<value_undefined>("object_property");
-            }
         }
     } else {
         // syntax: obj.prop
@@ -773,6 +769,10 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
+    if (property->is_undefined()) {
+        JJ_DEBUG("%s", "Member expression property is undefined, returning undefined");
+        return mk_val<value_undefined>("object_property");
+    }
     ensure_key_type_allowed(property);
 
     value val = mk_val<value_undefined>("object_property");

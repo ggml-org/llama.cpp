@@ -399,6 +399,12 @@ static void test_expressions(testing & t) {
         "True"
     );
 
+    test_template(t, "undefined computed member is undefined",
+        "{{ a[undefined] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
     test_template(t, "array access",
         "{{ items[1] }}",
         {{"items", json::array({"a", "b", "c"})}},
