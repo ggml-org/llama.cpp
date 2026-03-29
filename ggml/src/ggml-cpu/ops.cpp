@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <type_traits>
 #include <vector>
 
 // ggml_compute_forward_dup
@@ -529,8 +530,6 @@ static void ggml_compute_forward_dup_from_q(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
-    std::vector<float> tmp(qk);
-
     for (int64_t ir = ir0; ir < ir1; ++ir) {
 
         uint32_t i = ir * qk;
@@ -547,11 +546,19 @@ static void ggml_compute_forward_dup_from_q(
         const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
         const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
-        dequantize_row_q(
-                (const void *) ((char *) src0->data + x_offset),
-                tmp.data(), qk);
+        if constexpr (std::is_same_v<dst_t, float>) {
+            dequantize_row_q(
+                    (const void *) ((char *) src0->data + x_offset),
+                    (float *) ((char *) dst->data + dst_offset), qk);
+        } else {
+            std::vector<float> tmp(qk);
 
-        ggml_dup_from_float_row(tmp.data(), (dst_t *) ((char *) dst->data + dst_offset), qk);
+            dequantize_row_q(
+                    (const void *) ((char *) src0->data + x_offset),
+                    tmp.data(), qk);
+
+            ggml_dup_from_float_row(tmp.data(), (dst_t *) ((char *) dst->data + dst_offset), qk);
+        }
     }
 }
 
