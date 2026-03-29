@@ -20,4 +20,4 @@ cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA
 #cmake --build . --config Release --target llama-bench
 
 #build all binary
-cmake --build . --config Release -j -v
+cmake --build . --config Release -j$((($(nproc)+1)/2)) -v
