@@ -95,28 +95,13 @@ static inline float get_mask_val_from_base(const struct ggml_tensor * mask,
 // Output buffer: 32 rows × 32 halfwords (64-byte stride, 16 hw data + 16 hw pad)
 //
 
-// Prefetch K rows for one dk_chunk into L2.
-// Each KV position needs 1 cache line (64B = 32 fp16 values).
-// Uses prefetch_va (CSR 0x81F) with stride in x31 to batch all kv_count lines.
+// Prefetch KV rows for one chunk into L2 using the platform l2_prefetch primitive.
 static inline void __attribute__((always_inline))
-prefetch_k_to_l2(const char * k_head, int64_t kv_start, int64_t dk_start,
-                 int64_t kv_count, int64_t nb1_k)
+prefetch_kv_to_l2(const char * head, int64_t kv_start, int64_t d_start,
+                  int64_t kv_count, int64_t nb1)
 {
-    uintptr_t base = (uintptr_t)k_head + kv_start * nb1_k + dk_start * 2;
-    uint64_t num_lines_m1 = (uint64_t)(kv_count - 1);  // bits 3:0
-
-    __asm__ __volatile__ (
-        "li    x1, 0x400000000000000 \n"  // Dest = L2 (bits 59:58 = 01)
-        "mv    x31, %[stride]\n"          // Stride = nb1_k bytes
-        "or    x3, x1, %[ptr]\n"          // Combine Dest + VA
-        "or    x3, x3, %[sz]\n"           // Combine with NumLines
-        "csrw  0x81f, x3\n"              // prefetch_va
-        :
-        : [ptr] "r" (base),
-          [sz] "r" (num_lines_m1),
-          [stride] "r" ((uint64_t)nb1_k)
-        : "x1", "x3", "x31", "memory"
-    );
+    const void *base = (const void *)(head + kv_start * nb1 + d_start * 2);
+    l2_prefetch(base, (uint64_t)kv_count, (uint64_t)nb1);
 }
 
 static inline void __attribute__((always_inline))
@@ -429,21 +414,6 @@ normalize_store_vec(float * out, float * acc, int64_t dv, float inv, int use_fas
     __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
 }
 
-static inline float __attribute__((always_inline))
-exp2f_et(float x) {
-    unsigned long old_mask;
-    float out;
-    __asm__ volatile(
-        "mova.x.m  %[ms]             \n\t"
-        "mov.m.x   m0, x0, 1         \n\t"
-        "fexp.ps   %[out], %[x]      \n\t"
-        "mova.m.x  %[ms]             \n\t"
-        : [ms] "=&r"(old_mask), [out] "=&f"(out)
-        : [x] "f"(x)
-    );
-    return out;
-}
-
 int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     (void) env;
 
@@ -545,7 +515,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             // ============================================================
 
             // Prefetch K data for the first dk_chunk into L2
-            prefetch_k_to_l2(k_head, kv_base, 0, kv_count, k->nb[1]);
+            prefetch_kv_to_l2(k_head, kv_base, 0, kv_count, k->nb[1]);
 
             for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
 
@@ -553,7 +523,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                                        kv_count, k->nb[1]);
 
                 if (dk_chunk + TILE_K < dk) {
-                    prefetch_k_to_l2(k_head, kv_base, dk_chunk + TILE_K,
+                    prefetch_kv_to_l2(k_head, kv_base, dk_chunk + TILE_K,
                                      kv_count, k->nb[1]);
                 }
 
@@ -606,13 +576,13 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
             // Prefetch V rows for this tile
             for (int64_t d = 0; d < dv; d += 32)
-                prefetch_k_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
+                prefetch_kv_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
 
             // Prefetch K for NEXT KV tile's first dk_chunk
             if (kv_base + TILE_KV < nk) {
                 int64_t next_count = (kv_base + 2*TILE_KV <= nk)
                     ? TILE_KV : (nk - kv_base - TILE_KV);
-                prefetch_k_to_l2(k_head, kv_base + TILE_KV, 0,
+                prefetch_kv_to_l2(k_head, kv_base + TILE_KV, 0,
                                  next_count, k->nb[1]);
             }
 
@@ -645,7 +615,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                 if (tile_max > ET_NEG_INF_F) {
                     // A2: rescale accumulator if this tile has a new global max
                     if (tile_max > M) {
-                        float rescale = exp2f_et((M - tile_max) * 1.4426950408889634f);
+                        float rescale = et_exp2f((M - tile_max) * 1.4426950408889634f);
                         scale_acc_vec(acc, dv, rescale);
                         S *= rescale;
                         M = tile_max;
