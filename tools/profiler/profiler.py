@@ -31,7 +31,8 @@ class ProfileRecord:
     duration_ns: int
     bytes: int
     extra: Optional[str]
-    ne: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    ne_src0: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    ne_src1: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
     @property
     def type_name(self) -> str:
@@ -52,22 +53,21 @@ class ProfileRecord:
             return 0.0
         return self.bytes / self.duration_ns
 
-    @property
-    def shape_str(self) -> str:
-        """Human-readable tensor shape string, e.g. '[4096, 4096]'."""
-        dims = [n for n in self.ne if n > 0]
+    @staticmethod
+    def _fmt_ne(ne: list[int]) -> str:
+        dims = [n for n in ne if n > 0]
         if not dims:
             return ""
         return "[" + ", ".join(str(d) for d in dims) + "]"
 
     @property
-    def ne_elements(self) -> int:
-        """Total number of elements."""
-        result = 1
-        for n in self.ne:
-            if n > 0:
-                result *= n
-        return result
+    def shape_str(self) -> str:
+        """Human-readable tensor shapes, e.g. '[4096, 4096] x [4096, 1]'."""
+        s0 = self._fmt_ne(self.ne_src0)
+        s1 = self._fmt_ne(self.ne_src1)
+        if s0 and s1:
+            return s0 + " x " + s1
+        return s0 or s1
 
     def to_dict(self) -> dict:
         return {
@@ -79,7 +79,8 @@ class ProfileRecord:
             "duration_ns": self.duration_ns,
             "bytes": self.bytes,
             "extra": self.extra,
-            "ne": self.ne,
+            "ne_src0": self.ne_src0,
+            "ne_src1": self.ne_src1,
         }
 
 
@@ -148,12 +149,17 @@ class ProfileData:
             print(f"Warning: file may not be a ggml profiler output (profiler={data.get('profiler')})")
 
         records = []
+        def _pad_ne(v):
+            if isinstance(v, list) and len(v) < 4:
+                return v + [0] * (4 - len(v))
+            if not isinstance(v, list):
+                return [0, 0, 0, 0]
+            return v
+
         for r in data.get("records", []):
-            ne = r.get("ne", [0, 0, 0, 0])
-            if isinstance(ne, list) and len(ne) < 4:
-                ne = ne + [0] * (4 - len(ne))
-            elif not isinstance(ne, list):
-                ne = [0, 0, 0, 0]
+            # Support both old "ne" format and new "ne_src0"/"ne_src1" format
+            ne_src0 = _pad_ne(r.get("ne_src0", r.get("ne", [0, 0, 0, 0])))
+            ne_src1 = _pad_ne(r.get("ne_src1", [0, 0, 0, 0]))
             records.append(ProfileRecord(
                 type=r.get("type", 0),
                 name=r.get("name", "unknown"),
@@ -163,7 +169,8 @@ class ProfileData:
                 duration_ns=r.get("duration_ns", 0),
                 bytes=r.get("bytes", 0),
                 extra=r.get("extra"),
-                ne=ne,
+                ne_src0=ne_src0,
+                ne_src1=ne_src1,
             ))
 
         backends_raw = data.get("backends", [])
@@ -205,7 +212,7 @@ class ProfileData:
                     backend_id=rec.backend_id,
                     min_ns=rec.duration_ns,
                     max_ns=rec.duration_ns,
-                    representative_ne=list(rec.ne),
+                    representative_ne=list(rec.ne_src0),
                 )
             s = groups[key]
             s.count += 1
@@ -532,7 +539,7 @@ function hash(s){var h=0;for(var i=0;i<s.length;i++)h=((h<<5)-h)+s.charCodeAt(i)
 function col(n){return OP_COL[n]||('hsl('+hash(n)%360+',60%,55%)');}
 function fmtT(us){if(us>=1e6)return(us/1e6).toFixed(2)+'s';if(us>=1e3)return(us/1e3).toFixed(2)+'ms';return us.toFixed(1)+'\u03bcs';}
 function fmtB(b){if(!b)return'';if(b>=1e9)return(b/1e9).toFixed(1)+'GB';if(b>=1e6)return(b/1e6).toFixed(1)+'MB';if(b>=1e3)return(b/1e3).toFixed(1)+'KB';return b+'B';}
-function fmtSh(s){if(!s)return'';return s.replace(/[\[\],]/g,function(m){return'<span style="color:#e8a040">'+m+'</span>';});}
+function fmtSh(s){if(!s)return'';return s.replace(/[\[\],]| x /g,function(m){return'<span style="color:#e8a040">'+m+'</span>';});}
 
 // Canvas state
 var canvas=document.getElementById('c');
