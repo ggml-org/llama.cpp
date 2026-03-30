@@ -350,14 +350,16 @@ static __global__ void k_set_rows_turbo3(
     const uint8_t idx = turbo_nearest_centroid_3bit(rv);
 
     // ---- Step 6: Pack qs and signs (warp-cooperative, no atomics) ----
-    // Warp warp_id handles turbo3 sub-block warp_id (elements warp_id*32 .. warp_id*32+31).
+    // Each warp handles 32 elements. With QK_TURBO3 > WARP_SIZE, multiple warps
+    // share one block and write to different byte offsets within it.
     const int warp_id = j / WARP_SIZE;
     const int lane    = j % WARP_SIZE;
-    block_turbo3_0 * blk = blk_base + warp_id;
+    const int elem_in_block = j % QK_TURBO3;
+    block_turbo3_0 * blk = blk_base + (j / QK_TURBO3);
 
     // Pack qs: 4 elements per byte, 2 bits each.
     // All 4 threads in a qs-group gather their low2 bits via shuffle.
-    const int qs_byte_idx = lane / 4;
+    const int qs_byte_idx = elem_in_block / 4;
     const uint8_t my_low2 = idx & 0x3;
     uint8_t qs_byte = 0;
 #pragma unroll
@@ -368,10 +370,12 @@ static __global__ void k_set_rows_turbo3(
     if (lane % 4 == 0) blk->qs[qs_byte_idx] = qs_byte;
 
     // Pack signs: 8 elements per byte, 1 bit each.  __ballot_sync across warp.
+    // Ballot is per-warp (32 bits); extract local byte, write to global position in block.
     const uint32_t ballot = __ballot_sync(0xffffffff, (idx >> 2) & 1);
-    const int signs_byte_idx = lane / 8;
-    const uint8_t signs_byte = (uint8_t)((ballot >> (signs_byte_idx * 8)) & 0xFF);
-    if (lane % 8 == 0) blk->signs[signs_byte_idx] = signs_byte;
+    const int local_signs_byte = lane / 8;             // byte within 32-bit ballot (0..3)
+    const int global_signs_byte = elem_in_block / 8;   // byte within block's signs array
+    const uint8_t signs_byte = (uint8_t)((ballot >> (local_signs_byte * 8)) & 0xFF);
+    if (lane % 8 == 0) blk->signs[global_signs_byte] = signs_byte;
 
     // ---- Step 7: Reconstruction norm (parallel, same pattern as step 2) ----
     const float c = TURBO_CENTROIDS_3BIT[idx];
@@ -392,8 +396,8 @@ static __global__ void k_set_rows_turbo3(
     const float recon_norm     = sqrtf(s_recon_sq);
     const float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
 
-    // ---- Step 8: Write corrected norm (one thread per turbo3 sub-block) ----
-    if (lane == 0) blk->norm = __float2half(corrected_norm);
+    // ---- Step 8: Write corrected norm (one per turbo3 block) ----
+    if (elem_in_block == 0) blk->norm = __float2half(corrected_norm);
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);
@@ -714,9 +718,12 @@ static __global__ void k_set_rows_turbo2(
     const uint8_t idx = turbo_nearest_centroid_2bit(rv);
 
     // ---- Step 6: Pack qs (warp-cooperative, no atomics) ----
+    // Each warp handles 32 elements. With QK_TURBO2 > WARP_SIZE, multiple warps
+    // share one block and write to different byte offsets within it.
     const int warp_id = j / WARP_SIZE;
     const int lane    = j % WARP_SIZE;
-    block_turbo2_0 * blk = blk_base + warp_id;
+    const int elem_in_block = j % QK_TURBO2;
+    block_turbo2_0 * blk = blk_base + (j / QK_TURBO2);
 
     // Pack qs: 4 elements per byte, 2 bits each.
     const uint8_t my_bits = idx & 0x3;
@@ -726,7 +733,7 @@ static __global__ void k_set_rows_turbo2(
         uint8_t contrib = __shfl_sync(0xffffffff, my_bits, (lane & ~3) + k);
         qs_byte |= contrib << (k * 2);
     }
-    if (lane % 4 == 0) blk->qs[lane / 4] = qs_byte;
+    if (lane % 4 == 0) blk->qs[elem_in_block / 4] = qs_byte;
 
     // No signs packing needed for turbo2
 
@@ -749,8 +756,8 @@ static __global__ void k_set_rows_turbo2(
     const float recon_norm     = sqrtf(s_recon_sq);
     const float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
 
-    // ---- Step 8: Write corrected norm ----
-    if (lane == 0) blk->norm = __float2half(corrected_norm);
+    // ---- Step 8: Write corrected norm (one per turbo2 block) ----
+    if (elem_in_block == 0) blk->norm = __float2half(corrected_norm);
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);
