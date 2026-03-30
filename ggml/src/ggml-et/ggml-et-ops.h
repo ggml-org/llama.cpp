@@ -255,6 +255,11 @@ struct ggml_et_sum_rows_params {
     ggml_tensor dst;      // F32 output tensor [1, ne01, ne02, ne03]
 };
 
+struct ggml_et_cumsum_params {
+    ggml_tensor src0;     // F32 input tensor [ne00, ne01, ne02, ne03]
+    ggml_tensor dst;      // F32 output tensor [ne00, ne01, ne02, ne03]
+};
+
 struct ggml_et_scale_params {
     ggml_tensor src0;     // F32 input tensor
     ggml_tensor dst;      // F32 output tensor
@@ -262,6 +267,7 @@ struct ggml_et_scale_params {
     float bias;           // Bias (additive offset)
 };
 
+bool ggml_et_op_cumsum(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_unary(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_sum_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
