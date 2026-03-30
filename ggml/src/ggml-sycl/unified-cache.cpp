@@ -3387,7 +3387,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 request.dst_size > request.src_size) {
                 const size_t pad_bytes = request.dst_size - request.src_size;
                 void *       pad_ptr   = static_cast<char *>(device_ptr) + request.src_size;
-                last_event = queue_.memset(pad_ptr, 0, pad_bytes);
+                last_event = fill_queue.memset(pad_ptr, 0, pad_bytes);
             }
 
             // Mark entry as IN_PROGRESS with ready_event so concurrent lookups
