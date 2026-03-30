@@ -136,8 +136,8 @@ def test_responses_stream_schema_fields():
     saw_output_item_done = False
     completed_response = None
     for data in res:
-        if "sequence_number" in data:
-            seen_seq_nums.append(data["sequence_number"])
+        assert "sequence_number" in data, f"missing sequence_number in {data.get('type')}"
+        seen_seq_nums.append(data["sequence_number"])
         if data.get("type") == "response.output_text.done":
             saw_output_text_done = True
             assert "content_index" in data
@@ -435,11 +435,13 @@ def test_responses_stream_created_event_has_full_response():
         assert resp["id"].startswith("resp_")
         assert resp["object"] == "response"
         assert resp["model"] is not None
-        assert "metadata" in resp
-        assert "store" in resp
-        assert "truncation" in resp
-        assert "tools" in resp
-        assert "usage" in resp
+        assert resp["completed_at"] is None
+        assert resp["metadata"] == {}
+        assert resp["store"] == False
+        assert resp["truncation"] == "disabled"
+        assert resp["tools"] == []
+        assert resp["usage"]["input_tokens"] == 0
+        assert resp["usage"]["output_tokens"] == 0
         assert resp["output"] == []
         assert resp["output_text"] == ""
 

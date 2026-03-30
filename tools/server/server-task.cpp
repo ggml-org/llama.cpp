@@ -940,17 +940,18 @@ static json build_oai_resp_metadata(const std::string & oai_resp_id,
                                     const std::string & output_text,
                                     int n_prompt_tokens,
                                     int n_decoded,
-                                    int n_prompt_tokens_cache) {
+                                    int n_prompt_tokens_cache,
+                                    const std::string & status = "completed") {
     std::time_t t = std::time(0);
     return json {
-        {"completed_at",         t},
+        {"completed_at",         status == "completed" ? json(t) : json(nullptr)},
         {"created_at",           t},
         {"id",                   oai_resp_id},
         {"model",                oaicompat_model},
         {"object",               "response"},
         {"output",               output},
         {"output_text",          output_text},
-        {"status",               "completed"},
+        {"status",               status},
         {"usage",                json {
             {"input_tokens",          n_prompt_tokens},
             {"output_tokens",         n_decoded},
@@ -1125,10 +1126,14 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         output_idx++;
     }
 
-    for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
+    for (size_t tc_idx = 0; tc_idx < oaicompat_msg.tool_calls.size(); tc_idx++) {
+        const common_chat_tool_call & tool_call = oaicompat_msg.tool_calls[tc_idx];
+        const std::string fc_id = tc_idx < oai_resp_fc_item_ids.size()
+            ? oai_resp_fc_item_ids[tc_idx]
+            : "fc_" + random_string(); // fallback for non-streaming path
         const json output_item = {
             {"type",      "function_call"},
-            {"id",        "fc_" + random_string()},
+            {"id",        fc_id},
             {"call_id",   tool_call.id},
             {"name",      tool_call.name},
             {"arguments", tool_call.arguments},
@@ -1447,7 +1452,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     oai_resp_reasoning_id  = state.oai_resp_reasoning_id;
     oai_resp_message_id    = state.oai_resp_message_id;
     oai_resp_fc_id         = state.oai_resp_fc_id;
-    // seq_num/output_idx: read from state (may have been advanced by previous to_json call)
+    oai_resp_fc_item_id    = state.oai_resp_fc_item_id;
     oai_resp_seq_num       = state.oai_resp_seq_num;
     oai_resp_output_idx    = state.oai_resp_output_idx;
 
@@ -1478,6 +1483,8 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
         }
         if (!diff.tool_call_delta.name.empty()) {
             state.oai_resp_fc_id = diff.tool_call_delta.id;
+            state.oai_resp_fc_item_id = "fc_" + random_string();
+            state.oai_resp_fc_item_ids.push_back(state.oai_resp_fc_item_id);
             state.oai_resp_seq_num++;    // output_item.added
             state.oai_resp_output_idx++;
         }
@@ -1630,12 +1637,10 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     int & output_idx = oai_resp_output_idx;
 
     if (n_decoded == 1) {
-        // Build initial response object with all required fields but empty output
+        // Build initial response object with all required fields but empty output and zeroed usage
         json initial_resp = build_oai_resp_metadata(
             oai_resp_id, oaicompat_model, {}, "",
-            n_prompt_tokens, 0, n_prompt_tokens_cache);
-        initial_resp["status"] = "in_progress";
-        initial_resp["completed_at"] = nullptr;
+            0, 0, 0, "in_progress");
 
         events.push_back(json {
             {"event", "response.created"},
@@ -1743,7 +1748,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"sequence_number", seq_num++},
                     {"output_index",    output_idx++},
                     {"item", json {
-                        {"id",        "fc_" + random_string()},
+                        {"id",        oai_resp_fc_item_id},
                         {"arguments", ""},
                         {"call_id",   diff.tool_call_delta.id},
                         {"name",      diff.tool_call_delta.name},
@@ -1752,7 +1757,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     }},
                 }},
             });
-            oai_resp_fc_id = diff.tool_call_delta.id;
         }
 
         if (!diff.tool_call_delta.arguments.empty()) {
@@ -1763,7 +1767,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"sequence_number", seq_num++},
                     {"output_index",    output_idx - 1},
                     {"delta",           diff.tool_call_delta.arguments},
-                    {"item_id",         "fc_" + oai_resp_fc_id},
+                    {"item_id",         oai_resp_fc_item_id},
                 }},
             });
         }
