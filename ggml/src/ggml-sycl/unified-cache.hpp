@@ -1162,7 +1162,8 @@ class unified_cache {
 
     // Copy data from mmap to device via staging. Returns event for the last transfer.
     sycl::event copy_to_device(void * dst, const void * src, size_t size);
-    sycl::event copy_to_device_async(void * dst, const void * src, size_t size, const std::vector<sycl::event> & deps);
+    sycl::event copy_to_device_async(void * dst, const void * src, size_t size, const std::vector<sycl::event> & deps,
+                                     sycl::queue * override_q = nullptr);
     static bool event_complete(const sycl::event & evt);
     sycl::event submit_barrier(const std::vector<sycl::event> & deps);
     sycl::event submit_barrier_all();

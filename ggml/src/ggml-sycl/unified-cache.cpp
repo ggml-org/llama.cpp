@@ -3370,12 +3370,8 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 result.status = cache_layout_status::FAILED;
                 return result;
             }
-            if (override_queue) {
-                // Use caller's queue for the H2D transfer
-                fill_event = override_queue->memcpy(device_ptr, request.src_ptr, request.src_size);
-            } else {
-                fill_event = copy_to_device_async(device_ptr, request.src_ptr, request.src_size, deps);
-            }
+            fill_event = copy_to_device_async(device_ptr, request.src_ptr, request.src_size, deps,
+                                                override_queue);
             GGML_SYCL_DEBUG("[DEBUG-FILL] copy_to_device_async returned\n");
         }
 
@@ -5169,7 +5165,8 @@ sycl::event unified_cache::copy_to_device(void * dst, const void * src, size_t s
 sycl::event unified_cache::copy_to_device_async(void *                           dst,
                                                 const void *                     src,
                                                 size_t                           size,
-                                                const std::vector<sycl::event> & deps) {
+                                                const std::vector<sycl::event> & deps,
+                                                sycl::queue *                    override_q) {
     if (!src || !dst) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] copy_to_device_async: null pointer (src=%p dst=%p size=%zu)\n", src, dst, size);
         return sycl::event{};
@@ -5186,6 +5183,9 @@ sycl::event unified_cache::copy_to_device_async(void *                          
     if (dst_type == sycl::usm::alloc::unknown && cache_assert_enabled()) {
         GGML_ABORT("copy_to_device_async called with non-USM destination");
     }
+    // Route memcpy through override queue when provided (e.g. BCS queue for
+    // expert prefetch).  Falls back to the cache's internal queue_ otherwise.
+    sycl::queue & q = override_q ? *override_q : queue_;
     if (copy_to_device_sync_enabled()) {
         for (const auto & dep : deps) {
             const_cast<sycl::event &>(dep).wait();
@@ -5278,9 +5278,9 @@ sycl::event unified_cache::copy_to_device_async(void *                          
             std::memcpy(stage_ptr, src_ptr, chunk);
             sycl::event ev;
             if (chain.empty()) {
-                ev = queue_.memcpy(dst_ptr, stage_ptr, chunk);
+                ev = q.memcpy(dst_ptr, stage_ptr, chunk);
             } else {
-                ev = queue_.submit([&](sycl::handler & cgh) {
+                ev = q.submit([&](sycl::handler & cgh) {
                     cgh.depends_on(chain);
                     cgh.memcpy(dst_ptr, stage_ptr, chunk);
                 });
@@ -5303,9 +5303,9 @@ sycl::event unified_cache::copy_to_device_async(void *                          
     }
 
     if (deps.empty()) {
-        return queue_.memcpy(dst, src, size);
+        return q.memcpy(dst, src, size);
     }
-    return queue_.submit([&](sycl::handler & cgh) {
+    return q.submit([&](sycl::handler & cgh) {
         cgh.depends_on(deps);
         cgh.memcpy(dst, src, size);
     });
