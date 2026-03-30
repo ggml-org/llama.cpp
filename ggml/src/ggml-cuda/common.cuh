@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
@@ -1326,82 +1327,78 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
-#ifdef USE_CUDA_GRAPH  // bug-fix-issue #19639
+#ifdef USE_CUDA_GRAPH  
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
     
-    //Add vector that holds only predefined number of graphs, its a LRU (Least recent use concept) to prevent unbounded VRAM growth (Issue #19639)
+    // Add vector that holds only predefined number of graphs, its a LRU (Least recent use concept) to prevent unbounded VRAM growth (Issue #19639)
     std::vector<const void *> cuda_graphs_lru;
     
-
-    // Returns the max number of CUDA graphs for a given compute capability.
-    // Budget is capped at 10% of the architecture's typical VRAM divided by
-    // the estimated per-graph memory footprint (MAX_CUDA_GRAPH_SIZE).       
+    // Returns the max number of CUDA graphs for a given compute capability (CC).           
     static constexpr size_t max_cuda_graphs(const int cc) {
+        
+        const bool isNvidiaCC = GGML_CUDA_CC_IS_NVIDIA(cc);
+        if(!isNvidiaCC) {
+            // For non-NVIDIA architectures return small number of graphs to hold in cache
+            return 32; 
+        }
 
-        constexpr size_t CUDA_NODE_SIZE      = 256;                       // Approximate size of a node's properties in bytes - used for estimating graph memory usage
-        constexpr size_t MAX_CUDA_GRAPH_SIZE = 2048 * CUDA_NODE_SIZE;     // Max number of nodes in a graph times size of node properties to estimate max graph size in bytes - used for eviction policy
-        constexpr size_t VRAM_BUDGET_PERCENT = 10;                        // Fraction of VRAM reserved for CUDA graph storage (10 = 10%)
+        // Vram-budget is capped at VRAM_BUDGET_PERCENT of the architecture's typical VRAM 
+        // divided by the estimated per-graph memory footprint (MAX_CUDA_GRAPH_SIZE).        
+        constexpr size_t VRAM_BUDGET_PERCENT = 10;                         // Fraction of VRAM reserved for CUDA graph storage expressed in % (10 = 10%)        
+        constexpr size_t CUDA_NODE_SIZE      = 256;                        // Approximate size of a node's properties in bytes - used for estimating graph memory usage
+        constexpr size_t MAX_CUDA_GRAPH_SIZE = 2048 * CUDA_NODE_SIZE;      // 512 KB = Max number of nodes in a graph times size of node to estimate the max graph size in bytes - used for eviction policy        
         constexpr size_t VRAM_1GB            = size_t(1024 * 1024 * 1024); // 1 GiB in bytes
-
-        // AMD and Moore Threads have large cc offsets — check them first.
-        if (GGML_CUDA_CC_IS_AMD(cc)) {
-            // CDNA (MI series): 192 GB HBM;  RDNA / GCN consumer: 16 GB
-            constexpr size_t vram_cdna  = 192 * VRAM_1GB;
-            constexpr size_t vram_other =  16 * VRAM_1GB;
-            const size_t vram = GGML_CUDA_CC_IS_CDNA(cc) ? vram_cdna : vram_other;
-            return std::max(size_t{1}, (vram / VRAM_BUDGET_PERCENT) / MAX_CUDA_GRAPH_SIZE);
-        }
-        if (GGML_CUDA_CC_IS_MTHREADS(cc)) {
-            constexpr size_t vram = 8 * VRAM_1GB; // MTT S4000/S5000: up to 8 GB
-            return std::max(size_t{1}, (vram / VRAM_BUDGET_PERCENT) / MAX_CUDA_GRAPH_SIZE);
-        }
-        // Architecture        Typical VRAM   max_cuda_graphs()
-        // Blackwell (>=1200)  80 GB          1638
+            
+        // Example numbers based on typical VRAM for each architecture and the resulting max_cuda_graphs() with a 10% VRAM budget and 512 KB per graph estimate:                                              
+        // Architecture         Typical VRAM   max_cuda_graphs()
+        // Blackwell (>=1200)   80 GB          1638
         // Ada Lovelace (>=890) 24 GB          491
-        // Ampere (>=800)      24 GB           491
-        // Turing (>=750)      11 GB           225
-        // Volta (>=700)       16 GB           327
+        // Ampere (>=800)       24 GB          491
+        // Turing (>=750)       11 GB          225
+        // Volta (>=700)        16 GB          327
         // Pascal and older     8 GB           163
-        // NVIDIA — descending order so the first matching branch wins.
-        constexpr size_t vram_blackwell    =  80 * VRAM_1GB; // B200/GB200: 80 GB  → 1638
-        constexpr size_t vram_ada_lovelace =  24 * VRAM_1GB; // RTX 4090/L40: 24 GB →  491
-        constexpr size_t vram_ampere       =  24 * VRAM_1GB; // RTX 3090/A100: 24 GB → 491
-        constexpr size_t vram_turing       =  11 * VRAM_1GB; // RTX 2080 Ti: 11 GB →  225
-        constexpr size_t vram_volta        =  16 * VRAM_1GB; // V100: 16 GB        →  327
-        constexpr size_t vram_pascal       =   8 * VRAM_1GB; // Pascal and older   →  163
-
+        constexpr size_t vram_blackwell    =  80 * VRAM_1GB;
+        constexpr size_t vram_ada_lovelace =  24 * VRAM_1GB;
+        constexpr size_t vram_ampere       =  24 * VRAM_1GB;
+        constexpr size_t vram_turing       =  11 * VRAM_1GB;
+        constexpr size_t vram_volta        =  16 * VRAM_1GB;
+        constexpr size_t vram_pascal       =   8 * VRAM_1GB;
+        
+        // Descending order so the first matching branch wins.
         const size_t vram =
             cc >= GGML_CUDA_CC_BLACKWELL    ? vram_blackwell    :
             cc >= GGML_CUDA_CC_ADA_LOVELACE ? vram_ada_lovelace :
             cc >= GGML_CUDA_CC_AMPERE       ? vram_ampere       :
             cc >= GGML_CUDA_CC_TURING       ? vram_turing       :
             cc >= GGML_CUDA_CC_VOLTA        ? vram_volta        :
-                                              vram_pascal;
-
+                                              vram_pascal;        
+        
         return std::max(size_t{1}, (vram / VRAM_BUDGET_PERCENT) / MAX_CUDA_GRAPH_SIZE);
     }
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
+        const auto t_start = std::chrono::steady_clock::now();
+
         auto it = cuda_graphs.find(first_node_ptr);
         if (it == cuda_graphs.end()) {
-            
+
             ///Evict the least recently used graph if we hit the per-architecture limit
-            if (cuda_graphs.size() >= max_cuda_graphs(ggml_cuda_info().devices[device].cc)) {
-                const void * oldest_key = cuda_graphs_lru.front();
-                ///Erasing from the map automatically triggers ~ggml_cuda_graph()
-                ///which calls cudaGraphExecDestroy() and cudaGraphDestroy()
+            const auto max_graphs = max_cuda_graphs(ggml_cuda_info().devices[device].cc);
+
+            if (cuda_graphs.size() >= max_graphs) {
+                const void * oldest_key = cuda_graphs_lru.front();                
                 cuda_graphs.erase(oldest_key);
                 cuda_graphs_lru.erase(cuda_graphs_lru.begin());
             }
             
-            const struct ggml_tensor* firstNode = static_cast<const struct ggml_tensor*>(first_node_ptr);        
-            GGML_LOG_DEBUG("--->Graphs cache per context: %zu\n", cuda_graphs.size() );
-            GGML_LOG_DEBUG("--->Graph first node name: %s\n", firstNode->name);
+            // const struct ggml_tensor* firstNode = static_cast<const struct ggml_tensor*>(first_node_ptr);        
+            // GGML_LOG_DEBUG("--->Graphs cache per context: %zu\n", cuda_graphs.size() );
+            // GGML_LOG_DEBUG("--->Graph first node name: %s\n", firstNode->name);
 
             cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
-            cuda_graphs_lru.push_back(first_node_ptr);
+            cuda_graphs_lru.push_back(first_node_ptr);            
             return cuda_graphs[first_node_ptr].get();
         }
 
@@ -1412,6 +1409,11 @@ struct ggml_backend_cuda_context {
             cuda_graphs_lru.push_back(first_node_ptr);
         }
 
+        const auto t_end     = std::chrono::steady_clock::now();
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+        GGML_LOG_DEBUG("cuda_graph() elapsed: %lld us  cache_size: %zu\n",
+                       static_cast<long long>(elapsed_us), cuda_graphs.size());
+                       
         return it->second.get();
     }
 
@@ -1436,53 +1438,6 @@ struct ggml_backend_cuda_context {
         return false;
     }
 #endif // USE_CUDA_GRAPH
-
-
-// (Issue #19639)
-// #ifdef USE_CUDA_GRAPH
-//     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
-//     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
-//     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
-
-//     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {        
-//         auto it = cuda_graphs.find(first_node_ptr);
-//         if (it == cuda_graphs.end()) {
-//             cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
-//             GGML_LOG_DEBUG("--->Graph add to cache: %p\n", first_node_ptr);            
-//             return cuda_graphs[first_node_ptr].get();
-//         }
-        
-//         GGML_LOG_DEBUG("--->Graphs cache per context: %zu\n", cuda_graphs.size() );
-//         // for (const auto & [key, graph] : cuda_graphs)
-//         //     GGML_LOG_DEBUG("--->Graph key: %p\n", key);            
-
-//         //const struct ggml_tensor* firstNode = static_cast<const struct ggml_tensor*>(first_node_ptr);        
-//         //GGML_LOG_DEBUG("--->Graph first node name: %s\n", firstNode->name);
-
-//         return it->second.get();
-//     }
-
-//     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
-//     // if graphs are in use without having access to the specific graph key)
-//     bool any_cuda_graph_enabled() const {
-//         for (const auto & [key, graph] : cuda_graphs) {
-//             if (graph && graph->is_enabled()) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-
-//     // Check if any CUDA graph has an instance for this context
-//     bool any_cuda_graph_has_instance() const {
-//         for (const auto & [key, graph] : cuda_graphs) {
-//             if (graph && graph->instance != nullptr) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-// #endif // USE_CUDA_GRAPH
 
     explicit ggml_backend_cuda_context(int device) :
         device(device),
