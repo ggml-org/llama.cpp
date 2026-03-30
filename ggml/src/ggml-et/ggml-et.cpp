@@ -1101,20 +1101,25 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_CONCAT:
-            // F32 contiguous, ne[0] cacheline-aligned (16 floats = 64 bytes)
-            // For dim==0, both src ne[0] must also be cacheline-aligned
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
-                op->ne[0] % 16 == 0 &&
-                op->src[0]->ne[0] % 16 == 0 &&
-                op->src[1]->ne[0] % 16 == 0 &&
-                ggml_is_contiguous(op) &&
-                ggml_is_contiguous(op->src[0]) &&
-                ggml_is_contiguous(op->src[1])) {
-                supported = true;
-            } else {
-                supported = false;
+                ggml_is_contiguous(op)) {
+                const int32_t dim = ((const int32_t *) op->op_params)[0];
+                if (op->ne[0] % 16 == 0 &&
+                    op->src[0]->ne[0] % 16 == 0 &&
+                    op->src[1]->ne[0] % 16 == 0 &&
+                    ggml_is_contiguous(op->src[0]) &&
+                    ggml_is_contiguous(op->src[1])) {
+                    // Standard aligned path: all ne[0] cacheline-aligned, all contiguous
+                    supported = true;
+                } else if (dim == 0 &&
+                           op->src[0]->nb[0] == sizeof(float) &&
+                           (op->src[1]->nb[0] == sizeof(float) || op->src[1]->ne[0] == 1)) {
+                    // Unaligned dim==0 path: LCM row grouping for CL alignment.
+                    // Doing scalar copy, stride src access.
+                    supported = true;
+                }
             }
             break;
         case GGML_OP_REPEAT:
