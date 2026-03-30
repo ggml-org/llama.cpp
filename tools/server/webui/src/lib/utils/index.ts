@@ -38,7 +38,7 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString } from './cors-proxy';
+export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';

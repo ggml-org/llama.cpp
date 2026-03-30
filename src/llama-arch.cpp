@@ -557,6 +557,8 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
                 LLM_TENSOR_ROPE_FREQS,
+                LLM_TENSOR_ROPE_FACTORS_LONG,
+                LLM_TENSOR_ROPE_FACTORS_SHORT,
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_Q,
                 LLM_TENSOR_ATTN_K,
