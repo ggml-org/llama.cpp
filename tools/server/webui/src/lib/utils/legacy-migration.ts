@@ -1,6 +1,8 @@
 /**
- * Migration utility for converting old marker-based agentic messages
- * to the new structured format with separate messages per turn.
+ * @deprecated Legacy migration utility — remove at some point in the future once all users have migrated to the new structured agentic message format.
+ *
+ * Converts old marker-based agentic messages to the new structured format
+ * with separate messages per turn.
  *
  * Old format: Single assistant message with markers in content:
  *   <<<reasoning_content_start>>>...<<<reasoning_content_end>>>
@@ -21,6 +23,7 @@ import type { DatabaseMessage } from '$lib/types/database';
 const MIGRATION_DONE_KEY = 'llama-webui-migration-v2-done';
 
 /**
+ * @deprecated Part of legacy migration — remove with the migration module.
  * Check if migration has been performed.
  */
 export function isMigrationNeeded(): boolean {
@@ -307,6 +310,7 @@ async function migrateConversation(convId: string): Promise<number> {
 }
 
 /**
+ * @deprecated Part of legacy migration — remove with the migration module.
  * Run the full migration across all conversations.
  * This should be called once at app startup if migration is needed.
  */

@@ -1,5 +1,6 @@
 import type { ErrorDialogType } from '$lib/enums';
-import type { DatabaseMessageExtra } from './database';
+import type { ApiChatCompletionToolCall } from './api';
+import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 
 export interface ChatUploadedFile {
 	id: string;
@@ -104,7 +105,7 @@ export interface ChatMessageToolCallTiming {
 export interface ChatStreamCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
-	onToolCallsStreaming?: (toolCalls: import('./api').ApiChatCompletionToolCall[]) => void;
+	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
 	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
@@ -112,7 +113,7 @@ export interface ChatStreamCallbacks {
 		content: string,
 		reasoningContent: string | undefined,
 		timings: ChatMessageTimings | undefined,
-		toolCalls: import('./api').ApiChatCompletionToolCall[] | undefined
+		toolCalls: ApiChatCompletionToolCall[] | undefined
 	) => Promise<void>;
 	createToolResultMessage?: (
 		toolCallId: string,
