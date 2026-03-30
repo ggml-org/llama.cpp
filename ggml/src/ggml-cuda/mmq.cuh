@@ -382,13 +382,16 @@ static __device__ __forceinline__ void vec_dot_q4_0_q8_1_dp4a(
                 const int kyqs = QI8_1 * ((k01/2) / (QI8_1/2)) + (k01/2) % (QI8_1/2);
 
                 int u[2*VDR_Q4_0_Q8_1_MMQ];
+
                 constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
+                constexpr int mcpy_int = max_cpy / sizeof(int);  
+
                 int tmp0[4], tmp1[4];  
 
-#pragma unroll
-                for (int l0 = 0; l0 < 4*sizeof(int)/max_cpy; ++l0) { 
-                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0*max_cpy, (&y_qs[j*MMQ_TILE_Y_K + kyqs]) + l0*max_cpy);
-                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0*max_cpy, (&y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_0]) + l0*max_cpy);
+                #pragma unroll
+                for (int l0 = 0; l0 < 4 / mcpy_int; ++l0) { 
+                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + l0 * mcpy_int]  );
+                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_0 + l0 * mcpy_int]);
                 }
 
                 u[0]=tmp0[0]; u[2]=tmp0[1]; u[4]=tmp0[2]; u[6]=tmp0[3];
@@ -489,15 +492,17 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
                 const int i = i0 + threadIdx.x;
                 const int kyqs = QI8_1 * ((k01/2) / (QI8_1/2)) + (k01/2) % (QI8_1/2);
 
-                int u[2*VDR_Q4_1_Q8_1_MMQ];
+                int u[2*VDR_Q4_0_Q8_1_MMQ];
 
                 constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
+                constexpr int mcpy_int = max_cpy / sizeof(int);  
+
                 int tmp0[4], tmp1[4];  
 
-#pragma unroll
-                for (int l0 = 0; l0 < 4*sizeof(int)/max_cpy; ++l0) {  
-                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0*max_cpy, (&y_qs[j*MMQ_TILE_Y_K + kyqs]) + l0*max_cpy);
-                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0*max_cpy, (&y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_0]) + l0*max_cpy);
+                #pragma unroll
+                for (int l0 = 0; l0 < 4 / mcpy_int; ++l0) { 
+                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + l0 * mcpy_int]  );
+                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_1 + l0 * mcpy_int]);
                 }
 
                 u[0]=tmp0[0]; u[2]=tmp0[1]; u[4]=tmp0[2]; u[6]=tmp0[3];
