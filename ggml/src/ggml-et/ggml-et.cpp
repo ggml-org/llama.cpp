@@ -711,6 +711,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_solve_tri(dev_ctx, node);
                 break;
 
+            case GGML_OP_SET:
+                ggml_et_op_set(dev_ctx, node);
+                break;
+
             case GGML_OP_RWKV_WKV6:
                 ggml_et_op_rwkv_wkv6(dev_ctx, node);
                 break;
@@ -1172,6 +1176,21 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[0]) &&
                        ggml_is_contiguous(op->src[1]);
             break;
+        case GGML_OP_SET:
+            // Minimal support: inplace SET where src1 covers the entire dst
+            // (same shape, same strides, offset=0). Just copies src1 → dst.
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[1]) &&
+                op->ne[0] % 16 == 0 &&
+                ggml_are_same_shape(op, op->src[1])) {
+                const bool inplace = (bool) ((const int32_t *) op->op_params)[4];
+                const size_t offset = ((const int32_t *) op->op_params)[3];
+                supported = inplace && offset == 0;
+            }
+            break;
         case GGML_OP_RWKV_WKV6:
             // F32 contiguous, head_size must be multiple of 8 for vectorization
             // 6 sources: k, v, r, tf, td, state
@@ -1277,9 +1296,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
