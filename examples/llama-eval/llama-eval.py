@@ -765,12 +765,14 @@ class Grader:
         grader_script: Optional[str] = None,
         judge_model_name: Optional[str] = None,
         judge_server_url: str = "",
+        judge_api_key: Optional[str] = None,
         dataset_type: str = "aime"
     ):
         self.grader_type = grader_type
         self.grader_script = grader_script
         self.judge_model_name = judge_model_name
         self.judge_server_url = judge_server_url
+        self.judge_api_key = judge_api_key
         self.dataset_type = dataset_type
         self.pattern = self._get_pattern()
 
@@ -862,6 +864,8 @@ Please provide only the extracted answer, nothing else. If there is no clear ans
 
         url = f"{self.judge_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if self.judge_api_key:
+            headers["Authorization"] = f"Bearer {self.judge_api_key}"
         data = {
             "model": self.judge_model_name,
             "messages": [
@@ -904,9 +908,11 @@ class Processor:
         grader: Grader,
         model_name: Optional[str] = None,
         threads: int = 32,
-        n_predict: int = -1
+        n_predict: int = -1,
+        api_key: Optional[str] = None
     ):
         self.server_url = server_url
+        self.api_key = api_key
         self.grader = grader
         self.model_name = model_name
         self.threads = threads
@@ -915,6 +921,8 @@ class Processor:
     def _make_request(self, eval_state: EvalState, prompt: str) -> Tuple[Dict[str, Any], int, str]:
         url = f"{self.server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
@@ -1138,6 +1146,18 @@ def main():
         help="Model name for LLM judge (default: same as main model)"
     )
     parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="API key for assessed server"
+    )
+    parser.add_argument(
+        "--judge-api-key",
+        type=str,
+        default=None,
+        help="API key for judge server"
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume from existing eval state"
@@ -1181,6 +1201,7 @@ def main():
             grader_script=args.grader_script,
             judge_model_name=judge_model_name,
             judge_server_url=judge_server_url,
+            judge_api_key=args.judge_api_key,
             dataset_type=eval_state.dataset_type
         )
         resume = True
@@ -1197,6 +1218,7 @@ def main():
             grader_script=args.grader_script,
             judge_model_name=judge_model_name,
             judge_server_url=judge_server_url,
+            judge_api_key=args.judge_api_key,
             dataset_type=args.dataset
         )
 
@@ -1227,6 +1249,7 @@ def main():
 
     processor = Processor(
         server_url=args.server,
+        api_key=args.api_key,
         grader=grader,
         model_name=args.model,
         threads=args.threads,
