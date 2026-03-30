@@ -557,9 +557,6 @@ struct layer_weight_pointers {
     void * ffn_gate_up_proj = nullptr;  // Fused gate+up (optional)
 };
 
-// Forward declaration (defined after the class, needed for vram_alloc_request).
-enum class runtime_category : uint8_t;
-
 // Unified GPU cache for both dense weights and MoE experts
 //
 // Design principles:
@@ -1053,42 +1050,33 @@ class unified_cache {
     // and falls back to host-pinned memory when device allocation is unsafe.
     //
     // Lifetime categories control eviction eligibility and diagnostics:
-    //   MODEL_LOAD  — persists for model lifetime (dense weights, embeddings)
-    //   CONTEXT     — persists for context lifetime (KV cache, compute buffers)
-    //   INFERENCE   — reused per-token (scratch, staging, MoE tables)
-    //   TEMPORARY   — freed within a single kernel dispatch
+    //   PERSISTENT — weights, KV cache — freed only on model/context destruction
+    //   SCRATCH    — per-graph-compute scratch — reused between tokens
+    //   TEMPORARY  — within a single kernel dispatch
 
     enum class alloc_lifetime : uint8_t {
-        MODEL_LOAD = 0,
-        CONTEXT    = 1,
-        INFERENCE  = 2,
-        TEMPORARY  = 3,
-    };
-
-    struct vram_alloc_request {
-        size_t           size               = 0;
-        alloc_lifetime   lifetime           = alloc_lifetime::INFERENCE;
-        runtime_category category;          // Set after runtime_category is defined
-        bool             allow_host_fallback = true;   // host-pinned OK if VRAM full
-        const char *     tag                = nullptr; // debug label
+        PERSISTENT = 0,  // Weights, KV cache — model/context lifetime
+        SCRATCH    = 1,  // Per-graph scratch — reused between tokens
+        TEMPORARY  = 2,  // Per-kernel dispatch — freed immediately after
     };
 
     struct vram_alloc_result {
         void * ptr       = nullptr;
-        bool   is_device = false;  // true = VRAM, false = host-pinned
+        bool   on_device = false;  // true = VRAM, false = host-pinned USM
         size_t size      = 0;
 
         explicit operator bool() const { return ptr != nullptr; }
     };
 
-    // Primary allocation entry point.  Queries L0 for real free VRAM, evicts
-    // cached weights when budget allows, and falls back to host-pinned memory
-    // when allow_host_fallback is true.  Thread-safe.
-    vram_alloc_result allocate(const vram_alloc_request & req);
+    // Primary allocation entry point.  Checks budget (used_ + runtime_reserved +
+    // size <= budget), queries L0 for real free VRAM as safety check, evicts
+    // cached weights when possible, and falls back to host-pinned memory.
+    // Thread-safe.  tag is a debug label for logging.
+    vram_alloc_result allocate(size_t size, alloc_lifetime lifetime, const char * tag = nullptr);
 
     // Release a buffer obtained from allocate().  Adjusts budget tracking.
     // Accepts both device and host-pinned pointers (determined automatically).
-    void deallocate(void * ptr, size_t size);
+    void deallocate(void * ptr, size_t size, alloc_lifetime lifetime);
 
     // === Inference Scratch Pool ===
     // Pre-allocated VRAM pool for per-op temporaries (Q8_1, FP16 dequant, etc.).
@@ -1104,8 +1092,8 @@ class unified_cache {
     // The returned pointer is valid until return_scratch() or reset_scratch_pool().
     void * get_scratch(size_t size);
 
-    // Return a scratch buffer to the pool.  No actual free — just adjusts bump pointer.
-    void return_scratch(void * ptr);
+    // Return a scratch buffer to the pool.  Adjusts the bump pointer.
+    void return_scratch(void * ptr, size_t size);
 
     // Reset the scratch pool bump pointer (call between graph_compute invocations).
     void reset_scratch_pool();
@@ -1266,8 +1254,9 @@ class unified_cache {
     // Track pointers returned by allocate() so deallocate() knows whether
     // the pointer is device or host-pinned and which budget to adjust.
     struct managed_alloc_entry {
-        size_t size      = 0;
-        bool   is_device = false;
+        size_t         size     = 0;
+        bool           on_device = false;
+        alloc_lifetime lifetime = alloc_lifetime::SCRATCH;
     };
 
     std::unordered_map<void *, managed_alloc_entry> managed_allocs_;
@@ -1857,20 +1846,25 @@ unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & qu
 // entry points for code outside unified-cache.cpp.
 
 // Allocate VRAM (or host-pinned fallback) through the unified cache.
-// Returns result with ptr, is_device flag, and actual size.
+// Returns result with ptr, on_device flag, and actual size.
 unified_cache::vram_alloc_result unified_cache_allocate(
-    int                                         device_id,
-    const unified_cache::vram_alloc_request &   req);
+    int                              device_id,
+    size_t                           size,
+    unified_cache::alloc_lifetime    lifetime,
+    const char *                     tag = nullptr);
 
 // Free a buffer previously obtained from unified_cache_allocate().
-void unified_cache_deallocate(int device_id, void * ptr, size_t size);
+void unified_cache_deallocate(int    device_id,
+                              void * ptr,
+                              size_t size,
+                              unified_cache::alloc_lifetime lifetime);
 
 // Reserve the inference scratch pool on a device.
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 
 // Get/return scratch from the pool.
 void * unified_cache_get_scratch(int device_id, size_t size);
-void   unified_cache_return_scratch(int device_id, void * ptr);
+void   unified_cache_return_scratch(int device_id, void * ptr, size_t size);
 void   unified_cache_reset_scratch_pool(int device_id);
 
 // Allocate from expert budget (or host fallback).

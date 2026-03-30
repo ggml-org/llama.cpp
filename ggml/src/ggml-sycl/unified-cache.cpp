@@ -8174,32 +8174,35 @@ size_t unified_cache::available_device() const {
 
 // --- unified_cache::allocate() ---
 // The primary allocation path for Phase 3.  Steps:
-//   1. Check budget headroom
+//   1. Check budget: used_ + runtime_reserved + size <= budget_
 //   2. If insufficient, try evict_and_flush
-//   3. Query L0 free VRAM as a second guard
+//   3. Query L0 free VRAM as a second safety guard
 //   4. Allocate on device or fall back to host-pinned
 //   5. Track in managed_allocs_ and adjust budget
 
-unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_request & req) {
+unified_cache::vram_alloc_result unified_cache::allocate(size_t          size,
+                                                         alloc_lifetime  lifetime,
+                                                         const char *    tag) {
     vram_alloc_result result{};
-    if (req.size == 0) {
+    if (size == 0) {
         return result;
     }
 
-    const size_t alloc_size = req.size;
-    const char * tag        = req.tag ? req.tag : "unified_cache::allocate";
+    const char * label = tag ? tag : "unified_cache::allocate";
 
-    // Step 1: Check budget headroom.
+    // Step 1: Check budget headroom (available() = budget_ - used_,
+    // where budget_ = base_budget_ - reserved_, and reserved_ tracks
+    // KV + compute + staging + graph runtime bytes).
     bool try_device = true;
-    if (alloc_size > available()) {
+    if (size > available()) {
         // Try eviction to make room.
-        const size_t needed = alloc_size - available();
+        const size_t needed = size - available();
         const size_t freed  = evict_and_flush(needed);
-        if (alloc_size > available()) {
+        if (size > available()) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate(%s): budget exhausted after evicting "
                             "%.1f MB (need %.1f MB, avail %.1f MB)\n",
-                            tag, freed / (1024.0 * 1024.0),
-                            alloc_size / (1024.0 * 1024.0),
+                            label, freed / (1024.0 * 1024.0),
+                            size / (1024.0 * 1024.0),
                             available() / (1024.0 * 1024.0));
             try_device = false;
         }
@@ -8208,10 +8211,10 @@ unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_reques
     // Step 2: Cross-check with L0 free VRAM.
     if (try_device) {
         const size_t hw_avail = available_device();
-        if (alloc_size > hw_avail) {
+        if (size > hw_avail) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate(%s): L0 free VRAM too low "
                             "(need %.1f MB, L0 avail %.1f MB), falling back\n",
-                            tag, alloc_size / (1024.0 * 1024.0),
+                            label, size / (1024.0 * 1024.0),
                             hw_avail / (1024.0 * 1024.0));
             try_device = false;
         }
@@ -8221,7 +8224,7 @@ unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_reques
     void * ptr = nullptr;
     if (try_device) {
         try {
-            ptr = ggml_sycl_malloc_device(alloc_size, queue_, tag);
+            ptr = ggml_sycl_malloc_device(size, queue_, label);
         } catch (...) {
             ptr = nullptr;
         }
@@ -8230,27 +8233,20 @@ unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_reques
     if (ptr) {
         // Device allocation succeeded.
         result.ptr       = ptr;
-        result.is_device = true;
-        result.size      = alloc_size;
+        result.on_device = true;
+        result.size      = size;
 
         // Track against budget as runtime reservation.
-        used_.fetch_add(alloc_size, std::memory_order_relaxed);
+        used_.fetch_add(size, std::memory_order_relaxed);
 
         std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
-        managed_allocs_[ptr] = { alloc_size, true };
+        managed_allocs_[ptr] = { size, true, lifetime };
         return result;
     }
 
     // Step 4: Host-pinned fallback.
-    if (!req.allow_host_fallback) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] allocate(%s): device alloc failed and host fallback "
-                      "disabled (size=%.1f MB)\n",
-                      tag, alloc_size / (1024.0 * 1024.0));
-        return result;
-    }
-
     try {
-        ptr = ggml_sycl_malloc_host(alloc_size, queue_, tag);
+        ptr = ggml_sycl_malloc_host(size, queue_, label);
     } catch (...) {
         ptr = nullptr;
     }
@@ -8258,26 +8254,27 @@ unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_reques
     if (!ptr) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] allocate(%s): both device and host alloc failed "
                        "(size=%.1f MB)\n",
-                       tag, alloc_size / (1024.0 * 1024.0));
+                       label, size / (1024.0 * 1024.0));
         return result;
     }
 
     result.ptr       = ptr;
-    result.is_device = false;
-    result.size      = alloc_size;
+    result.on_device = false;
+    result.size      = size;
 
     // Host-pinned does NOT consume VRAM budget (it is malloc_host).
     std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
-    managed_allocs_[ptr] = { alloc_size, false };
+    managed_allocs_[ptr] = { size, false, lifetime };
     return result;
 }
 
 // --- unified_cache::deallocate() ---
 
-void unified_cache::deallocate(void * ptr, size_t size) {
+void unified_cache::deallocate(void * ptr, size_t size, alloc_lifetime lifetime) {
     if (!ptr) {
         return;
     }
+    (void) lifetime;  // Used for future per-lifetime diagnostics.
 
     managed_alloc_entry entry{};
     {
@@ -8291,7 +8288,7 @@ void unified_cache::deallocate(void * ptr, size_t size) {
         managed_allocs_.erase(it);
     }
 
-    if (entry.is_device) {
+    if (entry.on_device) {
         // Reverse the budget charge.
         saturating_sub_used(entry.size);
     }
@@ -8322,14 +8319,15 @@ bool unified_cache::reserve_scratch_pool(size_t pool_bytes) {
     }
 
     // Allocate through our own allocate() path so budget/L0 checks apply.
-    vram_alloc_request req{};
-    req.size               = pool_bytes;
-    req.lifetime           = alloc_lifetime::CONTEXT;
-    req.category           = runtime_category::COMPUTE;
-    req.allow_host_fallback = false;  // Scratch pool must be on device.
-    req.tag                = "scratch_pool";
-
-    vram_alloc_result res = allocate(req);
+    // Scratch pool MUST be on device — if allocate() falls back to host, reject it.
+    vram_alloc_result res = allocate(pool_bytes, alloc_lifetime::PERSISTENT, "scratch_pool");
+    if (!res.ptr || !res.on_device) {
+        if (res.ptr && !res.on_device) {
+            // Got host-pinned — not useful as scratch pool, release it.
+            deallocate(res.ptr, pool_bytes, alloc_lifetime::PERSISTENT);
+        }
+        res.ptr = nullptr;
+    }
     if (!res.ptr) {
         GGML_LOG_WARN("[UNIFIED-CACHE] reserve_scratch_pool: failed to allocate %.1f MB\n",
                       pool_bytes / (1024.0 * 1024.0));
@@ -8374,10 +8372,11 @@ void * unified_cache::get_scratch(size_t size) {
     return static_cast<uint8_t *>(scratch_pool_ptr_) + off;
 }
 
-void unified_cache::return_scratch(void * ptr) {
+void unified_cache::return_scratch(void * ptr, size_t size) {
     // Stack discipline: we don't actually free individual allocations.
     // The pool is reset wholesale via reset_scratch_pool().
     (void) ptr;
+    (void) size;
 }
 
 void unified_cache::reset_scratch_pool() {
@@ -8387,13 +8386,7 @@ void unified_cache::reset_scratch_pool() {
 // --- Expert Allocation ---
 
 unified_cache::vram_alloc_result unified_cache::allocate_expert(size_t size) {
-    vram_alloc_request req{};
-    req.size               = size;
-    req.lifetime           = alloc_lifetime::INFERENCE;
-    req.category           = runtime_category::EXPERT_CACHE;
-    req.allow_host_fallback = true;
-    req.tag                = "expert";
-    return allocate(req);
+    return allocate(size, alloc_lifetime::SCRATCH, "expert");
 }
 
 // ============================================================================
@@ -8401,19 +8394,24 @@ unified_cache::vram_alloc_result unified_cache::allocate_expert(size_t size) {
 // ============================================================================
 
 unified_cache::vram_alloc_result unified_cache_allocate(
-    int                                       device_id,
-    const unified_cache::vram_alloc_request & req) {
+    int                           device_id,
+    size_t                        size,
+    unified_cache::alloc_lifetime lifetime,
+    const char *                  tag) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (!cache) {
         return {};
     }
-    return cache->allocate(req);
+    return cache->allocate(size, lifetime, tag);
 }
 
-void unified_cache_deallocate(int device_id, void * ptr, size_t size) {
+void unified_cache_deallocate(int                           device_id,
+                              void *                        ptr,
+                              size_t                        size,
+                              unified_cache::alloc_lifetime lifetime) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (cache) {
-        cache->deallocate(ptr, size);
+        cache->deallocate(ptr, size, lifetime);
     }
 }
 
@@ -8433,10 +8431,10 @@ void * unified_cache_get_scratch(int device_id, size_t size) {
     return cache->get_scratch(size);
 }
 
-void unified_cache_return_scratch(int device_id, void * ptr) {
+void unified_cache_return_scratch(int device_id, void * ptr, size_t size) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (cache) {
-        cache->return_scratch(ptr);
+        cache->return_scratch(ptr, size);
     }
 }
 
