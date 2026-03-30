@@ -968,17 +968,25 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        (ggml_nelements(op) % 16 == 0);
             break;
         case GGML_OP_GLU:
-            // Support F32 GLU operations (split tensor mode only)
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                op->src[1] && op->src[1]->type == GGML_TYPE_F32 && // Require split mode
                 ggml_nelements(op) % 16 == 0 &&
                 ggml_is_contiguous(op) &&
-                ggml_is_contiguous(op->src[0]) &&
-                ggml_is_contiguous(op->src[1])) {
+                ggml_is_contiguous(op->src[0])) {
                 // Check GLU variant - support SWIGLU and GEGLU
                 ggml_glu_op glu_type = ggml_get_glu_op(op);
-                supported = (glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_GEGLU);
+                const bool supported_variant = glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_GEGLU;
+
+                if (op->src[1]) {
+                    supported = supported_variant &&
+                        op->src[1]->type == GGML_TYPE_F32 &&
+                        ggml_is_contiguous(op->src[1]) &&
+                        op->src[0]->ne[0] == op->ne[0] &&
+                        op->src[1]->ne[0] == op->ne[0];
+                } else {
+                    supported = supported_variant &&
+                        op->src[0]->ne[0] == 2 * op->ne[0];
+                }
             } else {
                 supported = false;
             }

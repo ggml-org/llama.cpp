@@ -490,16 +490,17 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
         return false;
     }
 
-    // Validate split tensor mode (only mode we support)
-    if (!node->src[0] || !node->src[1]) {
-        GGML_LOG_ERROR("ET: GLU operation missing required inputs (split mode only)\n");
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: GLU operation missing required input\n");
         return false;
     }
+
+    const bool is_split_mode = node->src[1] != nullptr;
 
     // Only support F32 (as validated by supports_op)
     if (node->type != GGML_TYPE_F32 ||
         node->src[0]->type != GGML_TYPE_F32 ||
-        node->src[1]->type != GGML_TYPE_F32) {
+        (is_split_mode && node->src[1]->type != GGML_TYPE_F32)) {
         return false;
     }
 
@@ -517,13 +518,15 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     // Get GLU operation name for logging
     const char* glu_op_name = ggml_glu_op_name((ggml_glu_op)glu_op_type);
 
-    // Pack parameters - copy full tensor structures and GLU parameters (split mode)
-    ggml_et_glu_params params;
-    params.src0 = *node->src[0];              // F32 input tensor A
-    params.src1 = *node->src[1];              // F32 input tensor B (split mode)
-    params.dst = *node;                       // F32 output tensor
-    params.glu_op_type = glu_op_type;         // GLU variant type
-    params.swapped = swapped;                 // Swapped flag (unused in split mode)
+    // Pack parameters. Single-tensor mode is encoded by zeroing src1.
+    ggml_et_glu_params params = {};
+    params.src0 = *node->src[0];
+    if (is_split_mode) {
+        params.src1 = *node->src[1];
+    }
+    params.dst = *node;
+    params.glu_op_type = glu_op_type;
+    params.swapped = swapped;
     // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
     ggml_et_cpu_compare_ctx cpu_cmp_ctx;
     bool cpu_comparison_active = false;
