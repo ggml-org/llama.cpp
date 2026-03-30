@@ -65,6 +65,7 @@ set(KERNELS
     tri_f32
     solve_tri_f32
     ssm_conv_f32
+    ssm_scan_f32
     memops
 )
 

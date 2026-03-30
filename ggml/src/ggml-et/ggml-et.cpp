@@ -699,6 +699,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_ssm_conv(dev_ctx, node);
                 break;
 
+            case GGML_OP_SSM_SCAN:
+                ggml_et_op_ssm_scan(dev_ctx, node);
+                break;
+
             case GGML_OP_PAD:
                 ggml_et_op_pad(dev_ctx, node);
                 break;
@@ -1011,6 +1015,36 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             } else {
                 supported = false;
             }
+            break;
+        case GGML_OP_SSM_SCAN:
+            supported =
+                op->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op) &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[2]) &&
+                op->src[3] && op->src[3]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[3]) &&
+                op->src[4] && op->src[4]->type == GGML_TYPE_F32 &&
+                op->src[5] && op->src[5]->type == GGML_TYPE_F32 &&
+                op->src[6] && op->src[6]->type == GGML_TYPE_I32 && ggml_is_contiguous(op->src[6]) &&
+                op->src[1]->nb[0] == sizeof(float) &&
+                op->src[4]->nb[0] == sizeof(float) &&
+                op->src[5]->nb[0] == sizeof(float) &&
+                op->src[1]->nb[1] == (size_t) op->src[1]->ne[0] * sizeof(float) &&
+                op->src[4]->nb[1] == (size_t) op->src[4]->ne[0] * sizeof(float) &&
+                op->src[5]->nb[1] == (size_t) op->src[5]->ne[0] * sizeof(float) &&
+                op->src[0]->ne[0] == op->src[4]->ne[0] &&
+                op->src[0]->ne[1] == op->src[1]->ne[0] &&
+                op->src[0]->ne[2] == op->src[1]->ne[1] &&
+                op->src[1]->ne[2] == op->src[2]->ne[1] &&
+                op->src[1]->ne[3] == op->src[2]->ne[2] &&
+                op->src[4]->ne[2] == op->src[1]->ne[2] &&
+                op->src[4]->ne[3] == op->src[1]->ne[3] &&
+                ggml_are_same_shape(op->src[4], op->src[5]) &&
+                op->src[6]->ne[0] == op->src[1]->ne[3] &&
+                op->src[3]->ne[1] == op->src[1]->ne[1] &&
+                (op->src[3]->ne[0] == 1 || op->src[3]->ne[0] == op->src[0]->ne[0]) &&
+                (op->src[1]->ne[1] % op->src[4]->ne[1] == 0);
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             if (op->type == GGML_TYPE_F32 &&
@@ -1390,9 +1424,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
