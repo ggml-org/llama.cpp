@@ -387,6 +387,24 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "empty computed member defaults to undefined",
+        "{{ a[]|default('fallback') }}",
+        {{"a", {{"name", "Bob"}}}},
+        "fallback"
+    );
+
+    test_template(t, "empty computed member is undefined",
+        "{{ a[] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
+    test_template(t, "undefined computed member is undefined",
+        "{{ a[undefined] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
     test_template(t, "array access",
         "{{ items[1] }}",
         {{"items", json::array({"a", "b", "c"})}},
