@@ -283,8 +283,11 @@ static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 
 // Per block: norm(fp16) + 2-bit indices (8 bytes) + 1-bit extra (4 bytes) = 14 bytes per 32 values
 // = 3.5 bits/value → 4.6× compression vs fp16
 // The 3-bit index is split: lower 2 bits in qs[], upper 1 bit in signs[]
-#define QK_TURBO3 32   // Block size 32: matches q4_0 parallelism, graph handles WHT rotation
+#define QK_TURBO3 128   // Block size 128: one block per rotation group, eliminates redundant norms
 #define QK_TURBO3_GROUP 128  // rotation group size = head_dim
+// Derived: FA template nl parameters (auto-scale with block size)
+#define NL_TURBO3     (QK_TURBO3 / 16)   // non-vec FA iterations per block
+#define NL_TURBO3_VEC (QK_TURBO3 / 4)    // vec FA iterations per block
 typedef struct {
     ggml_half  norm;                    //  2 bytes: vector L2 norm (for rescaling)
     uint8_t    qs[QK_TURBO3 / 4];      //  8 bytes: lower 2-bit indices (4 per byte)
@@ -330,8 +333,11 @@ static_assert(QK_TURBO4 == 128, "turbo4 kernels assume QK_TURBO4 == 128");
 // Per block: norm(fp16) + 2-bit indices (8 bytes) = 10 bytes per 32 values
 // = 2.5 bits/value → 6.4× compression vs fp16
 // 4 centroids (Lloyd-Max for N(0, 1/128)): {-0.133462, -0.039994, 0.039994, 0.133462}
-#define QK_TURBO2 32   // Block size 32
+#define QK_TURBO2 128   // Block size 128: one block per rotation group
 #define QK_TURBO2_GROUP 128  // rotation group size = head_dim
+// Derived: FA template nl parameters (auto-scale with block size)
+#define NL_TURBO2     (QK_TURBO2 / 16)   // non-vec FA iterations per block
+#define NL_TURBO2_VEC (QK_TURBO2 / 4)    // vec FA iterations per block
 typedef struct {
     ggml_half  norm;                    //  2 bytes: corrected L2 norm
     uint8_t    qs[QK_TURBO2 / 4];      //  8 bytes: 2-bit indices (4 per byte)
