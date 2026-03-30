@@ -1340,7 +1340,9 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
     if (buffer && buffer->iface.init_tensor) {
         buffer->iface.init_tensor(buffer, tensor);
     } else {
-        GGML_LOG_ERROR("Null buffer for tensor passed to init_tensor function\n");
+        if (!buffer) {
+            GGML_LOG_ERROR("Tensor with null buffer passed to init_tensor function\n");
+        }
     }
 
     if (tensor->extra != nullptr) {
