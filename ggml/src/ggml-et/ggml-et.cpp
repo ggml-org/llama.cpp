@@ -1120,10 +1120,12 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                     // Standard aligned path: all ne[0] cacheline-aligned, all contiguous
                     supported = true;
                 } else if (dim == 0 &&
-                           op->src[0]->nb[0] == sizeof(float) &&
-                           (op->src[1]->nb[0] == sizeof(float) || op->src[1]->ne[0] == 1)) {
-                    // Unaligned dim==0 path: LCM row grouping for CL alignment.
-                    // Doing scalar copy, stride src access.
+                           op->ne[0] % 16 != 0) {
+                    // Unaligned dim==0 path: the kernel performs scalar copies using
+                    // source byte strides, so transposed / strided sources are valid.
+                    // Keep this limited to dst rows that are not cacheline-aligned;
+                    // aligned dst rows go through the vector path, which assumes
+                    // contiguous source rows.
                     supported = true;
                 }
             }
@@ -1327,9 +1329,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
