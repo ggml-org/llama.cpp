@@ -14,6 +14,7 @@
 
 #define SOC_MINIONS_PER_SHIRE 32
 #define NUM_HARTS_PER_MINION 2
+#define ET_CACHE_LINE_SIZE_BYTES 64
 
 // Environment structure definition
 typedef struct {
@@ -49,6 +50,27 @@ static inline int manual_popcountll(uint64_t x) {
         x >>= 1;
     }
     return count;
+}
+
+static inline int64_t et_gcd_i64(int64_t a, int64_t b) {
+    while (b) {
+        const int64_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+// Return the number of consecutive rows of width row_elems needed so the
+// combined write footprint spans an integer number of cache lines.
+static inline int64_t et_rows_per_cacheline_group(int64_t row_elems, int64_t elem_size_bytes) {
+    if (row_elems <= 0 || elem_size_bytes <= 0) {
+        return 1;
+    }
+
+    const int64_t row_bytes = row_elems * elem_size_bytes;
+    const int64_t gcd = et_gcd_i64(ET_CACHE_LINE_SIZE_BYTES, row_bytes);
+    return ET_CACHE_LINE_SIZE_BYTES / gcd;
 }
 
 // Calculate relative thread ID from absolute hart ID using shire mask
