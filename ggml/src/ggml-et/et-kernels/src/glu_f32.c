@@ -204,7 +204,7 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
 
     // Extract tensor references
     struct ggml_tensor* src0 = &params->src0;
-    struct ggml_tensor* src1 = &params->src1;  // May be null for single tensor mode
+    struct ggml_tensor* src1 = params->src1.data ? &params->src1 : 0;
     struct ggml_tensor* dst = &params->dst;
     int32_t swapped = params->swapped;
 
@@ -219,7 +219,7 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
 
     // Get data pointers
     float* src0_data = (float*)src0->data;
-    float* src1_data = src1 ? (float*)src1->data : src0_data;  // Same as src0 for single tensor mode
+    float* src1_data = src1 ? (float*)src1->data : src0_data;
     float* dst_data = (float*)dst->data;
 
     // Validate data pointers
