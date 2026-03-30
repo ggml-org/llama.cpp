@@ -3969,19 +3969,36 @@ bool unified_cache::stage_expert_group(int                          block_id,
         //    get_bcs_queue().wait() + finalize_pending_fills() at batch boundaries.
         //    Raw H2D copies go through BCS (copy-only engine) to keep CCS free.
         //    Fill functions receive DMA queue and internally route H2D to BCS.
+        //
+        //    IMPORTANT: When using a pre-allocated temp buffer (prealloc_temp),
+        //    consecutive fills share the same staging VRAM.  The BCS H2D for
+        //    tensor N+1 must not overwrite the temp buffer while the CCS reorder
+        //    for tensor N is still reading it.  We chain fills via deps: each
+        //    fill's H2D depends on the previous fill's reorder completion event.
+        //    Without this, the BCS and CCS queues race on the shared temp buffer
+        //    (WAR hazard) causing corrupted SOA layouts or BCS CAT faults.
         sycl::queue & dq  = get_dma_queue();
         sycl::queue & bcs = get_bcs_queue();
         sycl::event   last_event;
+        bool          has_last_event = false;
         for (auto & s : slots) {
             if (s.was_existing) continue;
             if (s.req && s.req->fill_fn) {
                 // Use the caller-provided fill function (GPU reorder, CPU reorder, etc.)
                 // Fill functions route H2D to BCS internally via ctx->bcs_queue.
+                // Pass last_event as dependency so BCS H2D waits for previous
+                // CCS reorder to finish reading the shared prealloc_temp buffer.
+                std::vector<sycl::event> fill_deps;
+                if (has_last_event) {
+                    fill_deps.push_back(last_event);
+                }
                 last_event =
-                    s.req->fill_fn(dq, s.ptr, s.data->dst_size, s.data->src_ptr, s.data->src_size, s.req->fill_ctx, {});
+                    s.req->fill_fn(dq, s.ptr, s.data->dst_size, s.data->src_ptr, s.data->src_size, s.req->fill_ctx, fill_deps);
+                has_last_event = true;
             } else if (s.data->src_ptr && s.data->src_size > 0) {
                 // Raw DMA copy — route to BCS (copy engine) to keep CCS free
                 last_event = bcs.memcpy(s.ptr, s.data->src_ptr, std::min(s.data->dst_size, s.data->src_size));
+                has_last_event = true;
             }
         }
 
@@ -5000,10 +5017,30 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                         (int) it->second.layout, entry_size, host_resident ? 1 : 0);
 
         if (!host_resident) {
-            // Only free device memory; host-resident entries are managed by host_cache
-            enqueue_deferred_free(ptr, entry_size);
-            // Signal that device-resident weight pointers may now be stale.
-            // Graph replay / persistent TG must check this before using baked pointers.
+            // Free device memory.  During prestage (outside graph_compute_impl),
+            // use synchronous drain + free to avoid the deferred-free race:
+            // the barrier in enqueue_deferred_free only captures queue state at
+            // submission time — subsequent DMA work can still reference the freed
+            // memory before the deferred free executes.  Synchronous drain ensures
+            // ALL queues are idle before freeing.
+            if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+                // Outside inference: drain all queues, then free immediately
+                try { queue_.wait(); } catch (...) {}
+                if (dma_queue_) { try { dma_queue_->wait(); } catch (...) {} }
+                if (bcs_queue_) { try { bcs_queue_->wait(); } catch (...) {} }
+                if (compute_queue_) { try { compute_queue_->wait(); } catch (...) {} }
+                // Now safe to free — no in-flight work references this memory
+                const bool is_pool = layout_pool_ && layout_pool_->owns(ptr);
+                if (!is_pool) {
+                    try { sycl::free(ptr, queue_); } catch (...) {}
+                }
+                saturating_sub_used(entry_size);
+            } else {
+                // During inference: defer free (graph_compute_active blocks eviction
+                // via the guard at the top of evict_one, so this shouldn't happen,
+                // but keep as safety net)
+                enqueue_deferred_free(ptr, entry_size);
+            }
             has_evictions_.store(true, std::memory_order_release);
         }
         // Note: For host-resident entries, we just remove tracking here.
@@ -5276,16 +5313,26 @@ sycl::event unified_cache::submit_barrier(const std::vector<sycl::event> & deps)
 }
 
 sycl::event unified_cache::submit_barrier_all() {
-    // Submit barrier that depends on ALL queues — cache, BCS, and compute.
-    // This ensures deferred frees don't execute until in-flight GPU kernels
-    // on the compute queue have completed. Without the compute queue barrier,
-    // evicted VRAM pointers can be freed while MUL_MAT_ID kernels on the
-    // compute queue still reference them (expert pointer table use-after-free).
+    // Submit barrier that depends on ALL queues — cache, DMA, BCS, and compute.
+    // This ensures deferred frees don't execute until in-flight work on every
+    // queue has completed.  Missing any queue causes use-after-free:
+    //   - compute queue: MUL_MAT_ID kernels reference expert pointer table
+    //   - dma queue: CCS reorder kernels write to freshly-allocated VRAM slots
+    //   - bcs queue: H2D copies write to temp VRAM or destination slots
+    // Without the dma_queue_ barrier, sycl::free() in process_deferred_frees()
+    // can unmap pages while dma_queue_ reorder kernels still reference VRAM,
+    // causing BCS CAT errors when the L0 driver reuses freed pages under
+    // high VRAM pressure (85-90% budget with 1000+ expert groups).
     std::vector<sycl::event> no_deps;
     std::vector<sycl::event> deps;
     try {
         deps.push_back(queue_.ext_oneapi_submit_barrier(no_deps));
     } catch (...) {}
+    if (dma_queue_) {
+        try {
+            deps.push_back(dma_queue_->ext_oneapi_submit_barrier(no_deps));
+        } catch (...) {}
+    }
     if (bcs_queue_) {
         try {
             deps.push_back(bcs_queue_->ext_oneapi_submit_barrier(no_deps));
