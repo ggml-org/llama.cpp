@@ -830,9 +830,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->ne[0] % 16 == 0 && // cache-aligned
                        op->src[0]->ne[0] % 16 == 0 &&
                        (op->src[1]->ne[0] % 16 == 0 || op->src[1]->ne[0] == 1) &&
-                       ggml_is_contiguous(op) &&
-                       ggml_is_contiguous(op->src[0]) &&
-                       ggml_is_contiguous(op->src[1]);
+                       op->nb[0] == sizeof(float) &&
+                       op->src[0]->nb[0] == sizeof(float) &&
+                       (op->src[1]->nb[0] == sizeof(float) || op->src[1]->ne[0] == 1) &&
+                       op->nb[1] == op->ne[0] * sizeof(float) &&
+                       op->src[0]->nb[1] == op->src[0]->ne[0] * sizeof(float);
             break;
         case GGML_OP_MUL_MAT:
             // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, F16 x F16 -> F32, and F32 x F32 -> F32 matrix multiplication
@@ -1244,18 +1246,34 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[1]);
             break;
         case GGML_OP_SET:
-            // Minimal support: inplace SET where src1 covers the entire dst
-            // (same shape, same strides, offset=0). Just copies src1 → dst.
+            // Minimal useful support: inplace F32 SET of a contiguous src1 view into
+            // a contiguous dst/base tensor using explicit destination view strides.
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
                 ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
                 ggml_is_contiguous(op->src[1]) &&
-                op->ne[0] % 16 == 0 &&
-                ggml_are_same_shape(op, op->src[1])) {
+                ggml_are_same_shape(op, op->src[0]) &&
+                op->src[1]->ne[0] % 16 == 0) {
                 const bool inplace = (bool) ((const int32_t *) op->op_params)[4];
+                const size_t nb1 = ((const int32_t *) op->op_params)[0];
+                const size_t nb2 = ((const int32_t *) op->op_params)[1];
+                const size_t nb3 = ((const int32_t *) op->op_params)[2];
                 const size_t offset = ((const int32_t *) op->op_params)[3];
-                supported = inplace && offset == 0;
+                const size_t nb0 = ggml_element_size(op);
+                const size_t im0 = op->src[1]->ne[0] == 0 ? 0 : op->src[1]->ne[0] - 1;
+                const size_t im1 = op->src[1]->ne[1] == 0 ? 0 : op->src[1]->ne[1] - 1;
+                const size_t im2 = op->src[1]->ne[2] == 0 ? 0 : op->src[1]->ne[2] - 1;
+                const size_t im3 = op->src[1]->ne[3] == 0 ? 0 : op->src[1]->ne[3] - 1;
+
+                const bool view_bounds_ok =
+                    offset + im0 * nb0 + im1 * nb1 + im2 * nb2 + im3 * nb3 <= ggml_nbytes(op);
+
+                const bool cacheline_aligned =
+                    (nb1 % 64 == 0) && (nb2 % 64 == 0) && (nb3 % 64 == 0) && (offset % 64 == 0);
+
+                supported = inplace && view_bounds_ok && cacheline_aligned;
             }
             break;
         case GGML_OP_RWKV_WKV6:
@@ -1305,7 +1323,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             break;
         case GGML_OP_GATED_DELTA_NET:
             // F32, S_v must be multiple of 8 for vectorization
-            // 6 sources: q, k, v, g, beta, state - all must be F32 contiguous
+            // q, k, v may be row-contiguous with strided higher dimensions.
+            // g, beta, state stay contiguous.
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&  // q
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&  // k
@@ -1316,9 +1335,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[2]->ne[0] % 8 == 0 &&  // S_v multiple of 8
                 (op->src[3]->ne[0] == 1 || op->src[3]->ne[0] == op->src[2]->ne[0]) && // g is scalar or per-element
                 op->src[4]->ne[0] == 1 &&       // beta is scalar per position
-                ggml_is_contiguous(op->src[0]) &&
-                ggml_is_contiguous(op->src[1]) &&
-                ggml_is_contiguous(op->src[2]) &&
+                et_ggml_is_row_contiguous(op->src[0]) &&
+                et_ggml_is_row_contiguous(op->src[1]) &&
+                et_ggml_is_row_contiguous(op->src[2]) &&
                 ggml_is_contiguous(op->src[3]) &&
                 ggml_is_contiguous(op->src[4]) &&
                 ggml_is_contiguous(op->src[5])) {

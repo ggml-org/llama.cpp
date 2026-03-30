@@ -1936,13 +1936,13 @@ bool ggml_et_op_gated_delta_net(ggml_backend_et_device_context* dev_ctx, const g
     const int64_t n_seqs_k = src_k->ne[3];
 
     ggml_et_gated_delta_net_params params;
-    params.q        = (float*)src_q->data;
-    params.k        = (float*)src_k->data;
-    params.v        = (float*)src_v->data;
-    params.g        = (float*)src_g->data;
-    params.beta     = (float*)src_beta->data;
-    params.state_in = (float*)src_state->data;
-    params.dst      = (float*)node->data;
+    params.q        = *src_q;
+    params.k        = *src_k;
+    params.v        = *src_v;
+    params.g        = *src_g;
+    params.beta     = *src_beta;
+    params.state_in = *src_state;
+    params.dst      = *node;
     params.S_v      = (int32_t)S_v;
     params.H        = (int32_t)H;
     params.H_q      = (int32_t)H_q;
@@ -2151,31 +2151,46 @@ bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
 
     const bool   inplace = (bool) ((const int32_t *) node->op_params)[4];
     const size_t offset  = ((const int32_t *) node->op_params)[3];
+    const size_t nb1     = ((const int32_t *) node->op_params)[0];
+    const size_t nb2     = ((const int32_t *) node->op_params)[1];
+    const size_t nb3     = ((const int32_t *) node->op_params)[2];
 
-    if (!inplace || offset != 0) {
-        GGML_LOG_ERROR("ET: SET only supports inplace with offset=0 (inplace=%d, offset=%zu)\n",
-                       inplace, offset);
+    if (!inplace) {
+        GGML_LOG_ERROR("ET: SET only supports inplace (inplace=%d)\n", inplace);
         return false;
     }
 
-    if (!ggml_are_same_shape(node, node->src[1])) {
-        GGML_LOG_ERROR("ET: SET only supports same-shape src1 and dst\n");
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: SET only supports F32 (dst=%s src0=%s src1=%s)\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
         return false;
     }
 
-    if (!ggml_is_contiguous(node) || !ggml_is_contiguous(node->src[1])) {
-        GGML_LOG_ERROR("ET: SET requires contiguous dst and src1\n");
+    if (!ggml_are_same_shape(node, node->src[0])) {
+        GGML_LOG_ERROR("ET: SET requires same-shape src0 and dst\n");
         return false;
     }
 
-    // Inplace same-shape SET: just copy src1 → dst via CONT kernel
-    ggml_et_cont_params params;
-    params.src0 = *node->src[1];
-    params.dst  = *node;
+    if (!ggml_is_contiguous(node) || !ggml_is_contiguous(node->src[0]) || !ggml_is_contiguous(node->src[1])) {
+        GGML_LOG_ERROR("ET: SET requires contiguous dst, src0, and src1\n");
+        return false;
+    }
 
-    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "cont_f32", &params, sizeof(params), 0xFFFFFFFF);
+    ggml_et_set_params params;
+    params.src1   = *node->src[1];
+    params.dst    = *node;
+    params.nb1    = (int32_t) nb1;
+    params.nb2    = (int32_t) nb2;
+    params.nb3    = (int32_t) nb3;
+    params.offset = (int32_t) offset;
 
-    ET_PERF_END("SET", "cont_f32", node);
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "set_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("SET", "set_f32", node);
     return kernel_result;
 }
 

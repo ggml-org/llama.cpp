@@ -206,13 +206,13 @@ struct ggml_et_rwkv_wkv7_params {
 };
 
 struct ggml_et_gated_delta_net_params {
-    float* q;           // [S_v, H_q, n_tokens, n_seqs_q]
-    float* k;           // [S_v, H_k, n_tokens, n_seqs_k]
-    float* v;           // [S_v, H, n_tokens, n_seqs]
-    float* g;           // [1 or S_v, H, n_tokens, n_seqs]
-    float* beta;        // [1, H, n_tokens, n_seqs]
-    float* state_in;    // [S_v, S_v, H, n_seqs]
-    float* dst;         // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
+    ggml_tensor q;      // [S_v, H_q, n_tokens, n_seqs_q]
+    ggml_tensor k;      // [S_v, H_k, n_tokens, n_seqs_k]
+    ggml_tensor v;      // [S_v, H, n_tokens, n_seqs]
+    ggml_tensor g;      // [1 or S_v, H, n_tokens, n_seqs]
+    ggml_tensor beta;   // [1, H, n_tokens, n_seqs]
+    ggml_tensor state_in; // [S_v, S_v, H, n_seqs]
+    ggml_tensor dst;    // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
     int32_t S_v;        // head dimension (value size)
     int32_t H;          // number of value heads
     int32_t H_q;        // number of Q heads
@@ -229,6 +229,15 @@ struct ggml_et_set_rows_params {
     ggml_tensor src0;     // F32 source data tensor
     ggml_tensor src1;     // I64 row indices tensor
     ggml_tensor dst;      // F32/F16 destination tensor
+};
+
+struct ggml_et_set_params {
+    ggml_tensor src1;     // F32 source view to write into dst
+    ggml_tensor dst;      // F32 destination/base tensor
+    int32_t nb1;          // destination view stride for dim 1
+    int32_t nb2;          // destination view stride for dim 2
+    int32_t nb3;          // destination view stride for dim 3
+    int32_t offset;       // byte offset into destination
 };
 
 struct ggml_et_rms_norm_mul_params {
