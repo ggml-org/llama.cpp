@@ -1511,6 +1511,10 @@ class scoped_unified_alloc {
     alloc_handle handle_{};
 };
 
+// Graph compute eviction guard — prevents expert cache eviction during inference
+void unified_cache_set_graph_compute_active(bool active);
+bool unified_cache_is_graph_compute_active();
+
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
 void   unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);
 void   unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);

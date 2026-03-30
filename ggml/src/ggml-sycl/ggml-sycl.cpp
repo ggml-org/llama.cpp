@@ -37315,9 +37315,16 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         compute_impl_guard() {
             GGML_ASSERT(!g_in_compute_impl && "Re-entrant compute_impl");
             g_in_compute_impl = true;
+            // Note: eviction guard (graph_compute_active) is activated AFTER
+            // MoE hybrid init completes, not here. The init needs eviction to
+            // stage popular experts into VRAM. See the activate_eviction_guard
+            // call after moe_hybrid_init_once below.
         }
 
-        ~compute_impl_guard() { g_in_compute_impl = false; }
+        ~compute_impl_guard() {
+            ggml_sycl::unified_cache_set_graph_compute_active(false);
+            g_in_compute_impl = false;
+        }
     };
 
     compute_impl_guard _reentry_guard;
@@ -37529,6 +37536,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
     }
+    // Activate eviction guard AFTER MoE init completes.
+    // During init, eviction is needed to stage experts. After init,
+    // block eviction to prevent stale pointers during node dispatch.
+    ggml_sycl::unified_cache_set_graph_compute_active(true);
+
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         ggml_sycl_tp_new_pass();

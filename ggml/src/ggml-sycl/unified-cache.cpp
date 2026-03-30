@@ -55,6 +55,7 @@ static constexpr size_t      k_host_cache_guard_bytes   = 64;
 static constexpr uint8_t     k_host_cache_guard_pattern = 0xA5;
 static std::atomic<int>      g_cache_assert_enabled{ -1 };
 static std::atomic<int>      g_copy_trace_enabled{ -1 };
+static std::atomic<bool>     g_graph_compute_active{ false };
 static std::mutex            g_runtime_alloc_mutex;
 static std::atomic<uint64_t> g_runtime_alloc_id{ 1 };
 
@@ -3027,6 +3028,15 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             };
             bool         force_host = false;
 
+            // 0. During graph_compute_impl, force ALL new allocations to host.
+            // No new VRAM allocations during inference — prevents both:
+            //   (a) eviction-induced stale pointers (evict_one blocked)
+            //   (b) L0 OUT_OF_DEVICE_MEMORY from near-full VRAM
+            // Existing VRAM-cached experts are used as-is (cache hit path).
+            if (g_graph_compute_active.load(std::memory_order_acquire) && lazy_host_cache()) {
+                force_host = true;
+            }
+
             // 1. Honor explicit host preference
             if (request.prefer_host && lazy_host_cache()) {
                 force_host = true;
@@ -4861,6 +4871,14 @@ static int eviction_tier(const unified_cache_entry & entry) {
 
 size_t unified_cache::evict_one(size_t /* new_size */) {
     process_deferred_frees();
+
+    // Block eviction while GPU kernels are in flight (graph_compute_impl).
+    // Evicting frees VRAM that MUL_MAT_ID kernels may still reference via
+    // the expert pointer table → GPU page fault → DEVICE_LOST.
+    // Callers fall back to host-pinned zero-copy when eviction returns 0.
+    if (g_graph_compute_active.load(std::memory_order_acquire)) {
+        return 0;
+    }
 
     unified_cache_key evict_key{};
     int               best_tier        = std::numeric_limits<int>::max();
@@ -6805,6 +6823,14 @@ bool unified_alloc_validate_registry(int device, const char * where) {
                       where ? " at " : "", where ? where : "", tracked_host, registry_host);
     }
     return ok;
+}
+
+void unified_cache_set_graph_compute_active(bool active) {
+    g_graph_compute_active.store(active, std::memory_order_release);
+}
+
+bool unified_cache_is_graph_compute_active() {
+    return g_graph_compute_active.load(std::memory_order_acquire);
 }
 
 void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat) {
