@@ -250,4 +250,18 @@ struct ggml_et_mul_mat_id_params {
     struct ggml_tensor dst;   // Output [M, n_expert_used, batch, 1]
 };
 
+// Check whether a tensor's data is physically contiguous in memory.
+// When ne[i] == 1, the stride nb[i] is irrelevant (no second element along
+// that axis), so we skip it and only check strides that are actually walked.
+static inline int ggml_tensor_is_contiguous(const struct ggml_tensor * t, int type_size) {
+    int64_t expected = type_size;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (t->ne[i] > 1 && (int64_t)t->nb[i] != expected) {
+            return 0;
+        }
+        expected *= t->ne[i];
+    }
+    return 1;
+}
+
 #endif // GGML_TENSOR_H

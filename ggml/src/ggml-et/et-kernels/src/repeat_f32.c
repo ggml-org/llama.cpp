@@ -28,6 +28,19 @@ static inline void copy_row_aligned(float* dst, const float* src, int32_t n) {
     }
 }
 
+// Broadcast a single scalar to n floats using fbc.ps (broadcast to all lanes).
+// n must be a multiple of 16 (cacheline-aligned).
+static inline void broadcast_scalar_aligned(float* dst, float val, int32_t n) {
+    __asm__ volatile("fbc.ps f11, %[v]\n" : : [v] "m"(val) : "f11");
+    for (int32_t i = 0; i < n; i += 8) {
+        __asm__ volatile(
+            "fsw.ps f11, %[dst_vec]\n"
+            : [dst_vec] "=m"(*(float(*)[8])&dst[i])
+            :: "f11"
+        );
+    }
+}
+
 int entry_point(struct ggml_et_repeat_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -91,7 +104,10 @@ int entry_point(struct ggml_et_repeat_params* params, void* env) {
         const float* src_row = (const float*)((const char*)src0_data + k1*nb01 + k2*nb02 + k3*nb03);
         float* dst_row = (float*)((char*)dst_data + i1*dnb1 + i2*dnb2 + i3*dnb3);
 
-        if (nr0 == 1) {
+        if (ne00 == 1) {
+            // Scalar broadcast: splat single value across entire dst row
+            broadcast_scalar_aligned(dst_row, *src_row, (int32_t)ne0);
+        } else if (nr0 == 1) {
             // No tiling along dim 0 - single cacheline-aligned row copy
             copy_row_aligned(dst_row, src_row, (int32_t)ne00);
         } else {

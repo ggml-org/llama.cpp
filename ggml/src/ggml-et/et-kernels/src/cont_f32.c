@@ -92,10 +92,7 @@ int entry_point(struct ggml_et_cont_params* params, void* env) {
         return 0;
     }
 
-    const bool src_contiguous = (nb00 == 4 &&
-                                 nb01 == ne00 * 4 &&
-                                 nb02 == ne00 * ne01 * 4 &&
-                                 nb03 == ne00 * ne01 * ne02 * 4);
+    const bool src_contiguous = ggml_tensor_is_contiguous(src0, 4);
 
     //==========================================================================
     // Fast path: src is contiguous: flat vectorized copy by cache lines

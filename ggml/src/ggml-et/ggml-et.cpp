@@ -1038,8 +1038,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             // Support F32->F32 and F16->F16 CONT operations (rearrange non-contiguous to contiguous)
             if ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
                 op->src[0] && op->src[0]->type == op->type &&
-                ggml_is_contiguous(op) &&
-                op->nb[1] % 64 == 0) { // cache alignment
+                ggml_is_contiguous(op)) {
                 // Defensive check: ensure dst and src0 are not aliased (separate buffers)
                 // While GGML design currently guarantees this, check for future robustness
                 if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
@@ -1100,11 +1099,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_REPEAT:
-            // F32 contiguous, src0 ne[0] cacheline-aligned (tile unit)
+            // F32 contiguous, dst ne[0] cacheline-aligned
+            // src0 ne[0] must be cacheline-aligned OR 1 (scalar broadcast)
             // dst.ne[i] must be divisible by src0.ne[i] for all dims
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                op->src[0]->ne[0] % 16 == 0 &&
+                (op->src[0]->ne[0] == 1 || op->src[0]->ne[0] % 16 == 0) &&
+                op->ne[0] % 16 == 0 &&
                 ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0]) &&
                 op->ne[0] % op->src[0]->ne[0] == 0 &&
