@@ -14,12 +14,12 @@ except ImportError:
     SentencePieceProcessor: Any = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # type: ignore[import-not-found]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found]
-    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found, ty:unresolved-import]
         SentencePieceTokenizer,
     )
 except ImportError:
@@ -32,7 +32,7 @@ else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
         get_one_valid_tokenizer_file,
     )
 except ImportError:
