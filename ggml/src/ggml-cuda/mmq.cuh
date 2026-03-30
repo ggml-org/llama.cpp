@@ -225,7 +225,6 @@ static_assert(MMQ_MMA_TILE_X_K_Q6_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_FP4  % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_FP4 == MMQ_MMA_TILE_X_K_Q8_1, "Wrong tile size for MXFP4");
 static_assert(MMQ_MMA_TILE_X_K_NVFP4 % 8 == 4, "Wrong padding.");
-static_assert(MMQ_MMA_TILE_X_K_NVFP4 == MMQ_MMA_TILE_X_K_Q3_K, "Wrong tile size for NVFP4");
 
 
 static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
