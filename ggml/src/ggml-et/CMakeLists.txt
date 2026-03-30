@@ -51,6 +51,7 @@ set(KERNELS
     repeat_f32
     rwkv_wkv6_f32
     rwkv_wkv7_f32
+    gated_delta_net_f32
     cont_f32
     cont_f16
     cpy_f32_f16
