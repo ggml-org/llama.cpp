@@ -963,28 +963,66 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         output.push_back(json {
             {"type",      "function_call"},
-            {"status",    "completed"},
-            {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
+            {"id",        "fc_" + random_string()},
+            {"call_id",   tool_call.id},
             {"name",      tool_call.name},
+            {"arguments", tool_call.arguments},
+            {"status",    "completed"},
         });
+    }
+
+    // Build output_text convenience field (concatenation of all output_text parts)
+    std::string output_text;
+    for (const auto & item : output) {
+        if (json_value(item, "type", std::string()) == "message") {
+            for (const auto & part : item.at("content")) {
+                if (json_value(part, "type", std::string()) == "output_text") {
+                    output_text += part.at("text").get<std::string>();
+                }
+            }
+        }
     }
 
     std::time_t t = std::time(0);
     json res = {
-        {"completed_at", t},
-        {"created_at",   t},
-        {"id",           oai_resp_id},
-        {"model",        oaicompat_model},
-        {"object",       "response"},
-        {"output",       output},
-        {"status",       "completed"},
-        {"usage",        json {
-            {"input_tokens",  n_prompt_tokens},
-            {"output_tokens", n_decoded},
-            {"total_tokens",  n_decoded + n_prompt_tokens},
-            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+        {"completed_at",         t},
+        {"created_at",           t},
+        {"id",                   oai_resp_id},
+        {"model",                oaicompat_model},
+        {"object",               "response"},
+        {"output",               output},
+        {"output_text",          output_text},
+        {"status",               "completed"},
+        {"usage",                json {
+            {"input_tokens",          n_prompt_tokens},
+            {"output_tokens",         n_decoded},
+            {"total_tokens",          n_decoded + n_prompt_tokens},
+            {"input_tokens_details",  json{{"cached_tokens", n_prompt_tokens_cache}}},
+            {"output_tokens_details", json{{"reasoning_tokens", 0}}},
         }},
+        {"incomplete_details",   nullptr},
+        {"previous_response_id", nullptr},
+        {"instructions",         nullptr},
+        {"error",                nullptr},
+        {"tools",                json::array()},
+        {"tool_choice",          "auto"},
+        {"truncation",           "disabled"},
+        {"parallel_tool_calls",  false},
+        {"text",                 json{{"format", json{{"type", "text"}}}}},
+        {"top_p",                1.0},
+        {"presence_penalty",     0.0},
+        {"frequency_penalty",    0.0},
+        {"top_logprobs",         0},
+        {"temperature",          1.0},
+        {"reasoning",            nullptr},
+        {"max_output_tokens",    nullptr},
+        {"max_tool_calls",       nullptr},
+        {"store",                false},
+        {"background",           false},
+        {"service_tier",         "default"},
+        {"safety_identifier",    nullptr},
+        {"prompt_cache_key",     nullptr},
+        {"metadata",             json::object()},
     };
 
     return res;
@@ -993,6 +1031,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
+    int & seq_num = oai_resp_seq_num;
 
     if (oaicompat_msg.reasoning_content != "") {
         const json output_item = json {
@@ -1009,8 +1048,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
@@ -1020,9 +1061,13 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_text.done"},
             {"data", json {
-                {"type",    "response.output_text.done"},
-                {"item_id", oai_resp_message_id},
-                {"text",    oaicompat_msg.content}
+                {"type",            "response.output_text.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"content_index",   0},
+                {"item_id",         oai_resp_message_id},
+                {"text",            oaicompat_msg.content},
+                {"logprobs",        json::array()},
             }}
         });
 
@@ -1036,9 +1081,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.content_part.done"},
             {"data", json {
-                {"type",    "response.content_part.done"},
-                {"item_id", oai_resp_message_id},
-                {"part",    content_part}
+                {"type",            "response.content_part.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"content_index",   0},
+                {"item_id",         oai_resp_message_id},
+                {"part",            content_part},
             }}
         });
         const json output_item = {
@@ -1052,8 +1100,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
@@ -1062,39 +1112,81 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         const json output_item = {
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"id",        "fc_" + random_string()},
+            {"call_id",   tool_call.id},
+            {"name",      tool_call.name},
             {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
-            {"name",      tool_call.name}
+            {"status",    "completed"},
         };
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
+    }
+
+    // Build output_text convenience field for streaming final event
+    std::string output_text_stream;
+    for (const auto & item : output) {
+        if (json_value(item, "type", std::string()) == "message") {
+            for (const auto & part : item.at("content")) {
+                if (json_value(part, "type", std::string()) == "output_text") {
+                    output_text_stream += part.at("text").get<std::string>();
+                }
+            }
+        }
     }
 
     std::time_t t = std::time(0);
     server_sent_events.push_back(json {
         {"event", "response.completed"},
         {"data", json {
-            {"type", "response.completed"},
+            {"type",            "response.completed"},
+            {"sequence_number", seq_num++},
             {"response", json {
-                {"id",         oai_resp_id},
-                {"object",     "response"},
-                {"created_at", t},
-                {"status",     "completed"},
-                {"model",      oaicompat_model},
-                {"output",     output},
-                {"usage",      json {
-                    {"input_tokens",  n_prompt_tokens},
-                    {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens},
-                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
-                }}
+                {"completed_at",         t},
+                {"created_at",           t},
+                {"id",                   oai_resp_id},
+                {"object",               "response"},
+                {"status",               "completed"},
+                {"model",                oaicompat_model},
+                {"output",               output},
+                {"output_text",          output_text_stream},
+                {"usage",                json {
+                    {"input_tokens",          n_prompt_tokens},
+                    {"output_tokens",         n_decoded},
+                    {"total_tokens",          n_decoded + n_prompt_tokens},
+                    {"input_tokens_details",  json{{"cached_tokens", n_prompt_tokens_cache}}},
+                    {"output_tokens_details", json{{"reasoning_tokens", 0}}},
+                }},
+                {"incomplete_details",   nullptr},
+                {"previous_response_id", nullptr},
+                {"instructions",         nullptr},
+                {"error",                nullptr},
+                {"tools",                json::array()},
+                {"tool_choice",          "auto"},
+                {"truncation",           "disabled"},
+                {"parallel_tool_calls",  false},
+                {"text",                 json{{"format", json{{"type", "text"}}}}},
+                {"top_p",                1.0},
+                {"presence_penalty",     0.0},
+                {"frequency_penalty",    0.0},
+                {"top_logprobs",         0},
+                {"temperature",          1.0},
+                {"reasoning",            nullptr},
+                {"max_output_tokens",    nullptr},
+                {"max_tool_calls",       nullptr},
+                {"store",                false},
+                {"background",           false},
+                {"service_tier",         "default"},
+                {"safety_identifier",    nullptr},
+                {"prompt_cache_key",     nullptr},
+                {"metadata",             json::object()},
             }},
         }}
     });

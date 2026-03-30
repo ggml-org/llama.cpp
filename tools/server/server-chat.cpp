@@ -102,13 +102,30 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 if (item.contains("status")) {
                     item.erase("status");
                 }
+                // Merge system/developer messages into the first system message.
+                // Many model templates (e.g. Qwen) require all system content at
+                // position 0 and reject system messages elsewhere in the conversation.
+                if (item.at("role") == "system" || item.at("role") == "developer") {
+                    if (!chatcmpl_messages.empty() && chatcmpl_messages[0].value("role", "") == "system") {
+                        auto & first_msg = chatcmpl_messages[0];
+                        if (first_msg["content"].is_string()) {
+                            std::string old_text = first_msg["content"].get<std::string>();
+                            first_msg["content"] = json::array({json{{"text", old_text}, {"type", "text"}}});
+                        }
+                        auto & first_content = first_msg["content"];
+                        for (const auto & part : chatcmpl_content) {
+                            first_content.push_back(part);
+                        }
+                        continue;
+                    }
+                    item["role"] = "system";
+                }
                 item["content"] = chatcmpl_content;
 
                 chatcmpl_messages.push_back(item);
             } else if (exists_and_is_string(item, "role") &&
                 item.at("role") == "assistant" &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "message"
+                (!item.contains("type") || item.at("type") == "message")
             ) {
                 // #responses_create-input-input_item_list-item-output_message
                 auto chatcmpl_content = json::array();
@@ -255,14 +272,17 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         }
         std::vector<json> chatcmpl_tools;
         for (json resp_tool : response_body.at("tools")) {
-            json chatcmpl_tool;
+            const std::string tool_type = json_value(resp_tool, "type", std::string());
 
-            const std::string type = json_value(resp_tool, "type", std::string());
-            if (type != "function") {
-                // Non-function Responses tools have no Chat Completions equivalent.
-                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
+            // Skip non-function tools (e.g. web_search, code_interpreter)
+            // sent by clients like Codex CLI - these are provider-specific
+            // and cannot be converted to chat completions function tools
+            if (tool_type != "function") {
+                SRV_WRN("skipping unsupported tool type '%s' in Responses conversion\n", tool_type.c_str());
                 continue;
             }
+
+            json chatcmpl_tool;
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
 
@@ -281,6 +301,15 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    // Strip Responses-only keys that have no chat completions equivalent
+    // (e.g. Codex CLI sends store, include, prompt_cache_key, web_search)
+    for (const char * key : {
+        "store", "include", "prompt_cache_key", "web_search",
+        "text", "truncation", "metadata",
+    }) {
+        chatcmpl_body.erase(key);
     }
 
     return chatcmpl_body;

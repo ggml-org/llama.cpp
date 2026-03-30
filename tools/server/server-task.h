@@ -372,6 +372,7 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
+    int         oai_resp_seq_num = 0;
 
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
