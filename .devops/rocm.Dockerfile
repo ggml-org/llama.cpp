@@ -58,7 +58,7 @@ RUN mkdir -p /app/full \
 FROM ${BASE_ROCM_DEV_CONTAINER} AS base
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl\
+    && apt-get install -y libgomp1 curl \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
@@ -79,7 +79,7 @@ RUN apt-get update \
     git \
     python3-pip \
     python3 \
-    python3-wheel\
+    python3-wheel \
     && pip install --break-system-packages --upgrade setuptools \
     && pip install --break-system-packages -r requirements.txt \
     && apt autoremove -y \
