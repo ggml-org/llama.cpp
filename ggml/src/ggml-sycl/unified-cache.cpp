@@ -998,8 +998,15 @@ unified_cache::~unified_cache() {
             }
         }
     }
-    // Destroy layout pool before SYCL context goes away
-    layout_pool_.reset();
+    // Destroy layout pool before SYCL context goes away.
+    // The pool's reset() returns physical bytes freed so we can decrement used_.
+    if (layout_pool_) {
+        const size_t pool_freed = layout_pool_->reset();
+        if (pool_freed > 0 && used_.load(std::memory_order_relaxed) >= pool_freed) {
+            used_.fetch_sub(pool_freed, std::memory_order_relaxed);
+        }
+        layout_pool_.reset();
+    }
 
     // Free staging buffer
     if (staging_) {

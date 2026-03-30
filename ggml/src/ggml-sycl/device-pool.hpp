@@ -129,8 +129,11 @@ class sycl_device_pool {
     }
 
     // Free all chunks. After this, all pointers returned by allocate() are invalid.
-    void reset() {
+    // Returns the total physical bytes that were freed (so the caller can update
+    // external budget counters like unified_cache::used_).
+    size_t reset() {
         std::lock_guard<std::mutex> lock(mutex_);
+        const size_t freed = chunk_bytes_;
         for (auto & c : chunks_) {
             if (c.base) {
                 try {
@@ -143,6 +146,7 @@ class sycl_device_pool {
         chunks_.clear();
         chunk_bytes_ = 0;
         alloc_count_ = 0;
+        return freed;
     }
 
     // Abandon all chunks without freeing (for use during SYCL shutdown when

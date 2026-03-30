@@ -16,7 +16,12 @@
 
 template <typename T>
 static inline T * ggml_sycl_gpu_sampler_alloc(size_t count, sycl::queue & q) {
-    return ggml_sycl_malloc_device_t<T>(count, q, "gpu_sampler");
+    return ggml_sycl_malloc_device_tracked_t<T>(count, q, "gpu_sampler");
+}
+
+template <typename T>
+static inline void ggml_sycl_gpu_sampler_free(T * ptr, size_t count, sycl::queue & q) {
+    ggml_sycl_free_device_tracked_t<T>(ptr, count, q);
 }
 
 // Constants
@@ -919,13 +924,13 @@ inline void ggml_sycl_sampler_free(
     sycl::queue& q
 ) {
     if (state.initialized) {
-        if (state.block_max) sycl::free(state.block_max, q);
-        if (state.block_sum) sycl::free(state.block_sum, q);
-        if (state.block_idx) sycl::free(state.block_idx, q);
-        if (state.probs) sycl::free(state.probs, q);
-        if (state.selected) sycl::free(state.selected, q);
-        if (state.random_val) sycl::free(state.random_val, q);
-        if (state.token_buffer) sycl::free(state.token_buffer, q);
+        if (state.block_max) ggml_sycl_gpu_sampler_free(state.block_max, GPU_SAMPLER_MAX_BLOCKS, q);
+        if (state.block_sum) ggml_sycl_gpu_sampler_free(state.block_sum, GPU_SAMPLER_MAX_BLOCKS, q);
+        if (state.block_idx) ggml_sycl_gpu_sampler_free(state.block_idx, GPU_SAMPLER_MAX_BLOCKS, q);
+        if (state.probs) ggml_sycl_gpu_sampler_free(state.probs, state.n_vocab, q);
+        if (state.selected) ggml_sycl_gpu_sampler_free(state.selected, (size_t) 1, q);
+        if (state.random_val) ggml_sycl_gpu_sampler_free(state.random_val, (size_t) 1, q);
+        if (state.token_buffer) ggml_sycl_gpu_sampler_free(state.token_buffer, GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
         state.initialized = false;
     }
 }
@@ -1438,8 +1443,8 @@ inline int ggml_sycl_verify_speculative(
     q.memcpy(&n_accepted, n_accepted_dev, sizeof(int32_t)).wait();
 
     // Cleanup temporary allocations
-    if (allocated_matches) sycl::free(matches, q);
-    if (allocated_n_accepted) sycl::free(n_accepted_dev, q);
+    if (allocated_matches) ggml_sycl_gpu_sampler_free(matches, (size_t) n_draft, q);
+    if (allocated_n_accepted) ggml_sycl_gpu_sampler_free(n_accepted_dev, (size_t) 1, q);
 
     return n_accepted;
 }
@@ -1465,7 +1470,7 @@ inline int ggml_sycl_verify_speculative_host(
         ctx, state, all_logits, draft_tokens_dev, n_draft, n_vocab);
 
     // Cleanup
-    sycl::free(draft_tokens_dev, q);
+    ggml_sycl_gpu_sampler_free(draft_tokens_dev, (size_t) n_draft, q);
 
     return n_accepted;
 }
@@ -1895,17 +1900,22 @@ inline void ggml_sycl_multi_seq_sampler_free(
 ) {
     if (!state.initialized) return;
 
-    if (state.temperatures) sycl::free(state.temperatures, q);
-    if (state.rng_states) sycl::free(state.rng_states, q);
-    if (state.sampled_tokens) sycl::free(state.sampled_tokens, q);
-    if (state.top_k_values) sycl::free(state.top_k_values, q);
-    if (state.top_p_values) sycl::free(state.top_p_values, q);
-    if (state.min_p_values) sycl::free(state.min_p_values, q);
-    if (state.greedy_flags) sycl::free(state.greedy_flags, q);
-    if (state.block_max) sycl::free(state.block_max, q);
-    if (state.block_sum) sycl::free(state.block_sum, q);
-    if (state.block_idx) sycl::free(state.block_idx, q);
-    if (state.seq_ids) sycl::free(state.seq_ids, q);
+    const int max_seqs       = state.max_seqs;
+    const int n_blocks       = (state.n_vocab + GPU_SAMPLER_BLOCK_SIZE - 1) / GPU_SAMPLER_BLOCK_SIZE;
+    const int n_blocks_cap   = std::min(n_blocks, GPU_SAMPLER_MAX_BLOCKS);
+    const size_t block_count = (size_t) max_seqs * n_blocks_cap;
+
+    if (state.temperatures)   ggml_sycl_gpu_sampler_free(state.temperatures,   (size_t) max_seqs, q);
+    if (state.rng_states)     ggml_sycl_gpu_sampler_free(state.rng_states,     (size_t) max_seqs, q);
+    if (state.sampled_tokens) ggml_sycl_gpu_sampler_free(state.sampled_tokens, (size_t) max_seqs, q);
+    if (state.top_k_values)   ggml_sycl_gpu_sampler_free(state.top_k_values,   (size_t) max_seqs, q);
+    if (state.top_p_values)   ggml_sycl_gpu_sampler_free(state.top_p_values,   (size_t) max_seqs, q);
+    if (state.min_p_values)   ggml_sycl_gpu_sampler_free(state.min_p_values,   (size_t) max_seqs, q);
+    if (state.greedy_flags)   ggml_sycl_gpu_sampler_free(state.greedy_flags,   (size_t) max_seqs, q);
+    if (state.block_max)      ggml_sycl_gpu_sampler_free(state.block_max,      block_count, q);
+    if (state.block_sum)      ggml_sycl_gpu_sampler_free(state.block_sum,      block_count, q);
+    if (state.block_idx)      ggml_sycl_gpu_sampler_free(state.block_idx,      block_count, q);
+    if (state.seq_ids)        ggml_sycl_gpu_sampler_free(state.seq_ids,        (size_t) max_seqs, q);
 
     state.initialized = false;
 }
@@ -2118,10 +2128,10 @@ inline int ggml_sycl_verify_speculative_with_tokens(
     GGML_LOG_DEBUG("\n");
 
     // Cleanup
-    sycl::free(draft_tokens_dev, q);
-    sycl::free(matches, q);
-    sycl::free(sampled_tokens_dev, q);
-    sycl::free(n_accepted_dev, q);
+    ggml_sycl_gpu_sampler_free(draft_tokens_dev, (size_t) n_draft, q);
+    ggml_sycl_gpu_sampler_free(matches, (size_t) n_draft, q);
+    ggml_sycl_gpu_sampler_free(sampled_tokens_dev, (size_t) n_draft, q);
+    ggml_sycl_gpu_sampler_free(n_accepted_dev, (size_t) 1, q);
 
     return n_accepted;
 }
