@@ -1284,8 +1284,15 @@ static void moe_prestage_popular_experts() {
         if (use_gpu_reorder && !temp_vram_bufs.empty()) {
             sycl::queue & cache_queue = cache->get_queue();
             cache_queue.wait();
+            size_t temp_freed = 0;
             for (void * buf : temp_vram_bufs) {
-                if (buf) sycl::free(buf, cache_queue);
+                if (buf) {
+                    sycl::free(buf, cache_queue);
+                    temp_freed += expert_bytes;  // Each temp buf = expert_bytes
+                }
+            }
+            if (temp_freed > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, temp_freed);
             }
         }
 
@@ -8898,6 +8905,11 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
     } else {
         try {
             temp_vram = sycl::malloc_device(src_size, queue);
+            if (temp_vram) {
+                const int dev_id = ggml_sycl_get_device_id_from_queue(queue);
+                ggml_sycl::unified_cache_add_runtime_bytes(
+                    dev_id, src_size, ggml_sycl::runtime_category::OTHER);
+            }
         } catch (const sycl::exception & e) {
             GGML_LOG_ERROR("[GPU-REORDER] temp VRAM alloc failed (%zu bytes): %s\n", src_size, e.what());
             if (staging) ggml_sycl_staging_pool().release(staging);
@@ -16070,13 +16082,16 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         void * ptr;
 
-        // NOTE: Compute pool allocations are NOT tracked via add_runtime_bytes.
-        // The pool is a fixed-size scratch area whose VRAM consumption is already
-        // reflected in driver-queried free memory.  Tracking pool entries against
-        // the cache budget would monotonically inflate reserved_ (pool entries are
-        // reused, not freed), eventually driving budget_ to 0 and disabling expert
-        // caching even with gigabytes of free VRAM.
+        // Track NEW physical VRAM consumed by pool growth.  Only the first
+        // allocation of each new buffer is tracked — reuse of existing buffers
+        // doesn't change physical footprint and isn't re-tracked.  Without
+        // this, the compute pool can consume 50-300 MB of VRAM invisible to the
+        // unified cache budget, causing OOM when the cache fills to ~90%.
         ptr = ggml_sycl_malloc_device(rounded_size, *qptr, "pool_leg");
+        if (ptr) {
+            ggml_sycl::unified_cache_add_runtime_bytes(
+                device, rounded_size, ggml_sycl::runtime_category::OTHER);
+        }
 
         if (!ptr) {
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, rounded_size);
