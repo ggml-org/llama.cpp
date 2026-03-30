@@ -159,7 +159,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                                 {"type", "refusal"},
                             });
                         } else {
-                            throw std::invalid_argument("'type' must be one of 'output_text' or 'refusal'");
+                            throw std::invalid_argument("'type' must be 'output_text', 'input_text', or 'refusal'");
                         }
                     }
                 }
