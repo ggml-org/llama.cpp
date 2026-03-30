@@ -1158,12 +1158,35 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     }
 
     // note: v->nb[1] > v->nb[2]
-    return ggml_view_4d(ctx, v,
+    ggml_tensor * v_view = ggml_view_4d(ctx, v,
             n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v, ns,
             ggml_row_size(v->type, kv_size*hparams.n_embd_head_v),  // v->nb[1]
             ggml_row_size(v->type, kv_size),                        // v->nb[2]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
+
+    if (turbo_quant) {
+        // The view shape is [n_kv, n_head, dv, ns] with non-unit strides. We need to
+        // apply rot_v_inv to the dv dimension (dim 2). ggml_mul_mat operates on dim 0,
+        // so we permute to bring dv first, apply the inverse rotation, then permute back.
+        //
+        //   ggml_cast    : convert from quantized/strided to contiguous F32
+        //   permute(2,0,1,3) : [n_kv, n_head, dv, ns] → [dv, n_kv, n_head, ns]
+        //   ggml_cont    : make contiguous so mul_mat has row-contiguous src1
+        //   mul_mat(rot_v_inv, ...) : apply Πᵀ to each dv-vector → [dv, n_kv, n_head, ns]
+        //   permute(1,2,0,3) : [dv, n_kv, n_head, ns] → [n_kv, n_head, dv, ns]
+        const int32_t dv     = hparams.n_embd_head_v;
+        const int32_t n_head = hparams.n_head_kv(il);
+        GGML_UNUSED(dv);
+        GGML_UNUSED(n_head);
+
+        ggml_tensor * v_f32  = ggml_cast(ctx, v_view, GGML_TYPE_F32);
+        ggml_tensor * v_perm = ggml_cont(ctx, ggml_permute(ctx, v_f32, 2, 0, 1, 3));
+        ggml_tensor * v_rot  = ggml_mul_mat(ctx, rot_v_inv[ikv], v_perm);
+        v_view = ggml_permute(ctx, v_rot, 1, 2, 0, 3);
+    }
+
+    return v_view;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
@@ -1216,8 +1239,11 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     auto * v = layers[ikv].v;
 
-    // TurboQuant: rotate v_cur before quantization (only the non-transposed FA path).
-    if (turbo_quant && !v_trans) {
+    // TurboQuant: rotate v_cur before quantization.
+    // Works for both the FA path (!v_trans) and the transposed path (v_trans): the
+    // rotation is applied to v_cur in [dv, n_head, n_tokens] form before any layout
+    // transformation, so the same forward rotation covers both storage paths.
+    if (turbo_quant) {
         v_cur = ggml_mul_mat(ctx, rot_v_fwd[ikv], v_cur);
     }
 
