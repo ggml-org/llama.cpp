@@ -2024,3 +2024,41 @@ bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_te
     ET_PERF_END("SOLVE_TRI", "solve_tri_f32", node);
     return kernel_result;
 }
+
+bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: SET operation missing source tensor(s)\n");
+        return false;
+    }
+
+    const bool   inplace = (bool) ((const int32_t *) node->op_params)[4];
+    const size_t offset  = ((const int32_t *) node->op_params)[3];
+
+    if (!inplace || offset != 0) {
+        GGML_LOG_ERROR("ET: SET only supports inplace with offset=0 (inplace=%d, offset=%zu)\n",
+                       inplace, offset);
+        return false;
+    }
+
+    if (!ggml_are_same_shape(node, node->src[1])) {
+        GGML_LOG_ERROR("ET: SET only supports same-shape src1 and dst\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node) || !ggml_is_contiguous(node->src[1])) {
+        GGML_LOG_ERROR("ET: SET requires contiguous dst and src1\n");
+        return false;
+    }
+
+    // Inplace same-shape SET: just copy src1 → dst via CONT kernel
+    ggml_et_cont_params params;
+    params.src0 = *node->src[1];
+    params.dst  = *node;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "cont_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("SET", "cont_f32", node);
+    return kernel_result;
+}

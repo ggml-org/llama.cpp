@@ -285,6 +285,7 @@ bool ggml_et_op_fill(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
 bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,
                              const ggml_tensor* mul_node);
