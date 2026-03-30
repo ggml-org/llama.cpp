@@ -125,7 +125,7 @@ export class MCPService {
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
-			requestInit.headers = buildProxiedHeaders(config.headers);
+			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
 		}
 
 		if (useProxy) {
