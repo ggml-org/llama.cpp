@@ -888,7 +888,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
                 ggml_is_contiguous(op) &&
-                ggml_is_contiguous(op->src[0])) {
+                et_ggml_is_row_contiguous(op->src[0])) {
                 // Check ROPE mode - only support standard (0x0) and NEOX (0x2)
                 const int mode = ((const int32_t *) op->op_params)[2];
                 const int ndims = ((const int32_t *) op->op_params)[1];
@@ -902,14 +902,14 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
-                       ggml_is_contiguous(op->src[0]);
+                       et_ggml_is_row_contiguous(op->src[0]);
             break;
         case GGML_OP_NORM:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
-                       ggml_is_contiguous(op->src[0]);
+                       et_ggml_is_row_contiguous(op->src[0]);
             break;
         case GGML_OP_L2_NORM:
             supported = op->type == GGML_TYPE_F32 &&
