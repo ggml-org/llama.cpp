@@ -444,6 +444,15 @@ void llama_context::sched_reserve() {
             const int il = std::stoi(n->name + prefix_len);
             ggml_backend_dev_t device_kv = model.dev_layer(il);
             if (device_fa != device_kv) {
+                const bool tq3_k_f16_v_fastpath =
+                    n->src[1] != nullptr && n->src[2] != nullptr &&
+                    n->src[1]->type == GGML_TYPE_TQ3_0 &&
+                    n->src[2]->type == GGML_TYPE_F16;
+                if (tq3_k_f16_v_fastpath) {
+                    LLAMA_LOG_INFO("%s: layer %d keeps Flash Attention enabled for TQ3_0 K + F16 V fast path\n",
+                            __func__, il);
+                    continue;
+                }
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",
                         __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));

@@ -2,6 +2,7 @@
 #include "mmq.cuh"
 #include "quantize.cuh"
 #include "mmid.cuh"
+#include "tq3-native.cuh"
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
@@ -23,8 +24,16 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_MXFP4:
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
+<<<<<<< HEAD
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
+=======
+        case GGML_TYPE_TQ3_0:
+            mul_mat_q_case<GGML_TYPE_TQ3_0>(ctx, args, stream);
+            break;
+        case GGML_TYPE_TQ3_1S:
+            mul_mat_q_case<GGML_TYPE_TQ3_1S>(ctx, args, stream);
+>>>>>>> 90cf6bf81 (release: tq3_1s runtime for 27b on 16gb)
             break;
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, args, stream);
@@ -130,13 +139,22 @@ void ggml_cuda_mul_mat_q(
             const int64_t s11 = src1->nb[1] / ts_src1;
             const int64_t s12 = src1->nb[2] / ts_src1;
             const int64_t s13 = src1->nb[3] / ts_src1;
+            const float * src1_quant = src1_d;
+            ggml_cuda_pool_alloc<float> src1_rot(ctx.pool());
+            if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
+                const int64_t n_act = ne13 * ne12 * ne11 * ne10;
+                src1_rot.alloc(n_act);
+                CUDA_CHECK(cudaMemcpyAsync(src1_rot.get(), src1_d, n_act*sizeof(float), cudaMemcpyDeviceToDevice, stream));
+                ggml_cuda_tq3_rotate_act(src1_rot.get(), n_act, stream);
+                src1_quant = src1_rot.get();
+            }
             if (use_native_mxfp4) {
                 static_assert(sizeof(block_fp4_mmq) == 4 * sizeof(block_q8_1));
-                quantize_mmq_mxfp4_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
+                quantize_mmq_mxfp4_cuda(src1_quant, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                         ne11, ne12, ne13, stream);
 
             } else {
-                quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
+                quantize_mmq_q8_1_cuda(src1_quant, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                        ne11, ne12, ne13, stream);
             }
             CUDA_CHECK(cudaGetLastError());
@@ -194,12 +212,21 @@ void ggml_cuda_mul_mat_q(
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
+        const float * src1_quant = src1_d;
+        ggml_cuda_pool_alloc<float> src1_rot(ctx.pool());
+        if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
+            const int64_t n_act = ne13 * ne12 * ne11 * ne10;
+            src1_rot.alloc(n_act);
+            CUDA_CHECK(cudaMemcpyAsync(src1_rot.get(), src1_d, n_act*sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            ggml_cuda_tq3_rotate_act(src1_rot.get(), n_act, stream);
+            src1_quant = src1_rot.get();
+        }
 
         if (use_native_mxfp4) {
-            quantize_mmq_mxfp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+            quantize_mmq_mxfp4_cuda(src1_quant, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                     ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         } else {
-            quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+            quantize_mmq_q8_1_cuda(src1_quant, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         }
         CUDA_CHECK(cudaGetLastError());
@@ -267,6 +294,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
 
+    // TQ3_0/TQ3_1S: use MMQ for prefill (ne11 >= 64) on NVIDIA tensor-core GPUs.
+    // Contiguity guard in ggml_cuda_mul_mat ensures KV cache views use cuBLAS.
+    if ((type == GGML_TYPE_TQ3_0 || type == GGML_TYPE_TQ3_1S) &&
+        GGML_CUDA_CC_IS_NVIDIA(cc) &&
+        fp16_mma_hardware_available(cc) &&
+        n_experts == 0) {
+        return ne11 >= 64;
+    }
+
     bool mmq_supported;
 
     switch (type) {
@@ -277,6 +313,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:

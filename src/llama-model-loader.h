@@ -97,6 +97,7 @@ struct llama_model_loader {
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
+    std::string ftype_alias;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
     size_t size_done = 0;
@@ -192,6 +193,7 @@ struct llama_model_loader {
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;
+    void load_data_for_name(const char * name, void * dst, size_t size) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(

@@ -266,6 +266,53 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant 3-bit (3.5 bpw)
+// 32 values per block, WHT rotation + Lloyd-Max 8-level codebook
+#define QK_TQ3_0 32
+typedef struct {
+    ggml_half d;                    // scale factor (RMS of block)
+    uint8_t qs[QK_TQ3_0 * 3 / 8];  // 3-bit quant indices, packed (12 bytes)
+} block_tq3_0;
+static_assert(sizeof(block_tq3_0) == sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_0 block size/padding");
+
+// TurboQuant 3-bit with two half-block scales (4.0 bpw)
+typedef struct {
+    ggml_half d0;
+    ggml_half d1;
+    uint8_t qs[QK_TQ3_0 * 3 / 8];
+} block_tq3_1s;
+static_assert(sizeof(block_tq3_1s) == 2 * sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_1s block size/padding");
+
+typedef struct {
+    ggml_half d0;
+    ggml_half d1;
+    ggml_half m;
+    uint8_t qs[QK_TQ3_0 * 3 / 8];
+} block_tq3_1s_shift;
+static_assert(sizeof(block_tq3_1s_shift) == 3 * sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_1s_shift block size/padding");
+
+#define QK_TQ3_1S_AP1 512
+typedef struct {
+    uint16_t mask;
+    uint8_t qs[258];
+} block_tq3_1s_ap1;
+static_assert(sizeof(block_tq3_1s_ap1) == 260, "wrong tq3_1s_ap1 block size/padding");
+
+#define QK_Q4_0_TQ_V0 32
+typedef struct {
+    uint8_t qs[QK_Q4_0_TQ_V0 * 3 / 8];
+    uint8_t s0;
+    int8_t  ds1;
+} block_q4_0_tq_v0;
+static_assert(sizeof(block_q4_0_tq_v0) == 14, "wrong q4_0_tq_v0 block size/padding");
+
+#define QK_Q4_0_TQ_V1 32
+typedef struct {
+    uint8_t qs[QK_Q4_0_TQ_V1 * 3 / 8];
+    uint8_t scales[4];
+} block_q4_0_tq_v1;
+static_assert(sizeof(block_q4_0_tq_v1) == 16, "wrong q4_0_tq_v1 block size/padding");
+
 //
 // Super-block quantization structures
 //

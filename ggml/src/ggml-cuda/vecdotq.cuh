@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "tq3-native.cuh"
 
 #include <cstdint>
 
@@ -763,6 +764,13 @@ static __device__ __forceinline__ float vec_dot_q8_0_q8_1(
     return vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, __low2half(bq8_1->ds));
 }
 
+static __device__ __forceinline__ float vec_dot_tq3_0_q8_0_native(
+    const void * __restrict__ vbq, const block_q8_0 * __restrict__ bq8_0, const int & kbx) {
+
+    const block_tq3_0 * bq = (const block_tq3_0 *) vbq + kbx;
+    return vec_dot_tq3_0_q8_0_native_block(bq, bq8_0);
+}
+
 static __device__ __forceinline__ float vec_dot_q2_K_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -1266,4 +1274,122 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
 
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
+}
+
+#define VDR_Q4_0_TQ_Q8_1_MMVQ 4
+
+static __device__ __forceinline__ float vec_dot_q4_0_tq_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_0_tq_v0 * bq = (const block_q4_0_tq_v0 *) vbq + kbx;
+    const int g = iqs / VDR_Q4_0_TQ_Q8_1_MMVQ; // group 0..3
+    const float scale0 = exp2f(((int) bq->s0 - 127) / 16.0f);
+    const float scale1 = scale0 * exp2f((float) bq->ds1 / 16.0f);
+    const float scale = g < 2 ? scale0 : scale1;
+    const float2 ds8 = __half22float2(bq8_1->ds);
+
+    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
+    const uint8_t * qp = bq->qs + g * 3;
+
+    float sum = 0.0f;
+    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
+    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
+    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
+    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
+    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
+    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
+    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
+    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
+
+    return sum * scale * ds8.x;
+}
+
+#define VDR_Q4_0_TQ_V1_Q8_1_MMVQ 4
+
+static __device__ __forceinline__ float vec_dot_q4_0_tq_v1_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_0_tq_v1 * bq = (const block_q4_0_tq_v1 *) vbq + kbx;
+    const int g = iqs / VDR_Q4_0_TQ_V1_Q8_1_MMVQ; // group 0..3
+    const float scale = exp2f(((int) bq->scales[g] - 127) / 16.0f);
+    const float2 ds8 = __half22float2(bq8_1->ds);
+
+    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
+    const uint8_t * qp = bq->qs + g * 3;
+
+    float sum = 0.0f;
+    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
+    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
+    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
+    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
+    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
+    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
+    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
+    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
+
+    return sum * scale * ds8.x;
+}
+
+// TQ3_0: dequant full block via warp-shuffle WHT, then dot with q8_1
+#define VDR_TQ3_0_Q8_1_MMVQ 4
+
+static __device__ __forceinline__ float vec_dot_tq3_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const int g = iqs / VDR_TQ3_0_Q8_1_MMVQ; // group 0..3
+
+    const block_tq3_0 * bq = (const block_tq3_0 *) vbq + kbx;
+    const float d = __half2float(bq->d);
+
+    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
+    const float signs[32] = {
+        +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+        -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+        -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+        -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    };
+
+    const uint8_t * qp = bq->qs + g * 3;
+    // Activations are pre-rotated into the TQ3 domain before q8_1 quantization,
+    // so the MMVQ path can dot directly against centroid values without inverse WHT.
+    float sum = 0.0f;
+    const float2 ds8 = __half22float2(bq8_1->ds);
+    GGML_UNUSED(signs);
+    sum += centroids[ qp[0]       & 7] * (float) bq8_1->qs[g*8 + 0];
+    sum += centroids[(qp[0] >> 3) & 7] * (float) bq8_1->qs[g*8 + 1];
+    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7] * (float) bq8_1->qs[g*8 + 2];
+    sum += centroids[(qp[1] >> 1) & 7] * (float) bq8_1->qs[g*8 + 3];
+    sum += centroids[(qp[1] >> 4) & 7] * (float) bq8_1->qs[g*8 + 4];
+    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7] * (float) bq8_1->qs[g*8 + 5];
+    sum += centroids[(qp[2] >> 2) & 7] * (float) bq8_1->qs[g*8 + 6];
+    sum += centroids[(qp[2] >> 5) & 7] * (float) bq8_1->qs[g*8 + 7];
+
+    return sum * d * ds8.x;
+}
+
+#define VDR_TQ3_1S_Q8_1_MMVQ 4
+static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const int g = iqs / VDR_TQ3_1S_Q8_1_MMVQ; // group 0..3
+
+    const block_tq3_1s * bq = (const block_tq3_1s *) vbq + kbx;
+    const float d = (g < 2) ? __half2float(bq->d0) : __half2float(bq->d1);
+
+    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
+
+    const uint8_t * qp = bq->qs + g * 3;
+    const float2 ds8 = __half22float2(bq8_1->ds);
+
+    float sum = 0.0f;
+    sum += centroids[ qp[0]       & 7] * (float) bq8_1->qs[g*8 + 0];
+    sum += centroids[(qp[0] >> 3) & 7] * (float) bq8_1->qs[g*8 + 1];
+    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7] * (float) bq8_1->qs[g*8 + 2];
+    sum += centroids[(qp[1] >> 1) & 7] * (float) bq8_1->qs[g*8 + 3];
+    sum += centroids[(qp[1] >> 4) & 7] * (float) bq8_1->qs[g*8 + 4];
+    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7] * (float) bq8_1->qs[g*8 + 5];
+    sum += centroids[(qp[2] >> 2) & 7] * (float) bq8_1->qs[g*8 + 6];
+    sum += centroids[(qp[2] >> 5) & 7] * (float) bq8_1->qs[g*8 + 7];
+
+    return sum * d * ds8.x;
 }

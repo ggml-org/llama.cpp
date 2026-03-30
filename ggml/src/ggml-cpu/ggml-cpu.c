@@ -6,6 +6,7 @@
 #include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
@@ -388,6 +389,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_tq2_0,
         .vec_dot                  = ggml_vec_dot_tq2_0_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TQ3_0] = {
+        .from_float               = quantize_row_tq3_0,
+        .vec_dot                  = ggml_vec_dot_tq3_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TQ3_1S] = {
+        .from_float               = quantize_row_tq3_1s,
+        .vec_dot                  = ggml_vec_dot_tq3_1s_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
     [GGML_TYPE_I32] = {
@@ -1143,9 +1156,9 @@ void ggml_set_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, 
 // ggml_compute_forward_mul_mat
 
 static void ggml_compute_forward_mul_mat_one_chunk(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const enum ggml_type type,
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst,
+        const enum ggml_type type,
     const int64_t num_rows_per_vec_dot,
     const int64_t ir0_start,
     const int64_t ir0_end,
@@ -2057,6 +2070,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             }
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        case GGML_OP_TURBO_WHT:
+            ggml_compute_forward_turbo_wht(params, tensor);
+            break;
             {
                 ggml_compute_forward_cross_entropy_loss_back(params, tensor);
             }
@@ -2408,6 +2424,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        case GGML_OP_TURBO_WHT:
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
             {

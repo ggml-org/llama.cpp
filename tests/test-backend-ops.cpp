@@ -8096,6 +8096,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ3_0, GGML_TYPE_F32, 128, 1, 256, {1, 1}, {1, 1}, {0, 1, 2, 3}, 512));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ3_0, GGML_TYPE_F32, 4096, 1, 12288, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ3_0, GGML_TYPE_F32, 4096, 13, 12288, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ3_0, GGML_TYPE_F32, 4096, 32, 12288, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ3_0, GGML_TYPE_F32, 4096, 64, 12288, {1, 1}, {1, 1}));
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
@@ -8664,12 +8669,31 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 use_id, 16, 8, b, with_bias, with_gate));
                             test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
                                 use_id, 16, 8, b, with_bias, with_gate, {1, 1}));
+                            if (!use_id && !with_bias && with_gate && glu_op == GGML_GLU_OP_SWIGLU) {
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 12288, 4096,
+                                    use_id, 1, 1, b, with_bias, with_gate, {1, 1}));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 13, 12288, 4096,
+                                    use_id, 1, 1, b, with_bias, with_gate, {1, 1}));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 32, 12288, 4096,
+                                    use_id, 1, 1, b, with_bias, with_gate, {1, 1}));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 64, 12288, 4096,
+                                    use_id, 1, 1, b, with_bias, with_gate, {1, 1}));
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_TQ3_0, GGML_GLU_OP_SWIGLU, 1, 12288, 4096,
+        false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_TQ3_0, GGML_GLU_OP_SWIGLU, 13, 12288, 4096,
+        false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_TQ3_0, GGML_GLU_OP_SWIGLU, 32, 12288, 4096,
+        false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_TQ3_0, GGML_GLU_OP_SWIGLU, 64, 12288, 4096,
+        false, 1, 1, false, false, true, {1, 1}));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT}) {
         for (bool with_norm : {false, true}) {

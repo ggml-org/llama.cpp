@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -158,6 +159,21 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    const auto is_turbo_kv_type = [](ggml_type type) {
+        return type == GGML_TYPE_TQ3_0;
+    };
+
+    const int adaptive_mode = []() {
+        const char * env = std::getenv("TURBO_LAYER_ADAPTIVE");
+        const int mode = env ? std::atoi(env) : 0;
+        if (mode > 0) {
+            LLAMA_LOG_INFO("llama_kv_cache: layer-adaptive mode %d enabled\n", mode);
+        }
+        return mode;
+    }();
+
+    bool warned_cpu_fallback = false;
+
     for (uint32_t il = 0; il < hparams.n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -194,8 +210,52 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        ggml_type layer_type_k = type_k;
+        ggml_type layer_type_v = type_v;
+
+        const bool cpu_bound_layer = ggml_backend_buft_is_host(buft);
+        if (cpu_bound_layer) {
+            const bool layer_has_turbo =
+                is_turbo_kv_type(layer_type_k) || is_turbo_kv_type(layer_type_v);
+            if (layer_has_turbo) {
+                layer_type_k = GGML_TYPE_Q8_0;
+                layer_type_v = GGML_TYPE_Q8_0;
+                if (!warned_cpu_fallback) {
+                    LLAMA_LOG_WARN("%s: TQ3_0 KV cache falling back to q8_0 for CPU-bound layers (partial offload)\n", __func__);
+                    warned_cpu_fallback = true;
+                }
+            }
+        }
+
+        if ((is_turbo_kv_type(type_k) || is_turbo_kv_type(type_v)) && hparams.n_layer >= 8 && adaptive_mode > 0) {
+            bool promote_k = false;
+            bool promote_v = false;
+
+            switch (adaptive_mode) {
+                case 1: promote_k = promote_v = (il < 4 || il >= hparams.n_layer - 4); break;
+                case 2: promote_k = promote_v = (il >= hparams.n_layer - 8); break;
+                case 3: promote_k = promote_v = (il >= hparams.n_layer - 4); break;
+                case 4: promote_k = promote_v = (il < 4); break;
+                case 5: promote_k = promote_v = (il < 2 || il >= hparams.n_layer - 2); break;
+                case 6: promote_v = (il >= hparams.n_layer - 8); break;
+                case 7: promote_k = (il >= hparams.n_layer - 8); break;
+                case 8: promote_v = (il < 2 || il >= hparams.n_layer - 2); break;
+                case 9: promote_k = promote_v = (il >= hparams.n_layer - 2); break;
+                case 10: promote_k = (il >= hparams.n_layer - 4); break;
+                case 11: promote_k = promote_v = (il >= hparams.n_layer - 6); break;
+                default: break;
+            }
+
+            if (promote_k) {
+                layer_type_k = GGML_TYPE_Q8_0;
+            }
+            if (promote_v) {
+                layer_type_v = GGML_TYPE_Q8_0;
+            }
+        }
+
+        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, layer_type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
+        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, layer_type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
 
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);

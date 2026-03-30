@@ -32,6 +32,60 @@ static inline int best_index_int8(int n, const int8_t * val, float x) {
     return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
 }
 
+static const int8_t Q4_0_TQ_V0_LEVELS[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
+
+static inline float q4_0_tq_v0_decode_scale_u8(uint8_t code) {
+    return exp2f(((int) code - 127) / 16.0f);
+}
+
+static inline uint8_t q4_0_tq_v0_encode_scale_u8(float scale) {
+    if (!(scale > 0.0f)) {
+        return 0;
+    }
+    const float code = roundf(log2f(scale) * 16.0f + 127.0f);
+    return (uint8_t) fminf(255.0f, fmaxf(0.0f, code));
+}
+
+static inline float q4_0_tq_v0_decode_delta_i8(int8_t code) {
+    return exp2f((float) code / 16.0f);
+}
+
+static inline int8_t q4_0_tq_v0_encode_delta_i8(float ratio) {
+    if (!(ratio > 0.0f)) {
+        return 0;
+    }
+    const float code = roundf(log2f(ratio) * 16.0f);
+    return (int8_t) fminf(127.0f, fmaxf(-128.0f, code));
+}
+
+static inline uint8_t q4_0_tq_v0_unpack_3bit(const uint8_t * qs, int idx) {
+    const int bit = idx * 3;
+    const int byte = bit / 8;
+    const int shift = bit % 8;
+    const uint32_t cur = (uint32_t) qs[byte]
+        | ((uint32_t) qs[byte + 1] << 8)
+        | ((uint32_t) (byte + 2 < 12 ? qs[byte + 2] : 0) << 16);
+    return (cur >> shift) & 0x7;
+}
+
+static inline void q4_0_tq_v0_pack_3bit(uint8_t * qs, int idx, uint8_t value) {
+    const int bit = idx * 3;
+    const int byte = bit / 8;
+    const int shift = bit % 8;
+    const uint32_t cur = (uint32_t) qs[byte]
+        | ((uint32_t) qs[byte + 1] << 8)
+        | ((uint32_t) (byte + 2 < 12 ? qs[byte + 2] : 0) << 16);
+    const uint32_t mask = ~((uint32_t) 0x7 << shift);
+    const uint32_t next = (cur & mask) | ((uint32_t) (value & 0x7) << shift);
+    qs[byte] = next & 0xFF;
+    if (byte + 1 < 12) {
+        qs[byte + 1] = (next >> 8) & 0xFF;
+    }
+    if (byte + 2 < 12) {
+        qs[byte + 2] = (next >> 16) & 0xFF;
+    }
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_0;
@@ -2275,6 +2329,516 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ2_0, n_per_row);
     quantize_row_tq2_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+//
+// TurboQuant TQ3_0: WHT rotation + 3-bit Lloyd-Max codebook
+//
+
+// Lloyd-Max 8-level codebook centroids for N(0,1)
+// Computed via iterative Lloyd's algorithm to convergence (178 iterations)
+// Theoretical MSE = 0.03455 for these optimal centroids
+static const float TQ3_0_CENTROIDS[8] = {
+    -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+     0.230106f,  0.725222f,  1.277503f,  1.988943f
+};
+
+// Decision boundaries (midpoints between adjacent centroids)
+static const float TQ3_0_BOUNDARIES[7] = {
+    -1.644041f, -1.015870f, -0.493924f, -0.008701f,
+     0.477664f,  1.001362f,  1.633223f
+};
+
+// Deterministic sign flip pattern for randomized Hadamard transform
+// Generated from golden ratio hash: sign[i] = ((i * 0x9E3779B9) >> 31) ? -1.0 : +1.0
+static const float TQ3_0_SIGNS[32] = {
+    +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+};
+
+static const float TQ3_1S_SCALE_SEARCH[9] = {
+    0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.10f, 1.20f, 1.35f, 1.50f,
+};
+
+static inline uint8_t tq3_0_choose_index(float v) {
+    uint8_t idx = 0;
+    for (int b = 0; b < 7; ++b) {
+        if (v > TQ3_0_BOUNDARIES[b]) {
+            idx = (uint8_t) (b + 1);
+        }
+    }
+    return idx;
+}
+
+// Forward randomized Hadamard transform: sign flips + WHT + normalize
+static void tq3_0_rht_forward(const float * GGML_RESTRICT in, float * GGML_RESTRICT out) {
+    // Apply sign flips
+    for (int i = 0; i < 32; i++) {
+        out[i] = in[i] * TQ3_0_SIGNS[i];
+    }
+
+    // In-place WHT butterfly (5 stages for n=32)
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step << 1) {
+            for (int j = i; j < i + step; j++) {
+                float a = out[j];
+                float b = out[j + step];
+                out[j]        = a + b;
+                out[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize by 1/sqrt(32)
+    const float norm = 1.0f / sqrtf(32.0f);
+    for (int i = 0; i < 32; i++) {
+        out[i] *= norm;
+    }
+}
+
+// Inverse randomized Hadamard transform: WHT + normalize + undo sign flips
+static void tq3_0_rht_inverse(const float * GGML_RESTRICT in, float * GGML_RESTRICT out) {
+    // Copy input
+    for (int i = 0; i < 32; i++) {
+        out[i] = in[i];
+    }
+
+    // In-place WHT butterfly (same as forward - WHT is self-inverse up to scale)
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step << 1) {
+            for (int j = i; j < i + step; j++) {
+                float a = out[j];
+                float b = out[j + step];
+                out[j]        = a + b;
+                out[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize and undo sign flips
+    const float norm = 1.0f / sqrtf(32.0f);
+    for (int i = 0; i < 32; i++) {
+        out[i] *= norm * TQ3_0_SIGNS[i];
+    }
+}
+
+void quantize_row_tq3_0_ref(const float * GGML_RESTRICT x, block_tq3_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; i++) {
+        const float * block_x = x + i * QK_TQ3_0;
+
+        // 1. Compute RMS scale
+        float sum_sq = 0.0f;
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            sum_sq += block_x[j] * block_x[j];
+        }
+        float rms = sqrtf(sum_sq / QK_TQ3_0);
+        if (rms < 1e-10f) { rms = 1.0f; } // avoid division by zero
+
+        y[i].d = GGML_FP32_TO_FP16(rms);
+
+        // 2. Normalize to unit variance
+        float normalized[QK_TQ3_0];
+        const float inv_rms = 1.0f / rms;
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            normalized[j] = block_x[j] * inv_rms;
+        }
+
+        // 3. Apply randomized Hadamard transform
+        tq3_0_rht_forward(normalized, rotated);
+
+        // 4. Scalar quantize each element to nearest Lloyd-Max centroid
+        uint8_t indices[QK_TQ3_0];
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            float v = rotated[j];
+            uint8_t idx = 0;
+            for (int b = 0; b < 7; b++) {
+                if (v > TQ3_0_BOUNDARIES[b]) { idx = b + 1; }
+            }
+            indices[j] = idx;
+        }
+
+        // 5. Pack 3-bit indices into qs[] (groups of 8 indices -> 3 bytes)
+        for (int g = 0; g < 4; g++) {
+            const uint8_t * idx = indices + g * 8;
+            uint8_t * qp = y[i].qs + g * 3;
+            qp[0] = (idx[0])      | (idx[1] << 3) | (idx[2] << 6);
+            qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+static float tq3_1s_quantize_half_search(const float * GGML_RESTRICT src, float init_scale, uint8_t * GGML_RESTRICT dst_idx) {
+    float best_scale = init_scale;
+    float best_err = INFINITY;
+    uint8_t best_idx[16] = {0};
+
+    for (int mi = 0; mi < (int) (sizeof(TQ3_1S_SCALE_SEARCH)/sizeof(TQ3_1S_SCALE_SEARCH[0])); ++mi) {
+        const float scale = fmaxf(init_scale * TQ3_1S_SCALE_SEARCH[mi], 1e-10f);
+        const float inv = 1.0f / scale;
+        uint8_t tmp_idx[16];
+        float err = 0.0f;
+
+        for (int j = 0; j < 16; ++j) {
+            const float v = src[j] * inv;
+            uint8_t idx = tq3_0_choose_index(v);
+            tmp_idx[j] = idx;
+            const float deq = TQ3_0_CENTROIDS[idx] * scale;
+            const float d = src[j] - deq;
+            err += d * d;
+        }
+
+        if (err < best_err) {
+            best_err = err;
+            best_scale = scale;
+            memcpy(best_idx, tmp_idx, sizeof(best_idx));
+        }
+    }
+
+    memcpy(dst_idx, best_idx, sizeof(best_idx));
+    return best_scale;
+}
+
+static float tq3_1s_quantize_half_refine(const float * GGML_RESTRICT src, float init_scale, uint8_t * GGML_RESTRICT dst_idx) {
+    uint8_t trial_idx[16] = {0};
+    float scale = tq3_1s_quantize_half_search(src, init_scale, trial_idx);
+
+    float best_scale = scale;
+    float best_err = INFINITY;
+    uint8_t best_idx[16] = {0};
+
+    for (int iter = 0; iter < 6; ++iter) {
+        const float inv = 1.0f / fmaxf(scale, 1e-10f);
+        float numer = 0.0f;
+        float denom = 0.0f;
+
+        for (int j = 0; j < 16; ++j) {
+            const uint8_t idx = tq3_0_choose_index(src[j] * inv);
+            trial_idx[j] = idx;
+            const float c = TQ3_0_CENTROIDS[idx];
+            numer += src[j] * c;
+            denom += c * c;
+        }
+
+        if (denom > 1e-12f) {
+            scale = fmaxf(numer / denom, 1e-10f);
+        }
+
+        float err = 0.0f;
+        for (int j = 0; j < 16; ++j) {
+            const float d = src[j] - TQ3_0_CENTROIDS[trial_idx[j]] * scale;
+            err += d * d;
+        }
+
+        if (err < best_err) {
+            best_err = err;
+            best_scale = scale;
+            memcpy(best_idx, trial_idx, sizeof(best_idx));
+        }
+    }
+
+    memcpy(dst_idx, best_idx, sizeof(best_idx));
+    return best_scale;
+}
+
+static float tq3_1s_shift_quantize_half_refine(const float * GGML_RESTRICT src, float mean, float init_scale, uint8_t * GGML_RESTRICT dst_idx) {
+    float best_scale = init_scale;
+    float best_err = INFINITY;
+    uint8_t best_idx[16] = {0};
+
+    for (int mi = 0; mi < (int) (sizeof(TQ3_1S_SCALE_SEARCH)/sizeof(TQ3_1S_SCALE_SEARCH[0])); ++mi) {
+        const float scale = fmaxf(init_scale * TQ3_1S_SCALE_SEARCH[mi], 1e-10f);
+        const float inv = 1.0f / scale;
+        uint8_t tmp_idx[16];
+        float err = 0.0f;
+
+        for (int j = 0; j < 16; ++j) {
+            const float v = (src[j] - mean) * inv;
+            const uint8_t idx = tq3_0_choose_index(v);
+            tmp_idx[j] = idx;
+            const float deq = TQ3_0_CENTROIDS[idx] * scale + mean;
+            const float d = src[j] - deq;
+            err += d * d;
+        }
+
+        if (err < best_err) {
+            best_err = err;
+            best_scale = scale;
+            memcpy(best_idx, tmp_idx, sizeof(best_idx));
+        }
+    }
+
+    uint8_t trial_idx[16] = {0};
+    float scale = best_scale;
+    float best_refined_scale = best_scale;
+    float best_refined_err = best_err;
+    uint8_t best_refined_idx[16] = {0};
+    memcpy(best_refined_idx, best_idx, sizeof(best_idx));
+
+    for (int iter = 0; iter < 6; ++iter) {
+        const float inv = 1.0f / fmaxf(scale, 1e-10f);
+        float numer = 0.0f;
+        float denom = 0.0f;
+
+        for (int j = 0; j < 16; ++j) {
+            const uint8_t idx = tq3_0_choose_index((src[j] - mean) * inv);
+            trial_idx[j] = idx;
+            const float c = TQ3_0_CENTROIDS[idx];
+            numer += (src[j] - mean) * c;
+            denom += c * c;
+        }
+
+        if (denom > 1e-12f) {
+            scale = fmaxf(numer / denom, 1e-10f);
+        }
+
+        float err = 0.0f;
+        for (int j = 0; j < 16; ++j) {
+            const float deq = TQ3_0_CENTROIDS[trial_idx[j]] * scale + mean;
+            const float d = src[j] - deq;
+            err += d * d;
+        }
+
+        if (err < best_refined_err) {
+            best_refined_err = err;
+            best_refined_scale = scale;
+            memcpy(best_refined_idx, trial_idx, sizeof(best_refined_idx));
+        }
+    }
+
+    memcpy(dst_idx, best_refined_idx, sizeof(best_refined_idx));
+    return best_refined_scale;
+}
+
+void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        tq3_0_rht_forward(x + i * QK_TQ3_0, rotated);
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        for (int j = 0; j < 16; ++j) {
+            sum0 += rotated[j] * rotated[j];
+            sum1 += rotated[16 + j] * rotated[16 + j];
+        }
+
+        float rms0 = sqrtf(sum0 / 16.0f);
+        float rms1 = sqrtf(sum1 / 16.0f);
+        if (rms0 < 1e-10f) {
+            rms0 = 1.0f;
+        }
+        if (rms1 < 1e-10f) {
+            rms1 = 1.0f;
+        }
+
+        uint8_t indices[QK_TQ3_0];
+        const float scale0 = tq3_1s_quantize_half_refine(rotated, rms0, indices);
+        const float scale1 = tq3_1s_quantize_half_refine(rotated + 16, rms1, indices + 16);
+
+        y[i].d0 = GGML_FP32_TO_FP16(scale0);
+        y[i].d1 = GGML_FP32_TO_FP16(scale1);
+
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * idx = indices + g * 8;
+            uint8_t * qp = y[i].qs + g * 3;
+            qp[0] = (idx[0])      | (idx[1] << 3) | (idx[2] << 6);
+            qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+void quantize_row_tq3_1s_shift_ref(const float * GGML_RESTRICT x, block_tq3_1s_shift * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        tq3_0_rht_forward(x + i * QK_TQ3_0, rotated);
+
+        float mean = 0.0f;
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            mean += rotated[j];
+        }
+        mean /= (float) QK_TQ3_0;
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        for (int j = 0; j < 16; ++j) {
+            const float c0 = rotated[j] - mean;
+            const float c1 = rotated[16 + j] - mean;
+            sum0 += c0 * c0;
+            sum1 += c1 * c1;
+        }
+
+        float rms0 = sqrtf(sum0 / 16.0f);
+        float rms1 = sqrtf(sum1 / 16.0f);
+        if (rms0 < 1e-10f) {
+            rms0 = 1.0f;
+        }
+        if (rms1 < 1e-10f) {
+            rms1 = 1.0f;
+        }
+
+        uint8_t indices[QK_TQ3_0];
+        const float scale0 = tq3_1s_shift_quantize_half_refine(rotated, mean, rms0, indices);
+        const float scale1 = tq3_1s_shift_quantize_half_refine(rotated + 16, mean, rms1, indices + 16);
+
+        y[i].d0 = GGML_FP32_TO_FP16(scale0);
+        y[i].d1 = GGML_FP32_TO_FP16(scale1);
+        y[i].m  = GGML_FP32_TO_FP16(mean);
+
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * idx = indices + g * 8;
+            uint8_t * qp = y[i].qs + g * 3;
+            qp[0] = (idx[0])      | (idx[1] << 3) | (idx[2] << 6);
+            qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+void dequantize_row_tq3_0(const block_tq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        // 1. Unpack 3-bit indices from qs[]
+        uint8_t indices[QK_TQ3_0];
+        for (int g = 0; g < 4; g++) {
+            const uint8_t * qp = x[i].qs + g * 3;
+            uint8_t * idx = indices + g * 8;
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+        }
+
+        // 2. Look up centroids
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            rotated[j] = TQ3_0_CENTROIDS[indices[j]];
+        }
+
+        // 3. Apply inverse WHT (undo rotation)
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+
+        // 4. Scale back
+        for (int j = 0; j < QK_TQ3_0; j++) {
+            y[i * QK_TQ3_0 + j] = dequantized[j] * d;
+        }
+    }
+}
+
+void dequantize_row_tq3_1s(const block_tq3_1s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d0 = GGML_FP16_TO_FP32(x[i].d0);
+        const float d1 = GGML_FP16_TO_FP32(x[i].d1);
+
+        uint8_t indices[QK_TQ3_0];
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * qp = x[i].qs + g * 3;
+            uint8_t * idx = indices + g * 8;
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+        }
+
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            const float d = j < 16 ? d0 : d1;
+            rotated[j] = TQ3_0_CENTROIDS[indices[j]] * d;
+        }
+
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            y[i * QK_TQ3_0 + j] = dequantized[j];
+        }
+    }
+}
+
+void dequantize_row_tq3_1s_shift(const block_tq3_1s_shift * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d0 = GGML_FP16_TO_FP32(x[i].d0);
+        const float d1 = GGML_FP16_TO_FP32(x[i].d1);
+        const float m  = GGML_FP16_TO_FP32(x[i].m);
+
+        uint8_t indices[QK_TQ3_0];
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * qp = x[i].qs + g * 3;
+            uint8_t * idx = indices + g * 8;
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+        }
+
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            const float d = j < 16 ? d0 : d1;
+            rotated[j] = TQ3_0_CENTROIDS[indices[j]] * d + m;
+        }
+
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            y[i * QK_TQ3_0 + j] = dequantized[j];
+        }
+    }
+}
+
+size_t quantize_tq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used - codebook is fixed
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_0, n_per_row);
+    quantize_row_tq3_0_ref(src, dst, (int64_t)nrow * n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_tq3_1s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void) quant_weights;
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_1S, n_per_row);
+    quantize_row_tq3_1s_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
 
@@ -5352,6 +5916,19 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_TQ3_0:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_tq3_0, data, nb);
+            } break;
+        case GGML_TYPE_TQ3_1S:
+            {
+                const block_tq3_1s * q = (const block_tq3_1s *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_float(q[i].d0, i) || !validate_float(q[i].d1, i)) {
+                        return false;
+                    }
+                }
             } break;
         case GGML_TYPE_IQ1_S:
             {

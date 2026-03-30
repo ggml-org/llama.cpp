@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -678,6 +679,8 @@ void ggml_compute_forward_add(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1128,6 +1131,8 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1257,6 +1262,8 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4345,6 +4352,8 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4621,6 +4630,8 @@ void ggml_compute_forward_set(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4693,9 +4704,9 @@ static void ggml_compute_forward_get_rows_q(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        dequantize_row_q(
-                (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        float * out = (float *) ((char *) dst->data + i10*nb1 + i11*nb2 + i12*nb3);
+        const void * row = (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03);
+        dequantize_row_q(row, out, nc);
     }
 }
 
@@ -4844,6 +4855,8 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -5569,6 +5582,8 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_0:
+        case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -11058,6 +11073,46 @@ void ggml_compute_forward_cross_entropy_loss_back(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+
+// ggml_compute_forward_turbo_wht
+
+void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src = dst->src[0];
+    GGML_ASSERT(src->type == GGML_TYPE_F32);
+    const float * src_data = (const float *)src->data;
+    float * dst_data = (float *)dst->data;
+
+    const int gs = 32;  // QK_TQ3_0 — always 32
+    const int64_t n_total = ggml_nelements(src);
+    const int64_t n_groups = n_total / gs;
+    const float inv_sqrt = 1.0f / sqrtf((float)gs);
+
+    const int64_t ith = params->ith;
+    const int64_t nth = params->nth;
+    const int64_t g0 = (n_groups * ith) / nth;
+    const int64_t g1 = (n_groups * (ith + 1)) / nth;
+
+    for (int64_t g = g0; g < g1; g++) {
+        const float * in = src_data + g * gs;
+        float * out = dst_data + g * gs;
+        float x[32];
+        // Apply sign flips
+        for (int i = 0; i < gs; i++) {
+            x[i] = in[i] * (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
+        }
+        // WHT butterfly
+        for (int h = 1; h < gs; h *= 2) {
+            for (int i = 0; i < gs; i += h * 2) {
+                for (int j = i; j < i + h; j++) {
+                    float a = x[j], b = x[j + h];
+                    x[j] = a + b; x[j + h] = a - b;
+                }
+            }
+        }
+        for (int i = 0; i < gs; i++) out[i] = x[i] * inv_sqrt;
     }
 }
 
