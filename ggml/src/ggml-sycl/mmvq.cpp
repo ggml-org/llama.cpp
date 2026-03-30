@@ -3805,13 +3805,70 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                 const layout_mode *         forced_layout) {
     GGML_SYCL_DEBUG("[MMVQ-ENTRY] src0=%s type=%d forced_layout=%d\n",
                     src0->name ? src0->name : "?", src0->type, forced_layout ? (int)*forced_layout : -1);
-    // Early batch size check - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for large batches
-    // For large batch sizes, host-side routing with oneDNN batching is faster
-    // MMVQ dispatches per-(token, expert) which has more overhead for large batches
-    // oneDNN batching groups tokens by expert and uses optimized GEMM
-    // Threshold determined empirically: MMVQ ~49 t/s for pp512, oneDNN ~675 t/s
-    constexpr int64_t MMVQ_MOE_MAX_BATCH = 32;
-    const int64_t     batch_size         = src1->ne[2];  // ne12 - number of tokens
+    // Early batch size check — route large PP batches to the per-expert batched
+    // GEMM path (host-side routing → oneDNN/MMQ) instead of MMVQ vec_dot.
+    //
+    // Trade-off:
+    //   MMVQ: ONE kernel launch dispatching all (token, expert) pairs in parallel.
+    //         Each work-group does an independent vec_dot — no weight reuse across
+    //         tokens assigned to the same expert.
+    //   PP fallback: iterates active experts, gathers tokens per expert, calls
+    //         ggml_sycl_mul_mat with batched rows.  When batch >= oneDNN threshold
+    //         (default 16), this uses XMX GEMM with full weight reuse.  Below that
+    //         threshold it falls to MMVQ internally, adding gather/scatter overhead.
+    //
+    // Adaptive threshold: switch when the average tokens per expert is large enough
+    // for oneDNN to provide a benefit.  avg_tokens_per_expert = batch * top_k / n_experts.
+    // We want avg >= oneDNN PP threshold (default 16) for the batched path to win.
+    // Below that, ggml_sycl_mul_mat falls back to MMVQ internally, adding
+    // per-expert gather/scatter overhead with no GEMM benefit.
+    // Rearranging: batch >= n_experts * onednn_threshold / top_k.
+    //
+    // Examples (onednn_threshold=16):
+    //   128 experts, top-4 → threshold = 512  (PP512+ uses batched GEMM)
+    //     8 experts, top-2 → threshold =  64  (PP64+  uses batched GEMM)
+    //
+    // Override: GGML_SYCL_MMVQ_MOE_PP=N forces a fixed threshold (batch > N → batched).
+    //           N=0: always batched; N=9999: always MMVQ.
+    static int64_t MMVQ_MOE_MAX_BATCH_OVERRIDE = []() -> int64_t {
+        const char * env = std::getenv("GGML_SYCL_MMVQ_MOE_PP");
+        return env ? std::atoi(env) : -1;  // -1 = use adaptive
+    }();
+    const int64_t batch_size = src1->ne[2];  // ne12 - number of tokens
+    {
+        int64_t effective_threshold;
+        if (MMVQ_MOE_MAX_BATCH_OVERRIDE >= 0) {
+            effective_threshold = MMVQ_MOE_MAX_BATCH_OVERRIDE;
+        } else {
+            // Adaptive: switch when avg tokens/expert >= oneDNN PP threshold.
+            // Read the threshold once (matches the value in ggml_sycl_mul_mat).
+            static int64_t onednn_pp_thr = []() -> int64_t {
+                const char * env = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
+                int v = env ? std::atoi(env) : 16;
+                return v > 0 ? v : 16;
+            }();
+            const int64_t n_experts = src0->ne[2];
+            const int64_t top_k     = ids->ne[0];
+            effective_threshold = (top_k > 0) ? (n_experts * onednn_pp_thr / top_k) : 1;
+            if (effective_threshold < 1) {
+                effective_threshold = 1;
+            }
+        }
+        // Log the computed threshold once per model configuration
+        {
+            static std::atomic<int> threshold_logged{0};
+            if (threshold_logged.fetch_add(1, std::memory_order_relaxed) == 0) {
+                GGML_LOG_INFO("[MMVQ-MoE] PP batch threshold = %ld (n_experts=%ld top_k=%ld%s)\n",
+                              (long) effective_threshold, (long) src0->ne[2], (long) ids->ne[0],
+                              MMVQ_MOE_MAX_BATCH_OVERRIDE >= 0 ? " override" : " adaptive");
+            }
+        }
+        if (batch_size > effective_threshold) {
+            GGML_SYCL_DEBUG("[MMVQ] Batch %ld > threshold %ld, routing to batched GEMM path\n",
+                            (long) batch_size, (long) effective_threshold);
+            return false;
+        }
+    }
     const auto *      src0_extra         = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     // Detect host-resident weights including SYCL HOST_PINNED buffers
     bool              host_weights       = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
@@ -3884,11 +3941,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         return false;
     }
 
-    if (batch_size > MMVQ_MOE_MAX_BATCH) {
-        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, falling back to oneDNN batching\n",
-                        (long) batch_size, MMVQ_MOE_MAX_BATCH);
-        return false;
-    }
+    // Batch size check already performed at function entry (adaptive threshold).
 
     GGML_TENSOR_BINARY_OP_LOCALS;
 
