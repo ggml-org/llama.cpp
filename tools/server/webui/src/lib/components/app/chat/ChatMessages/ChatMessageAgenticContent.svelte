@@ -284,15 +284,10 @@
 				{/if}
 			</div>
 		{/each}
-	{:else if sectionsParsed.length > 0}
+	{:else}
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
-	{:else}
-		<!-- No agentic sections - render content as plain markdown -->
-		<div class="agentic-text">
-			<MarkdownContent content={message.content || ''} attachments={message?.extra} />
-		</div>
 	{/if}
 </div>
 
