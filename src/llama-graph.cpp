@@ -2846,7 +2846,7 @@ ggml_tensor * llm_graph_context::build_attn_sparse(
     cb(kqv, "kqv", il);
 
     ggml_tensor * cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-    cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]);
+    cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     cb(cur, "kqv_out", il);
 
     if (wo) {
