@@ -150,6 +150,12 @@ struct ggml_et_tri_params {
     int32_t tri_type;     // ggml_tri_type enum value
 };
 
+struct ggml_et_solve_tri_params {
+    ggml_tensor src0;     // A: lower-triangular [n, n, B1, B2]
+    ggml_tensor src1;     // B: RHS [k, n, B1, B2]
+    ggml_tensor dst;      // X: solution [k, n, B1, B2]
+};
+
 struct ggml_et_diag_params {
     ggml_tensor src0;     // F32 input vector
     ggml_tensor dst;      // F32 output diagonal matrix
@@ -278,6 +284,7 @@ bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
 bool ggml_et_op_fill(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,
                              const ggml_tensor* mul_node);
