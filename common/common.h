@@ -573,6 +573,7 @@ struct common_params {
 
     // server params
     int32_t port                = 8080;          // server listens on this network port
+    bool    reuse_port          = false;         // allow multiple sockets to bind to the same port
     int32_t timeout_read        = 600;           // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
@@ -612,6 +613,9 @@ struct common_params {
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
+
+    // enable built-in tools
+    std::vector<std::string> server_tools;
 
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server
@@ -789,6 +793,8 @@ std::string string_from(bool value);
 std::string string_from(const std::vector<int> & values);
 std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
+
+bool glob_match(const std::string & pattern, const std::string & str);
 
 //
 // Filesystem utils

@@ -333,8 +333,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
                 }
 
-                // Skip DMA transactions from prev block (if any)
-                // No need to wait for these since the DMA is setup for in-order processing
+                // Skip output DMA transactions from prev block (if any)
+                // No need to wait for those here since we're explicitly waiting for the latest prefecthes below.
                 for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_queue); }
 
                 // Compute loop

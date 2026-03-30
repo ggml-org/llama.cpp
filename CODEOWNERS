@@ -10,6 +10,7 @@
 /common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
 /convert_*.py                           @CISC
+/docs/backend/snapdragon/               @ggml-org/ggml-hexagon
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
 /examples/convert-llama2c-to-ggml/      @ggerganov
@@ -65,6 +66,7 @@
 /scripts/gen*                           @ggerganov
 /scripts/get*                           @ggerganov
 /scripts/sync*                          @ggerganov
+/scripts/snapdragon/                    @ggml-org/ggml-hexagon
 /src/                                   @ggerganov
 /src/llama-adapter.*                    @CISC
 /src/llama-arch.*                       @CISC

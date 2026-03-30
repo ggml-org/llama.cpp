@@ -87,7 +87,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=OFF \
             -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
           leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
 
       - name: Test
@@ -124,7 +124,7 @@ jobs:
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -165,8 +165,8 @@ jobs:
         id: cmake_build
         run: |
           export CMAKE_PREFIX_PATH=dawn
-          cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -231,7 +231,7 @@ jobs:
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -274,14 +274,16 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
+          sudo apt-get install build-essential libssl-dev ninja-build
 
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_RPC=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -300,12 +302,13 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get install -y glslc libvulkan-dev libssl-dev
+          sudo apt-get install -y glslc libvulkan-dev libssl-dev ninja-build
 
       - name: Configure
         id: cmake_configure
         run: |
           cmake -B build \
+            -G "Ninja" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DGGML_BACKEND_DL=ON \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -314,7 +317,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake --build build -j $(nproc)
+          time cmake --build build -j $(nproc)
 
   ubuntu-24-webgpu:
     runs-on: ubuntu-24.04
@@ -336,7 +339,8 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers \
+            libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
 
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
@@ -378,7 +382,7 @@ jobs:
           export Dawn_DIR=dawn/lib64/cmake/Dawn
           cmake -B build \
             -DGGML_WEBGPU=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -415,11 +419,13 @@ jobs:
         run: |
           source emsdk/emsdk_env.sh
           emcmake cmake -B build-wasm \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_WEBGPU=ON \
             -DLLAMA_OPENSSL=OFF \
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
-          cmake --build build-wasm --target test-backend-ops -j $(nproc)
+          time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
 
   ubuntu-22-hip:
     runs-on: ubuntu-22.04
@@ -479,7 +485,7 @@ jobs:
         run: |
           cmake -B build -S . \
             -DGGML_MUSA=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl:
     runs-on: ubuntu-22.04
@@ -528,7 +534,7 @@ jobs:
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl-fp16:
     runs-on: ubuntu-22.04
@@ -551,7 +557,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev ninja-build
 
       - name: install oneAPI MKL library
         shell: bash
@@ -574,11 +580,13 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
             -DGGML_SYCL_F16=ON
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-openvino:
       name: ubuntu-24-openvino-${{ matrix.openvino_device }}
@@ -648,7 +656,7 @@ jobs:
             cmake -B build/ReleaseOV -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_OPENVINO=ON
-            cmake --build build/ReleaseOV --config Release -j $(nproc)
+            time cmake --build build/ReleaseOV --config Release -j $(nproc)
 
         - name: Test
           id: cmake_test
@@ -1039,7 +1047,7 @@ jobs:
             -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
             -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
 
-          cmake --build build --config Release -j $(nproc)
+          time cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test

@@ -3194,6 +3194,7 @@ class tinyBLAS_PPC {
 
   private:
 
+    __attribute__((always_inline))
     inline void save_acc(acc_t * ACC, int64_t ii, int64_t jj) {
         vec_t vec_C[4];
         __builtin_mma_disassemble_acc(vec_C, ACC);
@@ -3204,6 +3205,7 @@ class tinyBLAS_PPC {
         }
     }
 
+    __attribute__((always_inline))
     inline void add_save_acc(acc_t * ACC, int64_t ii, int64_t jj) {
         vec_t vec_C[4];
         __builtin_mma_disassemble_acc(vec_C, ACC);

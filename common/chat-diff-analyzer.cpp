@@ -287,7 +287,7 @@ void analyze_reasoning::compare_reasoning_presence() {
             return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())) + p.rest());
         });
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
+            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
         });
         // try the more aggressive parse first, if it fails, fall back to the delimiter one
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
@@ -297,7 +297,7 @@ void analyze_reasoning::compare_reasoning_presence() {
         if (result.result.success()) {
             if (!result.tags["pre"].empty() && !result.tags["post"].empty()) {
                 mode = reasoning_mode::TAG_BASED;
-                start = trim_whitespace(result.tags["pre"]);
+                start = trim_leading_whitespace(result.tags["pre"]);
                 end   = trim_trailing_whitespace(result.tags["post"]);
             } else if (!result.tags["post"].empty()) {
                 mode = reasoning_mode::TAG_BASED;
@@ -333,7 +333,7 @@ void analyze_reasoning::compare_thinking_enabled() {
     if (left_trimmed.empty() && !diff.right.empty()) {
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
             if (start.empty()) {
-                start = right_trimmed;
+                start = trim_leading_whitespace(diff.right);
                 mode  = reasoning_mode::TAG_BASED;
             }
         }
@@ -344,8 +344,44 @@ void analyze_reasoning::compare_thinking_enabled() {
                 if (seg.size() >= 2 && seg[seg.size() - 1].value == left_trimmed && seg[seg.size() - 2].type == segment_type::MARKER) {
                     start = seg[seg.size() - 2].value;
                 }
-                end = left_trimmed;
+                end = trim_trailing_whitespace(diff.left);
                 mode = reasoning_mode::TAG_BASED;
+            }
+        }
+    } else if (!left_trimmed.empty() && !right_trimmed.empty()) {
+        // Full-output diff is noisy (e.g., SmolLM3 changes the system message when enable_thinking flips).
+        // Try to find reasoning markers by tail-anchoring:
+        // one output's generation prompt tail may appear in the other with extra reasoning markers appended.
+        const auto & output_A = comparison->output_A;
+        const auto & output_B = comparison->output_B;
+        const size_t anchor_len = 64;
+
+        for (int dir = 0; dir < 2; dir++) {
+            const auto & base     = dir == 0 ? output_B : output_A;
+            const auto & extended = dir == 0 ? output_A : output_B;
+
+            size_t len = std::min(base.size(), anchor_len);
+            std::string anchor = base.substr(base.size() - len);
+            auto pos = extended.rfind(anchor);
+            if (pos == std::string::npos || pos + len >= extended.size()) {
+                continue;
+            }
+
+            std::string extra = trim_whitespace(extended.substr(pos + len));
+            if (extra.empty()) {
+                continue;
+            }
+
+            auto seg = prune_whitespace_segments(segmentize_markers(extra));
+            if (seg.size() == 2 && seg[0].type == segment_type::MARKER && seg[1].type == segment_type::MARKER) {
+                if (start.empty()) {
+                    start = seg[0].value;
+                }
+                if (end.empty()) {
+                    end   = seg[1].value;
+                }
+                mode = reasoning_mode::TAG_BASED;
+                break;
             }
         }
     }
@@ -395,7 +431,7 @@ void analyze_reasoning::compare_reasoning_scope() {
         LOG_DBG(ANSI_ORANGE "%s: Detected TOOLS_ONLY reasoning mode\n" ANSI_RESET, __func__);
 
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space()));
+            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space()));
         });
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
         if (result.result.success()) {
@@ -409,7 +445,7 @@ void analyze_reasoning::compare_reasoning_scope() {
             if (result.result.success()) {
                 end = trim_trailing_whitespace(result.tags["post"]);
             } else {
-                LOG_DBG(ANSI_ORANGE "%s: Unable to extracft reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
+                LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
             }
         }
@@ -488,7 +524,7 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
         // Take the more promising diff
         std::string pure_content = rdiff.length() > diff_tools.left.length() ? rdiff : diff_tools.left;
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(response) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
+            return p.tag("pre", p.marker() + p.space()) + p.literal(response) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
         });
         auto result = parser_wrapped.parse_anywhere_and_extract(pure_content);
         start = result.tags["pre"];

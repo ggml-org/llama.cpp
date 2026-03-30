@@ -4,7 +4,11 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
-	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
+	import {
+		ChatSidebar,
+		DialogConversationTitleUpdate,
+		DialogChatSettings
+	} from '$lib/components/app';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -17,8 +21,10 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import type { SettingsSectionTitle } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { setChatSettingsDialogContext } from '$lib/contexts';
 
 	let { children } = $props();
 
@@ -41,6 +47,16 @@
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
+
+	let chatSettingsDialogOpen = $state(false);
+	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
+
+	setChatSettingsDialogContext({
+		open: (initialSection?: SettingsSectionTitle) => {
+			chatSettingsDialogInitialSection = initialSection;
+			chatSettingsDialogOpen = true;
+		}
+	});
 
 	// Global keyboard shortcuts
 	function handleKeydown(event: KeyboardEvent) {
@@ -212,6 +228,12 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
+
+	<DialogChatSettings
+		open={chatSettingsDialogOpen}
+		onOpenChange={(open) => (chatSettingsDialogOpen = open)}
+		initialSection={chatSettingsDialogInitialSection}
+	/>
 
 	<DialogConversationTitleUpdate
 		bind:open={titleUpdateDialogOpen}
