@@ -162,13 +162,14 @@
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
 			hasNoContent &&
+			!isAgentic &&
 			isLastAssistantMessage
 	);
 
 	let showProcessingInfoBottom = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
-			!hasNoContent &&
+			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
 	);
 

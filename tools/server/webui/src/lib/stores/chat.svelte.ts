@@ -710,8 +710,18 @@ class ChatStore {
 				currentMessageId = msg.id;
 				return msg;
 			},
-			onFlowComplete: () => {
+			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
+				if (finalTimings) {
+					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
+					conversationsStore.updateMessageAtIndex(idx, { timings: finalTimings });
+					DatabaseService.updateMessage(assistantMessage.id, { timings: finalTimings }).catch(
+						console.error
+					);
+				}
+
 				cleanupStreamingState();
+
 				if (onComplete) onComplete(streamedContent);
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 			},

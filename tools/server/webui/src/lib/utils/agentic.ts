@@ -1,4 +1,4 @@
-import { AgenticSectionType } from '$lib/enums';
+import { AgenticSectionType, MessageRole } from '$lib/enums';
 import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
@@ -29,22 +29,16 @@ export type ToolResultLine = {
 };
 
 /**
- * Derives display sections from structured message data.
- *
- * This replaces the old marker-based parseAgenticContent() function.
- * Instead of parsing text markers from a single content string, it builds
- * sections from the structured OpenAI-compatible message fields.
+ * Derives display sections from a single assistant message and its direct tool results.
  *
  * @param message - The assistant message
- * @param toolMessages - Tool result messages (children in the message tree)
+ * @param toolMessages - Tool result messages for this assistant's tool_calls
  * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
- * @param isStreaming - Whether the message is currently being streamed
  */
-export function deriveAgenticSections(
+function deriveSingleTurnSections(
 	message: DatabaseMessage,
 	toolMessages: DatabaseMessage[] = [],
-	streamingToolCalls: ApiChatCompletionToolCall[] = [],
-	isStreaming = false
+	streamingToolCalls: ApiChatCompletionToolCall[] = []
 ): AgenticSection[] {
 	const sections: AgenticSection[] = [];
 
@@ -90,12 +84,76 @@ export function deriveAgenticSections(
 		});
 	}
 
-	// 5. If streaming with no content yet and no sections, show pending reasoning
-	if (isStreaming && sections.length === 0) {
-		// Nothing to show yet - the UI will show a processing indicator
+	return sections;
+}
+
+/**
+ * Derives display sections from structured message data.
+ *
+ * Handles both single-turn (one assistant + its tool results) and multi-turn
+ * agentic sessions (multiple assistant + tool messages grouped together).
+ *
+ * When `toolMessages` contains continuation assistant messages (from multi-turn
+ * agentic flows), they are processed in order to produce sections across all turns.
+ *
+ * @param message - The first/anchor assistant message
+ * @param toolMessages - Tool result messages and continuation assistant messages
+ * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
+ * @param isStreaming - Whether the message is currently being streamed
+ */
+export function deriveAgenticSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = [],
+	streamingToolCalls: ApiChatCompletionToolCall[] = []
+): AgenticSection[] {
+	const hasAssistantContinuations = toolMessages.some((m) => m.role === MessageRole.ASSISTANT);
+
+	if (!hasAssistantContinuations) {
+		return deriveSingleTurnSections(message, toolMessages, streamingToolCalls);
+	}
+
+	const sections: AgenticSection[] = [];
+
+	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
+	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
+
+	let i = firstTurnToolMsgs.length;
+
+	while (i < toolMessages.length) {
+		const msg = toolMessages[i];
+
+		if (msg.role === MessageRole.ASSISTANT) {
+			const turnToolMsgs = collectToolMessages(toolMessages, i + 1);
+			const isLastTurn = i + 1 + turnToolMsgs.length >= toolMessages.length;
+
+			sections.push(
+				...deriveSingleTurnSections(msg, turnToolMsgs, isLastTurn ? streamingToolCalls : [])
+			);
+
+			i += 1 + turnToolMsgs.length;
+		} else {
+			i++;
+		}
 	}
 
 	return sections;
+}
+
+/**
+ * Collect consecutive tool messages starting at `startIndex`.
+ */
+function collectToolMessages(messages: DatabaseMessage[], startIndex: number): DatabaseMessage[] {
+	const result: DatabaseMessage[] = [];
+
+	for (let i = startIndex; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			result.push(messages[i]);
+		} else {
+			break;
+		}
+	}
+
+	return result;
 }
 
 /**
@@ -109,11 +167,13 @@ export function parseToolResultWithImages(
 	return lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) return { text: line };
+
 		const attachmentName = match[1];
 		const image = extras.find(
 			(e): e is DatabaseMessageExtraImageFile =>
 				e.type === AttachmentType.IMAGE && e.name === attachmentName
 		);
+
 		return { text: line, image };
 	});
 }
@@ -123,8 +183,10 @@ export function parseToolResultWithImages(
  */
 function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
 	if (!toolCallsJson) return [];
+
 	try {
 		const parsed = JSON.parse(toolCallsJson);
+
 		return Array.isArray(parsed) ? parsed : [];
 	} catch {
 		return [];
@@ -140,7 +202,9 @@ export function hasAgenticContent(
 ): boolean {
 	if (message.toolCalls) {
 		const tc = parseToolCalls(message.toolCalls);
+
 		if (tc.length > 0) return true;
 	}
+
 	return toolMessages.length > 0;
 }

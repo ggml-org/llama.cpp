@@ -6,7 +6,12 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { copyToClipboard, formatMessageForClipboard, getMessageSiblings } from '$lib/utils';
+	import {
+		copyToClipboard,
+		formatMessageForClipboard,
+		getMessageSiblings,
+		hasAgenticContent
+	} from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -119,7 +124,8 @@
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
-		// Build display entries, grouping tool messages with their preceding assistant
+		// Build display entries, grouping agentic sessions into single entries.
+		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
 		const result: Array<{
 			message: DatabaseMessage;
 			toolMessages: DatabaseMessage[];
@@ -134,9 +140,29 @@
 			if (msg.role === MessageRole.TOOL) continue;
 
 			const toolMessages: DatabaseMessage[] = [];
-			if (msg.role === MessageRole.ASSISTANT) {
-				// Collect following tool messages
+			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
+
+				while (j < filteredMessages.length) {
+					const next = filteredMessages[j];
+
+					if (next.role === MessageRole.TOOL) {
+						toolMessages.push(next);
+
+						j++;
+					} else if (next.role === MessageRole.ASSISTANT) {
+						toolMessages.push(next);
+
+						j++;
+					} else {
+						break;
+					}
+				}
+
+				i = j - 1;
+			} else if (msg.role === MessageRole.ASSISTANT) {
+				let j = i + 1;
+
 				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
 					toolMessages.push(filteredMessages[j]);
 					j++;
@@ -144,6 +170,7 @@
 			}
 
 			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+
 			result.push({
 				message: msg,
 				toolMessages,

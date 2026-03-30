@@ -33,7 +33,7 @@
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
-	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
+	const sections = $derived(deriveAgenticSections(message, toolMessages, []));
 
 	// Parse tool results with images
 	const sectionsParsed = $derived(

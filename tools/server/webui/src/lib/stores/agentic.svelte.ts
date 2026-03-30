@@ -429,13 +429,20 @@ class AgenticStore {
 			// No tool calls = final turn, save and complete
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
+
+				const finalTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
+
 				await onAssistantTurnComplete?.(
 					turnContent,
 					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
+					finalTimings,
 					undefined
 				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+
+				if (finalTimings) onTurnComplete?.(finalTimings);
+
+				onFlowComplete?.(finalTimings);
+
 				return;
 			}
 
