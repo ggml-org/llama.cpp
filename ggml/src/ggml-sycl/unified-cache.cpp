@@ -7569,6 +7569,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
         if (experts_staged_count % PRESTAGE_YIELD_BATCH == 0) {
             try {
                 cache->get_queue().wait();       // CCS compute queue
+                cache->get_dma_queue().wait();   // DMA reorder queue
                 cache->get_bcs_queue().wait();   // BCS copy queue
                 if (staging_queue) {
                     staging_queue->wait();        // caller's staging queue
@@ -7583,6 +7584,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     if (experts_staged_count > 0 && (experts_staged_count % PRESTAGE_YIELD_BATCH) != 0) {
         try {
             cache->get_queue().wait();
+            cache->get_dma_queue().wait();
             cache->get_bcs_queue().wait();
             if (staging_queue) {
                 staging_queue->wait();
