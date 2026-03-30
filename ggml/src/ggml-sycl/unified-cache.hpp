@@ -630,7 +630,16 @@ class unified_cache {
     // Lock-free read lookup. Returns device pointer if entry is READY with
     // matching layout. Returns nullptr on miss.
     // NO allocation, NO fill, NO blocking. Same semantics as try_get_cached_fast.
+    // NOTE: Excludes HOST_MMAP entries (raw mmap pointers, not GPU-accessible).
+    //       Includes HOST_PINNED entries (sycl::malloc_host, GPU-accessible via PCIe).
     void * lookup(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
+
+    // Like lookup(), but only returns device-resident (VRAM) pointers.
+    // Excludes both HOST_PINNED and HOST_MMAP entries.
+    // Use when the pointer MUST be in device VRAM (e.g., for expert dispatch
+    // where host-pinned zero-copy would be too slow or where the caller name
+    // implies device residency).
+    void * lookup_device_only(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
     // --- DMA queue for cache operations (separate from compute) ---
     sycl::queue & get_dma_queue();

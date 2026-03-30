@@ -844,12 +844,15 @@ static bool is_expert_resident(int block_id, int expert_id, int device_id) {
     static const ggml_layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED,
                                                 GGML_LAYOUT_AOS };
 
+    // Only check device-resident (VRAM) entries.  Host-pinned and mmap entries
+    // should not count as "resident on this GPU device" — they live in host memory
+    // and would cause page faults if passed directly to GPU kernels.
     auto check_key = [&](const ggml_sycl_cache_id & key, const char * /*role*/) -> bool {
         if (!key.valid) {
             return false;
         }
         for (auto layout : layouts) {
-            if (cache->lookup(key, layout) != nullptr) {
+            if (cache->lookup_device_only(key, layout) != nullptr) {
                 return true;
             }
         }
@@ -918,10 +921,15 @@ static void * get_expert_device_ptr(int block_id, int expert_id, moe_tensor_type
         return nullptr;
     }
 
+    // Only return device-resident (VRAM) pointers.  Host-pinned and mmap entries
+    // must NOT be returned here — GPU kernels receive these pointers directly and
+    // would page fault on mmap addresses or incur unexpected PCIe zero-copy latency
+    // on host-pinned pointers.  Experts without VRAM copies should route to CPU
+    // dispatch via the standard fallback path.
     static const ggml_layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_XMX_TILED,
                                                 GGML_LAYOUT_AOS };
     for (auto layout : layouts) {
-        void * ptr = cache->lookup(*key_ptr, layout);
+        void * ptr = cache->lookup_device_only(*key_ptr, layout);
         if (ptr) {
             return ptr;
         }

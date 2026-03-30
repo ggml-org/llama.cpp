@@ -3656,6 +3656,13 @@ void * unified_cache::try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggm
     if (entry.state != cache_entry_state::READY) {
         return nullptr;
     }
+    // HOST_MMAP entries contain raw mmap pointers that are NOT GPU-accessible.
+    // Returning them from lookup would cause GPU page faults when kernels
+    // dereference the pointer.  Only DEVICE and HOST_PINNED (sycl::malloc_host,
+    // GPU-accessible via PCIe zero-copy) entries are safe for GPU dispatch.
+    if (entry.location == cache_location::HOST_MMAP) {
+        return nullptr;
+    }
     return entry.device_ptr;
 }
 
@@ -4220,7 +4227,35 @@ size_t unified_cache::evict_coldest_expert_group(
 
 void * unified_cache::lookup(const ggml_sycl_cache_id & key, ggml_layout_mode layout) {
     // Identical semantics to try_get_cached_fast -- shared_lock read-only path
+    // NOTE: try_get_cached_fast already filters HOST_MMAP entries.
     return try_get_cached_fast(key, layout);
+}
+
+void * unified_cache::lookup_device_only(const ggml_sycl_cache_id & key, ggml_layout_mode layout) {
+    if (!key.valid) {
+        return nullptr;
+    }
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    auto                                id_it = id_to_key_.find(key);
+    if (id_it == id_to_key_.end()) {
+        return nullptr;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return nullptr;
+    }
+    const auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return nullptr;
+    }
+    if (entry.state != cache_entry_state::READY) {
+        return nullptr;
+    }
+    // Only return VRAM-resident entries. Host-pinned and mmap entries are excluded.
+    if (entry.host_resident) {
+        return nullptr;
+    }
+    return entry.device_ptr;
 }
 
 unified_cache::weight_ptr_result unified_cache::get_weight_ptr(const ggml_sycl_cache_id & key) {
