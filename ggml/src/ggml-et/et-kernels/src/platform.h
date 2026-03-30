@@ -80,7 +80,7 @@ static inline int get_num_threads(uint64_t shire_mask) {
 //******************************************************************************
 
 #define NOP   __asm__ __volatile__ ("nop\n");
-#define FENCE __asm__ __volatile__ ("fence\n");
+#define FENCE __asm__ __volatile__ ("fence\n" ::: "memory");
 #define WFI   __asm__ __volatile__ ("wfi\n");
 
 //******************************************************************************
@@ -374,6 +374,30 @@ flush_to_l2(const void *addr, uint64_t nlines, uint64_t stride)
     __asm__ __volatile__(
         "mv x31, %[x31]\n"
         "csrw 0x8BF, %[val]\n"
+        :
+        : [x31] "r"(x31_val), [val] "r"(csr_val)
+        : "x31", "memory"
+    );
+}
+
+// Evict nlines cache lines at stride apart starting at addr from L1 to L2.
+// Uses EvictVA (CSR 0x89F).  Unlike flush_to_l2, this guarantees the line is
+// NOT present in L1 after the operation - subsequent loads will miss and go
+// to L2/SCP. Caller must FENCE before and WAIT_CACHEOPS after.
+//
+// NOTE: nlines is encoded in a 4-bit field (max 16). DO NOT pass nlines > 16.
+static inline void __attribute__((always_inline))
+evict_to_l2(const void *addr, uint64_t nlines, uint64_t stride)
+{
+    // dest=01 (L2) in bits 59:58, VA in bits 47:6, numlines-1 in bits 3:0
+    uint64_t csr_val = (0x1ULL << 58) |
+                       ((uint64_t)addr & 0xFFFFFFFFFFC0ULL) |
+                       ((nlines - 1) & 0xF);
+    uint64_t x31_val = stride & 0xFFFFFFFFFFC0ULL;
+
+    __asm__ __volatile__(
+        "mv x31, %[x31]\n"
+        "csrw 0x89F, %[val]\n"
         :
         : [x31] "r"(x31_val), [val] "r"(csr_val)
         : "x31", "memory"
