@@ -759,7 +759,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_UNARY:
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                op->ne[0] % 16 == 0 &&
+                (op->ne[0] * op->ne[1] * op->ne[2] * op->ne[3]) % 16 == 0 &&
                 ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0])) {
                 switch (ggml_get_unary_op(op)) {
