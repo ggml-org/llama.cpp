@@ -24663,7 +24663,11 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                         auto & cached_ptrs = it->second.expert_ptrs;
                         std::copy(cached_ptrs.begin(), cached_ptrs.end(),
                                   host_ptrs.begin());
-                        // H2D memcpy of the pointer table
+                        // H2D memcpy of the pointer table.
+                        // No fill events needed here: the GATE call that populated
+                        // this cache already chained fill events into its table_deps
+                        // and submitted the ptr-table H2D on the same in-order stream.
+                        // Subsequent UP/DOWN sub-ops are implicitly ordered after GATE.
                         if (extra->moe_expert_ptrs_device[device] != nullptr) {
                             sycl::event ev = stream->memcpy(
                                 extra->moe_expert_ptrs_device[device],
@@ -24953,22 +24957,33 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // Try the requested layout first, then SOA (prestage may have stored SOA
         // even when dispatch requests AOS for MXFP4).
         if (src0_is_usm_accessible) {
-            void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
+            sycl::event fill_evt;
+            bool has_fill_evt = false;
+            void * cached_ptr = cache->try_get_cached_with_event(expert_cache_key, layout,
+                                                                  &fill_evt, &has_fill_evt);
             // If requested layout not found, try SOA (prestage uploads SOA for all quant types)
             if (!cached_ptr && layout != GGML_LAYOUT_SOA) {
-                cached_ptr = cache->try_get_cached_fast(expert_cache_key, GGML_LAYOUT_SOA);
+                cached_ptr = cache->try_get_cached_with_event(expert_cache_key, GGML_LAYOUT_SOA,
+                                                              &fill_evt, &has_fill_evt);
             }
             // Also try COALESCED
             if (!cached_ptr && layout != GGML_LAYOUT_COALESCED) {
-                cached_ptr = cache->try_get_cached_fast(expert_cache_key, GGML_LAYOUT_COALESCED);
+                cached_ptr = cache->try_get_cached_with_event(expert_cache_key, GGML_LAYOUT_COALESCED,
+                                                              &fill_evt, &has_fill_evt);
             }
             if (cached_ptr) {
-                // Cache hit: use the already-cached SOA/COALESCED pointer directly.
+                // Cache hit (READY or IN_PROGRESS): use the pointer directly.
+                // If the fill is still in progress, chain the event so the
+                // pointer table H2D memcpy waits for it.
                 extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
-                stats_vram_ready++;
-                GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache HIT (fast path), ptr=%p\n", (long) e, cached_ptr);
-
-                // Cache already tracks the pointer — no separate table needed.
+                if (has_fill_evt) {
+                    table_deps.push_back(fill_evt);
+                    stats_progress++;
+                } else {
+                    stats_vram_ready++;
+                }
+                GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache HIT (fast path), ptr=%p in_progress=%d\n",
+                                (long) e, cached_ptr, has_fill_evt);
                 continue;
             }
             // Cache miss: fully non-blocking path. Leave pointer as nullptr so
@@ -24987,13 +25002,19 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // on ensure_cached_layout which may call malloc_device/fill_fn/queue.wait.
         if (layout == GGML_LAYOUT_AOS && src0_is_usm_accessible) {
             // Fast check: is the entry already cached in VRAM?
-            void * cached_ptr = cache->try_get_cached_fast(expert_cache_key, layout);
+            sycl::event fill_evt;
+            bool has_fill_evt = false;
+            void * cached_ptr = cache->try_get_cached_with_event(expert_cache_key, layout,
+                                                                  &fill_evt, &has_fill_evt);
             if (cached_ptr) {
                 extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
-                stats_vram_ready++;
+                if (has_fill_evt) {
+                    table_deps.push_back(fill_evt);
+                    stats_progress++;
+                } else {
+                    stats_vram_ready++;
+                }
                 GGML_SYCL_DEBUG("[OPT-FUSED-AOS] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
-
-                // Cache already tracks the pointer — no separate table needed.
                 continue;
             }
             // Cache miss: use host-pinned AOS data directly via PCIe zero-copy.
@@ -25010,23 +25031,33 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // Try cache lookup cascade; on miss, use zero-copy from expert_aos if accessible,
         // otherwise leave nullptr for CPU fallback.
         {
-            void * cached_ptr = cache->lookup(expert_cache_key, layout);
+            sycl::event fill_evt;
+            bool has_fill_evt = false;
+            void * cached_ptr = cache->try_get_cached_with_event(expert_cache_key, layout,
+                                                                  &fill_evt, &has_fill_evt);
             if (!cached_ptr && layout != GGML_LAYOUT_SOA) {
-                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_SOA);
+                cached_ptr = cache->try_get_cached_with_event(expert_cache_key, GGML_LAYOUT_SOA,
+                                                              &fill_evt, &has_fill_evt);
             }
             if (!cached_ptr && layout != GGML_LAYOUT_COALESCED) {
-                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_COALESCED);
+                cached_ptr = cache->try_get_cached_with_event(expert_cache_key, GGML_LAYOUT_COALESCED,
+                                                              &fill_evt, &has_fill_evt);
             }
             if (!cached_ptr && layout != GGML_LAYOUT_AOS) {
-                cached_ptr = cache->lookup(expert_cache_key, GGML_LAYOUT_AOS);
+                cached_ptr = cache->try_get_cached_with_event(expert_cache_key, GGML_LAYOUT_AOS,
+                                                              &fill_evt, &has_fill_evt);
             }
 
             if (cached_ptr) {
                 extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = cached_ptr;
-                stats_vram_ready++;
+                // Chain fill event if the entry is still IN_PROGRESS.
+                if (has_fill_evt) {
+                    table_deps.push_back(fill_evt);
+                    stats_progress++;
+                } else {
+                    stats_vram_ready++;
+                }
                 GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld cache HIT, ptr=%p\n", (long) e, cached_ptr);
-
-                // Cache already tracks the pointer — no separate table needed.
 
                 const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
                 if (cache && need_drop) {

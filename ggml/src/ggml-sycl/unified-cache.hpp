@@ -749,6 +749,16 @@ class unified_cache {
     // Otherwise returns nullptr. Does not update LRU/LFU stats.
     void * try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout);
 
+    // Like try_get_cached_fast, but also returns device_ptr for IN_PROGRESS
+    // entries whose fill is still running.  When the entry is IN_PROGRESS and
+    // has a ready_event, *out_event is set and *out_has_event is true so the
+    // caller can chain on it.
+    // Returns nullptr only when the entry does not exist or layout mismatches.
+    void * try_get_cached_with_event(const ggml_sycl_cache_id & key_id,
+                                     ggml_layout_mode           layout,
+                                     sycl::event *              out_event,
+                                     bool *                     out_has_event);
+
     // Fallback lookup by data pointer (aux_id) when primary key lookup fails.
     // Used during graph recording to find entries with aliased tensor names.
     // Only searches entries where src_ptr matches the given data_ptr.

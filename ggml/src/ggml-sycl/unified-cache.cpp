@@ -3666,6 +3666,55 @@ void * unified_cache::try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggm
     return entry.device_ptr;
 }
 
+void * unified_cache::try_get_cached_with_event(const ggml_sycl_cache_id & key_id,
+                                                ggml_layout_mode           layout,
+                                                sycl::event *              out_event,
+                                                bool *                     out_has_event) {
+    if (out_event) {
+        *out_event = sycl::event{};
+    }
+    if (out_has_event) {
+        *out_has_event = false;
+    }
+    if (!key_id.valid) {
+        return nullptr;
+    }
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    auto                                id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return nullptr;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return nullptr;
+    }
+    const auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return nullptr;
+    }
+    if (entry.location == cache_location::HOST_MMAP) {
+        return nullptr;
+    }
+    // READY entries: return pointer, no event needed.
+    if (entry.state == cache_entry_state::READY) {
+        return entry.device_ptr;
+    }
+    // IN_PROGRESS entries: return pointer + ready_event so the caller can
+    // chain the subsequent kernel/memcpy after the fill completes.
+    if (entry.state == cache_entry_state::IN_PROGRESS && entry.device_ptr) {
+        if (entry.has_ready_event) {
+            if (out_event) {
+                *out_event = entry.ready_event;
+            }
+            if (out_has_event) {
+                *out_has_event = true;
+            }
+        }
+        return entry.device_ptr;
+    }
+    return nullptr;
+}
+
 // --- Decomposed cache operations ---
 
 void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
