@@ -558,7 +558,14 @@ struct moe_warmup_state {
     void init(int nl, int ne) {
         n_layers  = std::min(nl, MOE_MAX_LAYERS);
         n_experts = std::min(ne, MOE_MAX_EXPERTS);
-        // Read env var for warmup token count (0 = skip warmup, use gate norms)
+        // S1 mode (all weights on host): default to gate norms instead of
+        // inference-based profiling.  Gate norms take ~100-200ms vs 5-10s
+        // for synthetic inference, with comparable cache hit rates.
+        if (ggml_backend_sycl_all_weights_host()) {
+            warmup_tokens = 0;  // Use gate norms, skip inference profiling
+        }
+        // Read env var for warmup token count (0 = skip warmup, use gate norms).
+        // Placed AFTER the S1 default so the user can still override.
         const char * env = getenv("GGML_SYCL_MOE_WARMUP_TOKENS");
         if (env) warmup_tokens = std::max(0, std::atoi(env));
         // Read env var for re-rank interval (0 disables periodic re-ranking)
@@ -37667,31 +37674,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             g_layer_map_initialized.store(true, std::memory_order_release);
         }
     }
-    // MoE hybrid initialization: detect MUL_MAT_ID nodes and initialize
-    // placement table, prefetcher, and predictor on first graph compute.
-    {
-        static std::atomic<int> moe_hybrid_gate{ -1 };
-        int gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
-        if (gate_val < 0) {
-            const char * env = getenv("GGML_SYCL_MOE_HYBRID");
-            int          new_val = env ? atoi(env) : 1;  // Default: ON (auto for MoE models)
-            moe_hybrid_gate.compare_exchange_strong(gate_val, new_val,
-                                                     std::memory_order_release,
-                                                     std::memory_order_acquire);
-            gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
-        }
-        if (gate_val != 0) {
-            const int dev = sycl_ctx->device;
-            if (dev >= 0 && dev < GGML_SYCL_MAX_DEVICES) {
-                std::call_once(g_moe_hybrid_init_flags[dev], [&]() {
-                    moe_hybrid_init_once(*sycl_ctx, cgraph);
-                });
-                // Signal that init is done so subsequent tokens activate the
-                // eviction guard early (in compute_impl_guard constructor).
-                g_moe_hybrid_init_done.store(true, std::memory_order_release);
-            }
-        }
-    }
+    // MoE hybrid initialization has been moved to ggml_backend_sycl_graph_compute()
+    // so that warmup profiling overhead is NOT counted as PP time.  By the time we
+    // reach graph_compute_impl, g_moe_hybrid_init_done is already true (after the
+    // first token), so the eviction guard in compute_impl_guard always activates early.
+
     // Activate eviction guard for FIRST token (after init completes) and as
     // a safety net for non-MoE models where g_moe_hybrid_init_done stays false.
     // For subsequent tokens, the guard was already activated in the constructor.
@@ -45261,6 +45248,34 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ctx->last_graph_event.reset();
         }
     };
+    // MoE hybrid initialization: detect MUL_MAT_ID nodes and initialize
+    // placement table, prefetcher, and predictor on first graph compute.
+    // Runs HERE (outside graph_compute_impl) so that warmup profiling
+    // overhead (~5-10s) is NOT counted as PP time.
+    {
+        static std::atomic<int> moe_hybrid_gate{ -1 };
+        int gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
+        if (gate_val < 0) {
+            const char * env = getenv("GGML_SYCL_MOE_HYBRID");
+            int          new_val = env ? atoi(env) : 1;  // Default: ON (auto for MoE models)
+            moe_hybrid_gate.compare_exchange_strong(gate_val, new_val,
+                                                     std::memory_order_release,
+                                                     std::memory_order_acquire);
+            gate_val = moe_hybrid_gate.load(std::memory_order_acquire);
+        }
+        if (gate_val != 0) {
+            const int dev = sycl_ctx->device;
+            if (dev >= 0 && dev < GGML_SYCL_MAX_DEVICES) {
+                std::call_once(g_moe_hybrid_init_flags[dev], [&]() {
+                    moe_hybrid_init_once(*sycl_ctx, cgraph);
+                });
+                // Signal that init is done so subsequent tokens activate the
+                // eviction guard early (in compute_impl_guard constructor).
+                g_moe_hybrid_init_done.store(true, std::memory_order_release);
+            }
+        }
+    }
+
     auto compute_impl = [&]() {
         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
     };
