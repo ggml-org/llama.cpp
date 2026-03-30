@@ -488,6 +488,7 @@ static ggml_sycl::ExpertPredictor   g_expert_predictors[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::PinnedBufferPool  g_pinned_buffer_pools[GGML_SYCL_MAX_DEVICES];
 static ggml_sycl::CpuExpertPool    g_cpu_expert_pools[GGML_SYCL_MAX_DEVICES];
 static std::once_flag               g_moe_hybrid_init_flags[GGML_SYCL_MAX_DEVICES];
+static std::atomic<bool>            g_moe_hybrid_init_done{false};
 // Map hash-based layer_id → sequential index for ExpertPredictor arrays.
 // Unified cache and placement table support arbitrary hash-based layer IDs,
 // but ExpertPredictor indexes into fixed-size arrays sized by layer count.
@@ -37330,10 +37331,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         compute_impl_guard() {
             GGML_ASSERT(!g_in_compute_impl && "Re-entrant compute_impl");
             g_in_compute_impl = true;
-            // Note: eviction guard (graph_compute_active) is activated AFTER
-            // MoE hybrid init completes, not here. The init needs eviction to
-            // stage popular experts into VRAM. See the activate_eviction_guard
-            // call after moe_hybrid_init_once below.
+            // Activate eviction guard EARLY on all tokens AFTER the first.
+            // On the first token, moe_hybrid_init_once needs eviction to stage
+            // popular experts, so the guard is deferred until after init.
+            // On subsequent tokens, the guard must be active before
+            // moe_prefetch_scan (which calls ensure_cached_layout and can
+            // trigger eviction that frees VRAM used by later dispatch).
+            if (g_moe_hybrid_init_done.load(std::memory_order_acquire)) {
+                ggml_sycl::unified_cache_set_graph_compute_active(true);
+            }
         }
 
         ~compute_impl_guard() {
@@ -37548,12 +37554,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 std::call_once(g_moe_hybrid_init_flags[dev], [&]() {
                     moe_hybrid_init_once(*sycl_ctx, cgraph);
                 });
+                // Signal that init is done so subsequent tokens activate the
+                // eviction guard early (in compute_impl_guard constructor).
+                g_moe_hybrid_init_done.store(true, std::memory_order_release);
             }
         }
     }
-    // Activate eviction guard AFTER MoE init completes.
-    // During init, eviction is needed to stage experts. After init,
-    // block eviction to prevent stale pointers during node dispatch.
+    // Activate eviction guard for FIRST token (after init completes) and as
+    // a safety net for non-MoE models where g_moe_hybrid_init_done stays false.
+    // For subsequent tokens, the guard was already activated in the constructor.
     ggml_sycl::unified_cache_set_graph_compute_active(true);
 
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
