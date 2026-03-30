@@ -850,7 +850,7 @@ static __device__ __forceinline__ void load_tiles_nvfp4(const char * __restrict_
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_NVFP4, mmq_y);
     int   * x_qs = (int   *) x_tile;
     float * x_df = (float *) (x_qs + txs.qs);
-#endif
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
     constexpr int threads_per_row = MMQ_ITER_K / QK_NVFP4;
     constexpr int rows_per_warp = warp_size / threads_per_row;
