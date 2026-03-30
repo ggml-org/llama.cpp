@@ -4,8 +4,9 @@
 // All copies are aligned to cacheline boundaries (64 bytes = 16 floats).
 //
 // For dim >= 1, entire rows are copied from src0 or src1 into dst.
-// For dim == 0, each row is two halves: [src0_part | src1_part], both
-// cacheline-aligned since ne00 % 16 == 0 is enforced by supports_op.
+// For dim == 0, use:
+// - a fast vector path when both source row segments are cacheline-aligned
+// - a scalar stride-aware path otherwise
 //******************************************************************************
 
 #include <stdint.h>
@@ -82,11 +83,10 @@ int entry_point(struct ggml_et_concat_params* params, void* env) {
     // Total rows across all higher dimensions
     const int64_t total_rows = ne1 * ne2 * ne3;
 
-    // Unaligned dim==0 path: ne0 not a multiple of 16.
-    // Distribute by groups of R rows where R*ne0 is a multiple of 16,
-    // so each group starts/ends on a cache-line boundary. R = lcm(16, ne0) / ne0.
-    if (dim == 0 && ne0 % 16 != 0) {
-        // gcd then lcm
+    // Generic slow path for dim==0 when either source segment is not suitable for
+    // aligned vector copies. Threading is done by groups of rows whose combined
+    // width is cacheline-aligned, so writers do not share destination cache lines.
+    if (dim == 0 && (ne00 % 16 != 0 || ne10 % 16 != 0 || nb00 != sizeof(float) || nb10 != sizeof(float))) {
         int64_t a = 16, b = ne0;
         while (b) { int64_t t = b; b = a % b; a = t; }
         const int64_t rows_per_group = 16 / a;  // lcm(16, ne0) / ne0
@@ -104,13 +104,11 @@ int entry_point(struct ggml_et_concat_params* params, void* env) {
 
                 float* dst_row = (float*)((char*)dst_data + i1*dnb1 + i2*dnb2 + i3*dnb3);
 
-                // Copy src0 elements (stride-based for non-contiguous src)
                 const char* s0_base = (const char*)src0_data + i1*nb01 + i2*nb02 + i3*nb03;
                 for (int64_t i0 = 0; i0 < ne00; i0++) {
                     dst_row[i0] = *(const float*)(s0_base + i0*nb00);
                 }
 
-                // Copy src1 elements (stride-based for transposed src)
                 const char* s1_base = (const char*)src1_data + i1*nb11 + i2*nb12 + i3*nb13;
                 for (int64_t i0 = 0; i0 < ne10; i0++) {
                     dst_row[ne00 + i0] = *(const float*)(s1_base + i0*nb10);
