@@ -885,7 +885,11 @@ static void proc_cumsum_req(struct htp_context * ctx, struct htp_general_req * r
     struct profile_data prof;
     profile_start(&prof);
 
-    uint32_t rsp_status = op_cumsum(&octx);
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_cumsum(&octx);
+        vtcm_release(ctx);
+    }
 
     profile_stop(&prof);
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
