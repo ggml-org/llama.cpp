@@ -227,39 +227,23 @@ static inline float et_cosf(float x) {
 //******************************************************************************
 
 // Convert FP16 (IEEE 754 half precision) to FP32 (single precision)
+// Uses ET hardware FCVT.PS.F16 instruction for accurate conversion
 static inline float fp16_to_fp32(uint16_t h) {
-    // Extract sign, exponent, mantissa
-    uint32_t sign = (h & 0x8000) << 16;
-    int32_t exp = (h & 0x7C00);
-    uint32_t mantissa = (h & 0x03FF);
+    float result;
+    unsigned long temp;
+    uint32_t raw = (uint32_t)h;
 
-    if (exp == 0) {
-        // Subnormal or zero
-        if (mantissa == 0) {
-            return *(float*)&sign; // Return signed zero
-        }
-        // Convert subnormal
-        exp = 0x38800000; // 2^-14 in fp32
-        mantissa <<= 13;
-        // Normalize
-        while ((mantissa & 0x00800000) == 0) {
-            mantissa <<= 1;
-            exp -= 0x00800000;
-        }
-        mantissa &= 0x007FFFFF;
-        uint32_t result = sign | exp | mantissa;
-        return *(float*)&result;
-    } else if (exp == 0x7C00) {
-        // Infinity or NaN
-        uint32_t result = sign | 0x7F800000 | (mantissa << 13);
-        return *(float*)&result;
-    } else {
-        // Normal number
-        exp = ((exp >> 10) - 15 + 127) << 23; // Convert exponent
-        mantissa <<= 13;
-        uint32_t result = sign | exp | mantissa;
-        return *(float*)&result;
-    }
+    __asm__ volatile (
+        "mova.x.m  %[temp]              \n\t"  // Save current mask state
+        "mov.m.x   m0, x0, 1            \n\t"  // Set mask register m0 to enable element 0
+        "fbcx.ps   %[result], %[raw]    \n\t"  // Broadcast raw FP16 bits into vector register
+        "fcvt.ps.f16 %[result], %[result] \n\t" // Convert FP16 to FP32
+        "mova.m.x  %[temp]              \n\t"  // Restore mask state
+        : [temp] "=&r"(temp), [result] "=&f"(result)
+        : [raw] "r"(raw)
+    );
+
+    return result;
 }
 
 // Convert FP32 (single precision) to FP16 (IEEE 754 half precision)
