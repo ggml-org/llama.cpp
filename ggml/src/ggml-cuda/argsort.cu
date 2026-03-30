@@ -47,9 +47,11 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 #ifdef STRIDED_ITERATOR_AVAILABLE
     auto offset_iterator = cuda::make_strided_iterator(cuda::make_counting_iterator(0), ncols);
 #else
-    ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows + 1);
+    // offset_iterator needs to populate nrows + 1 elements, so we also have to ceildiv nrows + 1 by block_size
+    const int                 nrows_offset = nrows + 1;
+    ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows_offset);
     int *                     offset_iterator = offsets_alloc.get();
-    const dim3                offset_grid((nrows + block_size - 1) / block_size);
+    const dim3                offset_grid((nrows_offset + block_size - 1) / block_size);
     init_offsets<<<offset_grid, block_size, 0, stream>>>(offset_iterator, ncols, nrows);
 #endif
     CUDA_CHECK(cudaMemcpyAsync(temp_keys, x, ncols * nrows * sizeof(float), cudaMemcpyDeviceToDevice, stream));
