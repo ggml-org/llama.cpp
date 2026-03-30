@@ -3736,11 +3736,14 @@ void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
     auto it = entries_.find(cache_key);
     if (it != entries_.end()) {
         auto & entry = it->second;
-        if (entry.layout == layout && entry.size == size && entry.device_ptr) {
-            // Already allocated (may be READY or IN_PROGRESS) — return existing ptr
+        if (entry.layout == layout && entry.size == size && entry.device_ptr &&
+            entry.location != cache_location::HOST_MMAP) {
+            // Already allocated (may be READY or IN_PROGRESS) — return existing ptr.
+            // HOST_MMAP entries are raw mmap pointers, not device allocations;
+            // treat them as a mismatch so a real device allocation is made.
             return entry.device_ptr;
         }
-        // Layout/size mismatch — evict old entry
+        // Layout/size mismatch or HOST_MMAP — evict old entry
         if (entry.device_ptr && !entry.host_resident) {
             if (!entry.pool_allocated) {
                 enqueue_deferred_free(entry.device_ptr, entry.size);
@@ -4350,6 +4353,10 @@ unified_cache::weight_ptr_result unified_cache::get_weight_ptr(const ggml_sycl_c
         const auto & entry = entry_it->second;
         if (entry.state != cache_entry_state::READY) continue;
         if (!entry.device_ptr) continue;
+        // HOST_MMAP entries contain raw mmap pointers that are NOT GPU-accessible.
+        // Returning them would cause CCS page faults when GPU kernels dereference
+        // the pointer.  Only DEVICE and HOST_PINNED entries are safe.
+        if (entry.location == cache_location::HOST_MMAP) continue;
         result.ptr       = entry.device_ptr;
         result.layout    = entry.layout;
         result.on_device = !entry.host_resident;
@@ -4450,6 +4457,13 @@ void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout
         return nullptr;
     }
 
+    // HOST_MMAP entries contain raw mmap pointers that are NOT GPU-accessible.
+    // Returning them would cause CCS page faults when GPU kernels dereference
+    // the pointer.  Only DEVICE and HOST_PINNED entries are safe.
+    if (entry_it->second.location == cache_location::HOST_MMAP) {
+        return nullptr;
+    }
+
     return entry_it->second.device_ptr;
 }
 
@@ -4474,6 +4488,10 @@ void * unified_cache::get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layou
             continue;
         }
         if (entry.src_ptr == data_ptr) {
+            // HOST_MMAP entries contain raw mmap pointers that are NOT GPU-accessible.
+            if (entry.location == cache_location::HOST_MMAP) {
+                continue;
+            }
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] get_by_data_ptr: found alias data=%p size=%zu -> device=%p\n", data_ptr,
                             nbytes, entry.device_ptr);
             return entry.device_ptr;
