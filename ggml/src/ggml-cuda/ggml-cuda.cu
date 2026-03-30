@@ -98,16 +98,9 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     GGML_ABORT(GGML_CUDA_NAME " error");
 }
 
-// this is faster on Windows
-// probably because the Windows CUDA libraries forget to make this check before invoking the drivers
+// always set device explicitly — early-return optimization is unsafe on ROCm multi-GPU
+// with uninitialized thread contexts (see https://github.com/ggml-org/llama.cpp/issues/21140)
 void ggml_cuda_set_device(int device) {
-    int current_device;
-    CUDA_CHECK(cudaGetDevice(&current_device));
-
-    if (device == current_device) {
-        return;
-    }
-
     CUDA_CHECK(cudaSetDevice(device));
 }
 
@@ -2807,6 +2800,7 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    ggml_cuda_set_device(cuda_ctx->device);
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
 
