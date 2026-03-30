@@ -8150,4 +8150,325 @@ void shutdown_unified_cache() {
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Shutdown complete\n");
 }
 
+// ============================================================================
+// Phase 3: Unified Allocation API
+// ============================================================================
+
+// --- unified_cache::available_device() ---
+// Queries Level Zero for the actual free VRAM on the device, subtracts a safety
+// margin for driver internals.  Unlike available() which is pure budget math,
+// this reflects real hardware state.
+
+size_t unified_cache::available_device() const {
+    const int device_id = get_device_id_from_queue(const_cast<sycl::queue &>(queue_));
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return 0;
+    }
+    size_t free_mem = 0, total_mem = 0;
+    ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
+    if (free_mem <= VRAM_SAFETY_MARGIN) {
+        return 0;
+    }
+    return free_mem - VRAM_SAFETY_MARGIN;
+}
+
+// --- unified_cache::allocate() ---
+// The primary allocation path for Phase 3.  Steps:
+//   1. Check budget headroom
+//   2. If insufficient, try evict_and_flush
+//   3. Query L0 free VRAM as a second guard
+//   4. Allocate on device or fall back to host-pinned
+//   5. Track in managed_allocs_ and adjust budget
+
+unified_cache::vram_alloc_result unified_cache::allocate(const vram_alloc_request & req) {
+    vram_alloc_result result{};
+    if (req.size == 0) {
+        return result;
+    }
+
+    const size_t alloc_size = req.size;
+    const char * tag        = req.tag ? req.tag : "unified_cache::allocate";
+
+    // Step 1: Check budget headroom.
+    bool try_device = true;
+    if (alloc_size > available()) {
+        // Try eviction to make room.
+        const size_t needed = alloc_size - available();
+        const size_t freed  = evict_and_flush(needed);
+        if (alloc_size > available()) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate(%s): budget exhausted after evicting "
+                            "%.1f MB (need %.1f MB, avail %.1f MB)\n",
+                            tag, freed / (1024.0 * 1024.0),
+                            alloc_size / (1024.0 * 1024.0),
+                            available() / (1024.0 * 1024.0));
+            try_device = false;
+        }
+    }
+
+    // Step 2: Cross-check with L0 free VRAM.
+    if (try_device) {
+        const size_t hw_avail = available_device();
+        if (alloc_size > hw_avail) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate(%s): L0 free VRAM too low "
+                            "(need %.1f MB, L0 avail %.1f MB), falling back\n",
+                            tag, alloc_size / (1024.0 * 1024.0),
+                            hw_avail / (1024.0 * 1024.0));
+            try_device = false;
+        }
+    }
+
+    // Step 3: Attempt device allocation.
+    void * ptr = nullptr;
+    if (try_device) {
+        try {
+            ptr = ggml_sycl_malloc_device(alloc_size, queue_, tag);
+        } catch (...) {
+            ptr = nullptr;
+        }
+    }
+
+    if (ptr) {
+        // Device allocation succeeded.
+        result.ptr       = ptr;
+        result.is_device = true;
+        result.size      = alloc_size;
+
+        // Track against budget as runtime reservation.
+        used_.fetch_add(alloc_size, std::memory_order_relaxed);
+
+        std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
+        managed_allocs_[ptr] = { alloc_size, true };
+        return result;
+    }
+
+    // Step 4: Host-pinned fallback.
+    if (!req.allow_host_fallback) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] allocate(%s): device alloc failed and host fallback "
+                      "disabled (size=%.1f MB)\n",
+                      tag, alloc_size / (1024.0 * 1024.0));
+        return result;
+    }
+
+    try {
+        ptr = ggml_sycl_malloc_host(alloc_size, queue_, tag);
+    } catch (...) {
+        ptr = nullptr;
+    }
+
+    if (!ptr) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] allocate(%s): both device and host alloc failed "
+                       "(size=%.1f MB)\n",
+                       tag, alloc_size / (1024.0 * 1024.0));
+        return result;
+    }
+
+    result.ptr       = ptr;
+    result.is_device = false;
+    result.size      = alloc_size;
+
+    // Host-pinned does NOT consume VRAM budget (it is malloc_host).
+    std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
+    managed_allocs_[ptr] = { alloc_size, false };
+    return result;
+}
+
+// --- unified_cache::deallocate() ---
+
+void unified_cache::deallocate(void * ptr, size_t size) {
+    if (!ptr) {
+        return;
+    }
+
+    managed_alloc_entry entry{};
+    {
+        std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
+        auto it = managed_allocs_.find(ptr);
+        if (it == managed_allocs_.end()) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] deallocate: unknown pointer %p (size=%zu)\n", ptr, size);
+            return;
+        }
+        entry = it->second;
+        managed_allocs_.erase(it);
+    }
+
+    if (entry.is_device) {
+        // Reverse the budget charge.
+        saturating_sub_used(entry.size);
+    }
+
+    try {
+        sycl::free(ptr, queue_);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] deallocate: sycl::free failed ptr=%p: %s\n", ptr, e.what());
+    }
+}
+
+// --- Inference Scratch Pool ---
+
+bool unified_cache::reserve_scratch_pool(size_t pool_bytes) {
+    if (scratch_pool_ptr_ && scratch_pool_size_ >= pool_bytes) {
+        return true;  // Already large enough.
+    }
+
+    // Free existing pool if it exists but is too small.
+    if (scratch_pool_ptr_) {
+        saturating_sub_used(scratch_pool_size_);
+        try {
+            sycl::free(scratch_pool_ptr_, queue_);
+        } catch (...) {}
+        scratch_pool_ptr_  = nullptr;
+        scratch_pool_size_ = 0;
+        scratch_pool_off_.store(0, std::memory_order_relaxed);
+    }
+
+    // Allocate through our own allocate() path so budget/L0 checks apply.
+    vram_alloc_request req{};
+    req.size               = pool_bytes;
+    req.lifetime           = alloc_lifetime::CONTEXT;
+    req.category           = runtime_category::COMPUTE;
+    req.allow_host_fallback = false;  // Scratch pool must be on device.
+    req.tag                = "scratch_pool";
+
+    vram_alloc_result res = allocate(req);
+    if (!res.ptr) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] reserve_scratch_pool: failed to allocate %.1f MB\n",
+                      pool_bytes / (1024.0 * 1024.0));
+        return false;
+    }
+
+    scratch_pool_ptr_  = res.ptr;
+    scratch_pool_size_ = pool_bytes;
+    scratch_pool_off_.store(0, std::memory_order_relaxed);
+    scratch_pool_hwm_  = 0;
+
+    GGML_LOG_INFO("[UNIFIED-CACHE] Scratch pool reserved: %.1f MB on device\n",
+                  pool_bytes / (1024.0 * 1024.0));
+    return true;
+}
+
+void * unified_cache::get_scratch(size_t size) {
+    if (!scratch_pool_ptr_ || size == 0) {
+        return nullptr;
+    }
+
+    // Align to 256 bytes for GPU coalescing.
+    const size_t aligned = (size + 255) & ~size_t(255);
+
+    // Atomic bump allocator — lock-free.
+    size_t off = scratch_pool_off_.fetch_add(aligned, std::memory_order_relaxed);
+    if (off + aligned > scratch_pool_size_) {
+        // Pool exhausted — roll back.
+        scratch_pool_off_.fetch_sub(aligned, std::memory_order_relaxed);
+        return nullptr;
+    }
+
+    // Track high-water mark (relaxed — diagnostic only).
+    size_t new_hwm = off + aligned;
+    size_t cur_hwm = scratch_pool_hwm_;
+    while (new_hwm > cur_hwm) {
+        // Not atomic — this is best-effort diagnostic.
+        scratch_pool_hwm_ = new_hwm;
+        cur_hwm = new_hwm;
+    }
+
+    return static_cast<uint8_t *>(scratch_pool_ptr_) + off;
+}
+
+void unified_cache::return_scratch(void * ptr) {
+    // Stack discipline: we don't actually free individual allocations.
+    // The pool is reset wholesale via reset_scratch_pool().
+    (void) ptr;
+}
+
+void unified_cache::reset_scratch_pool() {
+    scratch_pool_off_.store(0, std::memory_order_relaxed);
+}
+
+// --- Expert Allocation ---
+
+unified_cache::vram_alloc_result unified_cache::allocate_expert(size_t size) {
+    vram_alloc_request req{};
+    req.size               = size;
+    req.lifetime           = alloc_lifetime::INFERENCE;
+    req.category           = runtime_category::EXPERT_CACHE;
+    req.allow_host_fallback = true;
+    req.tag                = "expert";
+    return allocate(req);
+}
+
+// ============================================================================
+// Phase 3: Free-Standing Wrappers
+// ============================================================================
+
+unified_cache::vram_alloc_result unified_cache_allocate(
+    int                                       device_id,
+    const unified_cache::vram_alloc_request & req) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return {};
+    }
+    return cache->allocate(req);
+}
+
+void unified_cache_deallocate(int device_id, void * ptr, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (cache) {
+        cache->deallocate(ptr, size);
+    }
+}
+
+bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return false;
+    }
+    return cache->reserve_scratch_pool(pool_bytes);
+}
+
+void * unified_cache_get_scratch(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return nullptr;
+    }
+    return cache->get_scratch(size);
+}
+
+void unified_cache_return_scratch(int device_id, void * ptr) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (cache) {
+        cache->return_scratch(ptr);
+    }
+}
+
+void unified_cache_reset_scratch_pool(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (cache) {
+        cache->reset_scratch_pool();
+    }
+}
+
+unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return {};
+    }
+    return cache->allocate_expert(size);
+}
+
+size_t unified_cache_available_device(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return 0;
+    }
+    return cache->available_device();
+}
+
+size_t unified_cache_available_budget(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return 0;
+    }
+    return cache->available_budget();
+}
+
 }  // namespace ggml_sycl

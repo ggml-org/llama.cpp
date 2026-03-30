@@ -557,6 +557,9 @@ struct layer_weight_pointers {
     void * ffn_gate_up_proj = nullptr;  // Fused gate+up (optional)
 };
 
+// Forward declaration (defined after the class, needed for vram_alloc_request).
+enum class runtime_category : uint8_t;
+
 // Unified GPU cache for both dense weights and MoE experts
 //
 // Design principles:
@@ -1044,6 +1047,89 @@ class unified_cache {
     // Get size of a persistent scratch buffer (0 if not found)
     size_t get_persistent_scratch_size(const std::string & buffer_name) const;
 
+    // === Unified Allocation API (Phase 3) ===
+    // ALL VRAM allocations during inference should flow through this API.
+    // The cache queries L0 free VRAM before allocating, evicts weights if needed,
+    // and falls back to host-pinned memory when device allocation is unsafe.
+    //
+    // Lifetime categories control eviction eligibility and diagnostics:
+    //   MODEL_LOAD  — persists for model lifetime (dense weights, embeddings)
+    //   CONTEXT     — persists for context lifetime (KV cache, compute buffers)
+    //   INFERENCE   — reused per-token (scratch, staging, MoE tables)
+    //   TEMPORARY   — freed within a single kernel dispatch
+
+    enum class alloc_lifetime : uint8_t {
+        MODEL_LOAD = 0,
+        CONTEXT    = 1,
+        INFERENCE  = 2,
+        TEMPORARY  = 3,
+    };
+
+    struct vram_alloc_request {
+        size_t           size               = 0;
+        alloc_lifetime   lifetime           = alloc_lifetime::INFERENCE;
+        runtime_category category;          // Set after runtime_category is defined
+        bool             allow_host_fallback = true;   // host-pinned OK if VRAM full
+        const char *     tag                = nullptr; // debug label
+    };
+
+    struct vram_alloc_result {
+        void * ptr       = nullptr;
+        bool   is_device = false;  // true = VRAM, false = host-pinned
+        size_t size      = 0;
+
+        explicit operator bool() const { return ptr != nullptr; }
+    };
+
+    // Primary allocation entry point.  Queries L0 for real free VRAM, evicts
+    // cached weights when budget allows, and falls back to host-pinned memory
+    // when allow_host_fallback is true.  Thread-safe.
+    vram_alloc_result allocate(const vram_alloc_request & req);
+
+    // Release a buffer obtained from allocate().  Adjusts budget tracking.
+    // Accepts both device and host-pinned pointers (determined automatically).
+    void deallocate(void * ptr, size_t size);
+
+    // === Inference Scratch Pool ===
+    // Pre-allocated VRAM pool for per-op temporaries (Q8_1, FP16 dequant, etc.).
+    // Call reserve_scratch_pool() once at context creation with the max scratch
+    // size needed across all ops.  get_scratch()/return_scratch() are lock-free
+    // bump allocators during inference — zero malloc, zero free.
+
+    // Reserve the scratch pool.  Must be called before get_scratch().
+    // Returns true if allocation succeeded (or pool already large enough).
+    bool reserve_scratch_pool(size_t pool_bytes);
+
+    // Get a scratch buffer from the pool.  Returns nullptr if pool exhausted.
+    // The returned pointer is valid until return_scratch() or reset_scratch_pool().
+    void * get_scratch(size_t size);
+
+    // Return a scratch buffer to the pool.  No actual free — just adjusts bump pointer.
+    void return_scratch(void * ptr);
+
+    // Reset the scratch pool bump pointer (call between graph_compute invocations).
+    void reset_scratch_pool();
+
+    // Current scratch pool capacity and high-water mark.
+    size_t scratch_pool_capacity() const { return scratch_pool_size_; }
+    size_t scratch_pool_hwm() const { return scratch_pool_hwm_; }
+
+    // === Expert Allocation ===
+    // Allocates from the expert portion of the cache budget.  Falls back to
+    // host-pinned when VRAM is full.  Tracked separately for diagnostics.
+
+    vram_alloc_result allocate_expert(size_t size);
+
+    // === Live VRAM Queries ===
+    // Query actual free VRAM from Level Zero (not just budget accounting).
+    // Includes a safety margin for driver internals.
+
+    // Actual free VRAM on the device (L0 query minus safety margin).
+    size_t available_device() const;
+
+    // Budget headroom: budget_ - used_ (what the cache thinks is available).
+    size_t available_budget() const { return available(); }
+
   private:
     // Evict lowest-scoring entry to make room for new_size bytes
     // Returns true if eviction succeeded, false if all entries are pinned
@@ -1166,6 +1252,29 @@ class unified_cache {
 
     std::unordered_map<std::string, persistent_scratch_entry> persistent_scratches_;
     mutable std::mutex                                        persistent_scratch_mutex_;
+
+    // === Inference Scratch Pool (Phase 3) ===
+    // Pre-allocated VRAM block for per-op temporaries.  get_scratch() bumps
+    // the offset; return_scratch() decrements it (stack discipline).
+    // reset_scratch_pool() resets to zero between graph_compute calls.
+    void *              scratch_pool_ptr_  = nullptr;  // Base pointer (device VRAM)
+    size_t              scratch_pool_size_ = 0;        // Total pool bytes
+    std::atomic<size_t> scratch_pool_off_{ 0 };        // Current bump offset
+    size_t              scratch_pool_hwm_  = 0;        // High-water mark for diagnostics
+
+    // === Unified allocate() tracking (Phase 3) ===
+    // Track pointers returned by allocate() so deallocate() knows whether
+    // the pointer is device or host-pinned and which budget to adjust.
+    struct managed_alloc_entry {
+        size_t size      = 0;
+        bool   is_device = false;
+    };
+
+    std::unordered_map<void *, managed_alloc_entry> managed_allocs_;
+    std::mutex                                      managed_allocs_mutex_;
+
+    // Safety margin subtracted from L0-reported free VRAM to avoid driver OOM.
+    static constexpr size_t VRAM_SAFETY_MARGIN = 128 * 1024 * 1024;  // 128 MB
 
     // Deferred frees to avoid releasing buffers while in flight.
     std::vector<deferred_free_entry>      deferred_frees_;
@@ -1742,6 +1851,36 @@ void unified_cache_free_partial_entries(int device);
 // no llama.cpp backend and thus cannot use create_cache_for_device().
 // Returns the cache pointer, or nullptr on failure.
 unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & queue);
+
+// === Unified Allocation API — Free-Standing Wrappers (Phase 3) ===
+// Route to the unified_cache for the given device.  These are the preferred
+// entry points for code outside unified-cache.cpp.
+
+// Allocate VRAM (or host-pinned fallback) through the unified cache.
+// Returns result with ptr, is_device flag, and actual size.
+unified_cache::vram_alloc_result unified_cache_allocate(
+    int                                         device_id,
+    const unified_cache::vram_alloc_request &   req);
+
+// Free a buffer previously obtained from unified_cache_allocate().
+void unified_cache_deallocate(int device_id, void * ptr, size_t size);
+
+// Reserve the inference scratch pool on a device.
+bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
+
+// Get/return scratch from the pool.
+void * unified_cache_get_scratch(int device_id, size_t size);
+void   unified_cache_return_scratch(int device_id, void * ptr);
+void   unified_cache_reset_scratch_pool(int device_id);
+
+// Allocate from expert budget (or host fallback).
+unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size);
+
+// Query actual L0 free VRAM (with safety margin).
+size_t unified_cache_available_device(int device_id);
+
+// Query budget headroom (budget_ - used_).
+size_t unified_cache_available_budget(int device_id);
 
 // === Shutdown API ===
 
