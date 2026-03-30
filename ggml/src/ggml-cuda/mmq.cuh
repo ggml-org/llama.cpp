@@ -492,7 +492,7 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
                 const int i = i0 + threadIdx.x;
                 const int kyqs = QI8_1 * ((k01/2) / (QI8_1/2)) + (k01/2) % (QI8_1/2);
 
-                int u[2*VDR_Q4_0_Q8_1_MMQ];
+                int u[2*VDR_Q4_1_Q8_1_MMQ];
 
                 constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
                 constexpr int mcpy_int = max_cpy / sizeof(int);  
