@@ -1346,11 +1346,10 @@ struct ggml_backend_cuda_context {
 
         // Vram-budget is capped at VRAM_BUDGET_PERCENT of the architecture's typical VRAM 
         // divided by the estimated per-graph memory footprint (MAX_CUDA_GRAPH_SIZE).        
-        constexpr size_t VRAM_BUDGET_PERCENT = 10;                         // Fraction of VRAM reserved for CUDA graph storage expressed in % (10 = 10%)        
-        constexpr size_t CUDA_NODE_SIZE      = 256;                        // Approximate size of a node's properties in bytes - used for estimating graph memory usage
-        constexpr size_t MAX_CUDA_GRAPH_SIZE = 2048 * CUDA_NODE_SIZE;      // 512 KB = Max number of nodes in a graph times size of node to estimate the max graph size in bytes - used for eviction policy        
-        constexpr size_t VRAM_1GB            = size_t(1024 * 1024 * 1024); // 1 GiB in bytes
-            
+        constexpr size_t VRAM_BUDGET_PERCENT    = 10;                         // Fraction of VRAM reserved for CUDA graph storage expressed in % (10 = 10%)        
+        constexpr size_t CUDA_GRAPH_NODE_SIZE   = 256;                        // Approximate size of a node's properties in bytes - used for estimating graph memory usage
+        constexpr size_t CUDA_GRAPH_NODES       = 2048;                       // Approximate number of nodes in a graph - used for estimating graph memory usage        
+        
         // Example numbers based on typical VRAM for each architecture and the resulting max_cuda_graphs() with a 10% VRAM budget and 512 KB per graph estimate:                                              
         // Architecture         Typical VRAM   max_cuda_graphs()
         // Blackwell (>=1200)   80 GB          1638
@@ -1359,6 +1358,7 @@ struct ggml_backend_cuda_context {
         // Turing (>=750)       11 GB          225
         // Volta (>=700)        16 GB          327
         // Pascal and older     8 GB           163
+        constexpr size_t VRAM_1GB            = size_t(1024 * 1024 * 1024); // 1 GiB in bytes
         constexpr size_t vram_blackwell    =  80 * VRAM_1GB;
         constexpr size_t vram_ada_lovelace =  24 * VRAM_1GB;
         constexpr size_t vram_ampere       =  24 * VRAM_1GB;
@@ -1373,8 +1373,9 @@ struct ggml_backend_cuda_context {
             cc >= GGML_CUDA_CC_AMPERE       ? vram_ampere       :
             cc >= GGML_CUDA_CC_TURING       ? vram_turing       :
             cc >= GGML_CUDA_CC_VOLTA        ? vram_volta        :
-                                              vram_pascal;        
-        
+                                              vram_pascal;       
+
+        constexpr size_t MAX_CUDA_GRAPH_SIZE = CUDA_GRAPH_NODES * CUDA_GRAPH_NODE_SIZE; 
         return std::max(size_t{1}, (vram / VRAM_BUDGET_PERCENT) / MAX_CUDA_GRAPH_SIZE);
     }
 
@@ -1413,7 +1414,7 @@ struct ggml_backend_cuda_context {
         const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
         GGML_LOG_DEBUG("cuda_graph() elapsed: %lld us  cache_size: %zu\n",
                        static_cast<long long>(elapsed_us), cuda_graphs.size());
-                       
+
         return it->second.get();
     }
 
