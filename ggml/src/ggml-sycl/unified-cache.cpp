@@ -3400,9 +3400,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 std::unique_lock<std::shared_mutex> lock(rw_mutex_);
                 auto                                it = entries_.find(key);
                 if (it != entries_.end()) {
-                    it->second.has_ready_event = true;
-                    it->second.ready_event     = last_event;
-                    it->second.state           = cache_entry_state::IN_PROGRESS;
+                    it->second.has_ready_event  = true;
+                    it->second.ready_event      = last_event;
+                    it->second.state            = cache_entry_state::IN_PROGRESS;
+                    it->second.last_write_event = last_event;
+                    it->second.has_write_event  = true;
                 }
             }
             entry_cv_.notify_all();
@@ -3528,8 +3530,10 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                                it = entries_.find(key);
         if (it != entries_.end()) {
-            it->second.has_ready_event = false;
-            it->second.state           = cache_entry_state::READY;
+            it->second.has_ready_event  = false;
+            it->second.state            = cache_entry_state::READY;
+            it->second.last_write_event = fill_event;
+            it->second.has_write_event  = true;
         }
     }
     entry_cv_.notify_all();
@@ -4015,10 +4019,14 @@ bool unified_cache::stage_expert_group(int                          block_id,
                 unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key, s.data->layer_id, s.data->expert_id };
                 auto              it = entries_.find(ckey);
                 if (it != entries_.end()) {
-                    it->second.has_ready_event = true;
-                    it->second.ready_event     = last_event;
-                    it->second.layout          = layout;
-                    it->second.size            = s.data->dst_size;
+                    it->second.has_ready_event  = true;
+                    it->second.ready_event      = last_event;
+                    it->second.layout           = layout;
+                    it->second.size             = s.data->dst_size;
+                    if (has_last_event) {
+                        it->second.last_write_event = last_event;
+                        it->second.has_write_event  = true;
+                    }
                 }
             }
         }
@@ -4110,11 +4118,13 @@ bool unified_cache::stage_expert_group(int                          block_id,
             unified_cache_key ckey{ cache_entry_type::MOE_EXPERT, *s.key, s.data->layer_id, s.data->expert_id };
             auto              it = entries_.find(ckey);
             if (it != entries_.end()) {
-                it->second.has_ready_event = true;
-                it->second.ready_event     = last_event;
-                it->second.layout          = layout;
-                it->second.size            = s.data->dst_size;
-                it->second.src_ptr         = s.data->src_ptr;
+                it->second.has_ready_event  = true;
+                it->second.ready_event      = last_event;
+                it->second.layout           = layout;
+                it->second.size             = s.data->dst_size;
+                it->second.src_ptr          = s.data->src_ptr;
+                it->second.last_write_event = last_event;
+                it->second.has_write_event  = true;
             }
         }
     }

@@ -373,6 +373,8 @@ struct unified_cache_entry {
     bool                  host_resident;    // Entry lives in host memory, not device (fallback when VRAM full)
     cache_location        location;         // DEVICE/HOST_PINNED/HOST_MMAP
     bool                  pool_allocated;   // True if device_ptr was sub-allocated from layout_pool_
+    sycl::event           last_write_event; // Event from last fill/reorder that wrote to device_ptr
+    bool                  has_write_event = false;  // Whether last_write_event is valid
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
