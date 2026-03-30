@@ -908,10 +908,12 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
                 ggml_is_contiguous(op) &&
                 et_ggml_is_row_contiguous(op->src[0])) {
-                // Check ROPE mode - only support standard (0x0) and NEOX (0x2)
+                // Check ROPE mode - support standard (0x0), NEOX (0x2), and IMROPE (0x28)
                 const int mode = ((const int32_t *) op->op_params)[2];
                 const int ndims = ((const int32_t *) op->op_params)[1];
-                supported = ((mode == 0x0) || ((mode & GGML_ROPE_TYPE_NEOX) && ndims % 16 == 0)) && (ndims <= 256);
+                supported = ((mode == 0x0) ||
+                             (((mode & GGML_ROPE_TYPE_NEOX) || mode == GGML_ROPE_TYPE_IMROPE) && ndims % 16 == 0))
+                            && (ndims <= 256);
             } else {
                 supported = false;
             }
@@ -1301,9 +1303,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    if(!supported) {
-        ggml_et_dump_operator_metadata(op);
-    }
+    // if(!supported) {
+    //     ggml_et_dump_operator_metadata(op);
+    // }
     return supported;
 }
 
