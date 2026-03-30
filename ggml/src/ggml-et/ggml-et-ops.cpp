@@ -1955,3 +1955,34 @@ bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
     ET_PERF_END("SET_ROWS", kernel_name, node);
     return kernel_result;
 }
+
+bool ggml_et_op_fill(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    ggml_et_fill_params params;
+    params.dst = *node;
+    memcpy(&params.c, node->op_params, sizeof(float));
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "fill_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("FILL", "fill_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: DIAG operation missing source tensor\n");
+        return false;
+    }
+
+    ggml_et_diag_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "diag_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("DIAG", "diag_f32", node);
+    return kernel_result;
+}

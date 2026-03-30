@@ -695,6 +695,14 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_set_rows(dev_ctx, node);
                 break;
 
+            case GGML_OP_FILL:
+                ggml_et_op_fill(dev_ctx, node);
+                break;
+
+            case GGML_OP_DIAG:
+                ggml_et_op_diag(dev_ctx, node);
+                break;
+
             case GGML_OP_RWKV_WKV6:
                 ggml_et_op_rwkv_wkv6(dev_ctx, node);
                 break;
@@ -723,11 +731,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
     return GGML_STATUS_SUCCESS;
 }
 
-// Check that each row is element-contiguous (nb[0] == type_size and nb[1] == ne[0]*nb[0]),
-// but allow non-contiguous higher dims (e.g. strided views across dim 2/3).
+// Check that elements within each row are contiguous (nb[0] == type_size).
+// Higher-dim strides can be arbitrary — kernels navigate them via byte offsets.
 static bool et_ggml_is_row_contiguous(const ggml_tensor * t) {
-    const size_t type_sz = ggml_type_size(t->type);
-    return t->nb[0] == type_sz && t->nb[1] == t->ne[0] * type_sz;
+    return t->nb[0] == ggml_type_size(t->type);
 }
 
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
@@ -1116,6 +1123,24 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             } else {
                 supported = false;
             }
+            break;
+        case GGML_OP_FILL:
+            // F32 contiguous, ne[0] cacheline-aligned for SIMD fill
+            supported = op->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(op) &&
+                       op->ne[0] % 16 == 0;
+            break;
+        case GGML_OP_DIAG:
+            // F32 contiguous dst, src0 is 1D vector [N,1,...], dst is [N,N,...]
+            // ne[0] must be cacheline-aligned for SIMD zeroing
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->ne[0] % 16 == 0 &&
+                       op->ne[0] == op->ne[1] &&
+                       op->src[0]->ne[0] == op->ne[0] &&
+                       op->src[0]->ne[1] == 1 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
             break;
         case GGML_OP_RWKV_WKV6:
             // F32 contiguous, head_size must be multiple of 8 for vectorization

@@ -139,6 +139,16 @@ struct ggml_et_repeat_params {
     ggml_tensor dst;      // F32 output tensor (tiled result)
 };
 
+struct ggml_et_fill_params {
+    ggml_tensor dst;      // F32 output tensor (contiguous)
+    float c;              // Constant value to fill
+};
+
+struct ggml_et_diag_params {
+    ggml_tensor src0;     // F32 input vector
+    ggml_tensor dst;      // F32 output diagonal matrix
+};
+
 struct ggml_et_rwkv_wkv6_params {
     float* k;           // src[0]: [S, H, T]  key
     float* v;           // src[1]: [S, H, T]  value
@@ -259,6 +269,8 @@ bool ggml_et_op_rwkv_wkv7(ggml_backend_et_device_context* dev_ctx, const ggml_te
 bool ggml_et_op_cpy(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_gated_delta_net(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_fill(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,
                              const ggml_tensor* mul_node);
