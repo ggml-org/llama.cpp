@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22.2)
+cmake_minimum_required(VERSION 3.22.1)
 project(ggml-htp C CXX ASM)
 
 include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)

@@ -60,13 +60,17 @@ target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ht
 
 # Build HTP skels
 set(HTP_SKELS)
+set(HTP_SKELETON_TARGETS)
 function(build_htp_skel V)
-    ExternalProject_Add(htp-${V}
+    set(HTP_SKELETON_TARGET htp-${V})
+
+    ExternalProject_Add(${HTP_SKELETON_TARGET}
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/htp BUILD_ALWAYS ON
         BUILD_BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so
         CMAKE_ARGS
             -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_TOOLCHAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/htp/cmake-toolchain.cmake
+            -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
             -DCMAKE_INSTALL_LIBDIR=${CMAKE_CURRENT_BINARY_DIR}
             -DHEXAGON_SDK_ROOT=${HEXAGON_SDK_ROOT}
             -DHEXAGON_TOOLS_ROOT=${HEXAGON_TOOLS_ROOT}
@@ -74,7 +78,10 @@ function(build_htp_skel V)
             -DGGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE}
             -DDSP_VERSION=${V}
             -DPREBUILT_LIB_DIR="toolv19_${V}")
+
+    list(APPEND HTP_SKELETON_TARGETS ${HTP_SKELETON_TARGET})
     list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
+    set(HTP_SKELETON_TARGETS ${HTP_SKELETON_TARGETS} PARENT_SCOPE)
     set(HTP_SKELS ${HTP_SKELS} PARENT_SCOPE)
 endfunction()
 
@@ -84,6 +91,14 @@ build_htp_skel(v73)
 build_htp_skel(v75)
 build_htp_skel(v79)
 build_htp_skel(v81)
+
+# Build skels whenever ggml-hexagon is built.
+add_dependencies(${TARGET_NAME} ${HTP_SKELETON_TARGETS})
+
+# Place skels next to libggml-hexagon.so so Android packaging can include them.
+add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${HTP_SKELS} $<TARGET_FILE_DIR:${TARGET_NAME}>
+    COMMENT "copying Hexagon HTP skels to target output directory")
 
 # Install Hexagon skels required at runtime
 install(FILES ${HTP_SKELS} TYPE LIB)

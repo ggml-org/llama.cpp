@@ -1646,8 +1646,9 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         u.enable = 1;
         int err  = remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to enable unsigned PD for session %d : error 0x%x\n", dev_id, err);
-            throw std::runtime_error("ggml-hex: remote_session_control(unsign) failed (see log for details)");
+            // Some devices/firmware disallow unsigned PD control. Continue and attempt to
+            // open the session anyway, which can still work with signed/skel-compatible flows.
+            GGML_LOG_WARN("ggml-hex: failed to enable unsigned PD for session %d : error 0x%x (continuing)\n", dev_id, err);
         }
     }
 
@@ -3322,6 +3323,13 @@ static ggml_backend_buffer_type_t * ggml_backend_hexagon_device_get_extra_buffer
     return bufts;
 }
 
+// Aggressively offload every op the NPU can handle.
+// Without this callback (NULL), the scheduler only offloads ops whose tensor
+// size exceeds an internal threshold, leaving many small-but-supported ops on CPU.
+static bool ggml_backend_hexagon_device_offload_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    return ggml_backend_hexagon_device_supports_op(dev, op);
+}
+
 static const struct ggml_backend_device_i ggml_backend_hexagon_device_i = {
     /* .get_name             = */ ggml_backend_hexagon_device_get_name,
     /* .get_description      = */ ggml_backend_hexagon_device_get_description,
@@ -3334,7 +3342,7 @@ static const struct ggml_backend_device_i ggml_backend_hexagon_device_i = {
     /* .buffer_from_host_ptr = */ NULL,  // ggml_backend_hexagon_device_buffer_from_ptr,
     /* .supports_op          = */ ggml_backend_hexagon_device_supports_op,
     /* .supports_buft        = */ ggml_backend_hexagon_device_supports_buft,
-    /* .offload_op           = */ NULL,  // ggml_backend_hexagon_device_offload_op,
+    /* .offload_op           = */ ggml_backend_hexagon_device_offload_op,
     /* .event_new            = */ NULL,
     /* .event_free           = */ NULL,
     /* .event_synchronize    = */ NULL,

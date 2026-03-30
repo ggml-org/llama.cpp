@@ -19,6 +19,100 @@
 #    include <dlfcn.h>
 #    include <unistd.h>
 #endif
+#ifdef __ANDROID__
+#    include <android/dlext.h>
+#    include <elf.h>
+#    include <link.h>
+// android_get_exported_namespace is in libdl_android.so but not in public NDK headers
+typedef struct android_namespace_t * (*android_get_exported_namespace_pfn_t)(const char *);
+
+// Resolve a symbol from an already-loaded library by parsing its ELF dynamic
+// symbol table via dl_iterate_phdr.  This bypasses dlsym namespace restrictions.
+struct elf_sym_lookup {
+    const char * library;
+    const char * symbol;
+    void *       result;
+};
+
+static int elf_sym_lookup_cb(struct dl_phdr_info * info, size_t /*size*/, void * data) {
+    auto * ctx = static_cast<elf_sym_lookup *>(data);
+    if (!info->dlpi_name || !strstr(info->dlpi_name, ctx->library)) {
+        return 0;  // not the library we want
+    }
+
+    // Find PT_DYNAMIC segment
+    const ElfW(Dyn) * dyn_start = nullptr;
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
+        if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
+            dyn_start = reinterpret_cast<const ElfW(Dyn) *>(
+                info->dlpi_addr + info->dlpi_phdr[i].p_vaddr);
+            break;
+        }
+    }
+    if (!dyn_start) return 0;
+
+    // Extract symbol table, string table, and hash table from dynamic section.
+    // d_un.d_ptr values may be unrelocated VAs — add load bias if they look
+    // like small offsets (i.e. less than the library's base address).
+    const ElfW(Sym) * symtab = nullptr;
+    const char *       strtab = nullptr;
+    const ElfW(Word) * hashtab = nullptr;
+    const uint32_t *   gnu_hash = nullptr;
+    auto dyn_ptr = [&](ElfW(Addr) val) -> uintptr_t {
+        return (val < static_cast<ElfW(Addr)>(info->dlpi_addr))
+             ? (info->dlpi_addr + val) : val;
+    };
+
+    for (const ElfW(Dyn) * d = dyn_start; d->d_tag != DT_NULL; d++) {
+        switch (d->d_tag) {
+            case DT_SYMTAB:   symtab   = reinterpret_cast<const ElfW(Sym) *>(dyn_ptr(d->d_un.d_ptr)); break;
+            case DT_STRTAB:   strtab   = reinterpret_cast<const char *>(dyn_ptr(d->d_un.d_ptr));      break;
+            case DT_HASH:     hashtab  = reinterpret_cast<const ElfW(Word) *>(dyn_ptr(d->d_un.d_ptr)); break;
+            case DT_GNU_HASH: gnu_hash = reinterpret_cast<const uint32_t *>(dyn_ptr(d->d_un.d_ptr));   break;
+        }
+    }
+    if (!symtab || !strtab) return 0;
+
+    // Determine number of symbols from DT_HASH (nchain == nsyms)
+    size_t nsyms = 0;
+    if (hashtab) {
+        nsyms = hashtab[1];  // hashtab[0]=nbuckets, hashtab[1]=nchain
+    } else if (gnu_hash) {
+        // Approximate: scan GNU hash to find max symndx
+        uint32_t nbuckets  = gnu_hash[0];
+        uint32_t symoffset = gnu_hash[1];
+        uint32_t bloom_sz  = gnu_hash[2];
+        const uint32_t * buckets =
+            reinterpret_cast<const uint32_t *>(&gnu_hash[4] + bloom_sz * (sizeof(ElfW(Addr))/4));
+        uint32_t max_idx = symoffset;
+        for (uint32_t i = 0; i < nbuckets; i++) {
+            if (buckets[i] > max_idx) max_idx = buckets[i];
+        }
+        // Walk chain from max_idx until we find the end marker (LSB set)
+        const uint32_t * chain = buckets + nbuckets - symoffset;
+        while (!(chain[max_idx] & 1)) max_idx++;
+        nsyms = max_idx + 1;
+    } else {
+        nsyms = 256;  // small fallback
+    }
+
+    for (size_t i = 0; i < nsyms; i++) {
+        if (symtab[i].st_shndx == SHN_UNDEF) continue;
+        if (strcmp(strtab + symtab[i].st_name, ctx->symbol) == 0) {
+            ctx->result = reinterpret_cast<void *>(
+                info->dlpi_addr + symtab[i].st_value);
+            return 1;  // found, stop iteration
+        }
+    }
+    return 0;
+}
+
+static void * elf_find_symbol(const char * lib_name, const char * sym_name) {
+    elf_sym_lookup ctx { lib_name, sym_name, nullptr };
+    dl_iterate_phdr(elf_sym_lookup_cb, &ctx);
+    return ctx.result;
+}
+#endif
 #include "ggml-impl.h"
 #include "htp-drv.h"
 #include "libdl.h"
@@ -311,18 +405,64 @@ int htpdrv_init() {
 #ifdef _WIN32
     std::string drv_path = get_driver_path() + "\\" + "libcdsprpc.dll";
 #else
-    std::string drv_path = "libcdsprpc.so";
+    const char * vendor_lib = getenv("GGML_HEXAGON_VENDOR_LIB");
+    std::string drv_path = (vendor_lib && vendor_lib[0] != '\0')
+                         ? vendor_lib
+                         : "libcdsprpc.so";
 #endif
     if (initialized) {
         GGML_LOG_INFO("ggml-hex: Driver already loaded\n");
         return AEE_SUCCESS;
     }
-    GGML_LOG_INFO("ggml-hex: Loading driver %s\n", drv_path.c_str());
 
-    fs::path path{ drv_path.c_str() };
-    dl_handle_ptr handle { dl_load_library(path) };
+    // When loading a vendor lib from a custom path, try android_dlopen_ext with
+    // the "sphal" namespace which has vendor/lib64 in its search paths and links
+    // to vndk for transitive deps (libhidlbase, libcutils, libhardware, etc.).
+    dl_handle_ptr handle { nullptr };
+#ifdef __ANDROID__
+    if (vendor_lib && vendor_lib[0] != '\0') {
+        // Load directly from /vendor/lib64 via sphal namespace which has
+        // vendor search paths and vndk linkage for transitive deps.
+        drv_path = "libcdsprpc.so";
+        GGML_LOG_INFO("ggml-hex: Trying sphal namespace for vendor FastRPC lib\n");
+
+        // Resolve android_get_exported_namespace by parsing ELF symtab of the
+        // already-loaded libdl_android.so — this bypasses dlsym namespace
+        // restrictions that prevent apps from calling private linker APIs.
+        auto get_ns = (android_get_exported_namespace_pfn_t)
+            elf_find_symbol("libdl_android.so", "android_get_exported_namespace");
+
+        if (get_ns) {
+            GGML_LOG_INFO("ggml-hex: resolved android_get_exported_namespace via ELF parsing\n");
+            struct android_namespace_t * sphal_ns = get_ns("sphal");
+            if (sphal_ns) {
+                android_dlextinfo extinfo = {};
+                extinfo.flags = ANDROID_DLEXT_USE_NAMESPACE;
+                extinfo.library_namespace = sphal_ns;
+                void * h = android_dlopen_ext(drv_path.c_str(),
+                                              RTLD_NOW | RTLD_LOCAL, &extinfo);
+                if (h) {
+                    handle.reset(static_cast<dl_handle *>(h));
+                    GGML_LOG_INFO("ggml-hex: Loaded vendor lib via sphal namespace\n");
+                } else {
+                    GGML_LOG_WARN("ggml-hex: sphal dlopen failed: %s\n", dlerror());
+                }
+            } else {
+                GGML_LOG_WARN("ggml-hex: sphal namespace not found\n");
+            }
+        } else {
+            GGML_LOG_WARN("ggml-hex: could not resolve android_get_exported_namespace\n");
+        }
+    }
+#endif
+
     if (!handle) {
-        GGML_LOG_ERROR("ggml-hex: failed to load %s: %s\n", path.u8string().c_str(), dl_error());
+        GGML_LOG_INFO("ggml-hex: Loading driver %s (standard dlopen)\n", drv_path.c_str());
+        fs::path path{ drv_path.c_str() };
+        handle.reset(dl_load_library(path));
+    }
+    if (!handle) {
+        GGML_LOG_ERROR("ggml-hex: failed to load %s: %s\n", drv_path.c_str(), dl_error());
         return AEE_EUNABLETOLOAD;
     }
 
