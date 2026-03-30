@@ -12,7 +12,9 @@
 #include "math_fp.h"
 
 // ROPE constants (matching GGML definitions)
-#define GGML_ROPE_TYPE_NEOX 2
+#define GGML_ROPE_TYPE_NEOX   2
+#define GGML_ROPE_TYPE_MROPE  8
+#define GGML_ROPE_TYPE_IMROPE 40
 #define MAX_ROPE_HALF_DIMS 128  // supports up to n_dims=256
 
 #define ROPE_VEC_WIDTH 8
@@ -342,6 +344,106 @@ static inline void compute_rope_cache(
 }
 
 //------------------------------------------------------------------------------
+// IMROPE cache build (interleaved multi-modal RoPE for Qwen3VL)
+//------------------------------------------------------------------------------
+
+// Builds cos/sin cache with 4 interleaved position channels.
+// Each dimension pair selects from {theta_t, theta_h, theta_w, theta_e}
+// using a mod-3 sector pattern, matching the CPU reference exactly.
+static inline void compute_imrope_cache(
+    float * cos_cache, float * sin_cache,
+    int32_t n_dims, float theta_scale,
+    int32_t pos_t, int32_t pos_h, int32_t pos_w, int32_t pos_e,
+    const int32_t sections[4],
+    const float * freq_factors, float freq_scale,
+    const float corr_dims[2], float ext_factor, float attn_factor) {
+
+    const int32_t half_dims = n_dims / 2;
+    const int32_t sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+
+    float theta_t = (float)pos_t;
+    float theta_h = (float)pos_h;
+    float theta_w = (float)pos_w;
+    float theta_e = (float)pos_e;
+
+    int32_t dim_idx = 0;
+
+    for (; dim_idx + ROPE_VEC_WIDTH <= half_dims; dim_idx += ROPE_VEC_WIDTH) {
+        float theta_block[ROPE_VEC_WIDTH] __attribute__((aligned(32)));
+        float mscale = attn_factor;
+
+        if (ext_factor != 0.0f) {
+            mscale *= 1.0f + 0.1f * et_logf(et_fdiv(1.0f, freq_scale));
+        }
+
+        for (int i = 0; i < ROPE_VEC_WIDTH; ++i) {
+            const int32_t pair_idx = dim_idx + i;
+            const int32_t sector = pair_idx % sect_dims;
+            const float ff = freq_factors ? freq_factors[pair_idx] : 1.0f;
+
+            // Interleaved sector assignment (mod-3 pattern)
+            float theta;
+            if      (sector % 3 == 1 && sector < 3 * sections[1]) { theta = theta_h; }
+            else if (sector % 3 == 2 && sector < 3 * sections[2]) { theta = theta_w; }
+            else if (sector % 3 == 0 && sector < 3 * sections[0]) { theta = theta_t; }
+            else                                                   { theta = theta_e; }
+
+            const float theta_extrap = et_fdiv(theta, ff);
+            float theta_interp = freq_scale * theta_extrap;
+            float theta_mix = theta_interp;
+
+            if (ext_factor != 0.0f) {
+                float ramp_mix = rope_yarn_ramp(corr_dims[0], corr_dims[1], pair_idx * 2) * ext_factor;
+                theta_mix = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+            }
+
+            theta_block[i] = theta_mix;
+
+            // All 4 thetas advance every iteration
+            theta_t *= theta_scale;
+            theta_h *= theta_scale;
+            theta_w *= theta_scale;
+            theta_e *= theta_scale;
+        }
+
+        rope_sincos_block8(&sin_cache[dim_idx], &cos_cache[dim_idx], theta_block);
+
+        for (int i = 0; i < ROPE_VEC_WIDTH; ++i) {
+            sin_cache[dim_idx + i] *= mscale;
+            cos_cache[dim_idx + i] *= mscale;
+        }
+    }
+
+    // Scalar tail
+    for (; dim_idx < half_dims; ++dim_idx) {
+        const int32_t sector = dim_idx % sect_dims;
+        const float ff = freq_factors ? freq_factors[dim_idx] : 1.0f;
+
+        float theta;
+        if      (sector % 3 == 1 && sector < 3 * sections[1]) { theta = theta_h; }
+        else if (sector % 3 == 2 && sector < 3 * sections[2]) { theta = theta_w; }
+        else if (sector % 3 == 0 && sector < 3 * sections[0]) { theta = theta_t; }
+        else                                                   { theta = theta_e; }
+
+        rope_yarn_scalar(
+            et_fdiv(theta, ff),
+            freq_scale,
+            corr_dims,
+            dim_idx * 2,
+            ext_factor,
+            attn_factor,
+            &cos_cache[dim_idx],
+            &sin_cache[dim_idx]
+        );
+
+        theta_t *= theta_scale;
+        theta_h *= theta_scale;
+        theta_w *= theta_scale;
+        theta_e *= theta_scale;
+    }
+}
+
+//------------------------------------------------------------------------------
 // Entry point
 //------------------------------------------------------------------------------
 
@@ -424,25 +526,54 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
 
     const float theta_scale = et_powf(freq_base, et_fdiv(-2.0f, (float)n_dims));
     const int32_t half_dims = n_dims / 2;
-    const int is_neox = (mode & GGML_ROPE_TYPE_NEOX) != 0;
+    const int is_neox   = (mode & GGML_ROPE_TYPE_NEOX) != 0;
+    const int is_imrope = (mode == GGML_ROPE_TYPE_IMROPE);
+    const int use_neox_rotation = is_neox || is_imrope;
 
-    int32_t last_pos = -1;
+    // For IMROPE position cache invalidation: track all 4 channels
+    int32_t last_pos   = -1;
+    int32_t last_pos_h = -1;
+    int32_t last_pos_w = -1;
+    int32_t last_pos_e = -1;
 
     for (int64_t wu = start_wu; wu < end_wu; ++wu) {
         const int64_t h = wu % heads;
         const int64_t s = (wu / heads) % seq_len;
         const int64_t b = wu / (heads * seq_len);
 
-        const int32_t pos = src1_data[s] + rope_params->n_past;
+        if (is_imrope) {
+            // IMROPE: src1 layout is [p_t(0..S-1), p_h(0..S-1), p_w(0..S-1), p_e(0..S-1)]
+            const int32_t pt = src1_data[s]              + rope_params->n_past;
+            const int32_t ph = src1_data[s + seq_len]    + rope_params->n_past;
+            const int32_t pw = src1_data[s + seq_len * 2] + rope_params->n_past;
+            const int32_t pe = src1_data[s + seq_len * 3] + rope_params->n_past;
 
-        if (pos != last_pos) {
-            compute_rope_cache(
-                cos_cache, sin_cache,
-                n_dims, theta_scale, pos,
-                freq_factors, freq_scale,
-                corr_dims, rope_params->ext_factor, rope_params->attn_factor
-            );
-            last_pos = pos;
+            if (pt != last_pos || ph != last_pos_h || pw != last_pos_w || pe != last_pos_e) {
+                compute_imrope_cache(
+                    cos_cache, sin_cache,
+                    n_dims, theta_scale,
+                    pt, ph, pw, pe,
+                    rope_params->sections,
+                    freq_factors, freq_scale,
+                    corr_dims, rope_params->ext_factor, rope_params->attn_factor
+                );
+                last_pos   = pt;
+                last_pos_h = ph;
+                last_pos_w = pw;
+                last_pos_e = pe;
+            }
+        } else {
+            const int32_t pos = src1_data[s] + rope_params->n_past;
+
+            if (pos != last_pos) {
+                compute_rope_cache(
+                    cos_cache, sin_cache,
+                    n_dims, theta_scale, pos,
+                    freq_factors, freq_scale,
+                    corr_dims, rope_params->ext_factor, rope_params->attn_factor
+                );
+                last_pos = pos;
+            }
         }
 
         const float* head_src = (const float*)((const char*)src0_data +
@@ -451,12 +582,13 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
         float* head_dst = (float*)((char*)dst_data +
             b * dst->nb[3] + s * dst->nb[2] + h * dst->nb[1]);
 
-        // preserve original behavior exactly
+        // Copy dimensions beyond n_dims unchanged
         for (int64_t d = n_dims; d < head_dim; ++d) {
             head_dst[d] = head_src[d];
         }
 
-        if (is_neox) {
+        if (use_neox_rotation) {
+            // NEOX/IMROPE: pairs at (i, i+half_dims)
             uint64_t temp_mask;
             __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
             __asm__ volatile("mov.m.x m0, x0, 0xFF");
@@ -485,6 +617,7 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
 
             __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
         } else {
+            // Standard: adjacent pairs (2i, 2i+1)
             for (int32_t pair_idx = 0; pair_idx < half_dims; ++pair_idx) {
                 const int32_t dim_in_head = pair_idx * 2;
                 const float x0 = head_src[dim_in_head];
