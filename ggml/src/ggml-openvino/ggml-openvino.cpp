@@ -918,15 +918,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
-    case GGML_OP_VIEW: {
-        if (ggml_nelements(op) != ggml_nelements(op->src[0])) {
-            std::cout << __func__ << ": OpenVINO backend does not support VIEW with different number of elements: "
-                      << op->name << " " << ggml_nelements(op)
-                      << " vs " << ggml_nelements(op->src[0]) << std::endl;
-            return true;
-        }
-        break;
-    }
     case GGML_OP_TRANSPOSE: {
         // if the type is bf16, will return true
         if (op->type == GGML_TYPE_BF16) {

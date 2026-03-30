@@ -65,6 +65,8 @@ public:
 
     int32_t * get_output_op_params() const { return m_decoder->get_output_op_params(m_node_idx); }
 
+    size_t get_output_op_offset() const { return m_decoder->get_output_op_offset(m_node_idx); }
+
     ov::element::Type get_output_type() const {
         return m_decoder->get_output_type(m_node_idx);
     }

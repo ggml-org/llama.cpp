@@ -597,7 +597,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
                                ov::Core & core,
                                const std::string & device,
                                const ov::AnyMap & config) {
-    if (cgraph->n_nodes == 1 && (cgraph->nodes[0]->op == GGML_OP_NONE || cgraph->nodes[0]->op == GGML_OP_VIEW)) {
+    if (cgraph->n_nodes == 1 && (cgraph->nodes[0]->op == GGML_OP_NONE)) {
         return GGML_STATUS_SUCCESS;
     }
 
