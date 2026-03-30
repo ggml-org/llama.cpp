@@ -398,6 +398,7 @@ struct common_params {
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+    bool      kv_turbo     = false;         // apply TurboQuant rotation before K/V quantization
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 

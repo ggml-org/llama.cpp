@@ -89,7 +89,8 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                         bool   turbo_quant = false);
 
     ~llama_kv_cache() = default;
 
@@ -234,6 +235,22 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    // TurboQuant: random orthogonal rotation applied before K/V quantization
+    // rot_k_fwd[ikv] = Π  (forward rotation for K), shape [n_embd_head_k, n_embd_head_k], F32
+    // rot_k_inv[ikv] = Πᵀ (inverse rotation for K)
+    // rot_v_fwd/inv: same for V (only used when !v_trans, i.e. flash-attn path)
+    bool turbo_quant = false;
+
+    std::vector<ggml_tensor *> rot_k_fwd;
+    std::vector<ggml_tensor *> rot_k_inv;
+    std::vector<ggml_tensor *> rot_v_fwd;
+    std::vector<ggml_tensor *> rot_v_inv;
+
+    ggml_context_ptr        ctx_rot;
+    ggml_backend_buffer_ptr buf_rot;
+
+    void init_turbo_rotations();
 
     size_t total_size() const;
 

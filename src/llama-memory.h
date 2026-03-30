@@ -20,6 +20,10 @@ struct llama_memory_params {
 
     // use full-size SWA cache
     bool swa_full;
+
+    // apply TurboQuant random rotation to K/V vectors before quantization
+    // improves quantization quality at low bit-widths with no calibration data
+    bool turbo_quant;
 };
 
 enum llama_memory_status {

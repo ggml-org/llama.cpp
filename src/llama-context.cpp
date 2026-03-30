@@ -207,9 +207,10 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
+            /*.type_k      =*/ params.type_k,
+            /*.type_v      =*/ params.type_v,
+            /*.swa_full    =*/ params.swa_full,
+            /*.turbo_quant =*/ params.turbo_quant,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -2312,6 +2313,7 @@ llama_context_params llama_context_default_params() {
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
+        /*.turbo_quant                 =*/ false,
         /*.kv_unified                  =*/ false,
     };
 
@@ -2878,7 +2880,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         ggml_backend_dev_memory(dev, &free, &total);
 
         const size_t self = mb.model + mb.context + mb.compute;
-        const size_t unaccounted = total - self - free;
+        const size_t unaccounted = (total >= self + free) ? total - self - free : 0;
 
         table_data.push_back({
             template_gpu,

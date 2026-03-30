@@ -2626,6 +2626,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--turbo-kv"},
+        string_format("apply TurboQuant random rotation to K/V vectors before quantization\n"
+                      "improves quantization quality at low bit-widths with no calibration data\n"
+                      "(default: %s)", params.kv_turbo ? "true" : "false"),
+        [](common_params & params) {
+            params.kv_turbo = true;
+        }
+    ).set_env("LLAMA_ARG_TURBO_KV"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

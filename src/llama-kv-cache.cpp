@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <random>
 #include <stdexcept>
 
 //
@@ -30,9 +31,11 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                     bool   turbo_quant) :
     model(model), hparams(model.hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    turbo_quant(turbo_quant) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -198,6 +201,112 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+
+    if (turbo_quant) {
+        init_turbo_rotations();
+    }
+}
+
+// Fill a d×d random orthogonal matrix via modified Gram-Schmidt.
+// On exit: fwd[r*d+c] = Π[r,c], inv[r*d+c] = Πᵀ[r,c].
+// Both are laid out in ggml row-major (ne[0]=d=cols, ne[1]=d=rows).
+static void turbo_fill_rotation(float * fwd, float * inv, uint32_t d,
+                                  std::mt19937 & rng, std::normal_distribution<float> & dist) {
+    // Generate orthonormal rows in-place inside fwd.
+    for (uint32_t i = 0; i < d; i++) {
+        float * ri = fwd + i * d;
+        for (uint32_t k = 0; k < d; k++) {
+            ri[k] = dist(rng);
+        }
+        // Subtract projections onto already-orthonormalized rows j < i
+        for (uint32_t j = 0; j < i; j++) {
+            const float * rj = fwd + j * d;
+            float dot = 0.0f;
+            for (uint32_t k = 0; k < d; k++) {
+                dot += rj[k] * ri[k];
+            }
+            for (uint32_t k = 0; k < d; k++) {
+                ri[k] -= dot * rj[k];
+            }
+        }
+        // Normalize
+        float norm = 0.0f;
+        for (uint32_t k = 0; k < d; k++) {
+            norm += ri[k] * ri[k];
+        }
+        norm = sqrtf(norm);
+        for (uint32_t k = 0; k < d; k++) {
+            ri[k] /= norm;
+        }
+    }
+    // inv = fwd^T  (Π is orthogonal so Π^{-1} = Π^T)
+    for (uint32_t i = 0; i < d; i++) {
+        for (uint32_t j = 0; j < d; j++) {
+            inv[i * d + j] = fwd[j * d + i];
+        }
+    }
+}
+
+void llama_kv_cache::init_turbo_rotations() {
+    const uint32_t n_kv_layers = (uint32_t) layers.size();
+
+    // 4 tensors per KV layer: fwd+inv for K, fwd+inv for V
+    ggml_init_params params_rot = {
+        /*.mem_size   =*/ 4 * n_kv_layers * ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+
+    ctx_rot = ggml_context_ptr(ggml_init(params_rot));
+    if (!ctx_rot) {
+        throw std::runtime_error("failed to create TurboQuant rotation context");
+    }
+
+    rot_k_fwd.resize(n_kv_layers);
+    rot_k_inv.resize(n_kv_layers);
+    rot_v_fwd.resize(n_kv_layers);
+    rot_v_inv.resize(n_kv_layers);
+
+    for (uint32_t ikv = 0; ikv < n_kv_layers; ikv++) {
+        const int32_t il = (int32_t) layers[ikv].il;
+        const uint32_t dk = hparams.n_embd_head_k;
+        const uint32_t dv = hparams.n_embd_head_v;
+
+        rot_k_fwd[ikv] = ggml_new_tensor_2d(ctx_rot.get(), GGML_TYPE_F32, dk, dk);
+        rot_k_inv[ikv] = ggml_new_tensor_2d(ctx_rot.get(), GGML_TYPE_F32, dk, dk);
+        rot_v_fwd[ikv] = ggml_new_tensor_2d(ctx_rot.get(), GGML_TYPE_F32, dv, dv);
+        rot_v_inv[ikv] = ggml_new_tensor_2d(ctx_rot.get(), GGML_TYPE_F32, dv, dv);
+
+        ggml_format_name(rot_k_fwd[ikv], "turbo_rot_k_fwd_l%d", il);
+        ggml_format_name(rot_k_inv[ikv], "turbo_rot_k_inv_l%d", il);
+        ggml_format_name(rot_v_fwd[ikv], "turbo_rot_v_fwd_l%d", il);
+        ggml_format_name(rot_v_inv[ikv], "turbo_rot_v_inv_l%d", il);
+    }
+
+    ggml_backend_buffer_t raw_buf = ggml_backend_alloc_ctx_tensors_from_buft(
+            ctx_rot.get(), ggml_backend_cpu_buffer_type());
+    if (!raw_buf) {
+        throw std::runtime_error("failed to allocate TurboQuant rotation buffer");
+    }
+    buf_rot = ggml_backend_buffer_ptr(raw_buf);
+
+    LLAMA_LOG_INFO("%s: TurboQuant rotation matrices = %.2f MiB\n", __func__,
+            ggml_backend_buffer_get_size(raw_buf) / 1024.0f / 1024.0f);
+
+    // Fixed seed so rotations are deterministic across calls.
+    // Each KV layer and each of K/V get an independent random rotation.
+    std::mt19937 rng(0x74757262u);  // "turb"
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+
+    for (uint32_t ikv = 0; ikv < n_kv_layers; ikv++) {
+        const uint32_t dk = hparams.n_embd_head_k;
+        const uint32_t dv = hparams.n_embd_head_v;
+
+        turbo_fill_rotation(
+            (float *) rot_k_fwd[ikv]->data, (float *) rot_k_inv[ikv]->data, dk, rng, dist);
+        turbo_fill_rotation(
+            (float *) rot_v_fwd[ikv]->data, (float *) rot_v_inv[ikv]->data, dv, rng, dist);
+    }
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -1000,12 +1109,22 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
-    return ggml_view_4d(ctx, k,
+    ggml_tensor * k_view = ggml_view_4d(ctx, k,
             hparams.n_embd_head_k, hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k),
             ggml_row_size(k->type, n_embd_k_gqa),
             ggml_row_size(k->type, n_embd_k_gqa*kv_size),
             ggml_row_size(k->type, n_embd_k_gqa*kv_size)*sinfo.s0);
+
+    if (turbo_quant) {
+        // Cast to F32 first so ggml_mul_mat gets a well-typed second argument,
+        // then apply the inverse rotation: ggml_mul_mat(Πᵀ, k_f32) = k_f32 × Π,
+        // which undoes the forward rotation stored in the cache.
+        ggml_tensor * k_f32 = ggml_cast(ctx, k_view, GGML_TYPE_F32);
+        k_view = ggml_mul_mat(ctx, rot_k_inv[ikv], k_f32);
+    }
+
+    return k_view;
 }
 
 ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1023,12 +1142,19 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
-        return ggml_view_4d(ctx, v,
+        ggml_tensor * v_view = ggml_view_4d(ctx, v,
                 hparams.n_embd_head_v, hparams.n_head_kv(il), n_kv, ns,
                 ggml_row_size(v->type, hparams.n_embd_head_v),          // v->nb[1]
                 ggml_row_size(v->type, n_embd_v_gqa),                   // v->nb[2]
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size),           // v->nb[3]
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
+
+        if (turbo_quant) {
+            ggml_tensor * v_f32 = ggml_cast(ctx, v_view, GGML_TYPE_F32);
+            v_view = ggml_mul_mat(ctx, rot_v_inv[ikv], v_f32);
+        }
+
+        return v_view;
     }
 
     // note: v->nb[1] > v->nb[2]
@@ -1046,6 +1172,14 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * k = layers[ikv].k;
+
+    // TurboQuant: rotate k_cur before quantization into the cache.
+    // k_cur is [n_embd_head_k, n_head_kv, n_tokens] (3D).
+    // ggml_mul_mat(Π, k_cur) computes k_cur × Πᵀ, rotating each head vector.
+    // Result stays 3D and becomes F32, which satisfies the merge assertion below.
+    if (turbo_quant) {
+        k_cur = ggml_mul_mat(ctx, rot_k_fwd[ikv], k_cur);
+    }
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
@@ -1081,6 +1215,11 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * v = layers[ikv].v;
+
+    // TurboQuant: rotate v_cur before quantization (only the non-transposed FA path).
+    if (turbo_quant && !v_trans) {
+        v_cur = ggml_mul_mat(ctx, rot_v_fwd[ikv], v_cur);
+    }
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
