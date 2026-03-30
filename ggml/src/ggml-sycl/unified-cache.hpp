@@ -1876,6 +1876,64 @@ size_t unified_cache_available_device(int device_id);
 // Query budget headroom (budget_ - used_).
 size_t unified_cache_available_budget(int device_id);
 
+// === Phase 4: Pre-allocated MoE Inference Buffers ===
+// Pre-allocate device buffers for MoE dispatch at model/context init time
+// instead of on-demand during inference.  This eliminates malloc_device calls
+// during graph_compute_impl, preventing DEVICE_LOST from OOM.
+
+// Model parameters needed to size MoE buffers.
+struct moe_buffer_params {
+    int    n_experts      = 0;    // Total experts per layer (e.g. 128)
+    int    n_expert_used  = 0;    // Experts selected per token (e.g. 4)
+    int    max_batch      = 512;  // Max tokens per batch (PP max)
+    int    n_moe_layers   = 0;    // Number of MoE layers (for sizing)
+    int    n_moe_tensors  = 0;    // MoE tensors per layer (gate/up/down = 3)
+    int64_t n_embd        = 0;    // Embedding dimension (for IDs sizing)
+};
+
+// Pre-allocated MoE inference buffers for a single device.
+// All pointers are either device VRAM or host-pinned (tracked by on_device flags).
+struct moe_inference_buffers {
+    // Expert pointer tables: one per MoE tensor (gate/up/down * n_layers).
+    // Each table is n_experts * sizeof(void*) bytes on device.
+    // The host mirror vectors are separate (not pre-allocated here).
+    void * * expert_ptr_tables      = nullptr;  // Array of n_tables device ptrs
+    int      n_tables               = 0;        // n_moe_layers * n_moe_tensors
+    size_t   table_bytes            = 0;        // Bytes per table (n_experts * sizeof(void*))
+    bool     tables_on_device       = false;
+
+    // MoE IDs device staging buffer.
+    // Size: max(n_expert_used * max_batch * sizeof(int32_t)) across all layers.
+    // A single shared buffer is sufficient because MoE layers execute sequentially.
+    void * ids_staging              = nullptr;
+    size_t ids_staging_bytes        = 0;
+    bool   ids_on_device            = false;
+
+    // True if buffers have been allocated.
+    bool   initialized              = false;
+};
+
+// Pre-allocate MoE inference buffers for a device.
+// Call during moe_hybrid_init_once() after model architecture is known.
+// Uses unified_cache_allocate() internally — respects budget and falls back to host.
+// Returns true if all buffers were allocated successfully.
+bool moe_preallocate_inference_buffers(int device_id, const moe_buffer_params & params);
+
+// Get the pre-allocated MoE buffers for a device.
+// Returns nullptr if not initialized.
+const moe_inference_buffers * moe_get_inference_buffers(int device_id);
+
+// Get a specific expert pointer table by index.
+// Returns the device pointer for table[table_index], or nullptr if invalid.
+void * moe_get_expert_ptr_table(int device_id, int table_index);
+
+// Get the shared MoE IDs staging buffer.
+// Returns nullptr if not pre-allocated or if needed_bytes exceeds the pre-allocated size.
+void * moe_get_ids_staging(int device_id, size_t needed_bytes);
+
+// Free all pre-allocated MoE buffers for a device (called during shutdown).
+void moe_free_inference_buffers(int device_id);
+
 // === Shutdown API ===
 
 // Shutdown the unified cache system before SYCL runtime destruction

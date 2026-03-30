@@ -8469,4 +8469,195 @@ size_t unified_cache_available_budget(int device_id) {
     return cache->available_budget();
 }
 
+// ============================================================================
+// Phase 4: Pre-allocated MoE Inference Buffers
+// ============================================================================
+
+// Per-device storage for pre-allocated MoE buffers.
+static std::array<moe_inference_buffers, GGML_SYCL_MAX_DEVICES> g_moe_buffers{};
+static std::mutex                                                g_moe_buffers_mutex;
+
+// Internal: allocate the expert pointer table block as a single contiguous
+// allocation, then partition it into per-table pointers.
+// Each table is `n_experts * sizeof(void*)` bytes.
+// We allocate one big block: n_tables * table_bytes, then point into it.
+// This minimizes the number of cache allocations.
+
+bool moe_preallocate_inference_buffers(int device_id, const moe_buffer_params & params) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        GGML_LOG_ERROR("[MOE-PREALLOC] invalid device_id=%d\n", device_id);
+        return false;
+    }
+    if (params.n_experts <= 0) {
+        GGML_LOG_WARN("[MOE-PREALLOC] n_experts=%d, skipping pre-allocation\n", params.n_experts);
+        return true;  // Not an error — model may not be MoE.
+    }
+
+    std::lock_guard<std::mutex> lock(g_moe_buffers_mutex);
+    moe_inference_buffers & bufs = g_moe_buffers[device_id];
+    if (bufs.initialized) {
+        return true;  // Already done.
+    }
+
+    const int    n_tables    = params.n_moe_layers * std::max(params.n_moe_tensors, 1);
+    const size_t table_bytes = static_cast<size_t>(params.n_experts) * sizeof(void *);
+    const size_t total_table_bytes = static_cast<size_t>(n_tables) * table_bytes;
+
+    // IDs staging: n_expert_used * max_batch * sizeof(int32_t)
+    const size_t ids_bytes = static_cast<size_t>(params.n_expert_used) *
+                             static_cast<size_t>(params.max_batch) * sizeof(int32_t);
+
+    GGML_LOG_INFO("[MOE-PREALLOC] device %d: n_tables=%d table_bytes=%zu "
+                  "total_table=%.1f KB ids_staging=%.1f KB\n",
+                  device_id, n_tables, table_bytes,
+                  total_table_bytes / 1024.0, ids_bytes / 1024.0);
+
+    // --- Allocate expert pointer tables ---
+    if (n_tables > 0 && table_bytes > 0) {
+        auto table_result = unified_cache_allocate(
+            device_id, total_table_bytes,
+            unified_cache::alloc_lifetime::PERSISTENT,
+            "moe_expert_ptr_tables");
+
+        if (!table_result) {
+            GGML_LOG_ERROR("[MOE-PREALLOC] failed to allocate expert pointer tables "
+                           "(%.1f KB)\n", total_table_bytes / 1024.0);
+            return false;
+        }
+
+        // Allocate the host-side array of pointers into the contiguous block.
+        bufs.expert_ptr_tables = static_cast<void **>(::malloc(
+            static_cast<size_t>(n_tables) * sizeof(void *)));
+        if (!bufs.expert_ptr_tables) {
+            unified_cache_deallocate(device_id, table_result.ptr, total_table_bytes,
+                                     unified_cache::alloc_lifetime::PERSISTENT);
+            GGML_LOG_ERROR("[MOE-PREALLOC] failed to allocate host table pointer array\n");
+            return false;
+        }
+
+        // Partition the contiguous device block into per-table pointers.
+        auto * base = static_cast<uint8_t *>(table_result.ptr);
+        for (int i = 0; i < n_tables; i++) {
+            bufs.expert_ptr_tables[i] = base + static_cast<size_t>(i) * table_bytes;
+        }
+
+        bufs.n_tables         = n_tables;
+        bufs.table_bytes      = table_bytes;
+        bufs.tables_on_device = table_result.on_device;
+
+        // Zero-fill the tables (they'll be populated by update_moe_ptr_table).
+        auto * cache = get_unified_cache_for_device(device_id);
+        if (cache && table_result.on_device) {
+            try {
+                cache->get_queue().memset(table_result.ptr, 0, total_table_bytes).wait();
+            } catch (...) {
+                GGML_LOG_WARN("[MOE-PREALLOC] memset of expert pointer tables failed\n");
+            }
+        }
+    }
+
+    // --- Allocate MoE IDs staging ---
+    if (ids_bytes > 0) {
+        auto ids_result = unified_cache_allocate(
+            device_id, ids_bytes,
+            unified_cache::alloc_lifetime::PERSISTENT,
+            "moe_ids_staging");
+
+        if (!ids_result) {
+            GGML_LOG_ERROR("[MOE-PREALLOC] failed to allocate IDs staging "
+                           "(%.1f KB)\n", ids_bytes / 1024.0);
+            // Tables were allocated — leave them, partial success.
+        } else {
+            bufs.ids_staging       = ids_result.ptr;
+            bufs.ids_staging_bytes = ids_bytes;
+            bufs.ids_on_device     = ids_result.on_device;
+        }
+    }
+
+    bufs.initialized = true;
+
+    GGML_LOG_INFO("[MOE-PREALLOC] device %d: tables=%s (%d x %zu B) ids=%s (%.1f KB)\n",
+                  device_id,
+                  bufs.tables_on_device ? "VRAM" : "host",
+                  bufs.n_tables, bufs.table_bytes,
+                  bufs.ids_on_device ? "VRAM" : "host",
+                  bufs.ids_staging_bytes / 1024.0);
+
+    return true;
+}
+
+const moe_inference_buffers * moe_get_inference_buffers(int device_id) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(g_moe_buffers_mutex);
+    if (!g_moe_buffers[device_id].initialized) {
+        return nullptr;
+    }
+    return &g_moe_buffers[device_id];
+}
+
+void * moe_get_expert_ptr_table(int device_id, int table_index) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return nullptr;
+    }
+    // No lock needed — read-only after initialization.
+    const moe_inference_buffers & bufs = g_moe_buffers[device_id];
+    if (!bufs.initialized || !bufs.expert_ptr_tables) {
+        return nullptr;
+    }
+    if (table_index < 0 || table_index >= bufs.n_tables) {
+        return nullptr;
+    }
+    return bufs.expert_ptr_tables[table_index];
+}
+
+void * moe_get_ids_staging(int device_id, size_t needed_bytes) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return nullptr;
+    }
+    // No lock needed — read-only after initialization.
+    const moe_inference_buffers & bufs = g_moe_buffers[device_id];
+    if (!bufs.initialized || !bufs.ids_staging) {
+        return nullptr;
+    }
+    if (needed_bytes > bufs.ids_staging_bytes) {
+        GGML_SYCL_DEBUG("[MOE-PREALLOC] ids_staging too small: need %zu have %zu\n",
+                        needed_bytes, bufs.ids_staging_bytes);
+        return nullptr;
+    }
+    return bufs.ids_staging;
+}
+
+void moe_free_inference_buffers(int device_id) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_moe_buffers_mutex);
+    moe_inference_buffers & bufs = g_moe_buffers[device_id];
+    if (!bufs.initialized) {
+        return;
+    }
+
+    // Free the contiguous table block (first table pointer is the base).
+    if (bufs.expert_ptr_tables && bufs.n_tables > 0) {
+        void * base = bufs.expert_ptr_tables[0];
+        if (base) {
+            const size_t total = static_cast<size_t>(bufs.n_tables) * bufs.table_bytes;
+            unified_cache_deallocate(device_id, base, total,
+                                     unified_cache::alloc_lifetime::PERSISTENT);
+        }
+        ::free(bufs.expert_ptr_tables);
+    }
+
+    // Free IDs staging.
+    if (bufs.ids_staging) {
+        unified_cache_deallocate(device_id, bufs.ids_staging, bufs.ids_staging_bytes,
+                                 unified_cache::alloc_lifetime::PERSISTENT);
+    }
+
+    bufs = {};  // Reset to zero state.
+}
+
 }  // namespace ggml_sycl
