@@ -174,6 +174,17 @@ struct ggml_et_ssm_conv_params {
     ggml_tensor dst;      // output: [d_inner, n_t, n_seqs]
 };
 
+struct ggml_et_ssm_scan_params {
+    ggml_tensor src0;     // s:   [d_state, head_dim, n_head, n_seqs]
+    ggml_tensor src1;     // x:   [head_dim, n_head, n_seq_tokens, n_seqs]
+    ggml_tensor src2;     // dt:  [n_head, n_seq_tokens, n_seqs]
+    ggml_tensor src3;     // A:   [d_state, n_head] or [1, n_head]
+    ggml_tensor src4;     // B:   [d_state, n_group, n_seq_tokens, n_seqs]
+    ggml_tensor src5;     // C:   [d_state, n_group, n_seq_tokens, n_seqs]
+    ggml_tensor src6;     // ids: [n_seqs] i32
+    ggml_tensor dst;      // [y, final_state] packed output from ggml_ssm_scan()
+};
+
 struct ggml_et_rwkv_wkv6_params {
     float* k;           // src[0]: [S, H, T]  key
     float* v;           // src[1]: [S, H, T]  value
@@ -316,6 +327,7 @@ bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_te
 bool ggml_et_op_pad(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_ssm_conv(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_ssm_scan(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,
                              const ggml_tensor* mul_node);

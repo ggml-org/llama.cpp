@@ -1752,6 +1752,49 @@ bool ggml_et_op_ssm_conv(ggml_backend_et_device_context* dev_ctx, const ggml_ten
     return kernel_result;
 }
 
+bool ggml_et_op_ssm_scan(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SSM_SCAN operation\n");
+        return false;
+    }
+
+    for (int i = 0; i < 7; ++i) {
+        if (!node->src[i]) {
+            GGML_LOG_ERROR("ET: SSM_SCAN missing required input %d\n", i);
+            return false;
+        }
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32 ||
+        node->src[2]->type != GGML_TYPE_F32 ||
+        node->src[3]->type != GGML_TYPE_F32 ||
+        node->src[4]->type != GGML_TYPE_F32 ||
+        node->src[5]->type != GGML_TYPE_F32 ||
+        node->src[6]->type != GGML_TYPE_I32) {
+        GGML_LOG_ERROR("ET: SSM_SCAN operation with unsupported types\n");
+        return false;
+    }
+
+    ggml_et_ssm_scan_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.src2 = *node->src[2];
+    params.src3 = *node->src[3];
+    params.src4 = *node->src[4];
+    params.src5 = *node->src[5];
+    params.src6 = *node->src[6];
+    params.dst  = *node;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "ssm_scan_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("SSM_SCAN", "ssm_scan_f32", node);
+    return kernel_result;
+}
+
 bool ggml_et_op_rwkv_wkv6(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 
