@@ -703,6 +703,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_diag(dev_ctx, node);
                 break;
 
+            case GGML_OP_TRI:
+                ggml_et_op_tri(dev_ctx, node);
+                break;
+
             case GGML_OP_RWKV_WKV6:
                 ggml_et_op_rwkv_wkv6(dev_ctx, node);
                 break;
@@ -759,7 +763,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_UNARY:
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                (op->ne[0] * op->ne[1] * op->ne[2] * op->ne[3]) % 16 == 0 &&
+                ggml_nelements(op) % 16 == 0 &&
                 ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0])) {
                 switch (ggml_get_unary_op(op)) {
@@ -1139,6 +1143,14 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->ne[0] == op->ne[1] &&
                        op->src[0]->ne[0] == op->ne[0] &&
                        op->src[0]->ne[1] == 1 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
+        case GGML_OP_TRI:
+            // F32 contiguous, same shape in/out
+            // Kernel handles arbitrary ne[0] with aligned fast path + scalar fallback
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]);
             break;

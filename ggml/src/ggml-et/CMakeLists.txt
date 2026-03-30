@@ -59,6 +59,7 @@ set(KERNELS
     set_rows_f32
     fill_f32
     diag_f32
+    tri_f32
     memops
 )
 

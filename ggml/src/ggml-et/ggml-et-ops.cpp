@@ -1986,3 +1986,22 @@ bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
     ET_PERF_END("DIAG", "diag_f32", node);
     return kernel_result;
 }
+
+bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: TRI operation missing source tensor\n");
+        return false;
+    }
+
+    ggml_et_tri_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+    memcpy(&params.tri_type, node->op_params, sizeof(int32_t));
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "tri_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("TRI", "tri_f32", node);
+    return kernel_result;
+}
