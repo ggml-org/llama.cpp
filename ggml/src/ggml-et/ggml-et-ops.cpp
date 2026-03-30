@@ -2005,3 +2005,22 @@ bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     ET_PERF_END("TRI", "tri_f32", node);
     return kernel_result;
 }
+
+bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: SOLVE_TRI operation missing source tensor(s)\n");
+        return false;
+    }
+
+    ggml_et_solve_tri_params params;
+    params.src0 = *node->src[0];  // A (lower-triangular)
+    params.src1 = *node->src[1];  // B (RHS)
+    params.dst  = *node;          // X (solution)
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "solve_tri_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    ET_PERF_END("SOLVE_TRI", "solve_tri_f32", node);
+    return kernel_result;
+}

@@ -60,6 +60,7 @@ set(KERNELS
     fill_f32
     diag_f32
     tri_f32
+    solve_tri_f32
     memops
 )
 
