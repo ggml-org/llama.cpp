@@ -168,6 +168,12 @@ struct ggml_et_diag_params {
     ggml_tensor dst;      // F32 output diagonal matrix
 };
 
+struct ggml_et_ssm_conv_params {
+    ggml_tensor src0;     // conv_x: [d_conv - 1 + n_t, d_inner, n_seqs]
+    ggml_tensor src1;     // conv1d.weight: [d_conv, d_inner]
+    ggml_tensor dst;      // output: [d_inner, n_t, n_seqs]
+};
+
 struct ggml_et_rwkv_wkv6_params {
     float* k;           // src[0]: [S, H, T]  key
     float* v;           // src[1]: [S, H, T]  value
@@ -300,6 +306,7 @@ bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
 bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_pad(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_ssm_conv(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,
                              const ggml_tensor* mul_node);
