@@ -156,6 +156,13 @@ struct ggml_et_solve_tri_params {
     ggml_tensor dst;      // X: solution [k, n, B1, B2]
 };
 
+struct ggml_et_pad_params {
+    ggml_tensor src0;     // F32 input (may be non-contiguous, nb[0] must == 4)
+    ggml_tensor dst;      // F32 output (contiguous, ne[0] % 16 == 0)
+    int32_t lp[4];        // left padding per dimension
+    int32_t rp[4];        // right padding per dimension
+};
+
 struct ggml_et_diag_params {
     ggml_tensor src0;     // F32 input vector
     ggml_tensor dst;      // F32 output diagonal matrix
@@ -285,6 +292,7 @@ bool ggml_et_op_fill(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
 bool ggml_et_op_diag(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_solve_tri(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_pad(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,

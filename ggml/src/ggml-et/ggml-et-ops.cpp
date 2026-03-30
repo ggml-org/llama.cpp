@@ -109,6 +109,14 @@ static ggml_et_cpu_compare_config get_rows_cpu_compare_config = {
     /* .max_log_elements = */ 2048
 };
 
+static ggml_et_cpu_compare_config pad_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config cont_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -2060,5 +2068,76 @@ bool ggml_et_op_set(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, "cont_f32", &params, sizeof(params), 0xFFFFFFFF);
 
     ET_PERF_END("SET", "cont_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_pad(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: PAD operation missing source tensor\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: PAD only supports F32 (src=%s dst=%s)\n",
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->type));
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node)) {
+        GGML_LOG_ERROR("ET: PAD requires contiguous output tensor\n");
+        return false;
+    }
+
+    if (node->src[0]->nb[0] != sizeof(float)) {
+        GGML_LOG_ERROR("ET: PAD requires element-contiguous src dim0 (nb[0]=%zu)\n",
+                       (size_t)node->src[0]->nb[0]);
+        return false;
+    }
+
+    // Extract padding parameters from op_params
+    const int32_t* op_params = (const int32_t*)node->op_params;
+
+    ggml_et_pad_params params;
+    params.src0 = *node->src[0];
+    params.dst  = *node;
+    params.lp[0] = op_params[0];
+    params.rp[0] = op_params[1];
+    params.lp[1] = op_params[2];
+    params.rp[1] = op_params[3];
+    params.lp[2] = op_params[4];
+    params.rp[2] = op_params[5];
+    params.lp[3] = op_params[6];
+    params.rp[3] = op_params[7];
+
+    // v1: no dim0 padding
+    if (params.lp[0] != 0 || params.rp[0] != 0) {
+        GGML_LOG_ERROR("ET: PAD dim0 padding not supported (lp0=%d rp0=%d)\n",
+                       params.lp[0], params.rp[0]);
+        return false;
+    }
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (pad_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_PAD)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for PAD operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "pad_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &pad_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for PAD operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("PAD", "pad_f32", node);
     return kernel_result;
 }

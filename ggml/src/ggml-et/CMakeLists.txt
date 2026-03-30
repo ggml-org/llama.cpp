@@ -58,6 +58,7 @@ set(KERNELS
     flash_attn_ext_f16_me
     set_rows_f32
     fill_f32
+    pad_f32
     diag_f32
     tri_f32
     solve_tri_f32

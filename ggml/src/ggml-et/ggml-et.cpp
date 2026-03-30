@@ -691,6 +691,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_repeat(dev_ctx, node);
                 break;
 
+            case GGML_OP_PAD:
+                ggml_et_op_pad(dev_ctx, node);
+                break;
+
             case GGML_OP_SET_ROWS:
                 ggml_et_op_set_rows(dev_ctx, node);
                 break;
@@ -1124,6 +1128,26 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
             }
             break;
+        case GGML_OP_PAD:
+            // F32 zero-pad only, no dim0 padding, dst contiguous
+            // ne[0] must be CL-aligned (% 16 == 0) or evenly divide a CL (16 % ne[0] == 0)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op) &&
+                (op->ne[0] % 16 == 0 || 16 % op->ne[0] == 0) &&
+                op->src[0]->nb[0] == sizeof(float)) {
+                const int32_t lp0 = ((const int32_t*)op->op_params)[0];
+                const int32_t rp0 = ((const int32_t*)op->op_params)[1];
+                const bool circular = (bool)((const int32_t*)op->op_params)[8];
+                if (lp0 == 0 && rp0 == 0 && !circular) {
+                    supported = true;
+                } else {
+                    supported = false;
+                }
+            } else {
+                supported = false;
+            }
+            break;
         case GGML_OP_REPEAT:
             // F32 contiguous, dst ne[0] cacheline-aligned
             // src0 ne[0] must be cacheline-aligned OR 1 (scalar broadcast)
@@ -1303,9 +1327,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
