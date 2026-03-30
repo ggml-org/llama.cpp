@@ -540,7 +540,7 @@ private:
             return mk_stmt<slice_expression>(start_pos, std::move(start), std::move(stop), std::move(step));
         }
         if (slices.empty()) {
-            return mk_stmt<noop_statement>(start_pos);
+            return mk_stmt<blank_expression>(start_pos);
         }
         return std::move(slices[0]);
     }

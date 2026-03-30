@@ -215,7 +215,7 @@ struct continue_statement : public statement {
 };
 
 // do nothing
-struct noop_statement : public expression {
+struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
     value execute_impl(context &) override {
         return mk_val<value_undefined>();
@@ -262,6 +262,14 @@ struct comment_statement : public statement {
 };
 
 // Expressions
+
+// Represents an omitted expression in a computed member, e.g. `a[]`.
+struct blank_expression : public expression {
+    std::string type() const override { return "BlankExpression"; }
+    value execute_impl(context &) override {
+        return mk_val<value_undefined>();
+    }
+};
 
 struct member_expression : public expression {
     statement_ptr object;
