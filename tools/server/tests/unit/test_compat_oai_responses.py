@@ -402,3 +402,108 @@ def test_responses_stream_output_text_consistency():
     assert completed_output_text is not None
     assert gathered_text == completed_output_text
     assert len(gathered_text) > 0
+
+
+def test_responses_stream_created_event_has_full_response():
+    """response.created must contain the full response object with all required
+    fields, not just {id, object, status}. This is needed by strict client
+    libraries like async-openai."""
+    global server
+    server.start()
+    res = server.make_stream_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+        "stream": True,
+    })
+    created_resp = None
+    in_progress_resp = None
+    for data in res:
+        if data.get("type") == "response.created":
+            created_resp = data["response"]
+        if data.get("type") == "response.in_progress":
+            in_progress_resp = data["response"]
+    assert created_resp is not None, "never received response.created"
+    assert in_progress_resp is not None, "never received response.in_progress"
+    # Both must have the full response object, not just minimal fields
+    for resp in [created_resp, in_progress_resp]:
+        assert resp["status"] == "in_progress"
+        assert resp["id"].startswith("resp_")
+        assert resp["object"] == "response"
+        assert resp["model"] is not None
+        assert "metadata" in resp
+        assert "store" in resp
+        assert "truncation" in resp
+        assert "tools" in resp
+        assert "usage" in resp
+        assert resp["output"] == []
+        assert resp["output_text"] == ""
+
+
+def test_responses_stream_all_events_have_sequence_number():
+    """Every streaming event must have a sequence_number field and they must
+    be strictly increasing across the entire stream."""
+    global server
+    server.start()
+    res = server.make_stream_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+        "stream": True,
+    })
+    all_seq_nums = []
+    event_types = []
+    for data in res:
+        assert "sequence_number" in data, f"missing sequence_number in event type {data.get('type')}"
+        all_seq_nums.append(data["sequence_number"])
+        event_types.append(data.get("type", "unknown"))
+    # Must have received multiple events
+    assert len(all_seq_nums) >= 6, f"expected >= 6 events, got {len(all_seq_nums)}: {event_types}"
+    # Must be strictly increasing
+    for i in range(1, len(all_seq_nums)):
+        assert all_seq_nums[i] > all_seq_nums[i-1], \
+            f"sequence_number not strictly increasing at index {i}: {all_seq_nums[i-1]} -> {all_seq_nums[i]} (events: {event_types[i-1]} -> {event_types[i]})"
+
+
+def test_responses_stream_delta_events_have_indices():
+    """Delta and added events must have output_index. Content-related events
+    must also have content_index."""
+    global server
+    server.start()
+    res = server.make_stream_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+        "stream": True,
+    })
+    saw_output_item_added = False
+    saw_content_part_added = False
+    saw_output_text_delta = False
+    for data in res:
+        evt = data.get("type", "")
+        if evt == "response.output_item.added":
+            saw_output_item_added = True
+            assert "output_index" in data, "output_item.added missing output_index"
+        if evt == "response.content_part.added":
+            saw_content_part_added = True
+            assert "output_index" in data, "content_part.added missing output_index"
+            assert "content_index" in data, "content_part.added missing content_index"
+        if evt == "response.output_text.delta":
+            saw_output_text_delta = True
+            assert "output_index" in data, "output_text.delta missing output_index"
+            assert "content_index" in data, "output_text.delta missing content_index"
+    assert saw_output_item_added, "never received response.output_item.added"
+    assert saw_content_part_added, "never received response.content_part.added"
+    assert saw_output_text_delta, "never received response.output_text.delta"
