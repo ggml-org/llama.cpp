@@ -28,6 +28,7 @@ import {
 	filterByLeafNodeId,
 	findDescendantMessages,
 	findLeafNode,
+	findMessageById,
 	isAbortError
 } from '$lib/utils';
 import {
@@ -416,7 +417,7 @@ class ChatStore {
 		if (!activeConv) return false;
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const systemMessage = allMessages.find((m) => m.id === messageId);
+			const systemMessage = findMessageById(allMessages, messageId);
 			if (!systemMessage || systemMessage.role !== MessageRole.SYSTEM) return false;
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			if (!rootMessage) return false;
@@ -878,7 +879,7 @@ class ChatStore {
 			const msg = conversationsStore.activeMessages[idx];
 			if (msg.role !== MessageRole.ASSISTANT) return;
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const parentMessage = allMessages.find((m) => m.id === msg.parent);
+			const parentMessage = findMessageById(allMessages, msg.parent);
 			if (!parentMessage) return;
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
@@ -928,7 +929,7 @@ class ChatStore {
 		if (!activeConv)
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-		const messageToDelete = allMessages.find((m) => m.id === messageId);
+		const messageToDelete = findMessageById(allMessages, messageId);
 
 		// For system messages, don't count descendants as they will be preserved (reparented to root)
 		if (messageToDelete?.role === MessageRole.SYSTEM) {
@@ -975,7 +976,7 @@ class ChatStore {
 		if (!activeConv) return;
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const messageToDelete = allMessages.find((m) => m.id === messageId);
+			const messageToDelete = findMessageById(allMessages, messageId);
 
 			if (!messageToDelete) return;
 
@@ -1024,7 +1025,7 @@ class ChatStore {
 			this.clearChatStreaming(activeConv.id);
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const dbMessage = allMessages.find((m) => m.id === messageId);
+			const dbMessage = findMessageById(allMessages, messageId);
 
 			if (!dbMessage) {
 				this.setChatLoading(activeConv.id, false);
@@ -1280,7 +1281,10 @@ class ChatStore {
 
 			let messageIdForResponse: string;
 
-			if (msg.children.length === 0) {
+			const dbMsg = findMessageById(allMessages, msg.id);
+			const hasChildren = dbMsg ? dbMsg.children.length > 0 : msg.children.length > 0;
+
+			if (!hasChildren) {
 				// No responses after this message — update in place instead of branching
 				const updates: Partial<DatabaseMessage> = {
 					content: newContent,

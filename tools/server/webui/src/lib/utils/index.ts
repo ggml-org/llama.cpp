@@ -22,6 +22,7 @@ export { default as autoResizeTextarea } from './autoresize-textarea';
 // Branching utilities
 export {
 	filterByLeafNodeId,
+	findMessageById,
 	findLeafNode,
 	findDescendantMessages,
 	getMessageSiblings,
