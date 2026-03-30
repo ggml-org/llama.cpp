@@ -1345,26 +1345,20 @@ struct ggml_backend_cuda_context {
         }
 
         // Vram-budget is capped at VRAM_BUDGET_PERCENT of the architecture's typical VRAM 
-        // divided by the estimated per-graph memory footprint (MAX_CUDA_GRAPH_SIZE).        
-        constexpr size_t VRAM_BUDGET_PERCENT    = 10;                         // Fraction of VRAM reserved for CUDA graph storage expressed in % (10 = 10%)        
-        constexpr size_t CUDA_GRAPH_NODE_SIZE   = 256;                        // Approximate size of a node's properties in bytes - used for estimating graph memory usage
-        constexpr size_t CUDA_GRAPH_NODES       = 2048;                       // Approximate number of nodes in a graph - used for estimating graph memory usage        
-        
-        // Example numbers based on typical VRAM for each architecture and the resulting max_cuda_graphs() with a 10% VRAM budget and 512 KB per graph estimate:                                              
-        // Architecture         Typical VRAM   max_cuda_graphs()
-        // Blackwell (>=1200)   80 GB          1638
-        // Ada Lovelace (>=890) 24 GB          491
-        // Ampere (>=800)       24 GB          491
-        // Turing (>=750)       11 GB          225
-        // Volta (>=700)        16 GB          327
-        // Pascal and older     8 GB           163
+        // divided by the estimated per-graph memory footprint (MAX_CUDA_GRAPH_SIZE=CUDA_GRAPH_NODES * CUDA_GRAPH_NODE_SIZE).        
+        //
+        constexpr size_t VRAM_BUDGET_PERCENT    = 10;   // Fraction of VRAM reserved for CUDA graph storage expressed in % (10 = 10%)        
+        constexpr size_t CUDA_GRAPH_NODE_SIZE   = 256;  // Approximate size of a node's properties in bytes - used for estimating graph memory usage
+        constexpr size_t CUDA_GRAPH_NODES       = 2048; // Approximate number of nodes in a graph - used for estimating graph memory usage        
+
+        //                                             
         constexpr size_t VRAM_1GB            = size_t(1024 * 1024 * 1024); // 1 GiB in bytes
         constexpr size_t vram_blackwell    =  80 * VRAM_1GB;
         constexpr size_t vram_ada_lovelace =  24 * VRAM_1GB;
-        constexpr size_t vram_ampere       =  24 * VRAM_1GB;
-        constexpr size_t vram_turing       =  11 * VRAM_1GB;
-        constexpr size_t vram_volta        =  16 * VRAM_1GB;
-        constexpr size_t vram_pascal       =   8 * VRAM_1GB;
+        constexpr size_t vram_ampere       =  16 * VRAM_1GB;
+        constexpr size_t vram_turing       =  12 * VRAM_1GB;
+        constexpr size_t vram_volta        =  8 * VRAM_1GB;
+        constexpr size_t vram_pascal       =  4 * VRAM_1GB;
         
         // Descending order so the first matching branch wins.
         const size_t vram =
@@ -1380,7 +1374,7 @@ struct ggml_backend_cuda_context {
     }
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
-        const auto t_start = std::chrono::steady_clock::now();
+        //const auto t_start = std::chrono::steady_clock::now();
 
         auto it = cuda_graphs.find(first_node_ptr);
         if (it == cuda_graphs.end()) {
@@ -1389,6 +1383,7 @@ struct ggml_backend_cuda_context {
             const auto max_graphs = max_cuda_graphs(ggml_cuda_info().devices[device].cc);
 
             if (cuda_graphs.size() >= max_graphs) {
+                GGML_LOG_DEBUG("--->Graphs cache per context: %zu\n", max_graphs );
                 const void * oldest_key = cuda_graphs_lru.front();                
                 cuda_graphs.erase(oldest_key);
                 cuda_graphs_lru.erase(cuda_graphs_lru.begin());
@@ -1410,10 +1405,10 @@ struct ggml_backend_cuda_context {
             cuda_graphs_lru.push_back(first_node_ptr);
         }
 
-        const auto t_end     = std::chrono::steady_clock::now();
-        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
-        GGML_LOG_DEBUG("cuda_graph() elapsed: %lld us  cache_size: %zu\n",
-                       static_cast<long long>(elapsed_us), cuda_graphs.size());
+        // const auto t_end     = std::chrono::steady_clock::now();
+        // const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+        // GGML_LOG_DEBUG("cuda_graph() elapsed: %lld us  cache_size: %zu\n",
+        //                static_cast<long long>(elapsed_us), cuda_graphs.size());
 
         return it->second.get();
     }
