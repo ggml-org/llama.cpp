@@ -74,14 +74,53 @@ int entry_point(struct ggml_et_concat_params* params, void* env) {
     const int64_t ne0  = dst->ne[0],  ne1  = dst->ne[1],  ne2  = dst->ne[2],  ne3  = dst->ne[3];
 
     // src strides in bytes
-    const size_t nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
-    const size_t nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
+    const size_t nb00 = src0->nb[0], nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
+    const size_t nb10 = src1->nb[0], nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
     // dst strides in bytes
     const size_t dnb1 = dst->nb[1], dnb2 = dst->nb[2], dnb3 = dst->nb[3];
 
-    // Total rows across all higher dimensions - parallelize over these
+    // Total rows across all higher dimensions
     const int64_t total_rows = ne1 * ne2 * ne3;
 
+    // Unaligned dim==0 path: ne0 not a multiple of 16.
+    // Distribute by groups of R rows where R*ne0 is a multiple of 16,
+    // so each group starts/ends on a cache-line boundary. R = lcm(16, ne0) / ne0.
+    if (dim == 0 && ne0 % 16 != 0) {
+        // gcd then lcm
+        int64_t a = 16, b = ne0;
+        while (b) { int64_t t = b; b = a % b; a = t; }
+        const int64_t rows_per_group = 16 / a;  // lcm(16, ne0) / ne0
+        const int64_t total_groups = (total_rows + rows_per_group - 1) / rows_per_group;
+
+        for (int64_t grp = thread_id; grp < total_groups; grp += num_threads) {
+            const int64_t row_start = grp * rows_per_group;
+            int64_t row_end = row_start + rows_per_group;
+            if (row_end > total_rows) { row_end = total_rows; }
+
+            for (int64_t row = row_start; row < row_end; row++) {
+                int64_t i1 = row % ne1;
+                int64_t i2 = (row / ne1) % ne2;
+                int64_t i3 = row / (ne1 * ne2);
+
+                float* dst_row = (float*)((char*)dst_data + i1*dnb1 + i2*dnb2 + i3*dnb3);
+
+                // Copy src0 elements (stride-based for non-contiguous src)
+                const char* s0_base = (const char*)src0_data + i1*nb01 + i2*nb02 + i3*nb03;
+                for (int64_t i0 = 0; i0 < ne00; i0++) {
+                    dst_row[i0] = *(const float*)(s0_base + i0*nb00);
+                }
+
+                // Copy src1 elements (stride-based for transposed src)
+                const char* s1_base = (const char*)src1_data + i1*nb11 + i2*nb12 + i3*nb13;
+                for (int64_t i0 = 0; i0 < ne10; i0++) {
+                    dst_row[ne00 + i0] = *(const float*)(s1_base + i0*nb10);
+                }
+            }
+        }
+        return 0;
+    }
+
+    // Standard path: ne0 % 16 == 0, aligned rows
     for (int64_t row = thread_id; row < total_rows; row += num_threads) {
         // Decompose linear row index into (i1, i2, i3)
         int64_t i1 = row % ne1;
