@@ -3544,6 +3544,36 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Pre-allocate MoE inference buffers (expert pointer tables +
+    // IDs staging) via the unified cache allocation API.  This eliminates
+    // runtime malloc_device calls during graph_compute_impl.
+    //
+    // n_moe_layers here counts total MUL_MAT_ID nodes (gate+up+down for each
+    // block), so use n_moe_tensors=1 and the sequential index from
+    // g_moe_layer_seq as the table_index directly.
+    // -----------------------------------------------------------------------
+    {
+        ggml_sycl::moe_buffer_params moe_params{};
+        moe_params.n_experts     = n_experts_per_layer;
+        moe_params.n_expert_used = n_experts_used > 0 ? n_experts_used : 4;
+        moe_params.max_batch     = 512;
+        moe_params.n_moe_layers  = n_moe_layers;  // total MUL_MAT_ID nodes
+        moe_params.n_moe_tensors = 1;             // seq index is per-tensor already
+        moe_params.n_embd        = max_K > 0 ? max_K : 4096;
+        if (ggml_sycl::moe_preallocate_inference_buffers(device, moe_params)) {
+            GGML_LOG_INFO(
+                "[MOE-HYBRID] Phase 4: pre-allocated MoE inference buffers "
+                "(device=%d, tables=%d, experts=%d)\n",
+                device, n_moe_layers, n_experts_per_layer);
+        } else {
+            GGML_LOG_WARN(
+                "[MOE-HYBRID] Phase 4: MoE buffer pre-allocation failed "
+                "(device=%d) — falling back to runtime allocation\n",
+                device);
+        }
+    }
 }
 
 // Layout-size helpers (defined later).
@@ -16243,11 +16273,14 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
     for (auto & pair : moe_ids_cache) {
         auto & entry = pair.second;
         if (entry.device_ids) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device, entry.device_bytes);
-            try {
-                ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
-                sycl::free(entry.device_ids, *stream());
-            } catch (...) {
+            // Skip cleanup for Phase 4 pre-allocated buffers — owned by unified cache
+            if (!entry.from_prealloc) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, entry.device_bytes);
+                try {
+                    ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
+                    sycl::free(entry.device_ids, *stream());
+                } catch (...) {
+                }
             }
             entry.device_ids   = nullptr;
             entry.device_bytes = 0;
@@ -24088,10 +24121,12 @@ static layout_mode ggml_sycl_moe_mmvq_layout(const ggml_tensor * tensor, bool al
 }
 
 // Forward declaration — defined below after this helper.
+// table_index: sequential index into pre-allocated Phase 4 tables (-1 to skip).
 static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
                                            int                     device,
                                            int64_t                 n_experts,
-                                           sycl::queue &           queue);
+                                           sycl::queue &           queue,
+                                           int                     table_index = -1);
 
 // Populate moe_expert_ptrs_device for GPU0-routed experts in the fusion path.
 // The standard path uses update_moe_ptr_table() which is expensive and designed
@@ -24111,8 +24146,18 @@ static const void * const * moe_fusion_ensure_gpu0_ptrs(
     const int64_t n_experts = src0->ne[2] > 0 ? src0->ne[2] : 1;
     sycl::queue & q         = *ctx.stream();
 
-    // Ensure device-side table is allocated
-    ggml_sycl_ensure_moe_ptr_table(extra, device, static_cast<int>(n_experts), q);
+    // Compute table_index from layer_hash for Phase 4 pre-allocated tables
+    int table_index = -1;
+    {
+        auto & seq_map = g_moe_layer_seq[device];
+        auto   it      = seq_map.find(layer_hash);
+        if (it != seq_map.end()) {
+            table_index = it->second;
+        }
+    }
+
+    // Ensure device-side table is allocated (uses pre-allocated if available)
+    ggml_sycl_ensure_moe_ptr_table(extra, device, static_cast<int>(n_experts), q, table_index);
     if (!extra->moe_expert_ptrs_device[device]) return nullptr;
 
     auto & host_ptrs = extra->moe_expert_ptrs_host[device];
@@ -24145,7 +24190,8 @@ static const void * const * moe_fusion_ensure_gpu0_ptrs(
 static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
                                            int                     device,
                                            int64_t                 n_experts,
-                                           sycl::queue &           queue) {
+                                           sycl::queue &           queue,
+                                           int                     table_index) {
     if (!extra || n_experts <= 0) {
         return;
     }
@@ -24160,14 +24206,38 @@ static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
         }
         return;
     }
+    // Free old buffer (only if it was runtime-allocated, not pre-allocated)
     if (extra->moe_expert_ptrs_device[device] != nullptr) {
-        if (extra->moe_expert_ptrs_size[device] > 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device, extra->moe_expert_ptrs_size[device]);
+        if (!extra->moe_expert_ptrs_from_prealloc[device]) {
+            if (extra->moe_expert_ptrs_size[device] > 0) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, extra->moe_expert_ptrs_size[device]);
+            }
+            sycl::free(extra->moe_expert_ptrs_device[device], queue);
         }
-        sycl::free(extra->moe_expert_ptrs_device[device], queue);
-        extra->moe_expert_ptrs_device[device] = nullptr;
-        extra->moe_expert_ptrs_size[device]   = 0;
+        extra->moe_expert_ptrs_device[device]        = nullptr;
+        extra->moe_expert_ptrs_size[device]          = 0;
+        extra->moe_expert_ptrs_from_prealloc[device] = false;
     }
+
+    // Try Phase 4 pre-allocated table first (avoids runtime malloc_device)
+    if (table_index >= 0) {
+        void * prealloc = ggml_sycl::moe_get_expert_ptr_table(device, table_index);
+        if (prealloc) {
+            // Verify the pre-allocated table is large enough
+            const auto * bufs = ggml_sycl::moe_get_inference_buffers(device);
+            if (bufs && bufs->table_bytes >= bytes) {
+                extra->moe_expert_ptrs_device[device]        = prealloc;
+                extra->moe_expert_ptrs_size[device]          = bytes;
+                extra->moe_expert_ptrs_from_prealloc[device] = true;
+                extra->moe_expert_ptrs_host[device].assign(count, nullptr);
+                GGML_SYCL_DEBUG("[MOE] Using pre-allocated table %d for device %d (%zu bytes)\n", table_index, device,
+                                bytes);
+                return;
+            }
+        }
+    }
+
+    // Fallback: runtime allocation via malloc_device
     ggml_sycl::unified_cache_add_runtime_bytes(device, bytes);
     void * table = ggml_sycl_malloc_device(bytes, queue, "moe_ptr_table");
     if (!table) {
@@ -24177,7 +24247,8 @@ static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
     }
     extra->moe_expert_ptrs_device[device] = table;
     queue.memset(table, 0, bytes);
-    extra->moe_expert_ptrs_size[device] = bytes;
+    extra->moe_expert_ptrs_size[device]          = bytes;
+    extra->moe_expert_ptrs_from_prealloc[device] = false;
     extra->moe_expert_ptrs_host[device].assign(count, nullptr);
 }
 
@@ -24374,18 +24445,34 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
     const size_t  row_bytes = static_cast<size_t>(n_ids) * sizeof(int32_t);
     const size_t  ids_bytes = static_cast<size_t>(n_ids * n_tokens) * sizeof(int32_t);
     if (!entry.device_ids || entry.device_bytes < ids_bytes) {
-        if (entry.device_ids) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, entry.device_bytes);
-            ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
-            sycl::free(entry.device_ids, *stream);
-        }
-        ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-        entry.device_ids   = ggml_sycl_malloc_device(ids_bytes, *stream, "moe_ids_device");
-        entry.device_bytes = ids_bytes;
-        if (!entry.device_ids) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
-
-            return nullptr;
+        // Try Phase 4 pre-allocated IDs staging buffer first
+        void * prealloc_ids = ggml_sycl::moe_get_ids_staging(ctx.device, ids_bytes);
+        if (prealloc_ids) {
+            // Only release old buffer if it was NOT a pre-allocated pointer
+            if (entry.device_ids && !entry.from_prealloc) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, entry.device_bytes);
+                ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
+                sycl::free(entry.device_ids, *stream);
+            }
+            entry.device_ids    = prealloc_ids;
+            entry.device_bytes  = ids_bytes;
+            entry.from_prealloc = true;
+            GGML_SYCL_DEBUG("[MOE-IDS] Using pre-allocated staging buffer (%zu bytes)\n", ids_bytes);
+        } else {
+            // Fallback: runtime allocation
+            if (entry.device_ids && !entry.from_prealloc) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, entry.device_bytes);
+                ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
+                sycl::free(entry.device_ids, *stream);
+            }
+            ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
+            entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *stream, "moe_ids_device");
+            entry.device_bytes  = ids_bytes;
+            entry.from_prealloc = false;
+            if (!entry.device_ids) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
+                return nullptr;
+            }
         }
     }
 
@@ -24512,7 +24599,17 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         (src0_alloc == sycl::usm::alloc::host || src0_alloc == sycl::usm::alloc::shared);
     GGML_SYCL_DEBUG("[MOE-PTR] src0_alloc=%d src0_is_device=%d src0_is_usm_accessible=%d\n", (int) src0_alloc,
                     src0_is_device, src0_is_usm_accessible);
-    ggml_sycl_ensure_moe_ptr_table(extra, device, n_experts, *stream);
+    // Compute table_index for Phase 4 pre-allocated tables
+    int tbl_idx = -1;
+    if (src0->name) {
+        int    hash_id = moe_cache_layer_id(src0->name);
+        auto & seq_map = g_moe_layer_seq[device];
+        auto   it      = seq_map.find(hash_id);
+        if (it != seq_map.end()) {
+            tbl_idx = it->second;
+        }
+    }
+    ggml_sycl_ensure_moe_ptr_table(extra, device, n_experts, *stream, tbl_idx);
     GGML_SYCL_DEBUG("[MOE-PTR] ensure_moe_ptr_table done\n");
     if (!extra->moe_expert_ptrs_device[device] ||
         extra->moe_expert_ptrs_host[device].size() != static_cast<size_t>(n_experts)) {
@@ -25228,7 +25325,17 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         }
         auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
         if (extra) {
-            ggml_sycl_ensure_moe_ptr_table(extra, ctx.device, src0->ne[2] > 0 ? src0->ne[2] : 1, *ctx.stream());
+            int preload_tbl_idx = -1;
+            if (src0->name) {
+                int    hash_id = moe_cache_layer_id(src0->name);
+                auto & seq_map = g_moe_layer_seq[ctx.device];
+                auto   it      = seq_map.find(hash_id);
+                if (it != seq_map.end()) {
+                    preload_tbl_idx = it->second;
+                }
+            }
+            ggml_sycl_ensure_moe_ptr_table(extra, ctx.device, src0->ne[2] > 0 ? src0->ne[2] : 1, *ctx.stream(),
+                                           preload_tbl_idx);
         }
         std::vector<int32_t> ids_host;
         if (!ggml_sycl_copy_ids_to_host(ctx, ids, ids_host)) {
@@ -25249,21 +25356,34 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         if (ids_on_host) {
             const size_t ids_bytes = static_cast<size_t>(n_ids * n_tokens) * sizeof(int32_t);
             if (!ids_entry.device_ids || ids_entry.device_bytes < ids_bytes) {
-                if (ids_entry.device_ids) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_entry.device_bytes);
-                    ggml_sycl::alloc_registry::instance().unregister_alloc(ids_entry.device_ids);
-                    sycl::free(ids_entry.device_ids, *ctx.stream());
-                }
-                ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-                ids_entry.device_ids = ggml_sycl_malloc_device(ids_bytes, *ctx.stream(), "moe_ids_device");
-
-                ids_entry.device_bytes = ids_bytes;
-                if (!ids_entry.device_ids) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
-                    GGML_LOG_ERROR("[GRAPH-PRELOAD] Failed to allocate device ids for %s (%zu bytes)\n", src0->name,
-                                   ids_bytes);
-
-                    return false;
+                // Try Phase 4 pre-allocated IDs staging buffer first
+                void * prealloc_ids = ggml_sycl::moe_get_ids_staging(ctx.device, ids_bytes);
+                if (prealloc_ids) {
+                    if (ids_entry.device_ids && !ids_entry.from_prealloc) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_entry.device_bytes);
+                        ggml_sycl::alloc_registry::instance().unregister_alloc(ids_entry.device_ids);
+                        sycl::free(ids_entry.device_ids, *ctx.stream());
+                    }
+                    ids_entry.device_ids    = prealloc_ids;
+                    ids_entry.device_bytes  = ids_bytes;
+                    ids_entry.from_prealloc = true;
+                } else {
+                    // Fallback: runtime allocation
+                    if (ids_entry.device_ids && !ids_entry.from_prealloc) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_entry.device_bytes);
+                        ggml_sycl::alloc_registry::instance().unregister_alloc(ids_entry.device_ids);
+                        sycl::free(ids_entry.device_ids, *ctx.stream());
+                    }
+                    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
+                    ids_entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *ctx.stream(), "moe_ids_device");
+                    ids_entry.device_bytes  = ids_bytes;
+                    ids_entry.from_prealloc = false;
+                    if (!ids_entry.device_ids) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
+                        GGML_LOG_ERROR("[GRAPH-PRELOAD] Failed to allocate device ids for %s (%zu bytes)\n", src0->name,
+                                       ids_bytes);
+                        return false;
+                    }
                 }
             }
         }
@@ -37379,6 +37499,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     ggml_sycl_cpu_quant_cache_new_graph();
     ggml_sycl_moe_ids_cache_new_graph();
     ggml_sycl_moe_layer_ids_cache_new_graph();
+
+    // Reset the scratch pool bump allocator so scratch allocations from the
+    // previous graph are returned to the pool.
+    ggml_sycl::unified_cache_reset_scratch_pool(sycl_ctx->device);
 
     // Pre-attention expert prefetch: submit DMA hints for all MoE layers
     // BEFORE any compute begins. The DMA engine processes hints during

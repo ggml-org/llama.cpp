@@ -1871,8 +1871,9 @@ struct ggml_tensor_extra_gpu {
     int moe_expert_id = -1;
 
     // MoE expert pointer table (device + host staging) for per-expert layout access
-    void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
-    size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
+    void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES]        = { nullptr };
+    size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]          = { 0 };
+    bool                moe_expert_ptrs_from_prealloc[GGML_SYCL_MAX_DEVICES] = { false };
     std::vector<void *> moe_expert_ptrs_host[GGML_SYCL_MAX_DEVICES];
 
     // MoE compact pointer list (row-major by id) and missing flag
@@ -2472,6 +2473,7 @@ struct ggml_backend_sycl_context {
         size_t               device_bytes  = 0;
         void *               staging_ids   = nullptr;  // Pinned host staging for non-USM sources
         size_t               staging_bytes = 0;
+        bool                 from_prealloc = false;    // true if device_ids came from Phase 4 pre-allocation
     };
 
     std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> moe_ids_cache;

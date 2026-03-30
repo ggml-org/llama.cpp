@@ -863,13 +863,17 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
 
         if (extra->moe_expert_ptrs_device[i] != nullptr && streams.size() > 0) {
-            ggml_sycl_set_device(i);
-            if (extra->moe_expert_ptrs_size[i] > 0) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(i, extra->moe_expert_ptrs_size[i]);
+            // Skip cleanup for Phase 4 pre-allocated tables — owned by unified cache
+            if (!extra->moe_expert_ptrs_from_prealloc[i]) {
+                ggml_sycl_set_device(i);
+                if (extra->moe_expert_ptrs_size[i] > 0) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(i, extra->moe_expert_ptrs_size[i]);
+                }
+                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_device[i], *(streams[i]))));
             }
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_device[i], *(streams[i]))));
-            extra->moe_expert_ptrs_device[i] = nullptr;
-            extra->moe_expert_ptrs_size[i] = 0;
+            extra->moe_expert_ptrs_device[i]        = nullptr;
+            extra->moe_expert_ptrs_size[i]          = 0;
+            extra->moe_expert_ptrs_from_prealloc[i] = false;
         }
         extra->moe_expert_ptrs_host[i].clear();
 
