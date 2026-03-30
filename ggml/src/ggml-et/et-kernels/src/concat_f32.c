@@ -84,12 +84,10 @@ int entry_point(struct ggml_et_concat_params* params, void* env) {
     const int64_t total_rows = ne1 * ne2 * ne3;
 
     // Generic slow path for dim==0 when either source segment is not suitable for
-    // aligned vector copies. Threading is done by groups of rows whose combined
-    // width is cacheline-aligned, so writers do not share destination cache lines.
+    // aligned vector copies. Threading is done by cacheline-aligned row groups,
+    // so writers do not share destination cache lines.
     if (dim == 0 && (ne00 % 16 != 0 || ne10 % 16 != 0 || nb00 != sizeof(float) || nb10 != sizeof(float))) {
-        int64_t a = 16, b = ne0;
-        while (b) { int64_t t = b; b = a % b; a = t; }
-        const int64_t rows_per_group = 16 / a;  // lcm(16, ne0) / ne0
+        const int64_t rows_per_group = et_rows_per_cacheline_group(ne0, sizeof(float));
         const int64_t total_groups = (total_rows + rows_per_group - 1) / rows_per_group;
 
         for (int64_t grp = thread_id; grp < total_groups; grp += num_threads) {

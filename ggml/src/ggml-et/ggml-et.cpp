@@ -1382,9 +1382,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    if(!supported) {
-        ggml_et_dump_operator_metadata(op);
-    }
+    // if(!supported) {
+    //     ggml_et_dump_operator_metadata(op);
+    // }
     return supported;
 }
 

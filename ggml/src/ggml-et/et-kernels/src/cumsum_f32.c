@@ -65,19 +65,29 @@ int entry_point(struct ggml_et_cumsum_params * params, void * env) {
     }
 
     const int64_t total_rows = ne1 * ne2 * ne3;
+    const int64_t rows_per_group = et_rows_per_cacheline_group(ne0, sizeof(float));
+    const int64_t total_groups = (total_rows + rows_per_group - 1) / rows_per_group;
 
-    for (int64_t row = thread_id; row < total_rows; row += num_threads) {
-        int64_t i1 = row % ne1;
-        int64_t i2 = (row / ne1) % ne2;
-        int64_t i3 = row / (ne1 * ne2);
+    for (int64_t grp = thread_id; grp < total_groups; grp += num_threads) {
+        const int64_t row_start = grp * rows_per_group;
+        int64_t row_end = row_start + rows_per_group;
+        if (row_end > total_rows) {
+            row_end = total_rows;
+        }
 
-        const float * src_row = (const float *) ((const char *) src0_data + i1 * snb1 + i2 * snb2 + i3 * snb3);
-        float * dst_row = (float *) ((char *) dst_data + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
+        for (int64_t row = row_start; row < row_end; ++row) {
+            int64_t i1 = row % ne1;
+            int64_t i2 = (row / ne1) % ne2;
+            int64_t i3 = row / (ne1 * ne2);
 
-        float acc = 0.0f;
-        for (int64_t i0 = 0; i0 < ne0; ++i0) {
-            acc += src_row[i0];
-            dst_row[i0] = acc;
+            const float * src_row = (const float *) ((const char *) src0_data + i1 * snb1 + i2 * snb2 + i3 * snb3);
+            float * dst_row = (float *) ((char *) dst_data + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
+
+            float acc = 0.0f;
+            for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                acc += src_row[i0];
+                dst_row[i0] = acc;
+            }
         }
     }
 
