@@ -5028,17 +5028,22 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
 
         if (!host_resident) {
             // Free device memory.  During prestage (outside graph_compute_impl),
-            // use synchronous drain + free to avoid the deferred-free race:
-            // the barrier in enqueue_deferred_free only captures queue state at
-            // submission time — subsequent DMA work can still reference the freed
-            // memory before the deferred free executes.  Synchronous drain ensures
-            // ALL queues are idle before freeing.
+            // synchronize then free.  When the entry has a write event, wait on
+            // just that event instead of draining all 4 queues — the write event
+            // covers the specific fill/reorder that last touched this buffer.
+            // Fall back to full queue drain when no write event is available.
             if (!g_graph_compute_active.load(std::memory_order_acquire)) {
-                // Outside inference: drain all queues, then free immediately
-                try { queue_.wait(); } catch (...) {}
-                if (dma_queue_) { try { dma_queue_->wait(); } catch (...) {} }
-                if (bcs_queue_) { try { bcs_queue_->wait(); } catch (...) {} }
-                if (compute_queue_) { try { compute_queue_->wait(); } catch (...) {} }
+                const bool has_evt = it->second.has_write_event;
+                if (has_evt) {
+                    // Per-entry event: wait only on the fill/reorder that wrote here
+                    try { it->second.last_write_event.wait(); } catch (...) {}
+                } else {
+                    // No write event: fall back to draining all queues for safety
+                    try { queue_.wait(); } catch (...) {}
+                    if (dma_queue_) { try { dma_queue_->wait(); } catch (...) {} }
+                    if (bcs_queue_) { try { bcs_queue_->wait(); } catch (...) {} }
+                    if (compute_queue_) { try { compute_queue_->wait(); } catch (...) {} }
+                }
                 // Now safe to free — no in-flight work references this memory
                 const bool is_pool = layout_pool_ && layout_pool_->owns(ptr);
                 if (!is_pool) {
