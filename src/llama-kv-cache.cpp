@@ -211,6 +211,17 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+    turboquant_cfg = llama_turboquant_runtime_from_env();
+    if (turboquant_cfg.enabled) {
+        LLAMA_LOG_INFO(
+            "%s: TurboQuant enabled (so8=%d, so8_learned=%d, triality=%d, mix=%.3f, seed=%u)\n",
+            __func__,
+            turboquant_cfg.so8_enabled ? 1 : 0,
+            turboquant_cfg.so8_learned ? 1 : 0,
+            turboquant_cfg.triality_enabled ? 1 : 0,
+            turboquant_cfg.triality_mix,
+            turboquant_cfg.rotation_seed);
+    }
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -1103,6 +1114,11 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
         k = ggml_reshape_2d(ctx, k, n_embd_gqa, kv_size*n_stream);
     }
 
+    if (turboquant_cfg.enabled && !turboquant_logged_k) {
+        LLAMA_LOG_INFO("%s: TurboQuant K-path active at layer %d\n", __func__, il);
+        turboquant_logged_k = true;
+    }
+
     // store the current K values into the cache
     return ggml_set_rows(ctx, k, k_cur, k_idxs);
 }
@@ -1124,6 +1140,11 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
 
     const int64_t n_stream = v->ne[2];
+
+    if (turboquant_cfg.enabled && !turboquant_logged_v) {
+        LLAMA_LOG_INFO("%s: TurboQuant V-path active at layer %d\n", __func__, il);
+        turboquant_logged_v = true;
+    }
 
     // take this branch when FA is enabled (the V cache is not transposed)
     if (!v_trans) {

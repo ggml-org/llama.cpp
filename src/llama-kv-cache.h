@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-turboquant.h"
 
 #include <unordered_map>
 #include <vector>
@@ -228,6 +229,9 @@ private:
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
+    llama_turboquant_runtime_config turboquant_cfg;
+    mutable bool turboquant_logged_k = false;
+    mutable bool turboquant_logged_v = false;
 
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;

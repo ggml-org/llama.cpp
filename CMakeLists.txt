@@ -114,6 +114,7 @@ option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+option(LLAMA_TURBOQUANT "llama: enable TurboQuant CUDA tooling/integration" ON)
 
 
 # Required for relocatable CMake package

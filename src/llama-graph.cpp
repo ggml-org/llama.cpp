@@ -888,7 +888,12 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
-        cb_func(ubatch, cur, name, il);
+        if (cur) {
+            ggml_format_name(cur, "%s-%d", name, il);
+            cb_func(ubatch, cur, cur->name, il);
+        } else {
+            cb_func(ubatch, cur, name, il);
+        }
     }
 }
 
