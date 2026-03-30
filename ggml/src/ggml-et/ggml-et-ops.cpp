@@ -133,6 +133,14 @@ static ggml_et_cpu_compare_config concat_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config cumsum_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config repeat_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -1451,6 +1459,50 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
     }
 
     ET_PERF_END("CONT", kernel_name, node);
+    return kernel_result;
+}
+
+bool ggml_et_op_cumsum(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node || !node->src[0]) {
+        GGML_LOG_ERROR("ET: Invalid parameters for CUMSUM operation\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: CUMSUM operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    const char * kernel_name = "cumsum_f32";
+
+    ggml_et_cumsum_params params;
+    params.src0 = *node->src[0];
+    params.dst  = *node;
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (cumsum_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_CUMSUM)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for CUMSUM operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &cumsum_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for CUMSUM operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("CUMSUM", kernel_name, node);
     return kernel_result;
 }
 
