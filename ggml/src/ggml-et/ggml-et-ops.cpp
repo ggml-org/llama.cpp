@@ -149,6 +149,14 @@ static ggml_et_cpu_compare_config repeat_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config ssm_conv_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config rwkv_wkv6_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -1690,6 +1698,54 @@ bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
     }
 
     ET_PERF_END("REPEAT", kernel_name, node);
+    return kernel_result;
+}
+
+bool ggml_et_op_ssm_conv(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node || !node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SSM_CONV operation\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: SSM_CONV operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    const char * kernel_name = "ssm_conv_f32";
+
+    ggml_et_ssm_conv_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.dst  = *node;
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (ssm_conv_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_SSM_CONV)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for SSM_CONV operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &ssm_conv_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for SSM_CONV operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("SSM_CONV", kernel_name, node);
     return kernel_result;
 }
 

@@ -695,6 +695,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_repeat(dev_ctx, node);
                 break;
 
+            case GGML_OP_SSM_CONV:
+                ggml_et_op_ssm_conv(dev_ctx, node);
+                break;
+
             case GGML_OP_PAD:
                 ggml_et_op_pad(dev_ctx, node);
                 break;
@@ -1139,6 +1143,20 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                     supported = true;
                 }
             }
+            break;
+        case GGML_OP_SSM_CONV:
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                       op->src[0]->nb[0] == sizeof(float) &&
+                       op->src[1]->nb[0] == sizeof(float) &&
+                       op->src[0]->nb[1] == op->src[0]->ne[0] * sizeof(float) &&
+                       op->src[1]->nb[1] == op->src[1]->ne[0] * sizeof(float) &&
+                       ggml_is_contiguous(op) &&
+                       op->src[1]->ne[1] == op->src[0]->ne[1] &&
+                       op->ne[0] == op->src[0]->ne[1] &&
+                       op->ne[1] == op->src[0]->ne[0] - op->src[1]->ne[0] + 1 &&
+                       op->ne[2] == op->src[0]->ne[2];
             break;
         case GGML_OP_PAD:
             // F32 zero-pad only, no dim0 padding, dst contiguous
