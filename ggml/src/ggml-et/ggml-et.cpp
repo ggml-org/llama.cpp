@@ -1126,20 +1126,26 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
                 ggml_is_contiguous(op)) {
                 const int32_t dim = ((const int32_t *) op->op_params)[0];
-                if (op->ne[0] % 16 == 0 &&
+                if (dim == 0 &&
                     op->src[0]->ne[0] % 16 == 0 &&
                     op->src[1]->ne[0] % 16 == 0 &&
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op->src[1])) {
-                    // Standard aligned path: all ne[0] cacheline-aligned, all contiguous
+                    // Fast dim==0 path: both source row segments are cacheline-aligned
+                    // and contiguous, so the kernel can use vector row copies.
                     supported = true;
                 } else if (dim == 0 &&
-                           op->ne[0] % 16 != 0) {
-                    // Unaligned dim==0 path: the kernel performs scalar copies using
-                    // source byte strides, so transposed / strided sources are valid.
-                    // Keep this limited to dst rows that are not cacheline-aligned;
-                    // aligned dst rows go through the vector path, which assumes
-                    // contiguous source rows.
+                           ((op->src[0]->nb[0] % sizeof(float) == 0) || op->src[0]->ne[0] == 1) &&
+                           ((op->src[1]->nb[0] % sizeof(float) == 0) || op->src[1]->ne[0] == 1)) {
+                    // Slow dim==0 path: scalar, stride-aware copies for non-contiguous
+                    // or non-aligned source row segments. Destination remains contiguous.
+                    supported = true;
+                } else if (op->ne[0] % 16 == 0 &&
+                           op->src[0]->ne[0] % 16 == 0 &&
+                           op->src[1]->ne[0] % 16 == 0 &&
+                           ggml_is_contiguous(op->src[0]) &&
+                           ggml_is_contiguous(op->src[1])) {
+                    // Dim >= 1 path: full aligned row copies from one source or the other.
                     supported = true;
                 }
             }
