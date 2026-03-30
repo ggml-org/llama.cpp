@@ -84,6 +84,60 @@ static inline int get_num_threads(uint64_t shire_mask) {
 #define WFI   __asm__ __volatile__ ("wfi\n");
 
 //******************************************************************************
+// Atomic Operations
+//******************************************************************************
+
+// Global AMO primitives — ET custom 'g' suffix instructions that go through
+// the NoC coherence fabric for chip-wide atomicity.
+
+// Atomic swap (word), returns previous value.
+static inline uint32_t __attribute__((always_inline))
+et_global_swap_w(volatile void *addr, uint32_t val)
+{
+    uint32_t ret;
+    __asm__ __volatile__(
+        "amoswapg.w %0, %1, (%2)"
+        : "=r"(ret) : "r"(val), "r"(addr) : "memory"
+    );
+    return ret;
+}
+
+// Atomic add (word), returns previous value.
+static inline uint32_t __attribute__((always_inline))
+et_global_add_w(volatile void *addr, uint32_t val)
+{
+    uint32_t ret;
+    __asm__ __volatile__(
+        "amoaddg.w %0, %1, (%2)"
+        : "=r"(ret) : "r"(val), "r"(addr) : "memory"
+    );
+    return ret;
+}
+
+// Atomic store (halfword, global). Address must be 16-bit aligned.
+static inline void __attribute__((always_inline))
+et_global_store_hw(volatile void *addr, uint16_t val)
+{
+    __asm__ __volatile__(
+        "shg %0, (%1)"
+        : : "r"(val), "r"(addr) : "memory"
+    );
+}
+
+// Convenience wrappers — float types, fire-and-forget (old value discarded).
+static inline void atomic_store_f32(volatile float *addr, float value) {
+    et_global_swap_w(addr, *(uint32_t *)&value);
+}
+
+static inline void atomic_add_f32(volatile float *addr, float value) {
+    et_global_add_w(addr, *(uint32_t *)&value);
+}
+
+static inline void atomic_store_f16(volatile uint16_t *addr, uint16_t value) {
+    et_global_store_hw(addr, value);
+}
+
+//******************************************************************************
 // Barrier Primitives
 //
 // Hardware resources used (per shire):
@@ -105,13 +159,79 @@ static inline int get_num_threads(uint64_t shire_mask) {
 // broadcast.
 //******************************************************************************
 
+#define ET_DEFAULT_SHIRE_MASK 0xFFFFFFFFULL
+
 typedef enum {
     ET_BARRIER_MINION,  // sync both harts within each minion (FLB=minion_id, FCC 0)
     ET_BARRIER_SHIRE,   // sync all harts across the shire   (FLB=0, FCC 1)
+    ET_BARRIER_GLOBAL,  // sync all harts across all active shires (FLB+global AMO+FCC)
 } et_barrier_scope_t;
 
-// Barrier with scope-derived parameters. No configuration needed.
+//******************************************************************************
+// Global Barrier (cross-shire)
+//
+// Synchronizes all harts across multiple shires on the chip.
+// Algorithm:
+//   1. FLB within each shire to elect one representative hart
+//   2. Elected hart does a global atomic increment on a shared counter
+//   3. The last shire to arrive resets the counter and sends FCC credits
+//      to all active shires to release them
+//   4. All harts wait on FCC to complete the barrier
+//
+// Uses FLB 0, FCC 1 (same as ET_BARRIER_SHIRE, these must not overlap).
+// The counter lives in a cache-line-aligned global to avoid coherency problems
+//******************************************************************************
+
+// Barrier counter cache-line aligned to avoid coherency problems
+// Must be zero-initialized (BSS).
+static uint32_t __attribute__((aligned(64)))
+et_global_barrier_count[64 / sizeof(uint32_t)] = {0};
+
+// Cross-shire barrier: all harts in num_active_shires shires synchronize.
+// Returns 1 if this hart was the globally-last to arrive, 0 otherwise.
+//
+//   num_active_shires - number of shires participating
+//                       (typically popcount(shire_mask) from kernel_environment_t)
+static inline uint64_t __attribute__((always_inline))
+et_barrier_global(uint64_t num_active_shires)
+{
+    uint64_t last_global = 0;
+
+    // FLB within this shire. Elect one hart per shire.
+    // Master shire has only 16 minions (32 harts), others have 32 (64 harts).
+    uint64_t shire_id = get_shire_id();
+    uint32_t harts_in_shire = (shire_id == SHIRE_MASTER)
+        ? (SOC_MINIONS_PER_SHIRE / 2) * NUM_HARTS_PER_MINION
+        : SOC_MINIONS_PER_SHIRE * NUM_HARTS_PER_MINION;
+    uint64_t last_in_shire = flbarrier(0, harts_in_shire - 1);
+
+    if (last_in_shire) {
+        // Global atomic increment. Count arriving shires
+        uint32_t prev = et_global_add_w(et_global_barrier_count, 1);
+
+        if (prev == num_active_shires - 1) {
+            // Last shire. reset counter and fan out FCC to all shires
+            last_global = 1;
+            et_global_swap_w(et_global_barrier_count, 0);
+
+            for (uint64_t sid = 0; sid < 33; sid++) {
+                // Send FCC 1 credit to all harts (both threads) in each shire
+                fcc_send(sid, THREAD_0, FCC_1, 0xFFFFFFFF);
+                fcc_send(sid, THREAD_1, FCC_1, 0xFFFFFFFF);
+            }
+        }
+    }
+
+    // All harts wait for the FCC credit from the last shire
+    fcc_consume(FCC_1);
+    return last_global;
+}
+
+// Barrier with scope-derived parameters.
 // Returns 1 if this hart was the last to arrive, 0 otherwise.
+//
+// ET_BARRIER_GLOBAL uses ET_DEFAULT_SHIRE_MASK (32 shires). For a different
+// shire count, use et_barrier_global(n) directly.
 static inline uint64_t __attribute__((always_inline))
 et_barrier(et_barrier_scope_t scope)
 {
@@ -119,11 +239,13 @@ et_barrier(et_barrier_scope_t scope)
         uint32_t local_minion = (get_hart_id() >> 1) & 0x1F;
         uint32_t mask = 1u << local_minion;
         return shire_barrier(local_minion, 0, 2, mask, mask);
-    } else { /* ET_BARRIER_SHIRE */
+    } else if (scope == ET_BARRIER_SHIRE) {
         uint64_t shire_id = get_shire_id();
         uint32_t thread_count = (shire_id == SHIRE_MASTER) ? 32 : 64;
         uint32_t mask = (shire_id == SHIRE_MASTER) ? 0xFFFF0000U : 0xFFFFFFFFU;
         return shire_barrier(0, 1, thread_count, mask, mask);
+    } else { /* ET_BARRIER_GLOBAL */
+        return et_barrier_global(manual_popcountll(ET_DEFAULT_SHIRE_MASK));
     }
 }
 
@@ -131,11 +253,11 @@ et_barrier(et_barrier_scope_t scope)
 // Use when et_barrier() doesn't fit (custom thread counts, subgroups,
 // only even harts active, etc).
 //
-//   flb          — which FLB counter (0-31)
-//   fcc          — which FCC counter (0 or 1)
-//   thread_count — number of harts that will call this barrier
-//   mask_t0      — CREDINC bitmask: which minions' hart 0 gets a credit
-//   mask_t1      — CREDINC bitmask: which minions' hart 1 gets a credit
+//   flb          - which FLB counter (0-31)
+//   fcc          - which FCC counter (0 or 1)
+//   thread_count - number of harts that will call this barrier
+//   mask_t0      - CREDINC bitmask: which minions' hart 0 gets a credit
+//   mask_t1      - CREDINC bitmask: which minions' hart 1 gets a credit
 static inline uint64_t __attribute__((always_inline))
 et_barrier_raw(uint32_t flb, uint32_t fcc, uint32_t thread_count,
                uint32_t mask_t0, uint32_t mask_t1)
@@ -280,49 +402,6 @@ et_global_l2scp(uint64_t offset)
     return (void *)(L2SCP_BASE
                     | (1ULL << 30)
                     | (offset & 0x3FFFFFFF));
-}
-
-//******************************************************************************
-// Atomic Operations
-//******************************************************************************
-
-// Atomic store for F32 values to global memory
-// Uses ET hardware's custom amoswapg.w instruction for global atomic swap
-// This ensures cache coherency when multiple threads write to nearby addresses
-static inline void atomic_store_f32(volatile float* addr, float value) {
-    uint32_t value_bits = *(uint32_t*)&value;
-    __asm__ volatile(
-        "amoswapg.w zero, %1, (%0)"
-        :
-        : "r"(addr), "r"(value_bits)
-        : "memory"
-    );
-}
-
-// Atomic add for F32 values to global memory
-// Uses ET hardware's custom amoaddg.w instruction for global atomic add
-// This ensures correct accumulation when multiple threads contribute to the same output
-static inline void atomic_add_f32(volatile float* addr, float value) {
-    uint32_t value_bits = *(uint32_t*)&value;
-    __asm__ volatile(
-        "amoaddg.w zero, %1, (%0)"
-        :
-        : "r"(addr), "r"(value_bits)
-        : "memory"
-    );
-}
-
-// Atomic store for F16 values to global memory
-// Uses ET hardware's custom shg instruction (store halfword global)
-// This ensures cache coherency when multiple threads write to nearby addresses
-// Address must be 16-bit aligned
-static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
-    __asm__ volatile(
-        "shg %1, (%0)"
-        :
-        : "r"(addr), "r"(value)
-        : "memory"
-    );
 }
 
 //******************************************************************************
