@@ -170,6 +170,26 @@ struct ggml_et_rwkv_wkv7_params {
     int32_t n_seqs;     // number of sequences
 };
 
+struct ggml_et_gated_delta_net_params {
+    float* q;           // [S_v, H_q, n_tokens, n_seqs_q]
+    float* k;           // [S_v, H_k, n_tokens, n_seqs_k]
+    float* v;           // [S_v, H, n_tokens, n_seqs]
+    float* g;           // [1 or S_v, H, n_tokens, n_seqs]
+    float* beta;        // [1, H, n_tokens, n_seqs]
+    float* state_in;    // [S_v, S_v, H, n_seqs]
+    float* dst;         // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
+    int32_t S_v;        // head dimension (value size)
+    int32_t H;          // number of value heads
+    int32_t H_q;        // number of Q heads
+    int32_t H_k;        // number of K heads
+    int32_t n_tokens;   // total tokens
+    int32_t n_seqs;     // number of sequences (from V)
+    int32_t n_seqs_q;   // Q sequence count
+    int32_t n_seqs_k;   // K sequence count
+    int32_t kda;        // 1 if per-element gate (g_ne0 == S_v), 0 if scalar
+    float   scale;      // 1/sqrt(S_v)
+};
+
 struct ggml_et_set_rows_params {
     ggml_tensor src0;     // F32 source data tensor
     ggml_tensor src1;     // I64 row indices tensor
@@ -237,6 +257,7 @@ bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
 bool ggml_et_op_rwkv_wkv6(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rwkv_wkv7(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_cpy(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_gated_delta_net(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context* dev_ctx,
                              const ggml_tensor* rms_norm_node,

@@ -1772,6 +1772,97 @@ bool ggml_et_op_rwkv_wkv7(ggml_backend_et_device_context* dev_ctx, const ggml_te
     return kernel_result;
 }
 
+static ggml_et_cpu_compare_config gated_delta_net_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-4f,
+    /* .max_log_elements = */ 4096
+};
+
+bool ggml_et_op_gated_delta_net(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for GATED_DELTA_NET operation\n");
+        return false;
+    }
+
+    // Validate all 6 source tensors exist
+    for (int i = 0; i <= 5; i++) {
+        if (!node->src[i]) {
+            GGML_LOG_ERROR("ET: GATED_DELTA_NET operation missing src[%d]\n", i);
+            return false;
+        }
+    }
+
+    if (node->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: GATED_DELTA_NET only supports F32, got %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    const char* kernel_name = "gated_delta_net_f32";
+
+    const ggml_tensor* src_q     = node->src[0];
+    const ggml_tensor* src_k     = node->src[1];
+    const ggml_tensor* src_v     = node->src[2];
+    const ggml_tensor* src_g     = node->src[3];
+    const ggml_tensor* src_beta  = node->src[4];
+    const ggml_tensor* src_state = node->src[5];
+
+    const int64_t S_v      = src_v->ne[0];
+    const int64_t H        = src_v->ne[1];
+    const int64_t n_tokens = src_v->ne[2];
+    const int64_t n_seqs   = src_v->ne[3];
+    const int64_t H_q      = src_q->ne[1];
+    const int64_t H_k      = src_k->ne[1];
+    const int64_t n_seqs_q = src_q->ne[3];
+    const int64_t n_seqs_k = src_k->ne[3];
+
+    ggml_et_gated_delta_net_params params;
+    params.q        = (float*)src_q->data;
+    params.k        = (float*)src_k->data;
+    params.v        = (float*)src_v->data;
+    params.g        = (float*)src_g->data;
+    params.beta     = (float*)src_beta->data;
+    params.state_in = (float*)src_state->data;
+    params.dst      = (float*)node->data;
+    params.S_v      = (int32_t)S_v;
+    params.H        = (int32_t)H;
+    params.H_q      = (int32_t)H_q;
+    params.H_k      = (int32_t)H_k;
+    params.n_tokens = (int32_t)n_tokens;
+    params.n_seqs   = (int32_t)n_seqs;
+    params.n_seqs_q = (int32_t)n_seqs_q;
+    params.n_seqs_k = (int32_t)n_seqs_k;
+    params.kda      = (src_g->ne[0] == S_v) ? 1 : 0;
+    params.scale    = 1.0f / sqrtf((float)S_v);
+
+    // CPU comparison for debugging
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (gated_delta_net_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_GATED_DELTA_NET)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for GATED_DELTA_NET operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &gated_delta_net_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for GATED_DELTA_NET operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("GATED_DELTA_NET", kernel_name, node, "S_v=%d H=%d n_tokens=%d n_seqs=%d kda=%d",
+                     (int)S_v, (int)H, (int)n_tokens, (int)n_seqs, params.kda);
+    return kernel_result;
+}
+
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 

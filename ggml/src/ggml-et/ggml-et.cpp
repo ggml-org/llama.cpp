@@ -703,6 +703,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_rwkv_wkv7(dev_ctx, node);
                 break;
 
+            case GGML_OP_GATED_DELTA_NET:
+                ggml_et_op_gated_delta_net(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -717,6 +721,13 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
     }
 
     return GGML_STATUS_SUCCESS;
+}
+
+// Check that each row is element-contiguous (nb[0] == type_size and nb[1] == ne[0]*nb[0]),
+// but allow non-contiguous higher dims (e.g. strided views across dim 2/3).
+static bool et_ggml_is_row_contiguous(const ggml_tensor * t) {
+    const size_t type_sz = ggml_type_size(t->type);
+    return t->nb[0] == type_sz && t->nb[1] == t->ne[0] * type_sz;
 }
 
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
@@ -905,7 +916,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op) &&
-                       ggml_is_contiguous(op->src[0]);
+                       et_ggml_is_row_contiguous(op->src[0]);
             break;
         case GGML_OP_SCALE:
             // F32 contiguous, total elements must be cache line aligned (16 floats)
@@ -1150,6 +1161,30 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_GATED_DELTA_NET:
+            // F32, S_v must be multiple of 8 for vectorization
+            // 6 sources: q, k, v, g, beta, state - all must be F32 contiguous
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&  // q
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&  // k
+                op->src[2] && op->src[2]->type == GGML_TYPE_F32 &&  // v
+                op->src[3] && op->src[3]->type == GGML_TYPE_F32 &&  // g
+                op->src[4] && op->src[4]->type == GGML_TYPE_F32 &&  // beta
+                op->src[5] && op->src[5]->type == GGML_TYPE_F32 &&  // state
+                op->src[2]->ne[0] % 8 == 0 &&  // S_v multiple of 8
+                (op->src[3]->ne[0] == 1 || op->src[3]->ne[0] == op->src[2]->ne[0]) && // g is scalar or per-element
+                op->src[4]->ne[0] == 1 &&       // beta is scalar per position
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
+                ggml_is_contiguous(op->src[2]) &&
+                ggml_is_contiguous(op->src[3]) &&
+                ggml_is_contiguous(op->src[4]) &&
+                ggml_is_contiguous(op->src[5])) {
+                supported = true;
+            } else {
+                supported = false;
+            }
+            break;
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
@@ -1186,9 +1221,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = false;
             break;
     }
-    // if(!supported) {
-    //     ggml_et_dump_operator_metadata(op);
-    // }
+    if(!supported) {
+        ggml_et_dump_operator_metadata(op);
+    }
     return supported;
 }
 
