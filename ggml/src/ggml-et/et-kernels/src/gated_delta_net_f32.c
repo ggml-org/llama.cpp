@@ -21,13 +21,13 @@
 #include "math_fp.h"
 
 struct ggml_et_gated_delta_net_params {
-    float* q;           // [S_v, H_q, n_tokens, n_seqs_q]
-    float* k;           // [S_v, H_k, n_tokens, n_seqs_k]
-    float* v;           // [S_v, H, n_tokens, n_seqs]
-    float* g;           // [1 or S_v, H, n_tokens, n_seqs]
-    float* beta;        // [1, H, n_tokens, n_seqs]
-    float* state_in;    // [S_v, S_v, H, n_seqs]
-    float* dst;         // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
+    struct ggml_tensor q;         // [S_v, H_q, n_tokens, n_seqs_q]
+    struct ggml_tensor k;         // [S_v, H_k, n_tokens, n_seqs_k]
+    struct ggml_tensor v;         // [S_v, H, n_tokens, n_seqs]
+    struct ggml_tensor g;         // [1 or S_v, H, n_tokens, n_seqs]
+    struct ggml_tensor beta;      // [1, H, n_tokens, n_seqs]
+    struct ggml_tensor state_in;  // [S_v, S_v, H, n_seqs]
+    struct ggml_tensor dst;       // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
     int32_t S_v;        // head dimension
     int32_t H;          // number of value heads
     int32_t H_q;        // number of Q heads
@@ -40,7 +40,6 @@ struct ggml_et_gated_delta_net_params {
     float   scale;      // 1/sqrt(S_v)
 };
 
-// Horizontal sum of 8-wide vector register f10 -> scalar float
 static inline float hsum_f10(void) {
     float result;
     __asm__ __volatile__(
@@ -75,13 +74,21 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
         return -1;
     }
 
-    const float* q        = params->q;
-    const float* k        = params->k;
-    const float* v        = params->v;
-    const float* g        = params->g;
-    const float* beta     = params->beta;
-    const float* state_in = params->state_in;
-    float* dst_data       = params->dst;
+    const struct ggml_tensor * q_tsr     = &params->q;
+    const struct ggml_tensor * k_tsr     = &params->k;
+    const struct ggml_tensor * v_tsr     = &params->v;
+    const struct ggml_tensor * g_tsr     = &params->g;
+    const struct ggml_tensor * beta_tsr  = &params->beta;
+    const struct ggml_tensor * state_tsr = &params->state_in;
+    const struct ggml_tensor * dst_tsr   = &params->dst;
+
+    const float* q        = (const float *) q_tsr->data;
+    const float* k        = (const float *) k_tsr->data;
+    const float* v        = (const float *) v_tsr->data;
+    const float* g        = (const float *) g_tsr->data;
+    const float* beta     = (const float *) beta_tsr->data;
+    const float* state_in = (const float *) state_tsr->data;
+    float* dst_data       = (float *) dst_tsr->data;
 
     const int32_t S_v      = params->S_v;
     const int32_t H        = params->H;
@@ -98,58 +105,56 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
         return -1;
     }
 
-    // Output layout: [attn_scores(S_v*H*n_tokens*n_seqs) | new_states(S_v*S_v*H*n_seqs)]
+    // Preserve the original contract for every tensor except q, k, and v, which may be
+    // row-contiguous with strided higher dimensions.
+    if (q_tsr->nb[0] != sizeof(float) ||
+        k_tsr->nb[0] != sizeof(float) ||
+        v_tsr->nb[0] != sizeof(float) ||
+        g_tsr->nb[0] != sizeof(float) ||
+        beta_tsr->nb[0] != sizeof(float) ||
+        state_tsr->nb[0] != sizeof(float) ||
+        dst_tsr->nb[0] != sizeof(float)) {
+        return -1;
+    }
+
     const int32_t attn_elems = S_v * H * n_tokens * n_seqs;
     float* attn_out_base  = dst_data;
     float* state_out_base = dst_data + attn_elems;
 
-    // Gate dimension 0 size
     const int32_t G0 = kda ? S_v : 1;
 
-    // Contiguous tensor strides (in floats)
-    // Q: [S_v, H_q, n_tokens, n_seqs_q]
-    const int32_t q_stride_h = S_v;
-    const int32_t q_stride_t = S_v * H_q;
-    const int32_t q_stride_s = S_v * H_q * n_tokens;
-    // K: [S_v, H_k, n_tokens, n_seqs_k]
-    const int32_t k_stride_h = S_v;
-    const int32_t k_stride_t = S_v * H_k;
-    const int32_t k_stride_s = S_v * H_k * n_tokens;
-    // V: [S_v, H, n_tokens, n_seqs]
-    const int32_t v_stride_h = S_v;
-    const int32_t v_stride_t = S_v * H;
-    const int32_t v_stride_s = S_v * H * n_tokens;
-    // G: [G0, H, n_tokens, n_seqs]
+    const size_t  q_nb1 = q_tsr->nb[1];
+    const size_t  q_nb2 = q_tsr->nb[2];
+    const size_t  q_nb3 = q_tsr->nb[3];
+    const size_t  k_nb1 = k_tsr->nb[1];
+    const size_t  k_nb2 = k_tsr->nb[2];
+    const size_t  k_nb3 = k_tsr->nb[3];
+    const size_t  v_nb1 = v_tsr->nb[1];
+    const size_t  v_nb2 = v_tsr->nb[2];
+    const size_t  v_nb3 = v_tsr->nb[3];
     const int32_t g_stride_h = G0;
     const int32_t g_stride_t = G0 * H;
     const int32_t g_stride_s = G0 * H * n_tokens;
-    // Beta: [1, H, n_tokens, n_seqs]
     const int32_t b_stride_t = H;
     const int32_t b_stride_s = H * n_tokens;
 
-    // Scratch for KDA exp(g) values (max S_v = 128)
     float exp_g_buf[128];
 
-    // Parallelize across (head, seq) pairs
     const int32_t total_work = H * n_seqs;
 
     for (int32_t ir = thread_id; ir < total_work; ir += num_threads) {
         const int32_t head = ir % H;
         const int32_t seq  = ir / H;
 
-        // Head indices for Q and K (GQA head repetition)
         const int32_t h_q = head % H_q;
         const int32_t h_k = head % H_k;
-        // Sequence indices for Q and K (sequence repetition)
         const int32_t seq_q = (n_seqs_q == n_seqs) ? seq : (seq * n_seqs_q / n_seqs);
         const int32_t seq_k = (n_seqs_k == n_seqs) ? seq : (seq * n_seqs_k / n_seqs);
 
-        // State pointers: layout [S_v, S_v, H, n_seqs] contiguous
         const int32_t state_offset = (seq * H + head) * S_v * S_v;
         float* s_out = state_out_base + state_offset;
         const float* s_in = state_in + state_offset;
 
-        // Copy input state to output buffer (work in-place on output)
         for (int32_t idx = 0; idx < S_v * S_v; idx += 8) {
             __asm__ volatile(
                 "flw.ps f10, %[src]\n"
@@ -160,29 +165,19 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
             );
         }
 
-        // Attention output pointer for first token of this (head, seq)
         float* attn_data = attn_out_base + (seq * n_tokens * H + head) * S_v;
 
         for (int32_t t = 0; t < n_tokens; t++) {
-            // Input pointers for this timestep
-            const float* q_t = q + seq_q * q_stride_s + t * q_stride_t + h_q * q_stride_h;
-            const float* k_t = k + seq_k * k_stride_s + t * k_stride_t + h_k * k_stride_h;
-            const float* v_t = v + seq * v_stride_s + t * v_stride_t + head * v_stride_h;
+            const float* q_t = (const float *)((const char *)q + seq_q * q_nb3 + t * q_nb2 + h_q * q_nb1);
+            const float* k_t = (const float *)((const char *)k + seq_k * k_nb3 + t * k_nb2 + h_k * k_nb1);
+            const float* v_t = (const float *)((const char *)v + seq * v_nb3 + t * v_nb2 + head * v_nb1);
             const float* g_t = g + seq * g_stride_s + t * g_stride_t + head * g_stride_h;
             const float  beta_val = beta[seq * b_stride_s + t * b_stride_t + head];
 
-            // ----------------------------------------------------------------
-            // Step 1: Gate decay
-            // State stored transposed: s_out[j*S_v + i] = S[i][j]
-            // KDA: S[i][:] *= exp(g[i])  =>  s_out[j][i] *= exp(g[i]) for all j
-            // Scalar: S *= exp(g[0])
-            // ----------------------------------------------------------------
             if (kda) {
-                // Precompute exp(g[i]) for all i
                 for (int32_t i = 0; i < S_v; i++) {
                     exp_g_buf[i] = et_expf(g_t[i]);
                 }
-                // Apply per-element gate to each row of stored state
                 for (int32_t j = 0; j < S_v; j++) {
                     float* row = &s_out[j * S_v];
                     for (int32_t i = 0; i < S_v; i += 8) {
@@ -199,7 +194,6 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                     }
                 }
             } else {
-                // Scalar gate: scale entire state by exp(g[0])
                 float decay = et_expf(g_t[0]);
                 __asm__ volatile("fbc.ps f20, %[d]\n" : : [d] "m"(decay) : "f20");
                 for (int32_t idx = 0; idx < S_v * S_v; idx += 8) {
@@ -214,16 +208,9 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 }
             }
 
-            // ----------------------------------------------------------------
-            // Steps 2-4 fused per state row:
-            //   delta_j = (v[j] - dot(s_row_j, k)) * beta
-            //   s_row_j[i] += k[i] * delta_j
-            //   attn[j] = dot(s_row_j, q) * scale
-            // ----------------------------------------------------------------
             for (int32_t j = 0; j < S_v; j++) {
                 float* row = &s_out[j * S_v];
 
-                // -- Compute delta_j: dot(state_row, k) --
                 float zero = 0.0f;
                 __asm__ volatile("fbc.ps f10, %[z]\n" : : [z] "m"(zero) : "f10");
 
@@ -242,7 +229,6 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 float dot_sk = hsum_f10();
                 float delta_j = (v_t[j] - dot_sk) * beta_val;
 
-                // -- Update state row and compute attention dot product --
                 __asm__ volatile(
                     "fbc.ps f20, %[dj]\n"
                     "fbc.ps f10, %[z]\n"
@@ -253,12 +239,12 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
 
                 for (int32_t i = 0; i < S_v; i += 8) {
                     __asm__ volatile(
-                        "flw.ps f11, %[s_vec]\n"        // state[j][i:i+8]
-                        "flw.ps f12, %[k_vec]\n"        // k[i:i+8]
-                        "flw.ps f13, %[q_vec]\n"        // q[i:i+8]
-                        "fmadd.ps f11, f20, f12, f11\n" // state += delta_j * k
-                        "fsw.ps f11, %[s_out]\n"        // store updated state
-                        "fmadd.ps f10, f11, f13, f10\n" // attn_acc += state * q
+                        "flw.ps f11, %[s_vec]\n"
+                        "flw.ps f12, %[k_vec]\n"
+                        "flw.ps f13, %[q_vec]\n"
+                        "fmadd.ps f11, f20, f12, f11\n"
+                        "fsw.ps f11, %[s_out]\n"
+                        "fmadd.ps f10, f11, f13, f10\n"
                         : [s_out] "=m"(*(float(*)[8])&row[i])
                         : [s_vec] "m"(*(const float(*)[8])&row[i]),
                           [k_vec] "m"(*(const float(*)[8])&k_t[i]),
@@ -270,7 +256,7 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 attn_data[j] = hsum_f10() * scale;
             }
 
-            attn_data += S_v * H;  // advance to next token
+            attn_data += S_v * H;
         }
     }
 
