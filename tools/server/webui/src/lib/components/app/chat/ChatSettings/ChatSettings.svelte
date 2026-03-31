@@ -7,16 +7,9 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database,
 		ListRestart
 	} from '@lucide/svelte';
-	import {
-		ChatSettingsFooter,
-		ChatSettingsImportExportTab,
-		ChatSettingsFields,
-		McpLogo,
-		McpServersSettings
-	} from '$lib/components/app';
+	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -284,16 +277,6 @@
 			]
 		},
 		{
-			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
-			icon: Database,
-			fields: []
-		},
-		{
-			title: SETTINGS_SECTION_TITLES.MCP,
-			icon: McpLogo,
-			fields: []
-		},
-		{
 			title: SETTINGS_SECTION_TITLES.DEVELOPER,
 			icon: Code,
 			fields: [
@@ -528,12 +511,6 @@
 
 					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 				</div>
-
-				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
-					<ChatSettingsImportExportTab />
-				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
-					<McpServersSettings />
-				{/if}
 
 				{#if currentSection.fields}
 					<div class="space-y-6">

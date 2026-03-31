@@ -7,7 +7,7 @@
 		open?: boolean;
 	}
 
-	let { onOpenChange, open = $bindable(false) }: Props = $props();
+	let { onOpenChange, open = false }: Props = $props();
 
 	function handleClose() {
 		onOpenChange?.(false);

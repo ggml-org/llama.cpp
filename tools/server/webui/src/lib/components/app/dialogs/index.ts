@@ -37,6 +37,50 @@
 export { default as DialogChatSettings } from './DialogChatSettings.svelte';
 
 /**
+ * **DialogMcpServersSettings** - MCP servers management dialog
+ *
+ * Modal dialog for managing MCP servers with dedicated context.
+ *
+ * **Architecture:**
+ * - Uses context-based state management
+ * - Provides `open()` method via context
+ * - Contains McpServersSettings component
+ *
+ * @example
+ * ```svelte
+ * <!-- In parent component -->
+ * <DialogMcpServersSettings />
+ *
+ * <!-- Trigger via context -->
+ * {#const mcpDialog = getMcpServersDialogContext()}
+ * <Button onclick={() => mcpDialog.open()}>Manage MCP Servers</Button>
+ * ```
+ */
+export { default as DialogMcpServersSettings } from './DialogMcpServersSettings.svelte';
+
+/**
+ * **DialogChatSettingsImportExport** - Import/Export conversations dialog
+ *
+ * Modal dialog for importing and exporting conversations with dedicated context.
+ *
+ * **Architecture:**
+ * - Uses context-based state management
+ * - Provides `open()` method via context
+ * - Contains ChatSettingsImportExportTab component
+ *
+ * @example
+ * ```svelte
+ * <!-- In parent component -->
+ * <DialogChatSettingsImportExport />
+ *
+ * <!-- Trigger via context -->
+ * {#const importExportDialog = getImportExportDialogContext()}
+ * <Button onclick={() => importExportDialog.open()}>Import/Export</Button>
+ * ```
+ */
+export { default as DialogChatSettingsImportExport } from './DialogChatSettingsImportExport.svelte';
+
+/**
  *
  * CONFIRMATION DIALOGS
  *

@@ -7,7 +7,9 @@
 	import {
 		ChatSidebar,
 		DialogConversationTitleUpdate,
-		DialogChatSettings
+		DialogChatSettings,
+		DialogMcpServersSettings,
+		DialogChatSettingsImportExport
 	} from '$lib/components/app';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
@@ -24,7 +26,11 @@
 	import type { SettingsSectionTitle } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { setChatSettingsDialogContext } from '$lib/contexts';
+	import {
+		setChatSettingsDialogContext,
+		setMcpServersDialogContext,
+		setImportExportDialogContext
+	} from '$lib/contexts';
 
 	let { children } = $props();
 
@@ -50,11 +56,25 @@
 
 	let chatSettingsDialogOpen = $state(false);
 	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
+	let mcpServersDialogOpen = $state(false);
+	let importExportDialogOpen = $state(false);
 
 	setChatSettingsDialogContext({
 		open: (initialSection?: SettingsSectionTitle) => {
 			chatSettingsDialogInitialSection = initialSection;
 			chatSettingsDialogOpen = true;
+		}
+	});
+
+	setMcpServersDialogContext({
+		open: () => {
+			mcpServersDialogOpen = true;
+		}
+	});
+
+	setImportExportDialogContext({
+		open: () => {
+			importExportDialogOpen = true;
 		}
 	});
 
@@ -233,6 +253,15 @@
 		open={chatSettingsDialogOpen}
 		onOpenChange={(open) => (chatSettingsDialogOpen = open)}
 		initialSection={chatSettingsDialogInitialSection}
+	/>
+
+	<DialogMcpServersSettings
+		open={mcpServersDialogOpen}
+		onOpenChange={(open) => (mcpServersDialogOpen = open)}
+	/>
+	<DialogChatSettingsImportExport
+		open={importExportDialogOpen}
+		onOpenChange={(open) => (importExportDialogOpen = open)}
 	/>
 
 	<DialogConversationTitleUpdate

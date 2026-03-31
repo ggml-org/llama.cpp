@@ -10,8 +10,7 @@
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
-	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { getMcpServersDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -54,7 +53,7 @@
 		onMcpResourcesClick
 	}: Props = $props();
 
-	const chatSettingsDialog = getChatSettingsDialogContext();
+	const mcpServersDialog = getMcpServersDialogContext();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -214,7 +213,7 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-2">
-		<McpActiveServersAvatars onClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)} />
+		<McpActiveServersAvatars onClick={() => mcpServersDialog.open()} />
 
 		{#if isMobile.current}
 			<ModelsSelectorSheet

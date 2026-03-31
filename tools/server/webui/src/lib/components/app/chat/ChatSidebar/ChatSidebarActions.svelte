@@ -1,11 +1,14 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { Database, Search, Settings, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { McpLogo } from '$lib/components/app';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
-	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import {
+		getChatSettingsDialogContext,
+		getMcpServersDialogContext,
+		getImportExportDialogContext
+	} from '$lib/contexts';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -22,6 +25,8 @@
 	let searchInput: HTMLInputElement | null = $state(null);
 
 	const chatSettingsDialog = getChatSettingsDialogContext();
+	const mcpServersDialog = getMcpServersDialogContext();
+	const importExportDialog = getImportExportDialogContext();
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -55,7 +60,7 @@
 		</div>
 	{:else}
 		<Button
-			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
+			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			href="?new_chat=true#/"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
@@ -70,7 +75,7 @@
 		</Button>
 
 		<Button
-			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
+			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			onclick={() => {
 				isSearchModeActive = true;
 			}}
@@ -86,9 +91,9 @@
 		</Button>
 
 		<Button
-			class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
+			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
 			onclick={() => {
-				chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP);
+				mcpServersDialog.open();
 			}}
 			variant="ghost"
 		>
@@ -96,6 +101,34 @@
 				<McpLogo class="h-4 w-4" />
 
 				MCP Servers
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
+			onclick={() => {
+				importExportDialog.open();
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Database class="h-4 w-4" />
+
+				Import / Export
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
+			onclick={() => {
+				chatSettingsDialog.open();
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Settings class="h-4 w-4" />
+
+				Settings
 			</div>
 		</Button>
 	{/if}
