@@ -509,3 +509,86 @@ def test_responses_stream_delta_events_have_indices():
     assert saw_output_item_added, "never received response.output_item.added"
     assert saw_content_part_added, "never received response.content_part.added"
     assert saw_output_text_delta, "never received response.output_text.delta"
+
+
+def test_responses_reasoning_content_array():
+    """Reasoning items with content as array (spec format) must be accepted."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"type": "reasoning", "summary": [],
+             "content": [{"type": "reasoning_text", "text": "thinking"}]},
+            {"role": "assistant", "type": "message",
+             "content": [{"type": "output_text", "text": "Hello"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_reasoning_content_string():
+    """Reasoning items with content as plain string (OpenCode format) must be accepted."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"type": "reasoning", "summary": [], "content": "thinking about it"},
+            {"role": "assistant", "type": "message",
+             "content": [{"type": "output_text", "text": "Hello"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_reasoning_content_null():
+    """Reasoning items with content:null (Codex format, issue openai/codex#11834)
+    must be accepted — content may be null when encrypted_content is present."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"type": "reasoning", "summary": [], "content": None,
+             "encrypted_content": "opaque_data_here"},
+            {"role": "assistant", "type": "message",
+             "content": [{"type": "output_text", "text": "Hello"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_reasoning_content_omitted():
+    """Reasoning items with content omitted entirely must be accepted."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"type": "reasoning", "summary": []},
+            {"role": "assistant", "type": "message",
+             "content": [{"type": "output_text", "text": "Hello"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"

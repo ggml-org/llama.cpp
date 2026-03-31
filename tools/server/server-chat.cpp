@@ -238,24 +238,29 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "reasoning") {
                 // #responses_create-input-input_item_list-item-reasoning
 
-                if (!exists_and_is_array(item, "content")) {
-                    throw std::invalid_argument("item['content'] is not an array");
-                }
-                if (item.at("content").empty()) {
-                    throw std::invalid_argument("item['content'] is empty");
-                }
-                if (!exists_and_is_string(item.at("content")[0], "text")) {
-                    throw std::invalid_argument("item['content']['text'] is not a string");
+                // content can be: null, omitted, a string, or array of {type, text} objects.
+                // Codex may send content:null or omit it entirely (issue openai/codex#11834).
+                // OpenCode may send content as a plain string.
+                // The spec uses array format: [{"type":"reasoning_text","text":"..."}].
+                // encrypted_content (opaque string) is accepted but ignored for local models.
+                std::string reasoning_text;
+                if (!item.contains("content") || item.at("content").is_null()) {
+                    // null or missing content - skip (encrypted_content only, or empty reasoning)
+                } else if (item.at("content").is_string()) {
+                    reasoning_text = item.at("content").get<std::string>();
+                } else if (item.at("content").is_array() && !item.at("content").empty()
+                           && exists_and_is_string(item.at("content")[0], "text")) {
+                    reasoning_text = item.at("content")[0].at("text").get<std::string>();
                 }
 
                 if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
-                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                    prev_msg["reasoning_content"] = reasoning_text;
                 } else {
                     chatcmpl_messages.push_back(json {
                         {"role", "assistant"},
                         {"content", json::array()},
-                        {"reasoning_content", item.at("content")[0].at("text")},
+                        {"reasoning_content", reasoning_text},
                     });
                 }
             } else {
