@@ -47,6 +47,12 @@ static void copy_f32_row(float* dst, const float* src, int64_t num_elements) {
     }
 }
 
+static void copy_f16_row(float* dst, const uint16_t* src, int64_t num_elements) {
+    for (int64_t i = 0; i < num_elements; i++) {
+        dst[i] = fp16_to_fp32(src[i]);
+    }
+}
+
 // Copy a row of F32 data from source to destination, aligned to cache line boundaries
 // using FP32 load/store instructions. They don't perform data conversion so is fine.
 // Requirement: n_bytes is a multiple of CACHE_LINE_SIZE (64 bytes)
@@ -448,6 +454,11 @@ static int get_row_f32_mc_cacheline_aligned(struct ggml_et_get_rows_params* para
             const float* src_row = (const float*)src0_data + row_index * ne00 + batch_offset + elem_offset_in_row;
             copy_row_cache_align(dst_row, src_row, num_elements * sizeof(float));
         }
+        else if (src0->type == GGML_TYPE_F16) {
+            // F16 source: scalar conversion over a destination-aligned write chunk.
+            const uint16_t* src_row = (const uint16_t*)src0_data + row_index * ne00 + batch_offset + elem_offset_in_row;
+            copy_f16_row(dst_row, src_row, num_elements);
+        }
         else if (src0->type == GGML_TYPE_Q8_0) {
             // Q8_0 source: dequantize work-unit-aligned blocks
             const int64_t blocks_per_row = (ne00 + QK8_0 - 1) / QK8_0;
@@ -493,7 +504,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
 
     // Fast path - we know how to deal with them multi-core
-    if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
+    if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
         && dst->ne[0] % CACHE_ELEMENTS(sizeof(float)) == 0) {
         return get_row_f32_mc_cacheline_aligned(params, env);
     }
@@ -515,7 +526,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
         return -1; // Invalid output or index type
     }
 
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K) {
         return -1; // Unsupported input type
     }
 
@@ -570,7 +581,11 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
             const float* src_row = (const float*)src0_data + row_index * ne00 + batch_offset;
             float* dst_row = dst_data + dst_offset * ne00;
             copy_f32_row(dst_row, src_row, ne00);
-
+        } else if (src0->type == GGML_TYPE_F16) {
+            // F16 source: scalar conversion
+            const uint16_t* src_row = (const uint16_t*)src0_data + row_index * ne00 + batch_offset;
+            float* dst_row = dst_data + dst_offset * ne00;
+            copy_f16_row(dst_row, src_row, ne00);
         } else if (src0->type == GGML_TYPE_Q8_0) {
             // Q8_0 source: dequantize while copying
             const int64_t blocks_per_row = (ne00 + QK8_0 - 1) / QK8_0;

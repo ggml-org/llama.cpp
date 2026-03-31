@@ -675,6 +675,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_softmax(dev_ctx, node);
                 break;
 
+            case GGML_OP_IM2COL:
+                ggml_et_op_im2col(dev_ctx, node);
+                break;
+
             case GGML_OP_FLASH_ATTN_EXT:
                 ggml_et_op_flash_attn_ext(dev_ctx, node);
                 break;
@@ -861,8 +865,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = true;
             }
             else if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
-                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+                op->src[0] && (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
+                op->src[1] && (op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_F32)) {
 
                 // Check first dimension contiguity requirements
                 bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
@@ -870,6 +874,27 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
 
                 // Check destination stride ordering (only for dimensions with ne > 1)
+                bool dst_properly_ordered = true;
+                for (int d = 0; d < 3; d++) {
+                    if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
+                        dst_properly_ordered = false;
+                    }
+                }
+
+                supported = src0_first_dim_contiguous &&
+                           src1_first_dim_contiguous &&
+                           dst_first_dim_contiguous &&
+                           dst_properly_ordered;
+            } else if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_Q8_0 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+
+                // Keep the existing quantized path constraints separate from the
+                // relaxed non-quant generic fallback.
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
                 bool dst_properly_ordered = true;
                 for (int d = 0; d < 3; d++) {
                     if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
@@ -972,6 +997,15 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op) &&
                        et_ggml_is_row_contiguous(op->src[0]) &&
                        ggml_get_op_params_i32(op, 0) > 0;
+            break;
+        case GGML_OP_IM2COL:
+            supported = op->src[0] && op->src[1] &&
+                       ((op->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) ||
+                        (op->type == GGML_TYPE_F16 && (op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_F32))) &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[1]) &&
+                       op->nb[0] == ggml_type_size(op->type) &&
+                       op->src[1]->nb[0] == ggml_type_size(op->src[1]->type);
             break;
         case GGML_OP_SCALE:
             // F32 contiguous, total elements must be cache line aligned (16 floats)
@@ -1110,10 +1144,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_GET_ROWS:
-            // Support F32/Q4_0/Q8_0/Q4_K data with I32 indices -> F32 output
+            // Support F32/F16/Q4_0/Q8_0/Q4_K data with I32 indices -> F32 output
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] &&
                 (op->src[0]->type == GGML_TYPE_F32 ||
+                    op->src[0]->type == GGML_TYPE_F16 ||
                     op->src[0]->type == GGML_TYPE_Q4_0 ||
                     op->src[0]->type == GGML_TYPE_Q8_0 ||
                     op->src[0]->type == GGML_TYPE_Q4_K) &&

@@ -201,6 +201,18 @@ static inline float compute_block_dot_product_f16_partial(const uint16_t* a_bloc
     return sum;
 }
 
+// Compute dot product between f16 block and f16 column vector
+// Scalar implementation for generic non-matrix-engine fallback paths.
+static inline float compute_block_dot_product_f16_f16_partial(const uint16_t* a_block, const uint16_t* b_col_start, int elements) {
+    float sum = 0.0f;
+
+    for (int i = 0; i < elements; i++) {
+        sum += fp16_to_fp32(a_block[i]) * fp16_to_fp32(b_col_start[i]);
+    }
+
+    return sum;
+}
+
 // Compute dot product between f16 block and f32 column vector
 // Vectorized: processes 8 elements at a time using ET vector instructions
 // Block size: 32 f16 values (64 bytes = 1 cache line)
@@ -257,6 +269,18 @@ static inline float compute_block_dot_product_f32_partial(const float* a_block, 
     }
 
     return final_sum;
+}
+
+// Compute dot product between f32 block and f16 column vector
+// Scalar implementation for generic non-matrix-engine fallback paths.
+static inline float compute_block_dot_product_f32_f16_partial(const float* a_block, const uint16_t* b_col_start, int elements) {
+    float sum = 0.0f;
+
+    for (int i = 0; i < elements; i++) {
+        sum += a_block[i] * fp16_to_fp32(b_col_start[i]);
+    }
+
+    return sum;
 }
 
 

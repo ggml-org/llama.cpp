@@ -48,6 +48,7 @@ set(KERNELS
     rms_norm_f32
     rms_norm_mul_f32
     softmax_f32
+    im2col
     get_rows_f32
     concat_f32
     repeat_f32

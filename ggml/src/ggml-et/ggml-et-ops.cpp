@@ -45,6 +45,14 @@ static ggml_et_cpu_compare_config group_norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config im2col_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config unary_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -597,7 +605,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 
     } else if (node->type == GGML_TYPE_F32 &&
                node->src[0]->type == GGML_TYPE_F16 &&
-               node->src[1]->type == GGML_TYPE_F32) {
+               (node->src[1]->type == GGML_TYPE_F16 || node->src[1]->type == GGML_TYPE_F32)) {
 
         kernel_name = "mul_mat_f16";
         src0_type_name = "F16";
@@ -614,7 +622,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         src0_type_name = "F32";
     } else if (node->type == GGML_TYPE_F32 &&
                node->src[0]->type == GGML_TYPE_F32 &&
-               node->src[1]->type == GGML_TYPE_F32) {
+               (node->src[1]->type == GGML_TYPE_F16 || node->src[1]->type == GGML_TYPE_F32)) {
 
         kernel_name = "mul_mat_f32";
         src0_type_name = "F32";
@@ -1103,6 +1111,58 @@ bool ggml_et_op_group_norm(ggml_backend_et_device_context* dev_ctx, const ggml_t
     return kernel_result;
 }
 
+bool ggml_et_op_im2col(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for IM2COL operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: IM2COL operation missing required inputs\n");
+        return false;
+    }
+
+    const bool supported_types =
+        (node->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32) ||
+        (node->type == GGML_TYPE_F16 && (node->src[1]->type == GGML_TYPE_F16 || node->src[1]->type == GGML_TYPE_F32));
+
+    if (!supported_types) {
+        GGML_LOG_ERROR("ET: IM2COL operation with unsupported types: dst=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    ggml_et_im2col_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.dst  = *node;
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (im2col_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_IM2COL)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for IM2COL operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "im2col", &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &im2col_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for IM2COL operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("IM2COL", "im2col", node);
+    return kernel_result;
+}
+
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 
@@ -1399,6 +1459,7 @@ bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
     if (node->type == GGML_TYPE_F32 &&
         node->src[1]->type == GGML_TYPE_I32 &&
         (node->src[0]->type == GGML_TYPE_F32 ||
+            node->src[0]->type == GGML_TYPE_F16 ||
             node->src[0]->type == GGML_TYPE_Q4_0 ||
             node->src[0]->type == GGML_TYPE_Q8_0 ||
             node->src[0]->type == GGML_TYPE_Q4_K)) {
