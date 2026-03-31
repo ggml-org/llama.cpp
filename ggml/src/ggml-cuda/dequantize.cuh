@@ -126,13 +126,7 @@ static __device__ __forceinline__ void dequantize_turbo2_0(const void * vx, cons
 }
 
 // ── PlanarQuant / IsoQuant dequantize for flash attention ───────────
-// Constants from cpy-planar-iso.cu (extern __constant__)
-extern __constant__ float d_planar_cos[64];
-extern __constant__ float d_planar_sin[64];
-extern __constant__ float d_iso_qw[32];
-extern __constant__ float d_iso_qx[32];
-extern __constant__ float d_iso_qy[32];
-extern __constant__ float d_iso_qz[32];
+#include "planar-iso-constants.cuh"
 
 static __constant__ float dq_centroids_3bit[8] = {
     -0.190685f, -0.117832f, -0.065717f, -0.021460f,
@@ -168,8 +162,8 @@ static __device__ __forceinline__ void dequantize_planar3_0(const void * vx, con
 
     // Inverse Givens: pair index = iqs/2
     int p = iqs / 2;
-    float c = d_planar_cos[p];
-    float s = d_planar_sin[p];
+    float c = PI_COS[p];
+    float s = PI_SIN[p];
     v.x = ( c * q0 + s * q1) * norm;
     v.y = (-s * q0 + c * q1) * norm;
 }
@@ -190,7 +184,7 @@ static __device__ __forceinline__ void dequantize_iso3_0(const void * vx, const 
     }
 
     // Inverse quaternion: conj(q_L) * v
-    float qw = d_iso_qw[g], qx = -d_iso_qx[g], qy = -d_iso_qy[g], qz = -d_iso_qz[g];
+    float qw = PI_QW[g], qx = -PI_QX[g], qy = -PI_QY[g], qz = -PI_QZ[g];
     float rw = qw*qvals[0] - qx*qvals[1] - qy*qvals[2] - qz*qvals[3];
     float rx = qw*qvals[1] + qx*qvals[0] + qy*qvals[3] - qz*qvals[2];
     float ry = qw*qvals[2] - qx*qvals[3] + qy*qvals[0] + qz*qvals[1];
@@ -210,8 +204,8 @@ static __device__ __forceinline__ void dequantize_planar4_0(const void * vx, con
     float q1 = dq_centroids_4bit[unpack_4bit(&x[ib], iqs + 1)];
 
     int p = iqs / 2;
-    float c = d_planar_cos[p];
-    float s = d_planar_sin[p];
+    float c = PI_COS[p];
+    float s = PI_SIN[p];
     v.x = ( c * q0 + s * q1) * norm;
     v.y = (-s * q0 + c * q1) * norm;
 }
@@ -229,7 +223,7 @@ static __device__ __forceinline__ void dequantize_iso4_0(const void * vx, const 
         qvals[c] = dq_centroids_4bit[unpack_4bit(&x[ib], g*4 + c)];
     }
 
-    float qw = d_iso_qw[g], qx = -d_iso_qx[g], qy = -d_iso_qy[g], qz = -d_iso_qz[g];
+    float qw = PI_QW[g], qx = -PI_QX[g], qy = -PI_QY[g], qz = -PI_QZ[g];
     float rw = qw*qvals[0] - qx*qvals[1] - qy*qvals[2] - qz*qvals[3];
     float rx = qw*qvals[1] + qx*qvals[0] + qy*qvals[3] - qz*qvals[2];
     float ry = qw*qvals[2] - qx*qvals[3] + qy*qvals[0] + qz*qvals[1];

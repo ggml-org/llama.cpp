@@ -243,9 +243,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
 
-    // Initialize rotation constants for planar/iso types
+    // Initialize rotation constants for planar/iso types (needed for K or V dequant)
     if (K->type == GGML_TYPE_PLANAR3_0 || K->type == GGML_TYPE_ISO3_0 ||
-        K->type == GGML_TYPE_PLANAR4_0 || K->type == GGML_TYPE_ISO4_0) {
+        K->type == GGML_TYPE_PLANAR4_0 || K->type == GGML_TYPE_ISO4_0 ||
+        V->type == GGML_TYPE_PLANAR3_0 || V->type == GGML_TYPE_ISO3_0 ||
+        V->type == GGML_TYPE_PLANAR4_0 || V->type == GGML_TYPE_ISO4_0) {
         ggml_cuda_init_planar_iso_constants();
     }
 
@@ -509,8 +511,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // PlanarQuant/IsoQuant: force VEC kernel (only implementation we have).
-    if (K->type == GGML_TYPE_PLANAR3_0 || K->type == GGML_TYPE_ISO3_0 ||
-        K->type == GGML_TYPE_PLANAR4_0 || K->type == GGML_TYPE_ISO4_0) {
+    // Check BOTH K and V — asymmetric configs like q8_0 K + iso3 V also need VEC.
+    auto is_planar_iso = [](ggml_type t) {
+        return t == GGML_TYPE_PLANAR3_0 || t == GGML_TYPE_ISO3_0 ||
+               t == GGML_TYPE_PLANAR4_0 || t == GGML_TYPE_ISO4_0;
+    };
+    if (is_planar_iso(K->type) || is_planar_iso(V->type)) {
         return BEST_FATTN_KERNEL_VEC;
     }
 
