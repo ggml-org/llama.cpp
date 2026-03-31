@@ -181,7 +181,7 @@ jobs:
           - build: 'x64'
             os: ubuntu-22.04
           - build: 'arm64'
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
           - build: 'ppc64le'
@@ -207,14 +207,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            python3 python3-pip python3-dev \
+            python3 python3-pip python3-dev python3-wheel \
             libjpeg-dev build-essential libssl-dev \
             git-lfs
+
+      - name: Toolchain workaround (GCC 14)
+        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        run: |
+          sudo apt-get install -y gcc-14 g++-14
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Python Dependencies
         id: python_depends
         run: |
-          python3 -m pip install --upgrade pip
+          export PIP_BREAK_SYSTEM_PACKAGES="1"
+          python3 -m pip install --upgrade pip setuptools
           pip3 install ./gguf-py
 
       - name: Swap Endianness
@@ -292,7 +300,15 @@ jobs:
           ctest -L main --verbose
 
   ubuntu-24-vulkan:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-24.04
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Clone
@@ -302,7 +318,10 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get install -y glslc libvulkan-dev libssl-dev ninja-build
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev libssl-dev ninja-build
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Configure
         id: cmake_configure

@@ -75,6 +75,8 @@ int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -99,8 +101,6 @@ int main(int argc, char ** argv) {
     if (params.model_alias.empty() && !params.model.name.empty()) {
         params.model_alias.insert(params.model.name);
     }
-
-    common_init();
 
     // struct that contains llama context and inference
     server_context ctx_server;
