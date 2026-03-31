@@ -1689,14 +1689,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
             n_outputs = n_outputs_new;
         }
 
-        // Deferred quantization: convert F16 K-cache to quantized after prefill
-        // Triggered on first single-token ubatch (= first decode step)
-        if (ubatch.n_tokens == 1 && memory) {
-            auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
-            if (kv) {
-                kv->convert_deferred_keys();
-            }
-        }
+        // TODO: Deferred quantization conversion (F16→quantized) after prefill.
+        // Currently disabled — swapping tensor pointers breaks ggml_backend_sched
+        // because the scheduler can't find the new tensor's backend buffer.
+        // The F16 K-cache gives FP16-quality PPL and 3-4% faster decode.
+        // VRAM savings require proper integration with the buffer scheduler.
+        //
+        // if (ubatch.n_tokens == 1 && memory) {
+        //     auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+        //     if (kv) kv->convert_deferred_keys();
+        // }
 
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
