@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "hexagon_types.h"
+#include "hexagon_protos.h"
 
 #include "hex-fastdiv.h"
 #include "hex-dump.h"
@@ -66,6 +67,32 @@ static inline size_t hex_smax(size_t a, size_t b) {
 static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, uint32_t height) {
     const uint64_t control = Q6_P_combine_RR(stride, Q6_R_combine_RlRl(width, height));
     Q6_l2fetch_AP((void *) p, control);
+}
+
+#define HEX_L2_LINE_SIZE 64
+
+static inline void hex_l2clear(void * addr, size_t size)
+{
+    const uint32_t s = (uint32_t) addr;
+    const uint32_t e = s + size;
+    for (uint32_t i = s; i <= e; i += HEX_L2_LINE_SIZE * 4) {
+        Q6_dcinva_A((void *) i + 00);
+        Q6_dcinva_A((void *) i + 64);
+        Q6_dcinva_A((void *) i + 128);
+        Q6_dcinva_A((void *) i + 192);
+    }
+}
+
+static inline void hex_l2flush(void * addr, size_t size)
+{
+    const uint32_t s = (uint32_t) addr;
+    const uint32_t e = s + size;
+    for (uint32_t i = s; i <= e; i += HEX_L2_LINE_SIZE * 4) {
+        Q6_dccleana_A((void *) i + 00);
+        Q6_dccleana_A((void *) i + 64);
+        Q6_dccleana_A((void *) i + 128);
+        Q6_dccleana_A((void *) i + 192);
+    }
 }
 
 #endif /* HEX_UTILS_H */

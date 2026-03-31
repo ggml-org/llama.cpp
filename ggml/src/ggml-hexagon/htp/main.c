@@ -479,7 +479,7 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
         if (b->flags & HTP_OP_BUF_INPUT) {
             uint8_t* l2_start = (uint8_t*) b->base + b->begin;
             uint32_t l2_size  = b->end  - b->begin;
-            qurt_mem_cache_clean((qurt_addr_t) l2_start, l2_size, QURT_MEM_CACHE_INVALIDATE, QURT_MEM_DCACHE);
+            hex_l2flush(l2_start, l2_size);
         }
     }
 }
@@ -491,7 +491,7 @@ static void post_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
     if (b->flags & HTP_OP_BUF_OUTPUT) {
         uint8_t* l2_start = (uint8_t*) b->base + b->begin;
         uint32_t l2_size  = b->end  - b->begin;
-        qurt_mem_cache_clean((qurt_addr_t) l2_start, l2_size, QURT_MEM_CACHE_FLUSH, QURT_MEM_DCACHE);
+        hex_l2clear(l2_start, l2_size);
     }
 }
 
