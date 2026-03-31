@@ -351,7 +351,8 @@ static inline void softmax_pass2_range(
     );
 }
 
-// Single-core row path using the new structure.
+// Single-core row path.
+// Handles arbitrary ne0 by splitting into SIMD-aligned portion + scalar tail.
 static inline void compute_softmax_row(
     float *dst,
     const float *src,
@@ -362,7 +363,31 @@ static inline void compute_softmax_row(
     float sink_value,
     bool use_sinks)
 {
-    softmax_params_t params = softmax_pass1_range(src, mask, 0, cols, scale, slope);
+    const int aligned_cols = cols & ~7;  // round down to multiple of 8
+    const int tail = cols - aligned_cols;
+
+    softmax_params_t params = softmax_params_empty();
+    if (aligned_cols > 0) {
+        params = softmax_pass1_range(src, mask, 0, aligned_cols, scale, slope);
+    }
+
+    // Scalar tail: merge remaining elements into the SIMD result
+    for (int i = aligned_cols; i < cols; i++) {
+        float x = src[i] * scale;
+        if (mask != NULL) x += mask[i] * slope;
+        if (!softmax_lane_is_valid(x)) continue;
+
+        if (params.max_val == -INFINITY) {
+            params.max_val = x;
+            params.sum_val = 1.0f;
+        } else if (x > params.max_val) {
+            params.sum_val = params.sum_val * et_expf(params.max_val - x) + 1.0f;
+            params.max_val = x;
+        } else {
+            params.sum_val += et_expf(x - params.max_val);
+        }
+        params.valid_mask = 1;
+    }
 
     if (use_sinks) {
         // For sinks, use fully scalar et_expf to match the reference CPU
@@ -391,7 +416,20 @@ static inline void compute_softmax_row(
         if (!params.valid_mask) {
             return;
         }
-        softmax_pass2_range(dst, src, mask, 0, cols, scale, slope, params);
+
+        if (aligned_cols > 0) {
+            softmax_pass2_range(dst, src, mask, 0, aligned_cols, scale, slope, params);
+        }
+
+        // Scalar tail for pass 2
+        if (tail > 0) {
+            float inv_sum = et_fdiv(1.0f, params.sum_val);
+            for (int i = aligned_cols; i < cols; i++) {
+                float x = src[i] * scale;
+                if (mask != NULL) x += mask[i] * slope;
+                dst[i] = et_expf(x - params.max_val) * inv_sum;
+            }
+        }
     }
 }
 
@@ -518,67 +556,74 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
 
     // Process tensor row by row in parallel across flattened rows.
     // Flattened row index spans [i03, i02, i01] with row length ne00.
+    //
+    // When ne00 * sizeof(float) is not a multiple of the cache line size,
+    // adjacent rows share cache lines.  Assign contiguous write groups to
+    // each thread so every thread's write footprint covers whole cache
+    // lines, preventing cross-hart L1 coherency issues.  When rows ARE
+    // cache-line aligned, rows_per_wg == 1 and this degenerates to the
+    // original stride-by-num_threads distribution.
     const int64_t rows_per_i03 = ne02 * ne01;
     const int64_t total_rows = ne03 * rows_per_i03;
+    const int64_t rows_per_wg = et_rows_per_cacheline_group(ne00, sizeof(float));
+    const int64_t total_wgs = (total_rows + rows_per_wg - 1) / rows_per_wg;
 
-    for (int64_t row = thread_id; row < total_rows; row += num_threads) {
-        const int64_t i03 = row / rows_per_i03;
-        const int64_t rem = row % rows_per_i03;
-        const int64_t i02 = rem / ne01;
-        const int64_t i01 = rem % ne01;
+    for (int64_t wg = thread_id; wg < total_wgs; wg += num_threads) {
+        const int64_t row_start = wg * rows_per_wg;
+        int64_t row_end = row_start + rows_per_wg;
+        if (row_end > total_rows) row_end = total_rows;
 
-        // Calculate ALiBi slope for this attention head
-        float slope = 1.0f;
-        if (max_bias > 0.0f) {
-            const uint32_t h = (uint32_t)i02;  // head index
-            if (h < n_head_log2) {
-                // slope = m0^(h+1) for first half of heads
-                slope = m0;
-                for (uint32_t i = 0; i < h; i++) {
-                    slope *= m0;
-                }
-            } else {
-                // slope = m1^(2*(h - n_head_log2) + 1) for second half
-                const uint32_t exp = 2 * (h - n_head_log2) + 1;
-                slope = m1;
-                for (uint32_t i = 1; i < exp; i++) {
-                    slope *= m1;
+        for (int64_t row = row_start; row < row_end; row++) {
+            const int64_t i03 = row / rows_per_i03;
+            const int64_t rem = row % rows_per_i03;
+            const int64_t i02 = rem / ne01;
+            const int64_t i01 = rem % ne01;
+
+            // Calculate ALiBi slope for this attention head
+            float slope = 1.0f;
+            if (max_bias > 0.0f) {
+                const uint32_t h = (uint32_t)i02;  // head index
+                if (h < n_head_log2) {
+                    slope = m0;
+                    for (uint32_t i = 0; i < h; i++) {
+                        slope *= m0;
+                    }
+                } else {
+                    const uint32_t exp = 2 * (h - n_head_log2) + 1;
+                    slope = m1;
+                    for (uint32_t i = 1; i < exp; i++) {
+                        slope *= m1;
+                    }
                 }
             }
+
+            float sink_value = 0.0f;
+            if (use_sinks && sinks_data) {
+                sink_value = sinks_data[i02];
+            }
+
+            const int64_t src_offset = i03 * ne02 * ne01 * ne00 +
+                                      i02 * ne01 * ne00 +
+                                      i01 * ne00;
+
+            const float* src_row = src0_data + src_offset;
+            float* dst_row = dst_data + src_offset;
+            const float* mask_row = NULL;
+
+            if (use_mask && mask_data) {
+                const int64_t mask_i03 = (ne13 > 0) ? i03 % ne13 : 0;
+                const int64_t mask_i02 = (ne12 > 0) ? i02 % ne12 : 0;
+                const int64_t mask_i01 = i01;
+
+                const int64_t mask_offset = mask_i03 * ne12 * ne11 * ne10 +
+                                           mask_i02 * ne11 * ne10 +
+                                           mask_i01 * ne10;
+
+                mask_row = mask_data + mask_offset;
+            }
+
+            compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, scale, slope, sink_value, use_sinks);
         }
-
-        float sink_value = 0.0f;
-        if (use_sinks && sinks_data) {
-            // Sinks tensor is 1D array indexed by head (i02)
-            sink_value = sinks_data[i02];
-        }
-
-        const int64_t src_offset = i03 * ne02 * ne01 * ne00 +
-                                  i02 * ne01 * ne00 +
-                                  i01 * ne00;
-
-        const float* src_row = src0_data + src_offset;
-        float* dst_row = dst_data + src_offset;
-        const float* mask_row = NULL;
-
-        // Calculate mask row offset using ggml's broadcasting rules
-        if (use_mask && mask_data) {
-            // ggml broadcasting logic:
-            // - i11 = i01 (direct mapping for dimension 1, even if mask is larger)
-            // - i12 = i02 % ne12 (modulo broadcasting for dimension 2)
-            // - i13 = i03 % ne13 (modulo broadcasting for dimension 3)
-            const int64_t mask_i03 = (ne13 > 0) ? i03 % ne13 : 0;
-            const int64_t mask_i02 = (ne12 > 0) ? i02 % ne12 : 0;
-            const int64_t mask_i01 = i01;  // Direct mapping (mask >= input guaranteed)
-
-            const int64_t mask_offset = mask_i03 * ne12 * ne11 * ne10 +
-                                       mask_i02 * ne11 * ne10 +
-                                       mask_i01 * ne10;
-
-            mask_row = mask_data + mask_offset;
-        }
-
-        compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, scale, slope, sink_value, use_sinks);
     }
 
     return 0; // Success
