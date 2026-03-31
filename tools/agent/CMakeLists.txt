@@ -8,16 +8,11 @@ set(AGENT_SOURCES
     permission-async.cpp
     skills/skills-manager.cpp
     agents-md/agents-md-manager.cpp
-    subagent/subagent-types.cpp
-    subagent/subagent-display.cpp
-    subagent/subagent-runner.cpp
-    subagent/subagent-output.cpp
     tools/tool-bash.cpp
     tools/tool-read.cpp
     tools/tool-write.cpp
     tools/tool-edit.cpp
     tools/tool-glob.cpp
-    tools/tool-task.cpp
 )
 
 # MCP support only available on Unix (uses fork, pipe, poll)
@@ -53,16 +48,11 @@ if(LLAMA_HTTPLIB)
         permission-async.cpp
         skills/skills-manager.cpp
         agents-md/agents-md-manager.cpp
-        subagent/subagent-types.cpp
-        subagent/subagent-display.cpp
-        subagent/subagent-runner.cpp
-        subagent/subagent-output.cpp
         tools/tool-bash.cpp
         tools/tool-read.cpp
         tools/tool-write.cpp
         tools/tool-edit.cpp
         tools/tool-glob.cpp
-        tools/tool-task.cpp
         ../server/server-http.cpp
     )
 

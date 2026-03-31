@@ -9,8 +9,6 @@
 #include "llama.h"
 #include "log.h"
 
-#include "../subagent/subagent-display.h"
-
 // MCP support (Unix only)
 #ifndef _WIN32
 #include "../mcp/mcp-server-manager.h"
@@ -65,49 +63,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 int main(int argc, char ** argv) {
     common_params params;
 
-    // Parse custom flags before common_params_parse
-    int max_subagent_depth = 0;  // Default: subagents disabled
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "--subagents") {
-            max_subagent_depth = 1;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (arg == "--no-subagents") {
-            max_subagent_depth = 0;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (arg == "--max-subagent-depth") {
-            if (i + 1 < argc) {
-                try {
-                    max_subagent_depth = std::stoi(argv[i + 1]);
-                    if (max_subagent_depth < 0) max_subagent_depth = 0;
-                    if (max_subagent_depth > 5) max_subagent_depth = 5;
-                } catch (...) {
-                    fprintf(stderr, "Invalid --max-subagent-depth value: %s\n", argv[i + 1]);
-                    return 1;
-                }
-                for (int j = i; j < argc - 2; j++) {
-                    argv[j] = argv[j + 2];
-                }
-                argc -= 2;
-                i--;
-            } else {
-                fprintf(stderr, "--max-subagent-depth requires a value\n");
-                return 1;
-            }
-        }
-    }
-
-    // Set subagent depth before anything else
-    subagent_display::instance().set_max_depth(max_subagent_depth);
-
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -119,7 +74,7 @@ int main(int argc, char ** argv) {
     }
 
     if (params.model_alias.empty() && !params.model.name.empty()) {
-        params.model_alias = params.model.name;
+        params.model_alias.insert(params.model.name);
     }
 
     common_init();
