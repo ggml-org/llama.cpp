@@ -1561,7 +1561,6 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
                                 // ref: https://github.com/ggml-org/llama.cpp/pull/13870
                                 ? LLAMA_ROPE_TYPE_NEOX
                                 : hparams.rope_type;
-
     ggml_tensor * tmp;
 
     if (ggml_is_quantized(cur->type)) {
@@ -1952,6 +1951,12 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             io.read_to(&n_seq_id, sizeof(n_seq_id));
 
             cells.pos_set(i, pos);
+
+            if (hparams.n_pos_per_embd() > 1) {
+                llama_kv_cell_ext ext;
+                io.read_to(&ext, sizeof(ext));
+                cells.ext_set(i, ext);
+            }
 
             for (uint32_t j = 0; j < n_seq_id; ++j) {
                 llama_seq_id seq_id;

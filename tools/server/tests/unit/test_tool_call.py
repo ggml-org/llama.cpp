@@ -9,6 +9,7 @@ sys.path.insert(0, str(path))
 
 from utils import *
 from enum import Enum
+from typing import TypedDict
 
 server: ServerProcess
 
@@ -29,56 +30,73 @@ class CompletionMode(Enum):
     NORMAL = "normal"
     STREAMED = "streamed"
 
-TEST_TOOL = {
-    "type":"function",
-    "function": {
-        "name": "test",
-        "description": "",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "success": {"type": "boolean", "const": True},
-            },
-            "required": ["success"]
-        }
-    }
-}
+class ToolParameters(TypedDict):
+    type: str
+    properties: dict[str, dict]
+    required: list[str]
 
-PYTHON_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "python",
-        "description": "Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
-        "parameters": {
-            "type": "object",
-            "properties": {
+class ToolFunction(TypedDict):
+    name: str
+    description: str
+    parameters: ToolParameters
+
+class ToolDefinition(TypedDict):
+    type: str
+    function: ToolFunction
+
+TEST_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "test",
+        description = "",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
+                "success": {
+                    "type": "boolean",
+                    "const": True,
+                },
+            },
+            required = ["success"],
+        ),
+    ),
+)
+
+PYTHON_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "python",
+        description = "Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
                 "code": {
                     "type": "string",
-                    "description": "The code to run in the ipython interpreter."
-                }
+                    "description": "The code to run in the ipython interpreter.",
+                },
             },
-            "required": ["code"]
-        }
-    }
-}
+            required = ["code"],
+        ),
+    ),
+)
 
-WEATHER_TOOL = {
-  "type":"function",
-  "function":{
-    "name":"get_current_weather",
-    "description":"Get the current weather in a given location",
-    "parameters":{
-      "type":"object",
-      "properties":{
-        "location":{
-          "type":"string",
-          "description":"The city and country/state, e.g. 'San Francisco, CA', or 'Paris, France'"
-        }
-      },
-      "required":["location"]
-    }
-  }
-}
+WEATHER_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "get_current_weather",
+        description = "Get the current weather in a given location",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
+                "location": {
+                    "type": "string",
+                    "description": "The city and country/state, e.g. 'San Francisco, CA', or 'Paris, France'",
+                },
+            },
+            required = ["location"],
+        ),
+    ),
+)
 
 def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict, argument_key: str | None, n_predict, **kwargs):
     body = server.make_any_request("POST", "/v1/chat/completions", data={

@@ -5,7 +5,7 @@ import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 
-export type SettingsConfigValue = string | number | boolean;
+export type SettingsConfigValue = string | number | boolean | undefined;
 
 export interface SettingsFieldConfig {
 	key: string;
@@ -24,6 +24,8 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
 	disableReasoningParsing?: boolean;
+	// Strip reasoning content from context before sending
+	excludeReasoningFromContext?: boolean;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;

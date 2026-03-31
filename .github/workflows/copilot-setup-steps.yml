@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: copilot-setup-steps
           evict-old-files: 1d
@@ -52,6 +52,5 @@ jobs:
       - name: Install Python dependencies
         run: |
           python3 -m venv .venv
-          .venv/bin/activate
+          source .venv/bin/activate
           pip install -r requirements/requirements-all.txt -r tools/server/tests/requirements.txt
-          pip install flake8 pyright pre-commit

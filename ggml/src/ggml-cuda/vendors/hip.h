@@ -207,6 +207,14 @@
 #define RDNA3
 #endif // defined(__GFX11__)
 
+#if defined(__gfx1150__) || defined(__gfx1151__)
+#define RDNA3_5
+#endif // defined(__gfx1150__) || defined(__gfx1151__)
+
+#if defined(RDNA3) && !defined(RDNA3_5)
+#define RDNA3_0
+#endif // defined(RDNA3) && !defined(RDNA3_5)
+
 #if defined(__gfx1030__) || defined(__gfx1031__) || defined(__gfx1032__) || defined(__gfx1033__) || \
     defined(__gfx1034__) || defined(__gfx1035__) || defined(__gfx1036__) || defined(__gfx1037__)
 #define RDNA2
@@ -226,6 +234,12 @@
 
 typedef __hip_bfloat16 nv_bfloat16;
 typedef __hip_bfloat162 nv_bfloat162;
+
+#if HIP_VERSION >= 60200000
+#include <hip/hip_fp8.h>
+typedef __hip_fp8_e4m3 __nv_fp8_e4m3;
+#define FP8_AVAILABLE
+#endif // HIP_VERSION >= 60200000
 
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));
