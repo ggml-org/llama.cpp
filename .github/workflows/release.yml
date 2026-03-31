@@ -131,17 +131,16 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz
           name: llama-bin-macos-x64.tar.gz
 
-  ubuntu-22-cpu:
+  ubuntu-cpu:
     strategy:
       matrix:
         include:
           - build: 'x64'
             os: ubuntu-22.04
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
-          # GGML_BACKEND_DL and GGML_CPU_ALL_VARIANTS are not currently supported on arm
-          # - build: 'arm64'
-          #   os: ubuntu-22.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -164,6 +163,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install build-essential libssl-dev
+
+      - name: Toolchain workaround (GCC 14)
+        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        run: |
+          sudo apt-get install -y gcc-14 g++-14
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Build
         id: cmake_build
@@ -194,8 +200,16 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
-  ubuntu-22-vulkan:
-    runs-on: ubuntu-22.04
+  ubuntu-vulkan:
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Clone
@@ -207,16 +221,23 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22-vulkan
+          key: ubuntu-vulkan-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies
         id: depends
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libssl-dev
+          if [[ "${{ matrix.os }}" =~ "ubuntu-22.04" ]]; then
+            wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+            sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+            sudo apt-get update -y
+            sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libssl-dev
+          else
+            sudo apt-get update -y
+            sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev libssl-dev ninja-build
+            echo "CC=gcc-14" >> "$GITHUB_ENV"
+            echo "CXX=g++-14" >> "$GITHUB_ENV"
+          fi
 
       - name: Build
         id: cmake_build
@@ -239,13 +260,13 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
-          name: llama-bin-ubuntu-vulkan-x64.tar.gz
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   ubuntu-24-openvino:
     runs-on: ubuntu-24.04
@@ -977,8 +998,8 @@ jobs:
       - windows-sycl
       - windows-hip
       - ubuntu-22-rocm
-      - ubuntu-22-cpu
-      - ubuntu-22-vulkan
+      - ubuntu-cpu
+      - ubuntu-vulkan
       - ubuntu-24-openvino
       - macOS-arm64
       - macOS-x64
@@ -1061,9 +1082,11 @@ jobs:
 
             **Linux:**
             - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
-            - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
-            - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
+            - [Ubuntu arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-arm64.tar.gz)
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
+            - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
+            - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
+            - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
 
             **Windows:**
