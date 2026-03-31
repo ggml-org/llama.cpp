@@ -830,6 +830,10 @@ bool is_expert_popularity_initialized() {
 // is_expert_resident) so startup-time cache misses can be suppressed.
 static std::atomic<bool> g_prestage_completed{ false };
 
+// Upfront VRAM budget reserved for MoE experts at inventory time (Phase 1).
+// Released after prestage completes and actual usage is tracked in cache (Phase 2).
+static size_t g_moe_expert_vram_reserve = 0;
+
 // Check if an expert's weights are fully resident in VRAM on a given device.
 // Checks the unified cache for ALL 3 tensors (gate, up, down) across multiple
 // layout modes (SOA, COALESCED, AOS, XMX_TILED).
@@ -1340,6 +1344,18 @@ static void moe_prestage_popular_experts() {
                   prestaged, skipped, down_deferred, n_layers, avail);
 
     ggml_sycl_watchdog_heartbeat();
+
+    // Release the upfront expert VRAM reserve now that actual staging is tracked
+    // in the cache's used_ bytes via allocate_slot().  Keeping the reserve would
+    // double-count: reserved_ + used_ both consuming budget.
+    if (g_moe_expert_vram_reserve > 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(
+            device, g_moe_expert_vram_reserve, ggml_sycl::runtime_category::EXPERT_CACHE);
+        GGML_LOG_INFO("[MOE-PRESTAGE] Released upfront VRAM reserve: %.1f MB "
+                      "(actual expert usage tracked in cache)\n",
+                      g_moe_expert_vram_reserve / (1024.0 * 1024.0));
+        g_moe_expert_vram_reserve = 0;
+    }
 
     // Phase 2: Fill secondary GPUs with the NEXT TIER of popular experts.
     // Uses the same global priority list from Phase 1 (sorted by popularity
@@ -5457,7 +5473,6 @@ static size_t                                      g_moe_expert_total_bytes     
 static int                                         g_moe_n_experts_total         = 0;
 static int                                         g_moe_n_experts_used          = 0;
 static uint32_t                                    g_model_n_layer               = 0;
-static size_t                                      g_moe_expert_vram_reserve     = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
