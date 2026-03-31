@@ -5,7 +5,7 @@
 """Shared pytest fixtures for QDC on-device test runners."""
 
 import pytest
-from appium import webdriver  # ty: ignore[unresolved-import]
+from appium import webdriver
 
 from utils import options
 

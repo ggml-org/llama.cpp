@@ -8,7 +8,7 @@ import os
 import subprocess
 import tempfile
 
-from appium.options.common import AppiumOptions  # ty: ignore[unresolved-import]
+from appium.options.common import AppiumOptions
 
 # ---------------------------------------------------------------------------
 # On-device paths
