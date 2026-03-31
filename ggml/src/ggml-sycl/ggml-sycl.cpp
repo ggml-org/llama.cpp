@@ -5613,8 +5613,24 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         size_t expert_group_bytes = per_expert_bytes;
         size_t raw_reserve        = popular_count * expert_group_bytes * static_cast<size_t>(g_model_n_layer);
 
-        // Cap at 60% of the unified cache budget for this device
-        size_t budget         = ggml_sycl::unified_cache_total_managed(device);
+        // Cap at 60% of estimated VRAM budget.  The unified cache may not exist
+        // yet at inventory time, so compute the budget from device memory directly
+        // (same formula the cache uses: budget_pct% of total minus headroom).
+        size_t free_vram = 0, total_vram = 0;
+        ggml_backend_sycl_get_device_memory(device, &free_vram, &total_vram);
+        int budget_pct = 90;
+        const char * pct_env = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+        if (pct_env) {
+            budget_pct = std::max(10, std::min(100, std::atoi(pct_env)));
+        }
+        const size_t headroom = std::max(size_t(256) << 20, total_vram / 10);
+        const size_t budget   = (total_vram > headroom)
+            ? (total_vram - headroom) * static_cast<size_t>(budget_pct) / 100
+            : 0;
+        GGML_LOG_INFO("[SYCL-BUDGET] MoE VRAM budget: %.1f MB "
+                      "(total=%.1f MB, headroom=%.1f MB, pct=%d%%)\n",
+                      budget / (1024.0 * 1024.0), total_vram / (1024.0 * 1024.0),
+                      headroom / (1024.0 * 1024.0), budget_pct);
         size_t capped_reserve = std::min(raw_reserve, budget * 60 / 100);
 
         if (capped_reserve > 0) {
