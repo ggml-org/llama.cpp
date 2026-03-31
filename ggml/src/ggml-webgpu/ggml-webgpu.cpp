@@ -81,8 +81,9 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* Constants */
 
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     32u
-#define WEBGPU_NUM_PARAM_SLOTS               (WEBGPU_COMMAND_SUBMIT_BATCH_SIZE + 10) // a few extra for safety, since some operations may need multiple slots
+#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 32u
+#define WEBGPU_NUM_PARAM_SLOTS \
+    (WEBGPU_COMMAND_SUBMIT_BATCH_SIZE + 10)  // a few extra for safety, since some operations may need multiple slots
 #define WEBGPU_WAIT_ANY_TIMEOUT_MS           100
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES         128  // enough for 32 parameters
 #define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES 4
@@ -136,8 +137,7 @@ struct webgpu_param_arena {
         this->next_slot   = 0;
 
         ggml_webgpu_create_buffer(device, buffer, this->slot_stride * slot_count,
-                                  wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
-                                  "ggml_webgpu_param_arena");
+                                  wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform, "ggml_webgpu_param_arena");
     }
 
     size_t alloc_slot(size_t size) {
@@ -226,8 +226,8 @@ struct webgpu_gpu_profile_buf_pool {
 #endif
 
 struct webgpu_command {
-    uint32_t                  num_kernels;
-    wgpu::CommandBuffer       commands;
+    uint32_t            num_kernels;
+    wgpu::CommandBuffer commands;
 #ifdef GGML_WEBGPU_GPU_PROFILE
     webgpu_gpu_profile_bufs timestamp_query_bufs;
     std::string             pipeline_name;
@@ -260,8 +260,8 @@ struct webgpu_global_context_struct {
     // Global mutex for pipeline and staging buffer, will be refactored to exclude pipeline caches.
     std::recursive_mutex mutex;
 
-    wgpu::Buffer                   memset_params_buf;
-    std::map<int, webgpu_pipeline> memset_pipelines;  // variant or type index
+    wgpu::Buffer    memset_params_buf;
+    webgpu_pipeline memset_pipeline;
 
 #ifdef GGML_WEBGPU_CPU_PROFILE
     // Profiling: labeled CPU time in ms (total)
@@ -306,13 +306,6 @@ struct webgpu_global_context_struct {
 
 typedef std::shared_ptr<webgpu_global_context_struct> webgpu_global_context;
 
-struct webgpu_submission {
-    wgpu::FutureWaitInfo submit_done;
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    std::vector<wgpu::FutureWaitInfo> profile_futures;
-#endif
-};
-
 // All the base objects needed to run operations on a WebGPU device
 struct webgpu_context_struct {
     // Points to global instances owned by ggml_backend_webgpu_reg_context
@@ -321,8 +314,8 @@ struct webgpu_context_struct {
     std::unique_ptr<ggml_webgpu_shader_lib> shader_lib;
 
     webgpu_param_arena param_arena;
-    wgpu::Buffer    set_rows_dev_error_buf;
-    wgpu::Buffer    set_rows_host_error_buf;
+    wgpu::Buffer       set_rows_dev_error_buf;
+    wgpu::Buffer       set_rows_host_error_buf;
 
     std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;                      // src_type, dst_type
 
@@ -464,45 +457,16 @@ static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &    
 }
 #endif
 
-// Wait for the queue to finish processing all submitted work
-static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
-                                     std::vector<webgpu_submission> & subs,
-                                     bool                             block = true) {
-    if (subs.empty()) {
-        return;
-    }
-
-    bool blocking_wait = block;
-    while (blocking_wait) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, WEBGPU_WAIT_ANY_TIMEOUT_MS * 1e6);
-        if (ggml_backend_webgpu_handle_wait_status(waitStatus, true)) {
-#ifdef GGML_WEBGPU_GPU_PROFILE
-            ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
-#endif
-            subs.erase(subs.begin());
-        }
-        blocking_wait = block && !subs.empty();
-    }
-
-    if (subs.empty()) {
-        return;
-    }
-
-    // Poll each submit future once and remove completed submissions.
-    for (auto sub = subs.begin(); sub != subs.end();) {
-        auto waitStatus = ctx->instance.WaitAny(1, &sub->submit_done, 0);
-        bool success    = ggml_backend_webgpu_handle_wait_status(waitStatus, true);
-#ifdef GGML_WEBGPU_GPU_PROFILE
-        ggml_backend_webgpu_wait_profile_futures(ctx, sub->profile_futures, false);
-        if (success && sub->profile_futures.empty()) {
-#else
-        if (success) {
-#endif
-            sub = subs.erase(sub);
-        } else {
-            ++sub;
-        }
-    }
+static void ggml_backend_webgpu_wait_queue(webgpu_global_context & ctx) {
+    ctx->instance.WaitAny(
+        ctx->queue.OnSubmittedWorkDone(wgpu::CallbackMode::AllowSpontaneous,
+                                       [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
+                                           if (status != wgpu::QueueWorkDoneStatus::Success) {
+                                               GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n",
+                                                              std::string(message).c_str());
+                                           }
+                                       }),
+        UINT64_MAX);
 }
 
 static void ggml_backend_webgpu_map_buffer(webgpu_global_context & ctx,
@@ -536,29 +500,19 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 }
 #endif
 
-static webgpu_submission ggml_backend_webgpu_submit(webgpu_global_context &       ctx,
-                                                    std::vector<webgpu_command> & commands) {
+static void ggml_backend_webgpu_submit(webgpu_global_context & ctx, std::vector<webgpu_command> & commands) {
     std::vector<wgpu::CommandBuffer> command_buffers;
-    webgpu_submission                submission;
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    std::vector<std::pair<std::string, webgpu_gpu_profile_bufs>> pipeline_name_and_ts_bufs;
-#endif
-
+    command_buffers.reserve(commands.size());
     for (const auto & command : commands) {
         command_buffers.push_back(command.commands);
     }
     ctx->queue.Submit(command_buffers.size(), command_buffers.data());
-
-    wgpu::Future p_f = ctx->queue.OnSubmittedWorkDone(
-        wgpu::CallbackMode::AllowSpontaneous,
-        [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-            if (status != wgpu::QueueWorkDoneStatus::Success) {
-                GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", std::string(message).c_str());
-            }
-        });
-    submission.submit_done = { p_f };
+}
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
+static void ggml_backend_webgpu_collect_profile_futures(webgpu_global_context &             ctx,
+                                                        const std::vector<webgpu_command> & commands,
+                                                        std::vector<wgpu::FutureWaitInfo> & futures) {
     for (const auto & command : commands) {
         auto label   = command.pipeline_name;
         auto ts_bufs = command.timestamp_query_bufs;
@@ -577,11 +531,10 @@ static webgpu_submission ggml_backend_webgpu_submit(webgpu_global_context &     
                 // We can't unmap in here due to WebGPU reentrancy limitations.
                 ctx->timestamp_query_buf_pool.free_bufs({ ts_bufs });
             });
-        submission.profile_futures.push_back({ f });
+        futures.push_back({ f });
     }
-#endif
-    return submission;
 }
+#endif
 
 static webgpu_command ggml_backend_webgpu_build_multi(
     webgpu_global_context &                                ctx,
@@ -694,31 +647,22 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
         { .binding = 1, .buffer = ctx->memset_params_buf, .offset = 0, .size = WEBGPU_PARAMS_BUF_SIZE_BYTES });
 
     wgpu::BindGroupDescriptor bind_group_desc;
-    bind_group_desc.layout     = ctx->memset_pipelines[0].pipeline.GetBindGroupLayout(0);
+    bind_group_desc.layout     = ctx->memset_pipeline.pipeline.GetBindGroupLayout(0);
     bind_group_desc.entryCount = entries.size();
     bind_group_desc.entries    = entries.data();
-    bind_group_desc.label      = ctx->memset_pipelines[0].name.c_str();
+    bind_group_desc.label      = ctx->memset_pipeline.name.c_str();
     wgpu::BindGroup bind_group = ctx->device.CreateBindGroup(&bind_group_desc);
 
-    wgpu::CommandEncoder    encoder = ctx->device.CreateCommandEncoder();
-    wgpu::ComputePassEncoder pass   = encoder.BeginComputePass();
-    pass.SetPipeline(ctx->memset_pipelines[0].pipeline);
+    wgpu::CommandEncoder     encoder = ctx->device.CreateCommandEncoder();
+    wgpu::ComputePassEncoder pass    = encoder.BeginComputePass();
+    pass.SetPipeline(ctx->memset_pipeline.pipeline);
     pass.SetBindGroup(0, bind_group);
     pass.DispatchWorkgroups(wg_x, 1, 1);
     pass.End();
 
-    wgpu::CommandBuffer             command = encoder.Finish();
+    wgpu::CommandBuffer              command  = encoder.Finish();
     std::vector<wgpu::CommandBuffer> commands = { command };
     ctx->queue.Submit(commands.size(), commands.data());
-    ctx->instance.WaitAny(ctx->queue.OnSubmittedWorkDone(
-                              wgpu::CallbackMode::AllowSpontaneous,
-                              [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-                                  if (status != wgpu::QueueWorkDoneStatus::Success) {
-                                      GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n",
-                                                     std::string(message).c_str());
-                                  }
-                              }),
-                          UINT64_MAX);
 }
 
 /** End WebGPU Actions */
@@ -2277,8 +2221,8 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
     workgroups_list.push_back({ wg_x_init, wg_y_init });
 
     if (merge_passes == 0) {
-        return ggml_backend_webgpu_build_multi(ctx->global_ctx, ctx->param_arena, pipelines, params_list,
-                                               entries_list, workgroups_list);
+        return ggml_backend_webgpu_build_multi(ctx->global_ctx, ctx->param_arena, pipelines, params_list, entries_list,
+                                               workgroups_list);
     }
 
     bool     in_is_tmp = start_in_tmp;
@@ -2505,10 +2449,12 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
     WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
-    std::vector<webgpu_command>    commands;
-    std::vector<webgpu_submission> subs;
-    uint32_t                       num_batched_kernels = 0;
-    bool                           contains_set_rows   = false;
+    std::vector<webgpu_command> commands;
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    std::vector<wgpu::FutureWaitInfo> profile_futures;
+#endif
+    uint32_t num_batched_kernels = 0;
+    bool     contains_set_rows   = false;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (cgraph->nodes[i]->op == GGML_OP_SET_ROWS) {
@@ -2521,16 +2467,19 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
         if (num_batched_kernels >= WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
             num_batched_kernels = 0;
-            subs.push_back(ggml_backend_webgpu_submit(ctx->global_ctx, commands));
+            ggml_backend_webgpu_submit(ctx->global_ctx, commands);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+            ggml_backend_webgpu_collect_profile_futures(ctx->global_ctx, commands, profile_futures);
+#endif
             ctx->param_arena.reset();
-            // Process events and check for completed submissions
-            ctx->global_ctx->instance.ProcessEvents();
-            //ggml_backend_webgpu_wait(ctx->global_ctx, subs, false);
             commands.clear();
         }
     }
     if (!commands.empty()) {
-        subs.push_back(ggml_backend_webgpu_submit(ctx->global_ctx, commands));
+        ggml_backend_webgpu_submit(ctx->global_ctx, commands);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+        ggml_backend_webgpu_collect_profile_futures(ctx->global_ctx, commands, profile_futures);
+#endif
         ctx->param_arena.reset();
         commands.clear();
     }
@@ -2542,6 +2491,11 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
                                    ctx->set_rows_host_error_buf.GetSize());
         wgpu::CommandBuffer set_rows_commands = encoder.Finish();
         ctx->global_ctx->queue.Submit(1, &set_rows_commands);
+    }
+
+    ggml_backend_webgpu_wait_queue(ctx->global_ctx);
+
+    if (contains_set_rows) {
         ggml_backend_webgpu_map_buffer(ctx->global_ctx, ctx->set_rows_host_error_buf, wgpu::MapMode::Read, 0,
                                        ctx->set_rows_host_error_buf.GetSize());
         const uint32_t * error_data = (const uint32_t *) ctx->set_rows_host_error_buf.GetConstMappedRange();
@@ -2551,7 +2505,9 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         ctx->set_rows_host_error_buf.Unmap();
     }
 
-    ggml_backend_webgpu_wait(ctx->global_ctx, subs);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    ggml_backend_webgpu_wait_profile_futures(ctx->global_ctx, profile_futures, true);
+#endif
     WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx->global_ctx);
     return GGML_STATUS_SUCCESS;
 }
@@ -2852,11 +2808,11 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_global_context & ctx) {
     ctx->capabilities.memset_bytes_per_thread =
         CEIL_DIV(ctx->capabilities.limits.maxStorageBufferBindingSize, max_threads);
     std::vector<wgpu::ConstantEntry> constants(2);
-    constants[0].key         = "wg_size";
-    constants[0].value       = WEBGPU_MAX_WG_SIZE;
-    constants[1].key         = "bytes_per_thread";
-    constants[1].value       = ctx->capabilities.memset_bytes_per_thread;
-    ctx->memset_pipelines[0] = ggml_webgpu_create_pipeline(ctx->device, wgsl_memset, "memset", constants);
+    constants[0].key     = "wg_size";
+    constants[0].value   = WEBGPU_MAX_WG_SIZE;
+    constants[1].key     = "bytes_per_thread";
+    constants[1].value   = ctx->capabilities.memset_bytes_per_thread;
+    ctx->memset_pipeline = ggml_webgpu_create_pipeline(ctx->device, wgsl_memset, "memset", constants);
 }
 
 static void ggml_webgpu_init_cpy_pipeline(webgpu_context & webgpu_ctx) {
@@ -3122,8 +3078,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     ggml_webgpu_init_memset_pipeline(ctx->webgpu_global_ctx);
     ggml_webgpu_create_buffer(ctx->webgpu_global_ctx->device, ctx->webgpu_global_ctx->memset_params_buf,
-                              WEBGPU_PARAMS_BUF_SIZE_BYTES,
-                              wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform, "memset_params_buf");
+                              WEBGPU_PARAMS_BUF_SIZE_BYTES, wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
+                              "memset_params_buf");
     ctx->webgpu_global_ctx->queue = ctx->webgpu_global_ctx->device.GetQueue();
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
