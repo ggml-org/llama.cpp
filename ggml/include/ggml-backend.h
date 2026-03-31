@@ -148,6 +148,8 @@ extern "C" {
         bool buffer_from_host_ptr;
         // event synchronization
         bool events;
+        // dedicated copy stream for compute/transfer overlap
+        bool copy_stream;
     };
 
     // all the device properties

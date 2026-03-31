@@ -117,12 +117,6 @@ extern "C" {
 
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
-
-        // (optional) prefetch tensor data on a separate copy stream for overlap with compute
-        void (*prefetch_tensor_async)(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
-
-        // (optional) wait for a pending prefetch to complete
-        void (*prefetch_event_wait)(ggml_backend_t backend);
     };
 
     struct ggml_backend {
