@@ -29,17 +29,18 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     int effective_num_threads = (num_threads + 1) / 2;
 
     // Extract tensor references
-    struct ggml_tensor* src0 = &params->src0; // Weight matrix A
-    struct ggml_tensor* src1 = &params->src1; // Activation matrix B
-    struct ggml_tensor* dst  = &params->dst;  // Output matrix C
+    struct ggml_tensor* src0 = &params->src0; // Weight matrix A (F32)
+    struct ggml_tensor* src1 = &params->src1; // Activation matrix B (F16/F32)
+    struct ggml_tensor* dst  = &params->dst;  // Output matrix C (F32)
 
-    // Strictly validate for F32
-    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    // Generic non-matrix-engine path: F32 x (F16/F32) -> F32
+    if (src0->type != GGML_TYPE_F32 ||
+        (src1->type != GGML_TYPE_F16 && src1->type != GGML_TYPE_F32) ||
+        dst->type != GGML_TYPE_F32) {
         return -1;
     }
 
     const float* src0_data = (const float*)src0->data;
-    const float* src1_data = (const float*)src1->data;
     float* dst_data       = (float*)dst->data;
 
     // Dimensions and Strides
@@ -90,17 +91,32 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             float sum = 0.0f;
             const float* f32_row = (const float*)((const char*)src0_data + m * nb01 + i02 * nb02 + i03 * nb03);
 
-            // Process full blocks
-            for (int64_t kb = 0; kb < K_blocks; kb++) {
-                const float* b_col_ptr = (const float*)((const char*)src1_data + (kb * block_size) * sizeof(float) + n * nb11 + i12 * nb12 + i13 * nb13);
-                sum += compute_block_dot_product_f32(&f32_row[kb * block_size], b_col_ptr);
-            }
+            if (src1->type == GGML_TYPE_F32) {
+                const float* src1_data = (const float*)src1->data;
 
-            // Handle partial remainder
-            if (K_remainder > 0) {
-                const int64_t offset = K_blocks * block_size;
-                const float* b_col_ptr = (const float*)((const char*)src1_data + offset * sizeof(float) + n * nb11 + i12 * nb12 + i13 * nb13);
-                sum += compute_block_dot_product_f32_partial(&f32_row[offset], b_col_ptr, K_remainder);
+                for (int64_t kb = 0; kb < K_blocks; kb++) {
+                    const float* b_col_ptr = (const float*)((const char*)src1_data + (kb * block_size) * sizeof(float) + n * nb11 + i12 * nb12 + i13 * nb13);
+                    sum += compute_block_dot_product_f32(&f32_row[kb * block_size], b_col_ptr);
+                }
+
+                if (K_remainder > 0) {
+                    const int64_t offset = K_blocks * block_size;
+                    const float* b_col_ptr = (const float*)((const char*)src1_data + offset * sizeof(float) + n * nb11 + i12 * nb12 + i13 * nb13);
+                    sum += compute_block_dot_product_f32_partial(&f32_row[offset], b_col_ptr, K_remainder);
+                }
+            } else {
+                const uint16_t* src1_data = (const uint16_t*)src1->data;
+
+                for (int64_t kb = 0; kb < K_blocks; kb++) {
+                    const uint16_t* b_col_ptr = (const uint16_t*)((const char*)src1_data + (kb * block_size) * sizeof(uint16_t) + n * nb11 + i12 * nb12 + i13 * nb13);
+                    sum += compute_block_dot_product_f32_f16_partial(&f32_row[kb * block_size], b_col_ptr, block_size);
+                }
+
+                if (K_remainder > 0) {
+                    const int64_t offset = K_blocks * block_size;
+                    const uint16_t* b_col_ptr = (const uint16_t*)((const char*)src1_data + offset * sizeof(uint16_t) + n * nb11 + i12 * nb12 + i13 * nb13);
+                    sum += compute_block_dot_product_f32_f16_partial(&f32_row[offset], b_col_ptr, K_remainder);
+                }
             }
 
             // Atomic store for output

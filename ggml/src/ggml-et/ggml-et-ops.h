@@ -40,6 +40,12 @@ struct ggml_et_binary_params {
     ggml_tensor dst;
 };
 
+struct ggml_et_im2col_params {
+    ggml_tensor src0;
+    ggml_tensor src1;
+    ggml_tensor dst;
+};
+
 // Element map parameters for embarrassingly parallel binary operations (MUL, ADD, etc.)
 // Operation type is determined by dst->op (GGML_OP_MUL, GGML_OP_ADD, etc.)
 struct ggml_et_elmap_params {
@@ -317,6 +323,7 @@ bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 bool ggml_et_op_group_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_im2col(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
