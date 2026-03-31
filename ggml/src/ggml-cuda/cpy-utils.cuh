@@ -211,6 +211,79 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
 }
 
+// TQ3_0: Device-side Walsh-Hadamard Transform (WHT32) for rotation
+// Same sign pattern as CPU (must match for consistency)
+static __device__ __forceinline__ void tq3_wht32_forward_device(float * x) {
+    const int8_t signs[32] = {
+        +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+        +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+    };
+    for (int j = 0; j < 32; j++) x[j] *= signs[j];
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step * 2) {
+            for (int j = i; j < i + step; j++) {
+                float a = x[j], b = x[j + step];
+                x[j] = a + b; x[j + step] = a - b;
+            }
+        }
+    }
+    const float s = 0.17677669529663688f;  // 1/sqrt(32)
+    for (int j = 0; j < 32; j++) x[j] *= s;
+}
+
+static __device__ __forceinline__ void tq3_wht32_inverse_device(float * x) {
+    for (int step = 1; step < 32; step <<= 1) {
+        for (int i = 0; i < 32; i += step * 2) {
+            for (int j = i; j < i + step; j++) {
+                float a = x[j], b = x[j + step];
+                x[j] = a + b; x[j + step] = a - b;
+            }
+        }
+    }
+    const int8_t signs[32] = {
+        +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+        +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+    };
+    const float s = 0.17677669529663688f;
+    for (int j = 0; j < 32; j++) x[j] *= s * signs[j];
+}
+
+// TQ3_0: GPU-side 2-bit scalar codebook quantization with WHT rotation
+static __device__ void quantize_f32_tq3_0_block(const float * __restrict__ x, block_tq3_0 * __restrict__ y) {
+    const float centroids[4] = { -1.510f, -0.4528f, 0.4528f, 1.510f };
+
+    // Copy and apply WHT rotation
+    float rotated[QK_TQ3_0];
+    for (int j = 0; j < QK_TQ3_0; j++) rotated[j] = x[j];
+    tq3_wht32_forward_device(rotated);
+
+    memset(y, 0, sizeof(block_tq3_0));
+
+    float amax = 0.0f;
+    for (int j = 0; j < QK_TQ3_0; j++) {
+        float av = fabsf(rotated[j]);
+        if (av > amax) amax = av;
+    }
+
+    const float d = amax / 1.510f;
+    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+    y->gamma = __float2half(d);
+
+    for (int j = 0; j < QK_TQ3_0; j++) {
+        float xn = rotated[j] * id;
+        int idx;
+        if (xn < 0.0f) { idx = (xn < -0.9814f) ? 0 : 1; }
+        else            { idx = (xn < 0.9814f) ? 2 : 3; }
+        y->qs[j / 4] |= (idx << (2 * (j % 4)));
+        float residual = rotated[j] - d * centroids[idx];
+        if (residual >= 0.0f) { y->qr[j / 8] |= (1 << (j % 8)); }
+    }
+}
+
+static __device__ void cpy_blck_f32_tq3_0(const char * cxi, char * cdsti) {
+    quantize_f32_tq3_0_block((const float *)cxi, (block_tq3_0 *)cdsti);
+}
+
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_scalar(const char * cxi, char * cdsti) {
     *(dst_t *) cdsti = ggml_cuda_cast<dst_t>(*(const src_t *) cxi);

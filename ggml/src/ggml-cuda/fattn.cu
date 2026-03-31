@@ -225,6 +225,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TQ3_0, GGML_TYPE_F16)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
@@ -278,6 +279,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TQ3_0, GGML_TYPE_F16)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     GGML_ABORT("fatal error");
@@ -353,7 +355,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
-    if (K->type != V->type) {
+    if (K->type != V->type && !(K->type == GGML_TYPE_TQ3_0 && V->type == GGML_TYPE_F16)) {
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_CUDA_FA_ALL_QUANTS
@@ -371,6 +373,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_TQ3_0:
             break;
         default:
             return BEST_FATTN_KERNEL_NONE;
@@ -466,6 +469,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return BEST_FATTN_KERNEL_MMA_F16;
         }
         // Fall through to tile kernel for small effective batch sizes.
+    }
+
+    // For TQ3_0, keep decode on the vec path. For prefill, allow the generic
+    // tile path so launch_fattn() can reconstruct K to a temporary f16 buffer
+    // once per kernel launch instead of decoding TQ3_0 inside every Q·K score.
+    if (K->type == GGML_TYPE_TQ3_0) {
+        if (Q->ne[1] == 1) {
+            return can_use_vector_kernel ? BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
+        }
     }
 
     // If there are no tensor cores available, use the generic tile kernel:

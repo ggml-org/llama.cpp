@@ -1112,6 +1112,16 @@ struct vk_op_glu_push_constants {
     uint32_t mode;  // 0: default, 1: swapped, 2: split
     float alpha; // for swiglu_oai
     float limit;
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb03;
+    uint32_t ne01;
+    uint32_t ne02;
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
+    uint32_t ne11;
+    uint32_t ne12;
 };
 
 struct vk_op_unary_push_constants {
@@ -5044,7 +5054,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         } else {
             device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
         }
-        vk::DeviceCreateInfo device_create_info;
+        vk::DeviceCreateInfo device_create_info{};
         std::vector<const char *> device_extensions;
         vk::PhysicalDeviceFeatures device_features = device->physical_device.getFeatures();
 
@@ -5413,12 +5423,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         device->name = GGML_VK_NAME + std::to_string(idx);
 
-        device_create_info = {
-            vk::DeviceCreateFlags(),
-            device_queue_create_infos,
-            {},
-            device_extensions
-        };
+        device_create_info
+            .setFlags(vk::DeviceCreateFlags())
+            .setQueueCreateInfos(device_queue_create_infos)
+            .setPEnabledExtensionNames(device_extensions);
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
 
@@ -11048,8 +11056,6 @@ static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const float alpha = op_params_f[2];
     const float limit = op_params_f[3];
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-
     if (!split) {
         GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
     } else {
@@ -11067,7 +11073,17 @@ static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const
             (uint32_t)dst->ne[0],
             mode,
             alpha,
-            limit
+            limit,
+            (uint32_t)(src0->nb[1] / src0->nb[0]),
+            (uint32_t)(src0->nb[2] / src0->nb[0]),
+            (uint32_t)(src0->nb[3] / src0->nb[0]),
+            (uint32_t)src0->ne[1],
+            (uint32_t)src0->ne[2],
+            (uint32_t)(dst->nb[1] / dst->nb[0]),
+            (uint32_t)(dst->nb[2] / dst->nb[0]),
+            (uint32_t)(dst->nb[3] / dst->nb[0]),
+            (uint32_t)dst->ne[1],
+            (uint32_t)dst->ne[2]
         });
 }
 
@@ -15217,8 +15233,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
-                    return ggml_is_contiguous(op->src[0]) &&
-                           (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                    return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
                            (op->src[0]->type == op->type);
                 default:
