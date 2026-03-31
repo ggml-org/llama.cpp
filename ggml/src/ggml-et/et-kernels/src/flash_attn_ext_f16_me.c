@@ -48,7 +48,7 @@ typedef uint16_t et_fp16_t;
 //   [0..1023]       accumulator (FA_DV_MAX * sizeof(float))
 //   [1024..3071]    kpanel buffer 0 (32 × 32 × 2 = 2048 bytes)
 //   [3072..5119]    kpanel buffer 1 (2048 bytes)
-// Sync: ET_BARRIER_MINION per dk_chunk (no counters needed).
+// Sync: ET_BARRIER_MINION per dk_chunk.
 // Double-buffering ensures hart 0 finishes buf[N%2] before hart 1
 // overwrites it at chunk N+2.
 #define SCP_ACC_OFF       0
@@ -122,17 +122,17 @@ pack_k_for_transpose16(et_fp16_t * out,
         et_fp16_t * even_row = out + (j * 2)     * 32;
         et_fp16_t * odd_row  = out + (j * 2 + 1) * 32;
         __asm__ volatile(
-            "flw.ps    f2, 0(%[src0])  \n\t"
-            "flw.ps    f3, 0(%[src1])  \n\t"
-            "fpackreph.pi f4, f2       \n\t"
-            "fsrli.pi  f5, f2, 16      \n\t"
-            "fpackreph.pi f5, f5       \n\t"
-            "fpackreph.pi f2, f3       \n\t"
-            "fsrli.pi  f3, f3, 16      \n\t"
-            "fpackreph.pi f3, f3       \n\t"
+            "flw.ps    f2, 0(%[src0])  \n\t"   // load row[0..15]
+            "flw.ps    f3, 0(%[src1])  \n\t"   // load row[16..31]
+            "fpackreph.pi f4, f2       \n\t"   // even_lo from src0
+            "fpackreph.pi f6, f3       \n\t"   // even_lo from src1 (interleaved)
+            "fsrli.pi  f5, f2, 16      \n\t"   // shift src0 for odd
+            "fsrli.pi  f7, f3, 16      \n\t"   // shift src1 for odd (interleaved)
+            "fpackreph.pi f5, f5       \n\t"   // odd from src0
+            "fpackreph.pi f7, f7       \n\t"   // odd from src1
             "mov.m.x   m0, x0, 0x0F   \n\t"
-            "fcmovm.ps f4, f4, f2      \n\t"
-            "fcmovm.ps f5, f5, f3      \n\t"
+            "fcmovm.ps f4, f4, f6      \n\t"   // merge even halves
+            "fcmovm.ps f5, f5, f7      \n\t"   // merge odd halves
             "mov.m.x   m0, x0, 0xFF   \n\t"
             "fsw.ps    f4, 0(%[even])  \n\t"
             "fsw.ps    f5, 0(%[odd])   \n\t"
@@ -141,7 +141,7 @@ pack_k_for_transpose16(et_fp16_t * out,
               [src1] "r"(k_row + 16),
               [even] "r"(even_row),
               [odd] "r"(odd_row)
-            : "f2", "f3", "f4", "f5", "memory"
+            : "f2", "f3", "f4", "f5", "f6", "f7", "memory"
         );
     }
 
@@ -393,6 +393,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
                     chunk_id++;
                 }
+
             }
         }
 
@@ -412,7 +413,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     // Score buffer for QK^T output (16 scores per KV tile)
     float scores[TILE_KV] __attribute__((aligned(64)));
 
-    // Small buffers for V accumulation (replaces kpanel reuse)
+    // Small buffers for V accumulation
     et_fp16_t w_f16_buf[32] __attribute__((aligned(64)));    // 64 bytes
     et_fp16_t vpanel_buf[8 * 32] __attribute__((aligned(64))); // 512 bytes
 
@@ -463,7 +464,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
                 int buf = chunk_id & 1;
 
-                // Load Q (overlaps with hart 1's pack + barrier wait)
+                // Load Q
                 tensor_load(
                     false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
                     (uint64_t)(q_f16 + dk_chunk), 0, 0, 64, 0);
@@ -489,6 +490,10 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                 chunk_id++;
             }
 
+            // Prefetch V rows for this tile
+            for (int64_t d = 0; d < dv; d += 32)
+                prefetch_kv_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
+
             // Extract QK^T scores from vector register file
             __asm__ volatile("" ::: "f0", "f1");
             {
@@ -507,10 +512,6 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     : "f0", "f1", "f2", "memory"
                 );
             }
-
-            // Prefetch V rows for this tile
-            for (int64_t d = 0; d < dv; d += 32)
-                prefetch_kv_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
 
             // ============================================================
             // Two-phase softmax + V accumulation
@@ -566,6 +567,9 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     }
 
                     // A3: SIMD exp2 + horizontal sum
+                    // Interleaved: f2/f3 chains alternate to hide ALU latency.
+                    // fexp.ps has multi-cycle latency — the two independent
+                    // exp2 calls naturally pipeline.
                     {
                         const float log2e = 1.4426950408889634f;
                         float S_tile;
@@ -573,10 +577,10 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                         __asm__ volatile(
                             "mova.x.m  %[ms]              \n\t"
                             "mov.m.x   m0, x0, 0xFF       \n\t"
-                            "fbc.ps    f4, 0(%[pM])       \n\t"
-                            "fbc.ps    f5, 0(%[pL])       \n\t"
                             "flw.ps    f2, 0(%[sc])       \n\t"
+                            "fbc.ps    f4, 0(%[pM])       \n\t"
                             "flw.ps    f3, 32(%[sc])      \n\t"
+                            "fbc.ps    f5, 0(%[pL])       \n\t"
                             "fsub.ps   f2, f2, f4         \n\t"
                             "fsub.ps   f3, f3, f4         \n\t"
                             "fmul.ps   f2, f2, f5         \n\t"
