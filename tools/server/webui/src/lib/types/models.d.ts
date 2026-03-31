@@ -1,8 +1,5 @@
 import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
 
-/**
- * Model modalities - vision and audio capabilities
- */
 export interface ModelModalities {
 	vision: boolean;
 	audio: boolean;
@@ -14,8 +11,28 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
-	/** Model modalities from /props endpoint */
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
+	parsedId?: ParsedModelId;
+	aliases?: string[];
+	tags?: string[];
+}
+
+export interface ParsedModelId {
+	raw: string;
+	orgName: string | null;
+	modelName: string | null;
+	params: string | null;
+	activatedParams: string | null;
+	quantization: string | null;
+	tags: string[];
+}
+
+/**
+ * Modality capabilities for file validation
+ */
+export interface ModalityCapabilities {
+	hasVision: boolean;
+	hasAudio: boolean;
 }

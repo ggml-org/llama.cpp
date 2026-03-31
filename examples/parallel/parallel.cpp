@@ -7,12 +7,13 @@
 #include "log.h"
 #include "llama.h"
 
+#include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
 #include <ctime>
-#include <algorithm>
 
 // trim whitespace from the beginning and end of a string
 static std::string trim(const std::string & str) {
@@ -153,6 +154,8 @@ static std::vector<std::string> split_string(const std::string& input, char deli
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     srand(1234);
 
     common_params params;

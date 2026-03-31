@@ -5,7 +5,6 @@ enable f16;
 #define TYPE f32
 #endif
 
-
 @group(0) @binding(0)
 var<storage, read_write> src: array<TYPE>;
 
@@ -57,12 +56,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       return;
     }
     var i = gid.x;
-    let i3 = i / (params.ne2 * params.ne1 * params.ne0);
-    i = i % (params.ne2 * params.ne1 * params.ne0);
-    let i2 = i / (params.ne1 * params.ne0);
-    i = i % (params.ne1 * params.ne0);
-    let i1 = i / params.ne0;
-    let i0 = i % params.ne0;
+    let ne2 = params.ne2;
+#ifdef DIAG
+    let ne1 = params.ne0;
+#else
+    let ne1 = params.ne1;
+#endif
+    let ne0 = params.ne0;
+
+    let i3 = i / (ne2 * ne1 * ne0);
+    i = i % (ne2 * ne1 * ne0);
+    let i2 = i / (ne1 * ne0);
+    i = i % (ne1 * ne0);
+    let i1 = i / ne0;
+    let i0 = i % ne0;
 
     let src_idx = i0 * params.stride_src0 + i1 * params.stride_src1 +
                   i2 * params.stride_src2 + i3 * params.stride_src3;
@@ -169,6 +176,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #endif
 #ifdef TRUNC
     let res = trunc(src[params.offset_src + src_idx]);
+#endif
+#ifdef SQR
+    let res = src[params.offset_src + src_idx] * src[params.offset_src + src_idx];
+#endif
+#ifdef SQRT
+    let res = sqrt(src[params.offset_src + src_idx]);
+#endif
+#ifdef SIN
+    let res_f32 = sin(f32(src[params.offset_src + src_idx]));
+    let res = TYPE(res_f32);
+#endif
+#ifdef COS
+    let res_f32 = cos(f32(src[params.offset_src + src_idx]));
+    let res = TYPE(res_f32);
+#endif
+#ifdef DIAG
+    let res = select(0.0, src[params.offset_src + i0 + i2 * params.stride_src2 + i3 * params.stride_src3], i0 == i1);
+#endif
+#ifdef TRI
+#ifdef TRI_TYPE_LOWER
+    let res = select(0.0, src[params.offset_src + src_idx], i0 < i1);
+#elif TRI_TYPE_LOWER_DIAG
+    let res = select(0.0, src[params.offset_src + src_idx], i0 <= i1);
+#elif TRI_TYPE_UPPER
+    let res = select(0.0, src[params.offset_src + src_idx], i0 > i1);
+#elif TRI_TYPE_UPPER_DIAG
+    let res = select(0.0, src[params.offset_src + src_idx], i0 >= i1);
+#endif
 #endif
 
 #ifdef INPLACE

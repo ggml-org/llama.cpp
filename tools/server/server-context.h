@@ -1,3 +1,5 @@
+#pragma once
+
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
@@ -6,12 +8,15 @@
 
 #include <cstddef>
 #include <memory>
+#include <set>
 
 struct server_context_impl; // private implementation
 
 struct server_context_meta {
     std::string build_info;
     std::string model_name;
+    std::set<std::string> model_aliases;
+    std::set<std::string> model_tags;
     std::string model_path;
     bool has_mtmd;
     bool has_inp_image;
@@ -30,6 +35,9 @@ struct server_context_meta {
     llama_token fim_pre_token;
     llama_token fim_sub_token;
     llama_token fim_mid_token;
+    llama_token fim_pad_token;
+    llama_token fim_rep_token;
+    llama_token fim_sep_token;
 
     // model meta
     enum llama_vocab_type model_vocab_type;
@@ -66,6 +74,10 @@ struct server_context {
     // get server metadata (read-only), can only be called after load_model()
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
+
+    // register a callback to be called when sleeping state changes
+    // must be set before load_model() is called
+    void on_sleeping_changed(std::function<void(bool)> callback);
 };
 
 

@@ -32,6 +32,7 @@ static void test_string_methods(testing & t);
 static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
+static void test_stats(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -70,6 +71,7 @@ int main(int argc, char *argv[]) {
     t.test("object methods", test_object_methods);
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
+        t.test("stats", test_stats);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -385,6 +387,24 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "empty computed member defaults to undefined",
+        "{{ a[]|default('fallback') }}",
+        {{"a", {{"name", "Bob"}}}},
+        "fallback"
+    );
+
+    test_template(t, "empty computed member is undefined",
+        "{{ a[] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
+    test_template(t, "undefined computed member is undefined",
+        "{{ a[undefined] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
     test_template(t, "array access",
         "{{ items[1] }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -691,6 +711,48 @@ static void test_filters(testing & t) {
         "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}"
     );
 
+    test_template(t, "indent",
+        "{{ data|indent(2) }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n  bar"
+    );
+
+    test_template(t, "indent first only",
+        "{{ data|indent(width=3,first=true) }}",
+        {{ "data", "foo\nbar" }},
+        "   foo\n   bar"
+    );
+
+    test_template(t, "indent blank lines and first line",
+        "{{ data|indent(width=5,blank=true,first=true) }}",
+        {{ "data", "foo\n\nbar" }},
+        "     foo\n     \n     bar"
+    );
+
+    test_template(t, "indent with default width",
+        "{{ data|indent() }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n    bar"
+    );
+
+    test_template(t, "indent with no newline",
+        "{{ data|indent }}",
+        {{ "data", "foo" }},
+        "foo"
+    );
+
+    test_template(t, "indent with trailing newline",
+        "{{ data|indent(blank=true) }}",
+        {{ "data", "foo\n" }},
+        "foo\n    "
+    );
+
+    test_template(t, "indent with string",
+        "{{ data|indent(width='>>>>') }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n>>>>bar"
+    );
+
     test_template(t, "chained filters",
         "{{ '  HELLO  '|trim|lower }}",
         json::object(),
@@ -839,6 +901,24 @@ static void test_macros(testing & t) {
         "{% macro greet(name='Guest') %}Hi {{ name }}{% endmacro %}{{ greet() }}",
         json::object(),
         "Hi Guest"
+    );
+
+    test_template(t, "macro kwargs input",
+        "{% macro my_func(a, b=False) %}{% if b %}{{ a }}{% else %}nope{% endif %}{% endmacro %}{{ my_func(1, b=True) }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "macro with multiple args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(1, 2) }},{{ add(1, 2, 3) }},{{ add(1, b=10) }},{{ add(1, 2, c=5) }}",
+        json::object(),
+        "3,6,11,8"
+    );
+
+    test_template(t, "macro with kwarg out-of-order input",
+        "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
+        json::object(),
+        "Hello, John Smith,Hi, Jane Doe"
     );
 }
 
@@ -1753,6 +1833,63 @@ static void test_hasher(testing & t) {
     });
 }
 
+static void test_stats(testing & t) {
+    static auto get_stats = [](const std::string & tmpl, const json & vars) -> jinja::value {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program prog = jinja::parse_from_tokens(lexer_res);
+
+        jinja::context ctx(tmpl);
+        jinja::global_from_json(ctx, json{{ "val", vars }}, true);
+        ctx.is_get_stats = true;
+
+        jinja::runtime runtime(ctx);
+        runtime.execute(prog);
+
+        return ctx.get_val("val");
+    };
+
+    t.test("stats", [](testing & t) {
+        jinja::value val = get_stats(
+            "{{val.num}} "
+            "{{val.str}} "
+            "{{val.arr[0]}} "
+            "{{val.obj.key1}} "
+            "{{val.nested | tojson}}",
+            // Note: the json below will be wrapped inside "val" in the context
+            json{
+                {"num", 1},
+                {"str", "abc"},
+                {"arr", json::array({1, 2, 3})},
+                {"obj", json::object({{"key1", 1}, {"key2", 2}, {"key3", 3}})},
+                {"nested", json::object({
+                    {"inner_key1", json::array({1, 2})},
+                    {"inner_key2", json::object({{"a", "x"}, {"b", "y"}})}
+                })},
+                {"mixed", json::object({
+                    {"used", 1},
+                    {"unused", 2},
+                })},
+            }
+        );
+
+        t.assert_true("num is used", val->at("num")->stats.used);
+        t.assert_true("str is used", val->at("str")->stats.used);
+
+        t.assert_true("arr is used", val->at("arr")->stats.used);
+        t.assert_true("arr[0] is used", val->at("arr")->at(0)->stats.used);
+        t.assert_true("arr[1] is not used", !val->at("arr")->at(1)->stats.used);
+
+        t.assert_true("obj is used", val->at("obj")->stats.used);
+        t.assert_true("obj.key1 is used", val->at("obj")->at("key1")->stats.used);
+        t.assert_true("obj.key2 is not used", !val->at("obj")->at("key2")->stats.used);
+
+        t.assert_true("inner_key1[0] is used", val->at("nested")->at("inner_key1")->at(0)->stats.used);
+        t.assert_true("inner_key2.a is used", val->at("nested")->at("inner_key2")->at("a")->stats.used);
+    });
+}
+
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         jinja::lexer lexer;
@@ -1796,8 +1933,9 @@ import sys
 from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
 
-tmpl = json.loads(sys.argv[1])
-vars_json = json.loads(sys.argv[2])
+merged_input = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+tmpl = merged_input["tmpl"]
+vars_json = merged_input["vars"]
 
 env = SandboxedEnvironment(
     trim_blocks=True,
@@ -1814,14 +1952,15 @@ env.globals["raise_exception"] = raise_exception
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
-print(result, end='')
+sys.stdout.buffer.write(result.encode())
 )";
 
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         // Prepare arguments
-        std::string tmpl_json = json(tmpl).dump();
-        std::string vars_json = vars.dump();
+        json merged;
+        merged["tmpl"] = json(tmpl);
+        merged["vars"] = vars;
 
 #ifdef _WIN32
         const char * python_executable = "python.exe";
@@ -1829,7 +1968,7 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        const char * command_line[] = {python_executable, "-c", py_script.c_str(), tmpl_json.c_str(), vars_json.c_str(), NULL};
+        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
 
         struct subprocess_s subprocess;
         int options = subprocess_option_combined_stdout_stderr
@@ -1843,6 +1982,20 @@ static void test_template_py(testing & t, const std::string & name, const std::s
             t.assert_true("subprocess creation", false);
             return;
         }
+        FILE * p_stdin = subprocess_stdin(&subprocess);
+
+        // Write input
+        std::string input = merged.dump();
+        auto written = fwrite(input.c_str(), 1, input.size(), p_stdin);
+        if (written != input.size()) {
+            t.log("Failed to write complete input to subprocess stdin");
+            t.assert_true("subprocess stdin write", false);
+            subprocess_destroy(&subprocess);
+            return;
+        }
+        fflush(p_stdin);
+        fclose(p_stdin); // Close stdin to signal EOF to the Python process
+        subprocess.stdin_file = nullptr;
 
         // Read output
         std::string output;
@@ -2147,6 +2300,7 @@ static void test_fuzzing(testing & t) {
 
     t.test("malformed templates (should error, not crash)", [&](testing & t) {
         const std::vector<std::string> malformed = {
+            "",
             "{{ x",
             "{% if %}",
             "{% for %}",
@@ -2166,6 +2320,11 @@ static void test_fuzzing(testing & t) {
         };
         for (const auto & tmpl : malformed) {
             t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+        }
+        std::string tmpl = "{% for message in messages %}{{ message.role | string }} : {{ message.content if ('content' in message and message.content is not none) }}{% endfor %";
+        while (tmpl.length() > 0) {
+            t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+            tmpl.pop_back();
         }
     });
 

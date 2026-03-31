@@ -2,6 +2,7 @@
 #define HVX_SIGMOID_H
 
 #include "hvx-base.h"
+#include "hvx-inverse.h"
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
 #define FAST_SIGMOID_C1    (0x3d009076)  // 0.03138777
@@ -91,6 +92,27 @@ static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
         }                                                       \
     } while(0)
 
+#define hvx_tanh_loop_body(dst_type, src_type, vec_store)       \
+    do {                                                        \
+        dst_type * restrict vdst = (dst_type *) dst;            \
+        src_type * restrict vsrc = (src_type *) src;            \
+                                                                \
+        const uint32_t epv  = 128 / sizeof(float);              \
+        const uint32_t nvec = n / epv;                          \
+        const uint32_t nloe = n % epv;                          \
+                                                                \
+        uint32_t i = 0;                                         \
+                                                                \
+        _Pragma("unroll(4)")                                    \
+        for (; i < nvec; i++) {                                 \
+             vdst[i] = hvx_vec_tanh_f32(vsrc[i]);               \
+        }                                                       \
+        if (nloe) {                                             \
+             HVX_Vector tmp = hvx_vec_tanh_f32(vsrc[i]);        \
+             vec_store((void *) &vdst[i], nloe * sizeof(float), tmp); \
+        }                                                       \
+    } while(0)
+
 static inline void hvx_sigmoid_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
@@ -109,6 +131,12 @@ static inline void hvx_sigmoid_f32_ua(uint8_t * restrict dst, const uint8_t * re
 
 static inline void hvx_sigmoid_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_sigmoid_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_tanh_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_tanh_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
 }
 
 #endif /* HVX_SIGMOID_H */

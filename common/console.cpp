@@ -87,6 +87,8 @@ namespace console {
     // Protects: current_display, out (FILE*), and all console output operations
     static std::mutex   g_console_mutex;
 
+    static completion_callback completion_cb = nullptr;
+
     //
     // Init and cleanup
     //
@@ -526,7 +528,7 @@ namespace console {
     }
 
     static void set_line_contents(std::string new_line, std::string & line, std::vector<int> & widths, size_t & char_pos,
-                                  size_t & byte_pos) {
+                                  size_t & byte_pos, int cursor_byte_pos = -1) {
         move_to_line_start(char_pos, byte_pos, widths);
         clear_current_line(widths);
 
@@ -536,6 +538,7 @@ namespace console {
         char_pos = 0;
 
         size_t idx = 0;
+        int back_width = 0;
         while (idx < line.size()) {
             size_t advance = 0;
             char32_t cp = decode_utf8(line, idx, advance);
@@ -544,8 +547,15 @@ namespace console {
             if (real_width < 0) real_width = 0;
             widths.push_back(real_width);
             idx += advance;
-            ++char_pos;
-            byte_pos = idx;
+            if (cursor_byte_pos >= 0 && static_cast<size_t>(cursor_byte_pos) < idx) {
+                back_width += real_width;
+            } else {
+                ++char_pos;
+                byte_pos = idx;
+            }
+        }
+        if (cursor_byte_pos >= 0) {
+            move_cursor(-back_width);
         }
     }
 
@@ -857,6 +867,20 @@ namespace console {
                 break;
             }
 
+            if (completion_cb && input_char == '\t') {
+                auto candidates = completion_cb(line, byte_pos);
+
+                if (!candidates.empty()) {
+                    if (candidates.size() > 1 || candidates[0].first != line) {
+                        // TODO?: Display all candidates
+                        set_line_contents(candidates[0].first, line, widths, char_pos, byte_pos, candidates[0].second);
+                    } else {
+                        // TODO: Move cursor to new byte_pos
+                    }
+                    continue;
+                }
+            }
+
             if (input_char == (char32_t) WEOF || input_char == 0x04 /* Ctrl+D */) {
                 end_of_stream = true;
                 break;
@@ -1153,6 +1177,10 @@ namespace console {
             return readline_simple(line, multiline_input);
         }
         return readline_advanced(line, multiline_input);
+    }
+
+    void set_completion_callback(completion_callback cb) {
+        completion_cb = cb;
     }
 
     namespace spinner {

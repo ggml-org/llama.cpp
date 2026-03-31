@@ -86,6 +86,14 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
+    impl(FILE * file) : owns_fp(false) {
+        fp = file;
+        fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
+    }
+
     size_t tell() const {
         LARGE_INTEGER li;
         li.QuadPart = 0;
@@ -159,7 +167,7 @@ struct llama_file::impl {
     }
 
     ~impl() {
-        if (fp) {
+        if (fp && owns_fp) {
             std::fclose(fp);
         }
     }
@@ -204,6 +212,13 @@ struct llama_file::impl {
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
+    }
+
+    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
+        fp = file;
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -353,7 +368,7 @@ struct llama_file::impl {
     ~impl() {
         if (fd != -1) {
             close(fd);
-        } else {
+        } else if (owns_fp) {
             std::fclose(fp);
         }
     }
@@ -369,10 +384,14 @@ struct llama_file::impl {
 
     FILE * fp{};
     size_t size{};
+    bool owns_fp = true;
 };
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+
+llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
+
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
@@ -504,6 +523,8 @@ struct llama_mmap::impl {
         }
     }
 #elif defined(_WIN32)
+    HANDLE hMapping = nullptr;
+
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         GGML_UNUSED(numa);
 
@@ -511,7 +532,7 @@ struct llama_mmap::impl {
 
         HANDLE hFile = (HANDLE) _get_osfhandle(file->file_id());
 
-        HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 
         if (hMapping == NULL) {
             DWORD error = GetLastError();
@@ -520,9 +541,9 @@ struct llama_mmap::impl {
 
         addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
         DWORD error = GetLastError();
-        CloseHandle(hMapping);
 
         if (addr == NULL) {
+            CloseHandle(hMapping);
             throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
         }
 
@@ -554,9 +575,17 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
-        if (!UnmapViewOfFile(addr)) {
-            LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
-                    llama_format_win_err(GetLastError()).c_str());
+        if (hMapping) {
+            if (addr) {
+                if (!UnmapViewOfFile(addr)) {
+                    LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
+                            llama_format_win_err(GetLastError()).c_str());
+                }
+            }
+            if (!CloseHandle(hMapping)) {
+                LLAMA_LOG_WARN("warning: CloseHandle failed: %s\n",
+                        llama_format_win_err(GetLastError()).c_str());
+            }
         }
     }
 #else

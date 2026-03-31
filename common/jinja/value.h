@@ -12,8 +12,8 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
+#include <unordered_map>
 
 namespace jinja {
 
@@ -118,6 +118,8 @@ struct value_t {
         bool used = false;
         // ops can be builtin calls or operators: "array_access", "object_access"
         std::set<std::string> ops;
+        // utility to recursively mark value and its children as used
+        static void mark_used(value & val, bool deep = false);
     } stats;
 
     value_t() = default;
@@ -449,7 +451,7 @@ struct value_array_t : public value_t {
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.val_arr.begin(), value_equivalence());
+        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.val_arr.begin(), other.val_arr.end(), value_equivalence());
     }
 };
 using value_array = std::shared_ptr<value_array_t>;
@@ -585,7 +587,7 @@ struct value_object_t : public value_t {
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.val_obj.begin(), value_equivalence());
+        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.val_obj.begin(), other.val_obj.end(), value_equivalence());
     }
 };
 using value_object = std::shared_ptr<value_object_t>;

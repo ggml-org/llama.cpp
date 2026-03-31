@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RemoveButton } from '$lib/components/app';
+	import { ActionIconRemove } from '$lib/components/app';
 	import { formatFileSize, getFileTypeLabel, getPreviewText, isTextFile } from '$lib/utils';
 	import { AttachmentType } from '$lib/enums';
 
@@ -104,7 +104,7 @@
 			onclick={onClick}
 		>
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<RemoveButton {id} {onRemove} />
+				<ActionIconRemove {id} {onRemove} />
 			</div>
 
 			<div class="pr-8">
@@ -158,7 +158,7 @@
 
 		{#if !readonly}
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<RemoveButton {id} {onRemove} />
+				<ActionIconRemove {id} {onRemove} />
 			</div>
 		{/if}
 	</button>

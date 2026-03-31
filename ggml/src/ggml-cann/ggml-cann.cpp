@@ -794,19 +794,44 @@ struct ggml_backend_cann_buffer_context {
     ~ggml_backend_cann_buffer_context() { ACL_CHECK(aclrtFree(dev_ptr)); }
 };
 
+// cann buffer type
 /**
- * @brief Check if a buffer is a CANN buffer.
- *
- * This function checks if a given buffer is a CANN buffer by comparing its
- * `get_name` function pointer to `ggml_backend_cann_buffer_get_name`.
- *
- * @param buffer The buffer to check.
- * @return true if the buffer is a CANN buffer, false otherwise.
+ * @brief Structure representing context information for a specific backend
+ * buffer type.
  */
-static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft);
+struct ggml_backend_cann_buffer_type_context {
+    int32_t     device; /**< Device identifier associated with the buffer context. */
+    std::string name;   /**< Name associated with the buffer context. */
+};
 
-static bool ggml_backend_buffer_is_cann(ggml_backend_buffer_t buffer) {
-    return ggml_backend_buft_is_cann(buffer->buft);
+/**
+ * @brief Retrieves the name associated with a CANN buffer type.
+ *
+ * This function returns the descriptive name associated with the specified
+ * CANN buffer type context.
+ *
+ * @param buft Pointer to the buffer type context.
+ * @return Const pointer to the C-style string containing the name.
+ */
+static const char * ggml_backend_cann_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
+
+    return buft_ctx->name.c_str();
+}
+
+/**
+ * @brief Checks if the backend buffer type is associated with the CANN backend.
+ *
+ * This function checks whether the provided backend buffer type is associated
+ * with the CANN backend based on the comparison of its name retrieval function
+ * pointer.
+ *
+ * @param buft Pointer to the backend buffer type to check.
+ * @return bool Returns true if the buffer type is associated with the CANN
+ * backend, otherwise false.
+ */
+static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cann_buffer_type_name;
 }
 
 /**
@@ -1209,7 +1234,8 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
-        if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
+        if (weight_to_nz && tensor->type != GGML_TYPE_BF16
+            && is_matmul_weight((const ggml_tensor *) tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
             weight_format_to_nz(tensor, offset, ctx->device);
@@ -1271,7 +1297,7 @@ static void ggml_backend_cann_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_backend_cann_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   src,
                                                 ggml_tensor *         dst) {
-    if (ggml_backend_buffer_is_cann(src->buffer)) {
+    if (ggml_backend_buft_is_cann(src->buffer->buft)) {
         ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
         ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
 
@@ -1334,31 +1360,6 @@ static const ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .clear           = */ ggml_backend_cann_buffer_clear,
     /* .reset           = */ NULL,
 };
-
-// cann buffer type
-/**
- * @brief Structure representing context information for a specific backend
- * buffer type.
- */
-struct ggml_backend_cann_buffer_type_context {
-    int32_t     device; /**< Device identifier associated with the buffer context. */
-    std::string name;   /**< Name associated with the buffer context. */
-};
-
-/**
- * @brief Retrieves the name associated with a CANN buffer type.
- *
- * This function returns the descriptive name associated with the specified
- * CANN buffer type context.
- *
- * @param buft Pointer to the buffer type context.
- * @return Const pointer to the C-style string containing the name.
- */
-static const char * ggml_backend_cann_buffer_type_name(ggml_backend_buffer_type_t buft) {
-    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
-
-    return buft_ctx->name.c_str();
-}
 
 /**
  * @brief Allocates a new CANN buffer of the specified type and size.
@@ -1443,7 +1444,8 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
-    } else if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
+    } else if (weight_to_nz && tensor->type != GGML_TYPE_BF16
+               && is_matmul_weight((const ggml_tensor *) tensor)) {
         // NZ format weight are not support quantized yet.
         // If ND tensor transform to NZ, size may changed.
         int64_t shape[] = { tensor->ne[1], tensor->ne[0] };
@@ -1997,7 +1999,7 @@ static bool ggml_backend_cann_cpy_tensor_async(ggml_backend_t      backend_src,
 
     GGML_ASSERT(!is_matmul_weight((const ggml_tensor *) src));
 
-    if (!ggml_backend_buffer_is_cann(src->buffer) || !ggml_backend_buffer_is_cann(dst->buffer)) {
+    if (!ggml_backend_buft_is_cann(src->buffer->buft) || !ggml_backend_buft_is_cann(dst->buffer->buft)) {
         return false;
     }
 
@@ -2223,6 +2225,19 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
             // If no matching graph is found, add a new ACL graph.
             ggml_cann_graph * new_graph = ggml_cann_graph::create_from_cgraph(cgraph);
             cann_ctx->graph_lru_cache.push(new_graph);
+
+            // Pre-load rope cache before graph capture.  During capture the
+            // stream cannot perform host-to-device memcpy or device memory
+            // malloc/free.  Running the full cache init now populates the
+            // cache metadata so these branches are skipped during capture,
+            // while also warming up the memory pool.
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (node->op == GGML_OP_ROPE) {
+                    ggml_cann_rope_cache_preload(*cann_ctx, node);
+                    break;
+                }
+            }
         }
     }
 #else
@@ -2283,6 +2298,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_MUL_MAT:
             {
                 switch (op->src[0]->type) {
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
                         return true;
@@ -2320,6 +2338,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                     case GGML_TYPE_Q8_0:
                         return true;
                     default:
@@ -2332,6 +2353,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                         return true;
                     default:
                         return false;
@@ -2341,20 +2365,30 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_CPY:
             {
                 ggml_tensor * src = op->src[0];
+#ifdef ASCEND_310P
                 if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
                     (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16)) {
-                    // only support F32 and F16.
+                    // only support F32 and F16 on 310P.
                     return false;
                 }
+#else
+                if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16 && op->type != GGML_TYPE_BF16) ||
+                    (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16)) {
+                    // only support F32, F16 and BF16.
+                    return false;
+                }
+#endif
                 return true;
             }
             break;
         case GGML_OP_CONT:
             {
-                // TODO: support GGML_TYPE_BF16
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+#ifndef ASCEND_310P
+                    case GGML_TYPE_BF16:
+#endif
                         return true;
                     default:
                         return false;
@@ -2503,10 +2537,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     // different head sizes of K and V are not supported yet
                     return false;
                 }
-                if (op->src[0]->ne[0] % 16 != 0) {
-                    // TODO: padding to support
-                    return false;
-                }
                 float logitSoftcap = 0.0f;
                 memcpy(&logitSoftcap, (const float *) (op->op_params) + 2, sizeof(float));
                 if (logitSoftcap != 0.0f) {
@@ -2521,21 +2551,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
     }
 
     GGML_UNUSED(dev);
-}
-
-/**
- * @brief Checks if the backend buffer type is associated with the CANN backend.
- *
- * This function checks whether the provided backend buffer type is associated
- * with the CANN backend based on the comparison of its name retrieval function
- * pointer.
- *
- * @param buft Pointer to the backend buffer type to check.
- * @return bool Returns true if the buffer type is associated with the CANN
- * backend, otherwise false.
- */
-static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_cann_buffer_type_name;
 }
 
 /**

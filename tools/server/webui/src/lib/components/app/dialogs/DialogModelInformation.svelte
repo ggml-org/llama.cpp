@@ -1,25 +1,42 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
-	import { BadgeModality, CopyToClipboardIcon } from '$lib/components/app';
+	import { BadgeModality, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
+	import type { ApiLlamaCppServerProps } from '$lib/types';
 
 	interface Props {
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		// when set, fetch props from the child process (router mode)
+		modelId?: string | null;
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props();
+	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
 
-	let serverProps = $derived(serverStore.props);
-	let modelName = $derived(modelsStore.singleModelName);
+	let isRouter = $derived(serverStore.isRouterMode);
+
+	// per-model props fetched from the child process
+	let routerModelProps = $state<ApiLlamaCppServerProps | null>(null);
+	let isLoadingRouterProps = $state(false);
+
+	// in router mode use per-model props, otherwise use global props
+	let serverProps = $derived(isRouter && modelId ? routerModelProps : serverStore.props);
+
+	let modelName = $derived(isRouter && modelId ? modelId : modelsStore.singleModelName);
 	let models = $derived(modelOptions());
 	let isLoadingModels = $derived(modelsLoading());
 
-	// Get the first model for single-model mode display
-	let firstModel = $derived(models[0] ?? null);
+	// in router mode, find the model option matching modelId
+	// in single mode, use the first model as before
+	let firstModel = $derived.by(() => {
+		if (isRouter && modelId) {
+			return models.find((m) => m.model === modelId) ?? null;
+		}
+		return models[0] ?? null;
+	});
 
 	// Get modalities from modelStore using the model ID from the first model
 	let modalities = $derived.by(() => {
@@ -33,10 +50,31 @@
 			modelsStore.fetch();
 		}
 	});
+
+	// fetch per-model props from child process when dialog opens in router mode
+	$effect(() => {
+		if (open && isRouter && modelId) {
+			isLoadingRouterProps = true;
+			modelsStore
+				.fetchModelProps(modelId)
+				.then((props) => {
+					routerModelProps = props;
+				})
+				.catch(() => {
+					routerModelProps = null;
+				})
+				.finally(() => {
+					isLoadingRouterProps = false;
+				});
+		}
+		if (!open) {
+			routerModelProps = null;
+		}
+	});
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-	<Dialog.Content class="@container z-9999 !max-w-[60rem] max-w-full">
+	<Dialog.Content class="@container z-9999 !max-h-[80dvh] !max-w-[60rem] max-w-full">
 		<style>
 			@container (max-width: 56rem) {
 				.resizable-text-container {
@@ -47,11 +85,12 @@
 
 		<Dialog.Header>
 			<Dialog.Title>Model Information</Dialog.Title>
+
 			<Dialog.Description>Current model details and capabilities</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-6 py-4">
-			{#if isLoadingModels}
+			{#if isLoadingModels || isLoadingRouterProps}
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
 				</div>
@@ -73,7 +112,7 @@
 											{modelName}
 										</span>
 
-										<CopyToClipboardIcon
+										<ActionIconCopyToClipboard
 											text={modelName || ''}
 											canCopy={!!modelName}
 											ariaLabel="Copy model name to clipboard"
@@ -97,7 +136,7 @@
 										{serverProps.model_path}
 									</span>
 
-									<CopyToClipboardIcon
+									<ActionIconCopyToClipboard
 										text={serverProps.model_path}
 										ariaLabel="Copy model path to clipboard"
 									/>
@@ -105,17 +144,29 @@
 							</Table.Row>
 
 							<!-- Context Size -->
-							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
-								<Table.Cell
-									>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
-								>
-							</Table.Row>
+							{#if serverProps?.default_generation_settings?.n_ctx}
+								<Table.Row>
+									<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
+
+									<Table.Cell
+										>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
+									>
+								</Table.Row>
+							{:else}
+								<Table.Row>
+									<Table.Cell class="h-10 align-middle font-medium text-red-500"
+										>Context Size</Table.Cell
+									>
+
+									<Table.Cell class="text-red-500">Not available</Table.Cell>
+								</Table.Row>
+							{/if}
 
 							<!-- Training Context -->
 							{#if modelMeta?.n_ctx_train}
 								<Table.Row>
 									<Table.Cell class="h-10 align-middle font-medium">Training Context</Table.Cell>
+
 									<Table.Cell>{formatNumber(modelMeta.n_ctx_train)} tokens</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -124,6 +175,7 @@
 							{#if modelMeta?.size}
 								<Table.Row>
 									<Table.Cell class="h-10 align-middle font-medium">Model Size</Table.Cell>
+
 									<Table.Cell>{formatFileSize(modelMeta.size)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -132,6 +184,7 @@
 							{#if modelMeta?.n_params}
 								<Table.Row>
 									<Table.Cell class="h-10 align-middle font-medium">Parameters</Table.Cell>
+
 									<Table.Cell>{formatParameters(modelMeta.n_params)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -140,6 +193,7 @@
 							{#if modelMeta?.n_embd}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Embedding Size</Table.Cell>
+
 									<Table.Cell>{formatNumber(modelMeta.n_embd)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -148,6 +202,7 @@
 							{#if modelMeta?.n_vocab}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Vocabulary Size</Table.Cell>
+
 									<Table.Cell>{formatNumber(modelMeta.n_vocab)} tokens</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -163,6 +218,7 @@
 							<!-- Total Slots -->
 							<Table.Row>
 								<Table.Cell class="align-middle font-medium">Parallel Slots</Table.Cell>
+
 								<Table.Cell>{serverProps.total_slots}</Table.Cell>
 							</Table.Row>
 
@@ -170,6 +226,7 @@
 							{#if modalities.length > 0}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Modalities</Table.Cell>
+
 									<Table.Cell>
 										<div class="flex flex-wrap gap-1">
 											<BadgeModality {modalities} />
@@ -181,6 +238,7 @@
 							<!-- Build Info -->
 							<Table.Row>
 								<Table.Cell class="align-middle font-medium">Build Info</Table.Cell>
+
 								<Table.Cell class="align-middle font-mono text-xs"
 									>{serverProps.build_info}</Table.Cell
 								>
@@ -190,8 +248,9 @@
 							{#if serverProps.chat_template}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
+
 									<Table.Cell class="py-10">
-										<div class="max-h-120 overflow-y-auto rounded-md bg-muted p-4">
+										<div class="rounded-md bg-muted p-4">
 											<pre
 												class="font-mono text-xs whitespace-pre-wrap">{serverProps.chat_template}</pre>
 										</div>

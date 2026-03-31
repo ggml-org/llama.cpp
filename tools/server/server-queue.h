@@ -95,11 +95,19 @@ public:
         callback_update_slots = std::move(callback);
     }
 
-    // Register callback for sleeping state change
+    // Register callback for sleeping state change; multiple callbacks are allowed
     // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
     //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
     void on_sleeping_state(std::function<void(bool)> callback) {
-        callback_sleeping_state = std::move(callback);
+        if (callback_sleeping_state) {
+            auto prev_callback = std::move(callback_sleeping_state);
+            callback_sleeping_state = [prev_callback, callback](bool sleeping) {
+                prev_callback(sleeping);
+                callback(sleeping);
+            };
+        } else {
+            callback_sleeping_state = std::move(callback);
+        }
     }
 
 private:

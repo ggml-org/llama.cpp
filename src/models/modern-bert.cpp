@@ -1,10 +1,10 @@
 #include "models.h"
 
 llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_head = hparams.n_embd_head_v;
+    const int64_t n_embd_head = hparams.n_embd_head_v();
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
-    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -15,8 +15,8 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
     cb(inpL, "inp_embd", -1);
 
     // embed layer norm
-    inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, -1);
-    cb(inpL, "inp_norm", -1);
+    inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, 0);
+    cb(inpL, "inp_norm", 0);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -104,13 +104,6 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
             LLM_NORM, -1);
     cb(cur, "final_norm_out", -1);
 
-    if (hparams.pooling_type == LLAMA_POOLING_TYPE_CLS) {
-        // extracting cls token
-        cur = ggml_view_1d(ctx0, cur, hparams.n_embd, 0);
-        cb(cur, "cls_pooled_embd", -1);
-    }
-
-    cb(cur, "res_embd", -1);
     res->t_embd = cur;
     ggml_build_forward_expand(gf, cur);
 }

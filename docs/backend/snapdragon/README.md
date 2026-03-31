@@ -35,7 +35,7 @@ Adapt below build commands accordingly.
 Let's build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
 
 ```
-[d]/workspace> cp docs/backend/hexagon/CMakeUserPresets.json .
+[d]/workspace> cp docs/backend/snapdragon/CMakeUserPresets.json .
 
 [d]/workspace> cmake --preset arm64-android-snapdragon-release -B build-snapdragon
 Preset CMake variables:
@@ -116,7 +116,7 @@ Llama-3.2-1B-Instruct-Q4_0.gguf: 1 file pushed, 0 skipped. 38.3 MB/s (773025920 
 ### Windows
 
 All artifacts are already installed in the `pkg-snapdragon` folder.
-To run, adapt below instructions to use Powershell scrits in `scripts/snapdragon/windows`.
+To run, adapt below instructions to use Powershell scripts in `scripts/snapdragon/windows`.
 
 ## How to Run
 

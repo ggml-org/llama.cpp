@@ -1,12 +1,12 @@
-#include "server-common.h"
 #include "server-task.h"
 
-#include "common.h"
-#include "llama.h"
 #include "chat.h"
+#include "common.h"
+#include "json-schema-to-grammar.h"
+#include "llama.h"
 #include "sampling.h"
 #include "speculative.h"
-#include "json-schema-to-grammar.h"
+#include "server-common.h"
 
 using json = nlohmann::ordered_json;
 
@@ -72,7 +72,7 @@ json task_params::to_json(bool only_metrics) const {
             {"chat_format",               common_chat_format_name(chat_parser_params.format)},
             {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
             {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-            {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
+            {"generation_prompt",         chat_parser_params.generation_prompt},
             {"samplers",                  samplers},
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
@@ -128,14 +128,14 @@ json task_params::to_json(bool only_metrics) const {
         {"logit_bias",                format_logit_bias(sampling.logit_bias)},
         {"n_probs",                   sampling.n_probs},
         {"min_keep",                  sampling.min_keep},
-        {"grammar",                   sampling.grammar},
+        {"grammar",                   common_grammar_value(sampling.grammar)},
         {"grammar_lazy",              sampling.grammar_lazy},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          sampling.preserved_tokens},
         {"chat_format",               common_chat_format_name(chat_parser_params.format)},
         {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
         {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
+        {"generation_prompt",         chat_parser_params.generation_prompt},
         {"samplers",                  samplers},
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
@@ -157,7 +157,8 @@ json task_params::to_json(bool only_metrics) const {
 common_chat_msg task_result_state::update_chat_msg(
         const std::string & text_added,
         bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs) {
+        std::vector<common_chat_msg_diff> & diffs,
+        bool filter_tool_calls) {
     generated_text += text_added;
     auto msg_prv_copy = chat_msg;
     SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
@@ -168,7 +169,64 @@ common_chat_msg task_result_state::update_chat_msg(
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
-        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
+        auto all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+
+        if (!filter_tool_calls) {
+            diffs = std::move(all_diffs);
+        } else {
+            for (auto & d : all_diffs) {
+                // If this is a new type of delta, flush all currently pending tool call names
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (sent_tool_call_names.count(i) || chat_msg.tool_calls[i].name.empty()) {
+                        continue;
+                    }
+                    if (d.tool_call_index != i || !d.tool_call_delta.arguments.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index      = i;
+                        header.tool_call_delta.id   = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+
+                if (d.tool_call_index == std::string::npos) {
+                    diffs.push_back(std::move(d));
+                } else {
+                    size_t i = d.tool_call_index;
+                    if (sent_tool_call_names.count(i)) {
+                        if (!d.tool_call_delta.arguments.empty()) {
+                            d.tool_call_delta.name = "";
+                            d.tool_call_delta.id   = "";
+                            diffs.push_back(std::move(d));
+                        }
+                    } else {
+                        // Not sent yet.
+                        if (!d.tool_call_delta.arguments.empty() || !is_partial) {
+                            d.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                            d.tool_call_delta.id   = chat_msg.tool_calls[i].id;
+                            diffs.push_back(std::move(d));
+                            sent_tool_call_names.insert(i);
+                        } else {
+                            // Suppress
+                        }
+                    }
+                }
+            }
+            // Final check at EOF
+            if (!is_partial) {
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (!sent_tool_call_names.count(i) && !chat_msg.tool_calls[i].name.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index      = i;
+                        header.tool_call_delta.id   = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+            }
+        }
     }
     return chat_msg;
 }
@@ -204,7 +262,8 @@ task_params server_task::params_from_json_cmpl(
     params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
     params.return_tokens    = json_value(data,       "return_tokens",      false);
     params.return_progress  = json_value(data,       "return_progress",    false);
-    params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
+    auto max_tokens         = json_value(data,       "max_tokens",         defaults.n_predict);
+    params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_completion_tokens", max_tokens));
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
@@ -317,14 +376,25 @@ task_params server_task::params_from_json_cmpl(
         try {
             auto schema                  = json_value(data, "json_schema", json::object());
             SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
-            params.sampling.grammar      = json_schema_to_grammar(schema);
-            SRV_DBG("Converted grammar: %s\n", params.sampling.grammar.c_str());
+            std::string grammar_str      = json_schema_to_grammar(schema);
+            SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
+            params.sampling.grammar      = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str)};
         } catch (const std::exception & e) {
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
-        params.sampling.grammar      = json_value(data, "grammar", defaults.sampling.grammar);
-        SRV_DBG("Grammar: %s\n", params.sampling.grammar.c_str());
+        std::string grammar_str = json_value(data, "grammar", std::string());
+        if (!grammar_str.empty()) {
+            // grammar_type key is set by the server when converting chat template grammars
+            std::string grammar_type = json_value(data, "grammar_type", std::string());
+            if (grammar_type == "tool_calls") {
+                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, std::move(grammar_str)};
+            } else {
+                // explicit grammar from the user (API field "grammar")
+                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, std::move(grammar_str)};
+            }
+            SRV_DBG("Grammar (%s): %s\n", grammar_type.c_str(), common_grammar_value(params.sampling.grammar).c_str());
+        }
         params.sampling.grammar_lazy = json_value(data, "grammar_lazy", defaults.sampling.grammar_lazy);
         SRV_DBG("Grammar lazy: %s\n", params.sampling.grammar_lazy ? "true" : "false");
     }
@@ -343,7 +413,9 @@ task_params server_task::params_from_json_cmpl(
         }
         params.chat_parser_params.reasoning_format = reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        params.chat_parser_params.thinking_forced_open = json_value(data, "thinking_forced_open", false);
+        params.chat_parser_params.generation_prompt = json_value(data, "generation_prompt", std::string());
+        params.sampling.generation_prompt = params.chat_parser_params.generation_prompt;
+        SRV_DBG("Generation prompt: '%s'\n", params.chat_parser_params.generation_prompt.c_str());
         params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
@@ -400,6 +472,29 @@ task_params server_task::params_from_json_cmpl(
         }
         if (params.sampling.grammar_lazy && params.sampling.grammar_triggers.empty()) {
             throw std::runtime_error("Error: no triggers set for lazy grammar!");
+        }
+    }
+
+    // Parse reasoning budget sampler parameters
+    {
+        const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
+        const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
+        const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
+        const auto message   = json_value(data, "reasoning_budget_message", std::string());
+        params.sampling.reasoning_budget_tokens = budget;
+
+        if (!start_tag.empty()) {
+            params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
+        }
+        if (!end_tag.empty()) {
+            params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
+            params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
+
+            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, params.sampling.generation_prompt.c_str(),
+                params.sampling.reasoning_budget_start.size(),
+                params.sampling.reasoning_budget_end.size(),
+                params.sampling.reasoning_budget_forced.size());
         }
     }
 
@@ -659,6 +754,15 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
+json server_task_result_cmpl_final::usage_json_oaicompat() {
+    return json {
+        {"completion_tokens", n_decoded},
+        {"prompt_tokens",     n_prompt_tokens},
+        {"total_tokens",      n_decoded + n_prompt_tokens},
+        {"prompt_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+    };
+}
+
 json server_task_result_cmpl_final::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
@@ -684,11 +788,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"model",              oaicompat_model},
         {"system_fingerprint", build_info},
         {"object",             "text_completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -736,11 +836,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"model",              oaicompat_model},
         {"system_fingerprint", build_info},
         {"object",             "chat.completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -768,7 +864,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
@@ -784,7 +880,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"choices", json::array({
             json {
                 {"finish_reason", finish_reason},
-                {"index", 0},
+                {"index", index},
                 {"delta", json::object()},
             },
         })},
@@ -805,11 +901,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"model",              oaicompat_model},
             {"system_fingerprint", build_info},
             {"object",             "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
+            {"usage",              usage_json_oaicompat()},
         });
     }
 
@@ -888,6 +980,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
             {"total_tokens",  n_decoded + n_prompt_tokens},
+            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
         }},
     };
 
@@ -996,7 +1089,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
                 {"usage",      json {
                     {"input_tokens",  n_prompt_tokens},
                     {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens}
+                    {"total_tokens",  n_decoded + n_prompt_tokens},
+                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
                 }}
             }},
         }}
@@ -1062,7 +1156,8 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"stop_reason", stop_reason},
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
         {"usage", {
-            {"input_tokens", n_prompt_tokens},
+            {"cache_read_input_tokens", n_prompt_tokens_cache},
+            {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
             {"output_tokens", n_decoded}
         }}
     };
@@ -1572,7 +1667,8 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                     {"stop_reason", nullptr},
                     {"stop_sequence", nullptr},
                     {"usage", {
-                        {"input_tokens", n_prompt_tokens},
+                        {"cache_read_input_tokens", n_prompt_tokens_cache},
+                        {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
                         {"output_tokens", 0}
                     }}
                 }}
@@ -1899,10 +1995,9 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         return nullptr;
     }
 
-    // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
     auto & cur = states.emplace_back();
     cur = {
-        /*.tokens      =*/ server_tokens(prompt.tokens.get_text_tokens(), false),
+        /*.tokens      =*/ prompt.tokens.clone(),
         /*.data        =*/ std::move(state_data),
         /*.checkpoints =*/ prompt.checkpoints,
     };

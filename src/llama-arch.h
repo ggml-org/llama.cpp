@@ -4,6 +4,7 @@
 
 #include <string>
 #include <set>
+#include <vector>
 
 //
 // gguf constants (sync with gguf.py)
@@ -30,6 +31,7 @@ enum llm_arch {
     LLM_ARCH_NEO_BERT,
     LLM_ARCH_JINA_BERT_V2,
     LLM_ARCH_JINA_BERT_V3,
+    LLM_ARCH_EUROBERT,
     LLM_ARCH_BLOOM,
     LLM_ARCH_STABLELM,
     LLM_ARCH_QWEN,
@@ -41,6 +43,8 @@ enum llm_arch {
     LLM_ARCH_QWEN3NEXT,
     LLM_ARCH_QWEN3VL,
     LLM_ARCH_QWEN3VLMOE,
+    LLM_ARCH_QWEN35,
+    LLM_ARCH_QWEN35MOE,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
     LLM_ARCH_PHIMOE,
@@ -73,13 +77,16 @@ enum llm_arch {
     LLM_ARCH_ARCTIC,
     LLM_ARCH_DEEPSEEK,
     LLM_ARCH_DEEPSEEK2,
+    LLM_ARCH_DEEPSEEK2OCR,
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
+    LLM_ARCH_GLM_DSA,
     LLM_ARCH_BITNET,
     LLM_ARCH_T5,
     LLM_ARCH_T5ENCODER,
     LLM_ARCH_JAIS,
+    LLM_ARCH_JAIS2,
     LLM_ARCH_NEMOTRON,
     LLM_ARCH_NEMOTRON_H,
     LLM_ARCH_NEMOTRON_H_MOE,
@@ -121,6 +128,8 @@ enum llm_arch {
     LLM_ARCH_RND1,
     LLM_ARCH_PANGU_EMBED,
     LLM_ARCH_MISTRAL3,
+    LLM_ARCH_MISTRAL4,
+    LLM_ARCH_PADDLEOCR,
     LLM_ARCH_MIMO2,
     LLM_ARCH_STEP35,
     LLM_ARCH_LLAMA_EMBED,
@@ -182,6 +191,7 @@ enum llm_kv {
     LLM_KV_EXPERT_GROUP_SCALE,
     LLM_KV_EXPERTS_PER_GROUP,
     LLM_KV_MOE_EVERY_N_LAYERS,
+    LLM_KV_MOE_LATENT_SIZE,
     LLM_KV_NEXTN_PREDICT_LAYERS,
     LLM_KV_NUM_DEEPSTACK_LAYERS,
     LLM_KV_POOLING_TYPE,
@@ -199,6 +209,7 @@ enum llm_kv {
     LLM_KV_EMBEDDING_SCALE,
     LLM_KV_TOKEN_SHIFT_COUNT,
     LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
+    LLM_KV_FULL_ATTENTION_INTERVAL,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -226,8 +237,14 @@ enum llm_kv {
     LLM_KV_ATTENTION_TEMPERATURE_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_KEY_LENGTH_SWA,
+    LLM_KV_ATTENTION_VALUE_LENGTH_SWA,
+    LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
+    LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
+    LLM_KV_ATTENTION_INDEXER_TOP_K,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
+    LLM_KV_ROPE_DIMENSION_COUNT_SWA,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
     LLM_KV_ROPE_FREQ_BASE,
     LLM_KV_ROPE_FREQ_BASE_SWA,
@@ -363,6 +380,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_DOWN_EXPS, // merged experts
     LLM_TENSOR_FFN_GATE_EXPS,
     LLM_TENSOR_FFN_UP_EXPS,
+    LLM_TENSOR_FFN_GATE_UP_EXPS,
     LLM_TENSOR_FFN_DOWN_SHEXP,
     LLM_TENSOR_FFN_GATE_SHEXP,
     LLM_TENSOR_FFN_UP_SHEXP,
@@ -370,6 +388,8 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE_CHEXPS,
     LLM_TENSOR_FFN_UP_CHEXPS,
     LLM_TENSOR_FFN_EXP_PROBS_B,
+    LLM_TENSOR_FFN_LATENT_DOWN,
+    LLM_TENSOR_FFN_LATENT_UP,
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
@@ -404,13 +424,14 @@ enum llm_tensor {
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
+    LLM_TENSOR_SSM_ALPHA,           // qwen3.5
     // Kimi Linear KDA (using SSM_ prefix for consistency)
     LLM_TENSOR_SSM_CONV1D_Q,        // kimi: Q conv1d weight
     LLM_TENSOR_SSM_CONV1D_K,        // kimi: K conv1d weight
     LLM_TENSOR_SSM_CONV1D_V,        // kimi: V conv1d weight
     LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
     LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
-    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient
+    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     LLM_TENSOR_TIME_MIX_W0,
@@ -489,6 +510,7 @@ enum llm_tensor {
     LLM_TENSOR_ENC_OUTPUT_NORM,
     LLM_TENSOR_CLS,
     LLM_TENSOR_CLS_OUT,
+    LLM_TENSOR_CLS_NORM,
     LLM_TENSOR_CONV1D,
     LLM_TENSOR_CONVNEXT_DW,
     LLM_TENSOR_CONVNEXT_NORM,
@@ -513,6 +535,10 @@ enum llm_tensor {
     LLM_TENSOR_VISEXP_FFN_GATE,
     LLM_TENSOR_VISEXP_FFN_DOWN,
     LLM_TENSOR_VISEXP_FFN_UP,
+    LLM_TENSOR_INDEXER_K_NORM,
+    LLM_TENSOR_INDEXER_PROJ,
+    LLM_TENSOR_INDEXER_ATTN_K,
+    LLM_TENSOR_INDEXER_ATTN_Q_B,
     LLM_TENSOR_NEXTN_EH_PROJ,
     LLM_TENSOR_NEXTN_EMBED_TOKENS,
     LLM_TENSOR_NEXTN_ENORM,
@@ -590,6 +616,8 @@ struct llm_tensor_info {
     llm_tensor_layer layer;
     ggml_op op;
 };
+
+std::vector<llm_arch> llm_arch_all();
 
 const char * llm_arch_name(llm_arch arch);
 

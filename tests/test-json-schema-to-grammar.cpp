@@ -571,6 +571,55 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "array with empty items",
+        R"""({
+            "type": "array",
+            "items": {}
+        })""",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            item ::= object
+            null ::= "null" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= "[" space (item ("," space item)*)? "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "array with empty items and prefixItems",
+        R"""({
+            "type": "array",
+            "items": {},
+            "prefixItems": { "type": "string" }
+        })""",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            item ::= object
+            null ::= "null" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= "[" space (item ("," space item)*)? "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "number",
         R"""({
             "type": "number"
@@ -1342,6 +1391,26 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "description only (no type) treated as unconstrained",
+        R"""({"description": "The 0-based index of the last line to be retrieved (inclusive). If None, read until the end of the file."})""",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            null ::= "null" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= value
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "literal string with escapes",
         R"""({
             "properties": {
@@ -1455,6 +1524,47 @@ int main() {
             tc.verify_status(FAILURE);
         }
     });
+
+    // C++ only tests (features not yet supported in JS/Python implementations)
+    {
+        fprintf(stderr, "#\n# Testing C++ only features\n#\n");
+        auto run = [](const TestCase & tc) {
+            fprintf(stderr, "- %s\n", tc.name.c_str());
+            try {
+                tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+                tc.verify_status(SUCCESS);
+            } catch (const std::invalid_argument & ex) {
+                fprintf(stderr, "Error: %s\n", ex.what());
+                tc.verify_status(FAILURE);
+            }
+        };
+
+        run({
+            SUCCESS,
+            "regexp with non-capturing group",
+            R"""({
+                "type": "string",
+                "pattern": "^(?:foo|bar)baz$"
+            })""",
+            R"""(
+                root ::= "\"" (("foo" | "bar") "baz") "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            "regexp with nested non-capturing groups",
+            R"""({
+                "type": "string",
+                "pattern": "^(?:(?:ab)+c)?d$"
+            })""",
+            R"""(
+                root ::= "\"" ((("ab")+ "c")? "d") "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+    }
 
     if (getenv("LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR")) {
         fprintf(stderr, "\033[33mWARNING: Skipping slow tests on emulator.\n\033[0m");

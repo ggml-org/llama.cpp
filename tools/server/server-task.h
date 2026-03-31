@@ -98,6 +98,7 @@ struct task_result_state {
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
+    std::unordered_set<size_t> sent_tool_call_names;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
@@ -120,7 +121,8 @@ struct task_result_state {
     common_chat_msg update_chat_msg(
         const std::string & text_added,
         bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs);
+        std::vector<common_chat_msg_diff> & diffs,
+        bool filter_tool_calls = false);
 };
 
 struct server_task {
@@ -342,6 +344,7 @@ struct server_task_result_cmpl_final : server_task_result {
     bool truncated;
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
     int32_t n_tokens_cached;
     bool has_new_line;
     std::string stopping_word;
@@ -385,6 +388,8 @@ struct server_task_result_cmpl_final : server_task_result {
 
     json to_json_non_oaicompat();
 
+    json usage_json_oaicompat();
+
     json to_json_oaicompat();
 
     json to_json_oaicompat_chat();
@@ -406,6 +411,7 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
 
     bool post_sampling_probs;
     bool is_progress = false;
@@ -556,6 +562,8 @@ struct server_task_result_apply_lora : server_task_result {
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
+
+    int64_t n_tokens;
 
     std::vector<uint8_t> data;
 

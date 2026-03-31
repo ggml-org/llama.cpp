@@ -85,7 +85,7 @@ value identifier::execute_impl(context & ctx) {
     auto builtins = global_builtins();
     if (!it->is_undefined()) {
         if (ctx.is_get_stats) {
-            it->stats.used = true;
+            value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
@@ -114,8 +114,10 @@ value binary_expression::execute_impl(context & ctx) {
 
     // Logical operators
     if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
     } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
 
@@ -277,7 +279,7 @@ value binary_expression::execute_impl(context & ctx) {
 static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
     JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
     if (ctx.is_get_stats) {
-        input->stats.used = true;
+        value_t::stats_t::mark_used(input);
         input->stats.ops.insert(name);
     }
     auto builtins = input->get_builtins();
@@ -446,6 +448,12 @@ value for_statement::execute_impl(context & ctx) {
 
     value iterable_val = iter_expr->execute(scope);
 
+    // mark the variable being iterated as used for stats
+    if (ctx.is_get_stats) {
+        value_t::stats_t::mark_used(iterable_val);
+        iterable_val->stats.ops.insert("array_access");
+    }
+
     if (iterable_val->is_undefined()) {
         JJ_DEBUG("%s", "For loop iterable is undefined, skipping loop");
         iterable_val = mk_val<value_array>();
@@ -464,7 +472,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(std::move(tuple));
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("object_access");
         }
     } else {
@@ -474,7 +482,7 @@ value for_statement::execute_impl(context & ctx) {
             items.push_back(item);
         }
         if (ctx.is_get_stats) {
-            iterable_val->stats.used = true;
+            value_t::stats_t::mark_used(iterable_val);
             iterable_val->stats.ops.insert("array_access");
         }
     }
@@ -659,8 +667,9 @@ value macro_statement::execute_impl(context & ctx) {
                 if (is_stmt<identifier>(this->args[i])) {
                     // normal parameter
                     std::string param_name = cast_stmt<identifier>(this->args[i])->val;
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), args.get_pos(i)->type().c_str());
-                    macro_ctx.set_val(param_name, args.get_pos(i));
+                    value param_value = args.get_kwarg_or_pos(param_name, i);
+                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                    macro_ctx.set_val(param_name, param_value);
                 } else if (is_stmt<keyword_argument_expression>(this->args[i])) {
                     // default argument used as normal parameter
                     auto kwarg = cast_stmt<keyword_argument_expression>(this->args[i]);
@@ -668,8 +677,9 @@ value macro_statement::execute_impl(context & ctx) {
                         throw std::runtime_error("Keyword argument key must be an identifier in macro '" + name + "'");
                     }
                     std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), args.get_pos(i)->type().c_str());
-                    macro_ctx.set_val(param_name, args.get_pos(i));
+                    value param_value = args.get_kwarg_or_pos(param_name, i);
+                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                    macro_ctx.set_val(param_name, param_value);
                 } else {
                     throw std::runtime_error("Invalid parameter type in macro '" + name + "'");
                 }
@@ -715,6 +725,8 @@ value member_expression::execute_impl(context & ctx) {
         int64_t arr_size = 0;
         if (is_val<value_array>(object)) {
             arr_size = object->as_array().size();
+        } else if (is_val<value_string>(object)) {
+            arr_size = object->as_string().length();
         }
 
         if (is_stmt<slice_expression>(this->property)) {
@@ -759,9 +771,14 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
-    ensure_key_type_allowed(property);
-
     value val = mk_val<value_undefined>("object_property");
+
+    if (property->is_undefined()) {
+        JJ_DEBUG("%s", "Member expression property is undefined, returning undefined");
+        return val;
+    }
+
+    ensure_key_type_allowed(property);
 
     if (is_val<value_undefined>(object)) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
@@ -811,8 +828,9 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     if (ctx.is_get_stats && val && object && property) {
-        val->stats.used = true;
-        object->stats.used = true;
+        value_t::stats_t::mark_used(val);
+        value_t::stats_t::mark_used(object);
+        value_t::stats_t::mark_used(property);
         if (is_val<value_int>(property)) {
             object->stats.ops.insert("array_access");
         } else if (is_val<value_string>(property)) {
@@ -829,7 +847,7 @@ value call_expression::execute_impl(context & ctx) {
     for (auto & arg_stmt : this->args) {
         auto arg_val = arg_stmt->execute(ctx);
         JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(std::move(arg_val));
+        args.push_back(arg_val);
     }
     // execute callee
     value callee_val = callee->execute(ctx);

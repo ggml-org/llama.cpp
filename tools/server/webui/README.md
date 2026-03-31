@@ -101,7 +101,7 @@ In a separate terminal, start the backend server:
 ./llama-server -m model.gguf
 
 # Multi-model (ROUTER mode)
-./llama-server --model-store /path/to/models
+./llama-server --models-dir /path/to/models
 ```
 
 ### 3. Start Development Servers

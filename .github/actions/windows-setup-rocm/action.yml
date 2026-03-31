@@ -11,5 +11,5 @@ runs:
     - name: Setup ROCm
       uses: ./.github/actions/install-exe
       with:
-        url: https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ inputs.version }}-WinSvr2022-For-HIP.exe
+        url: https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ inputs.version }}-Win11-For-HIP.exe
         args: -install

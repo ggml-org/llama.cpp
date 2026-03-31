@@ -163,7 +163,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             const auto & cell = cells[tail_id];
             // partial intersection is invalid if it includes the final pos
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
-                //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false\n");
+                //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false, p0 = %d, cell.pos = %d, p1 = %d\n", p0, cell.pos, p1);
                 return false;
             }
             // invalidate tails which will be cleared
@@ -928,11 +928,8 @@ bool llama_memory_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell
                 llama_seq_id seq_id;
                 io.read_to(&seq_id, sizeof(seq_id));
 
-                // TODO: llama_memory_recurrent should have a notion of max sequences
-                //if (seq_id < 0 || (uint32_t) seq_id >= llama_n_seq_max(ctx)) {
-                if (seq_id < 0) {
-                    //LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, llama_n_seq_max(ctx));
-                    LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, inf)\n", __func__, seq_id);
+                if (seq_id < 0 || (uint32_t) seq_id >= this->n_seq_max) {
+                    LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, this->n_seq_max);
                     return false;
                 }
 

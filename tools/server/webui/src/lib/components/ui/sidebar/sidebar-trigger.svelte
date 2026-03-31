@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { cn } from '$lib/components/ui/utils.js';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import type { ComponentProps } from 'svelte';
 	import { useSidebar } from './context.svelte.js';
@@ -21,8 +20,10 @@
 	data-sidebar="trigger"
 	data-slot="sidebar-trigger"
 	variant="ghost"
-	size="icon"
-	class={cn('size-7', className)}
+	size="icon-lg"
+	class="rounded-full backdrop-blur-lg {className} md:left-{sidebar.open
+		? 'unset'
+		: '2'} -top-2 -left-2 md:top-0"
 	type="button"
 	onclick={(e) => {
 		onclick?.(e);

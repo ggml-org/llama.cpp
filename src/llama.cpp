@@ -1,5 +1,6 @@
 #include "llama.h"
 
+#include "ggml-cpp.h"
 #include "llama-impl.h"
 
 #include "llama-chat.h"
@@ -12,6 +13,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <cassert>
@@ -363,14 +365,14 @@ static void llama_params_fit_impl(
             case LAYER_FRACTION_ATTN: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|gate|down).*";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|up|gate_up|down).*";
                 }
                 return patterns[il].c_str();
             }
             case LAYER_FRACTION_UP: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|down).*";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|gate_up|down).*";
                 }
                 return patterns[il].c_str();
             }
@@ -384,7 +386,7 @@ static void llama_params_fit_impl(
             case LAYER_FRACTION_MOE: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate)_(ch|)exps";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate_up|gate)_(ch|)exps";
                 }
                 return patterns[il].c_str();
             }
@@ -478,7 +480,7 @@ static void llama_params_fit_impl(
 
     int64_t global_surplus_cpu_moe = 0;
     if (hp_nex > 0) {
-        const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate)_(ch|)exps"; // matches all MoE tensors
+        const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
         tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
         tensor_buft_overrides[1] = {nullptr, nullptr};
@@ -825,7 +827,8 @@ int64_t llama_time_us(void) {
 }
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
+static int llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
+        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -834,7 +837,8 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.use_direct_io, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
+            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
 
@@ -880,9 +884,29 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 }
 
 static struct llama_model * llama_model_load_from_file_impl(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
         const std::string & path_model,
         std::vector<std::string> & splits,
+        FILE * file,
         struct llama_model_params params) {
+    {
+        int n_sources_defined = 0;
+        if (metadata != nullptr) {
+            n_sources_defined++;
+        }
+        if (!path_model.empty()) {
+            n_sources_defined++;
+        }
+        if (file != nullptr) {
+            n_sources_defined++;
+        }
+        if (n_sources_defined != 1) {
+            LLAMA_LOG_ERROR("%s: exactly one out metadata, path_model, and file must be defined\n", __func__);
+            return nullptr;
+        }
+    }
     ggml_time_init();
 
     if (!params.vocab_only && ggml_backend_reg_count() == 0) {
@@ -1003,7 +1027,7 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(path_model, splits, *model, params);
+    const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -1019,6 +1043,18 @@ static struct llama_model * llama_model_load_from_file_impl(
     return model;
 }
 
+struct llama_model * llama_model_init_from_user(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
+        struct llama_model_params params) {
+    GGML_ASSERT(metadata != nullptr);
+    std::string path_model;
+    std::vector<std::string> splits = {};
+    params.use_mmap = false;
+    params.use_extra_bufts = false;
+    return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
+}
 // deprecated
 struct llama_model * llama_load_model_from_file(
         const char * path_model,
@@ -1030,7 +1066,7 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params params) {
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(path_model, splits, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
 }
 
 struct llama_model * llama_model_load_from_splits(
@@ -1046,11 +1082,21 @@ struct llama_model * llama_model_load_from_splits(
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(splits.front(), splits, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, splits.front(), splits, /*file*/ nullptr, params);
+}
+
+struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_model_params params) {
+    if (!file) {
+        LLAMA_LOG_ERROR("%s: file is NULL\n", __func__);
+        return nullptr;
+    }
+    std::string path_model;
+    std::vector<std::string> splits = {};
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, file, params);
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
-    llama_model_saver ms(*model);
+    llama_model_saver ms(model);
     ms.add_kv_from_model();
     ms.add_tensors_from_model();
     ms.save(path_model);

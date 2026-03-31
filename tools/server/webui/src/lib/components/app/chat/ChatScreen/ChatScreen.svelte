@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import {
-		ChatForm,
+		ChatScreenForm,
 		ChatScreenHeader,
 		ChatMessages,
 		ChatScreenProcessingInfo,
@@ -12,15 +12,13 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import {
-		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
-		AUTO_SCROLL_INTERVAL,
-		INITIAL_SCROLL_DELAY
-	} from '$lib/constants/auto-scroll';
+	import { KeyboardKey } from '$lib/enums';
+	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import {
 		chatStore,
 		errorDialog,
 		isLoading,
+		isChatStreaming,
 		isEditing,
 		getAddFilesHandler
 	} from '$lib/stores/chat.svelte';
@@ -34,6 +32,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
@@ -42,16 +41,13 @@
 	let { showCenteredEmpty = false } = $props();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
-	let lastScrollTop = $state(0);
-	let scrollInterval: ReturnType<typeof setInterval> | undefined;
-	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-	let userScrolledUp = $state(false);
+
+	const autoScroll = createAutoScrollController({ isColumnReverse: true });
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -71,6 +67,8 @@
 
 	let emptyFileNames = $state<string[]>([]);
 
+	let initialMessage = $state('');
+
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
@@ -79,7 +77,7 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 
-	let isCurrentConversationLoading = $derived(isLoading());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
 	let isRouter = $derived(isRouterMode());
 
@@ -213,7 +211,11 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
+		if (
+			isCtrlOrCmd &&
+			event.shiftKey &&
+			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
+		) {
 			event.preventDefault();
 			if (activeConversation()) {
 				showDeleteDialog = true;
@@ -221,38 +223,22 @@
 		}
 	}
 
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+
+		await chatStore.addSystemPrompt();
+	}
+
 	function handleScroll() {
-		if (disableAutoScroll || !chatScrollContainer) return;
-
-		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
-		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
-
-		if (scrollTop < lastScrollTop && !isAtBottom) {
-			userScrolledUp = true;
-			autoScrollEnabled = false;
-		} else if (isAtBottom && userScrolledUp) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
-
-		if (scrollTimeout) {
-			clearTimeout(scrollTimeout);
-		}
-
-		scrollTimeout = setTimeout(() => {
-			if (isAtBottom) {
-				userScrolledUp = false;
-				autoScrollEnabled = true;
-			}
-		}, AUTO_SCROLL_INTERVAL);
-
-		lastScrollTop = scrollTop;
+		autoScroll.handleScroll();
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const result = files
-			? await parseFilesToMessageExtras(files, activeModelId ?? undefined)
+		const plainFiles = files ? $state.snapshot(files) : undefined;
+		const result = plainFiles
+			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
 			: undefined;
 
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
@@ -269,12 +255,9 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		if (!disableAutoScroll) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
+		autoScroll.enable();
 		await chatStore.sendMessage(message, extras);
-		scrollChatToBottom();
+		autoScroll.scrollToBottom();
 
 		return true;
 	}
@@ -324,43 +307,32 @@
 		}
 	}
 
-	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
-		if (disableAutoScroll) return;
-
-		chatScrollContainer?.scrollTo({
-			top: chatScrollContainer?.scrollHeight,
-			behavior
-		});
-	}
-
 	afterNavigate(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			autoScroll.enable();
 		}
 	});
 
 	onMount(() => {
+		autoScroll.startObserving();
+
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			autoScroll.enable();
+		}
+
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			uploadedFiles = pendingDraft.files;
 		}
 	});
 
 	$effect(() => {
-		if (disableAutoScroll) {
-			autoScrollEnabled = false;
-			if (scrollInterval) {
-				clearInterval(scrollInterval);
-				scrollInterval = undefined;
-			}
-			return;
-		}
+		autoScroll.setContainer(chatScrollContainer);
+	});
 
-		if (isCurrentConversationLoading && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
-		} else if (scrollInterval) {
-			clearInterval(scrollInterval);
-			scrollInterval = undefined;
-		}
+	$effect(() => {
+		autoScroll.setDisabled(disableAutoScroll);
 	});
 </script>
 
@@ -376,7 +348,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
+		class="flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -384,58 +356,59 @@
 		onscroll={handleScroll}
 		role="main"
 	>
-		<ChatMessages
-			class="mb-16 md:mb-24"
-			messages={activeMessages()}
-			onUserAction={() => {
-				if (!disableAutoScroll) {
-					userScrolledUp = false;
-					autoScrollEnabled = true;
-					scrollChatToBottom();
-				}
-			}}
-		/>
+		<div class="flex flex-col">
+			<ChatMessages
+				class="mb-16 md:mb-24"
+				messages={activeMessages()}
+				onUserAction={() => {
+					autoScroll.enable();
+					autoScroll.scrollToBottom();
+				}}
+			/>
 
-		<div
-			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
-			in:slide={{ duration: 150, axis: 'y' }}
-		>
-			<ChatScreenProcessingInfo />
+			<div
+				class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto"
+				in:slide={{ duration: 150, axis: 'y' }}
+			>
+				<ChatScreenProcessingInfo />
 
-			{#if hasPropsError}
-				<div
-					class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
-					in:fly={{ y: 10, duration: 250 }}
-				>
-					<Alert.Root variant="destructive">
-						<AlertTriangle class="h-4 w-4" />
-						<Alert.Title class="flex items-center justify-between">
-							<span>Server unavailable</span>
-							<button
-								onclick={() => serverStore.fetch()}
-								disabled={isServerLoading}
-								class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
-							>
-								<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-								{isServerLoading ? 'Retrying...' : 'Retry'}
-							</button>
-						</Alert.Title>
-						<Alert.Description>{serverError()}</Alert.Description>
-					</Alert.Root>
+				{#if hasPropsError}
+					<div
+						class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
+						in:fly={{ y: 10, duration: 250 }}
+					>
+						<Alert.Root variant="destructive">
+							<AlertTriangle class="h-4 w-4" />
+							<Alert.Title class="flex items-center justify-between">
+								<span>Server unavailable</span>
+								<button
+									onclick={() => serverStore.fetch()}
+									disabled={isServerLoading}
+									class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+								>
+									<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
+									{isServerLoading ? 'Retrying...' : 'Retry'}
+								</button>
+							</Alert.Title>
+							<Alert.Description>{serverError()}</Alert.Description>
+						</Alert.Root>
+					</div>
+				{/if}
+
+				<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
+					<ChatScreenForm
+						disabled={hasPropsError || isEditing()}
+						{initialMessage}
+						isLoading={isCurrentConversationLoading}
+						onFileRemove={handleFileRemove}
+						onFileUpload={handleFileUpload}
+						onSend={handleSendMessage}
+						onStop={() => chatStore.stopGeneration()}
+						onSystemPromptAdd={handleSystemPromptAdd}
+						showHelperText={false}
+						bind:uploadedFiles
+					/>
 				</div>
-			{/if}
-
-			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
-				<ChatForm
-					disabled={hasPropsError || isEditing()}
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => chatStore.stopGeneration()}
-					showHelperText={false}
-					bind:uploadedFiles
-				/>
 			</div>
 		</div>
 	</div>
@@ -454,9 +427,9 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-4 text-3xl font-semibold tracking-tight">llama.cpp</h1>
+				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">llama.cpp</h1>
 
-				<p class="text-lg text-muted-foreground">
+				<p class="text-muted-foreground md:text-lg">
 					{serverStore.props?.modalities?.audio
 						? 'Record audio, type a message '
 						: 'Type a message'} or upload files to get started
@@ -467,8 +440,10 @@
 				<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
 					<Alert.Root variant="destructive">
 						<AlertTriangle class="h-4 w-4" />
+
 						<Alert.Title class="flex items-center justify-between">
 							<span>Server unavailable</span>
+
 							<button
 								onclick={() => serverStore.fetch()}
 								disabled={isServerLoading}
@@ -478,20 +453,23 @@
 								{isServerLoading ? 'Retrying...' : 'Retry'}
 							</button>
 						</Alert.Title>
+
 						<Alert.Description>{serverError()}</Alert.Description>
 					</Alert.Root>
 				</div>
 			{/if}
 
 			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
-				<ChatForm
+				<ChatScreenForm
 					disabled={hasPropsError}
+					{initialMessage}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
-					showHelperText={true}
+					onSystemPromptAdd={handleSystemPromptAdd}
+					showHelperText
 					bind:uploadedFiles
 				/>
 			</div>
@@ -595,7 +573,7 @@
 	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? 'server'}
+	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
 
 <style>

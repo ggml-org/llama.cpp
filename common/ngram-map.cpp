@@ -461,7 +461,7 @@ void common_ngram_map_draft(common_ngram_map & map,
             slot_max = v;
         }
     }
-    // What is sum of the other occurences?
+    // What is sum of the other occurrences?
     uint32_t sum_occur = 0;
     for (int v = 0; v < COMMON_NGRAM_MAX_VALUES; ++v) {
         if (v == slot_max) {

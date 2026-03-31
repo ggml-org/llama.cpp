@@ -49,14 +49,20 @@ sequenceDiagram
     settingsStore->>serverStore: defaultParams
     serverStore-->>settingsStore: {temperature, top_p, top_k, ...}
 
-    settingsStore->>ParamSvc: extractServerDefaults(defaultParams)
-    ParamSvc-->>settingsStore: Record<string, value>
+    loop each SYNCABLE_PARAMETER
+        alt key NOT in userOverrides
+            settingsStore->>settingsStore: config[key] = serverDefault[key]
+            Note right of settingsStore: Non-overridden params adopt server default
+        else key in userOverrides
+            Note right of settingsStore: Keep user value, skip server default
+        end
+    end
 
-    settingsStore->>ParamSvc: mergeWithServerDefaults(config, serverDefaults)
-    Note right of ParamSvc: For each syncable parameter:<br/>- If NOT in userOverrides → use server default<br/>- If in userOverrides → keep user value
-    ParamSvc-->>settingsStore: mergedConfig
+    alt serverStore.props has webuiSettings
+        settingsStore->>settingsStore: Apply webuiSettings from server
+        Note right of settingsStore: Server-provided UI settings<br/>(e.g. showRawOutputSwitch)
+    end
 
-    settingsStore->>settingsStore: config = mergedConfig
     settingsStore->>settingsStore: saveConfig()
     deactivate settingsStore
 
@@ -67,11 +73,18 @@ sequenceDiagram
     UI->>settingsStore: updateConfig(key, value)
     activate settingsStore
     settingsStore->>settingsStore: config[key] = value
-    settingsStore->>settingsStore: userOverrides.add(key)
-    Note right of settingsStore: Mark as user-modified (won't be overwritten by server)
+
+    alt value matches server default for key
+        settingsStore->>settingsStore: userOverrides.delete(key)
+        Note right of settingsStore: Matches server default, remove override
+    else value differs from server default
+        settingsStore->>settingsStore: userOverrides.add(key)
+        Note right of settingsStore: Mark as user-modified (won't be overwritten)
+    end
+
     settingsStore->>settingsStore: saveConfig()
-    settingsStore->>LS: set("llama-config", config)
-    settingsStore->>LS: set("llama-userOverrides", [...userOverrides])
+    settingsStore->>LS: set(CONFIG_LOCALSTORAGE_KEY, config)
+    settingsStore->>LS: set(USER_OVERRIDES_LOCALSTORAGE_KEY, [...userOverrides])
     deactivate settingsStore
 
     UI->>settingsStore: updateMultipleConfig({key1: val1, key2: val2})
@@ -88,10 +101,9 @@ sequenceDiagram
 
     UI->>settingsStore: resetConfig()
     activate settingsStore
-    settingsStore->>settingsStore: config = SETTING_CONFIG_DEFAULT
+    settingsStore->>settingsStore: config = {...SETTING_CONFIG_DEFAULT}
     settingsStore->>settingsStore: userOverrides.clear()
-    settingsStore->>settingsStore: syncWithServerDefaults()
-    Note right of settingsStore: Apply server defaults for syncable params
+    Note right of settingsStore: All params reset to defaults<br/>Next syncWithServerDefaults will adopt server values
     settingsStore->>settingsStore: saveConfig()
     deactivate settingsStore
 
@@ -139,6 +151,6 @@ sequenceDiagram
 
     Note over settingsStore: UI-only (not synced):
     rect rgb(255, 240, 240)
-        Note over settingsStore: systemMessage, custom (JSON)<br/>showStatistics, enableContinueGeneration<br/>autoMicOnEmpty, disableAutoScroll<br/>apiKey, pdfAsImage, disableReasoningFormat
+        Note over settingsStore: systemMessage, custom (JSON)<br/>showStatistics, enableContinueGeneration<br/>autoMicOnEmpty, disableAutoScroll<br/>apiKey, pdfAsImage, disableReasoningParsing, showRawOutputSwitch
     end
 ```

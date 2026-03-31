@@ -1,0 +1,25 @@
+name: "Linux - Setup OpenVINO Toolkit"
+description: "Setup OpenVINO Toolkit for Linux"
+inputs:
+  path:
+    description: "Installation path"
+    required: true
+  version_major:
+    description: "OpenVINO major version (e.g., 2025.3)"
+    required: true
+  version_full:
+    description: "OpenVINO full version (e.g., 2025.3.0.19807.44526285f24)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup OpenVINO Toolkit
+      id: setup
+      uses: ./.github/actions/unarchive-tar
+      with:
+        url: https://storage.openvinotoolkit.org/repositories/openvino/packages/${{ inputs.version_major }}/linux/openvino_toolkit_ubuntu24_${{ inputs.version_full }}_x86_64.tgz
+        path: ${{ inputs.path }}
+        type: z
+        strip: 1
+

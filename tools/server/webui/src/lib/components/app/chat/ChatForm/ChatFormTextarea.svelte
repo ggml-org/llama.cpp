@@ -5,6 +5,7 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		onInput?: () => void;
 		onKeydown?: (event: KeyboardEvent) => void;
 		onPaste?: (event: ClipboardEvent) => void;
 		placeholder?: string;
@@ -14,6 +15,7 @@
 	let {
 		class: className = '',
 		disabled = false,
+		onInput,
 		onKeydown,
 		onPaste,
 		placeholder = 'Ask anything...',
@@ -24,6 +26,7 @@
 
 	onMount(() => {
 		if (textareaElement) {
+			autoResizeTextarea(textareaElement);
 			textareaElement.focus();
 		}
 	});
@@ -48,11 +51,15 @@
 	<textarea
 		bind:this={textareaElement}
 		bind:value
-		class="text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+		class="text-md min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
 		class:cursor-not-allowed={disabled}
+		style="max-height: var(--max-message-height);"
 		{disabled}
 		onkeydown={onKeydown}
-		oninput={(event) => autoResizeTextarea(event.currentTarget)}
+		oninput={(event) => {
+			autoResizeTextarea(event.currentTarget);
+			onInput?.();
+		}}
 		onpaste={onPaste}
 		{placeholder}
 	></textarea>
