@@ -1,0 +1,6 @@
+// iso3_0 K + F16 V flash attention vec kernel instantiation
+#include "../fattn-vec.cuh"
+
+DECL_FATTN_VEC_CASE( 64, GGML_TYPE_ISO3_0, GGML_TYPE_F16);
+DECL_FATTN_VEC_CASE(128, GGML_TYPE_ISO3_0, GGML_TYPE_F16);
+DECL_FATTN_VEC_CASE(256, GGML_TYPE_ISO3_0, GGML_TYPE_F16);

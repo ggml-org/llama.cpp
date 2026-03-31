@@ -1689,22 +1689,21 @@ int llama_context::decode(const llama_batch & batch_inp) {
             n_outputs = n_outputs_new;
         }
 
-        // Deferred quantization: DISABLED — conversion works (5.1x compression)
-        // but CUDA flash attention has no dequantize kernels for our types.
-        // The converted quantized K-cache can't be read by FA during decode.
-        // Need: CUDA FA dequantize template instances for planar3/iso3/planar4/iso4
-        // (same work as Metal FA templates we already built).
-        //
-        // if (ubatch.n_tokens == 1 && memory) {
-        //     auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
-        //     if (kv && kv->convert_deferred_keys()) {
-        //         sched_need_reserve = true;
-        //         sched_reserve();
-        //     }
-        // }
+        // Deferred quantization: convert F16 K-cache to quantized after prefill.
+        if (ubatch.n_tokens == 1 && memory) {
+            auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+            if (kv && kv->convert_deferred_keys()) {
+                fprintf(stderr, "llama_decode: conversion done, re-reserving scheduler...\n");
+                sched_need_reserve = true;
+                sched_reserve();
+                fprintf(stderr, "llama_decode: scheduler re-reserved OK\n");
+            }
+        }
 
+        fprintf(stderr, "llama_decode: process_ubatch n_tokens=%d...\n", ubatch.n_tokens);
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        fprintf(stderr, "llama_decode: process_ubatch done\n");
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module

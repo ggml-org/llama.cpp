@@ -235,10 +235,19 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE(128, type_K, type_V)       \
     FATTN_VEC_CASE(256, type_K, type_V)       \
 
+// Forward declaration for constant initialization
+extern void ggml_cuda_init_planar_iso_constants();
+
 static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_tensor * Q = dst->src[0];
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
+
+    // Initialize rotation constants for planar/iso types
+    if (K->type == GGML_TYPE_PLANAR3_0 || K->type == GGML_TYPE_ISO3_0 ||
+        K->type == GGML_TYPE_PLANAR4_0 || K->type == GGML_TYPE_ISO4_0) {
+        ggml_cuda_init_planar_iso_constants();
+    }
 
 #ifdef GGML_CUDA_FA_ALL_QUANTS
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
@@ -336,6 +345,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO2_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO4_0)
 
+    // PlanarQuant/IsoQuant K with F16 V (deferred quantization)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_PLANAR3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO3_0,    GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_PLANAR4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO4_0,    GGML_TYPE_F16)
+
     GGML_ABORT("fatal error");
 }
 
@@ -421,7 +436,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     if (K->type != V->type) {
         // Allow mixed turbo KV types (any combination of turbo2, turbo3, q8_0)
         auto is_turbo = [](ggml_type t) {
-            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_Q8_0;
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_Q8_0 ||
+                   t == GGML_TYPE_PLANAR3_0 || t == GGML_TYPE_ISO3_0 || t == GGML_TYPE_PLANAR4_0 || t == GGML_TYPE_ISO4_0;
         };
         if (!is_turbo(K->type) || !is_turbo(V->type)) {
             return BEST_FATTN_KERNEL_NONE;

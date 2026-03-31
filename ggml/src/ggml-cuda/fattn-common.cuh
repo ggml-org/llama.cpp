@@ -447,6 +447,142 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turbo4_0(
     return sum;
 }
 
+// ── PlanarQuant3 KQ dot product: Givens inverse rotation + centroid lookup ──
+// Same structure as turbo3 but with per-pair inverse Givens rotation.
+extern __constant__ float d_planar_cos[64];
+extern __constant__ float d_planar_sin[64];
+extern __constant__ float d_iso_qw[32];
+extern __constant__ float d_iso_qx[32];
+extern __constant__ float d_iso_qy[32];
+extern __constant__ float d_iso_qz[32];
+
+static __constant__ float FA_CENTROIDS_3BIT[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+static __constant__ float FA_CENTROIDS_4BIT[16] = {
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+};
+
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_planar3_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_planar3_0 * K = (const block_planar3_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+            const int elem0 = k_KQ * 2;
+            const int ib = elem0 / QK_PLANAR3;
+            const int j0 = elem0 % QK_PLANAR3;
+
+            const float norm = __half2float(K[ib].norm);
+            const uint8_t qs_byte = K[ib].qs[j0/4];
+            const uint8_t sgn_byte = K[ib].signs[j0/8];
+            const int shift = (j0%4)*2;
+            const uint8_t idx0 = ((qs_byte >> shift) & 0x3) | (((sgn_byte >> (j0%8)) & 0x1) << 2);
+            const uint8_t idx1 = ((qs_byte >> (shift+2)) & 0x3) | (((sgn_byte >> (j0%8+1)) & 0x1) << 2);
+
+            float q0 = FA_CENTROIDS_3BIT[idx0];
+            float q1 = FA_CENTROIDS_3BIT[idx1];
+
+            // Inverse Givens rotation
+            int p = (ib * QK_PLANAR3 + j0) / 2;  // global pair index
+            float c = d_planar_cos[p % 64];
+            float s = d_planar_sin[p % 64];
+            float2 kv;
+            kv.x = ( c * q0 + s * q1) * norm;
+            kv.y = (-s * q0 + c * q1) * norm;
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif
+        }
+    }
+    return sum;
+}
+
+// ── IsoQuant3 KQ dot product: quaternion inverse rotation ──
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_iso3_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_iso3_0 * K = (const block_iso3_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+            const int elem0 = k_KQ * 2;
+            const int ib = elem0 / QK_ISO3;
+            const int j0 = elem0 % QK_ISO3;
+
+            const float norm = __half2float(K[ib].norm);
+
+            // Need full 4-element quaternion group
+            int g = (ib * QK_ISO3 + j0) / 4;  // global group index
+            int offset = j0 % 4;
+
+            // Unpack all 4 elements of the group
+            int base = (g % 32) * 4;  // within block
+            float qvals[4];
+            for (int c = 0; c < 4; c++) {
+                int jj = base + c;
+                uint8_t low = (K[ib].qs[jj/4] >> ((jj%4)*2)) & 0x3;
+                uint8_t hi = (K[ib].signs[jj/8] >> (jj%8)) & 0x1;
+                qvals[c] = FA_CENTROIDS_3BIT[low | (hi << 2)];
+            }
+
+            // Inverse quaternion
+            int qg = g % 32;
+            float qw = d_iso_qw[qg], qx = -d_iso_qx[qg], qy = -d_iso_qy[qg], qz = -d_iso_qz[qg];
+            float rw = qw*qvals[0] - qx*qvals[1] - qy*qvals[2] - qz*qvals[3];
+            float rx = qw*qvals[1] + qx*qvals[0] + qy*qvals[3] - qz*qvals[2];
+            float ry = qw*qvals[2] - qx*qvals[3] + qy*qvals[0] + qz*qvals[1];
+            float rz = qw*qvals[3] + qx*qvals[2] - qy*qvals[1] + qz*qvals[0];
+
+            float results[4] = {rw, rx, ry, rz};
+            float2 kv;
+            kv.x = results[offset] * norm;
+            kv.y = results[offset + 1] * norm;
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif
+        }
+    }
+    return sum;
+}
+
+// Planar4 and Iso4 use same pattern but with 4-bit centroids
+// For now, since V is F16, we only need K-side for planar3/iso3.
+// planar4/iso4 can reuse turbo4's vec_dot if block layout is identical.
+
 template <typename Tds, int ni>
 static __device__ __forceinline__ void quantize_q8_1_to_shared(
     const float * __restrict__ x, const float scale, int * __restrict__ yq32, void * __restrict__ yds) {
@@ -938,6 +1074,12 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_turbo2_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBO4_0) {
         return vec_dot_fattn_vec_KQ_turbo4_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_PLANAR3_0) {
+        return vec_dot_fattn_vec_KQ_planar3_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_ISO3_0) {
+        return vec_dot_fattn_vec_KQ_iso3_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_PLANAR4_0 || type_K == GGML_TYPE_ISO4_0) {
+        return vec_dot_fattn_vec_KQ_turbo4_0<D, nthreads>;  // same block layout as turbo4
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
