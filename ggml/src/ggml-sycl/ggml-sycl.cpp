@@ -5564,8 +5564,10 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         size_t per_expert_bytes = g_moe_expert_total_bytes / n_expert_tensors;
 
         // Estimate popular experts: 30% of total (at least 1)
-        size_t popular_count      = std::max(size_t(1), static_cast<size_t>(g_moe_n_experts_total) * 30 / 100);
-        size_t expert_group_bytes = per_expert_bytes * 3;  // gate + up + down
+        size_t popular_count = std::max(size_t(1), static_cast<size_t>(g_moe_n_experts_total) * 30 / 100);
+        // per_expert_bytes already includes all tensor types (gate + up + down + norm)
+        // since g_moe_expert_total_bytes sums ALL _exps tensors
+        size_t expert_group_bytes = per_expert_bytes;
         size_t raw_reserve        = popular_count * expert_group_bytes * static_cast<size_t>(g_model_n_layer);
 
         // Cap at 60% of the unified cache budget for this device
@@ -5576,8 +5578,10 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
             ggml_sycl::unified_cache_add_runtime_bytes(device, capped_reserve,
                                                        ggml_sycl::runtime_category::EXPERT_CACHE);
             g_moe_expert_vram_reserve = capped_reserve;
-            GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB (%zu popular/%d total experts, %u layers)\n",
-                          capped_reserve / (1024.0 * 1024.0), popular_count, g_moe_n_experts_total, g_model_n_layer);
+            GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB "
+                          "(%zu popular experts x %u layers, %.1f MB/expert)\n",
+                          capped_reserve / (1024.0 * 1024.0), popular_count,
+                          g_model_n_layer, per_expert_bytes / (1024.0 * 1024.0));
         }
     }
 
