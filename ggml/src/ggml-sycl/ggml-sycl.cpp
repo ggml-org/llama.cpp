@@ -5598,51 +5598,11 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         }
     }
 
-    // Reserve VRAM budget for MoE expert working set so KV allocation
-    // doesn't consume space needed for hot experts.
+    // NOTE: MoE expert VRAM reserve is registered in ggml_sycl_preload_model_weights()
+    // AFTER the unified cache is created.  Registering here (before cache creation)
+    // gets absorbed into the cache's runtime_reserved_baseline and has no effect
+    // on available_for_compute().
     g_moe_expert_vram_reserve = 0;
-    if (g_moe_expert_total_bytes > 0 && g_moe_n_experts_total > 0 && g_model_n_layer > 0) {
-        int    device           = g_tensor_inventory_device;
-        size_t n_expert_tensors = static_cast<size_t>(g_moe_n_experts_total) * static_cast<size_t>(g_model_n_layer);
-        size_t per_expert_bytes = g_moe_expert_total_bytes / n_expert_tensors;
-
-        // Estimate popular experts: 30% of total (at least 1)
-        size_t popular_count = std::max(size_t(1), static_cast<size_t>(g_moe_n_experts_total) * 30 / 100);
-        // per_expert_bytes already includes all tensor types (gate + up + down + norm)
-        // since g_moe_expert_total_bytes sums ALL _exps tensors
-        size_t expert_group_bytes = per_expert_bytes;
-        size_t raw_reserve        = popular_count * expert_group_bytes * static_cast<size_t>(g_model_n_layer);
-
-        // Cap at 60% of estimated VRAM budget.  The unified cache may not exist
-        // yet at inventory time, so compute the budget from device memory directly
-        // (same formula the cache uses: budget_pct% of total minus headroom).
-        size_t free_vram = 0, total_vram = 0;
-        ggml_backend_sycl_get_device_memory(device, &free_vram, &total_vram);
-        int budget_pct = 90;
-        const char * pct_env = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
-        if (pct_env) {
-            budget_pct = std::max(10, std::min(100, std::atoi(pct_env)));
-        }
-        const size_t headroom = std::max(size_t(256) << 20, total_vram / 10);
-        const size_t budget   = (total_vram > headroom)
-            ? (total_vram - headroom) * static_cast<size_t>(budget_pct) / 100
-            : 0;
-        GGML_LOG_INFO("[SYCL-BUDGET] MoE VRAM budget: %.1f MB "
-                      "(total=%.1f MB, headroom=%.1f MB, pct=%d%%)\n",
-                      budget / (1024.0 * 1024.0), total_vram / (1024.0 * 1024.0),
-                      headroom / (1024.0 * 1024.0), budget_pct);
-        size_t capped_reserve = std::min(raw_reserve, budget * 60 / 100);
-
-        if (capped_reserve > 0) {
-            ggml_sycl::unified_cache_add_runtime_bytes(device, capped_reserve,
-                                                       ggml_sycl::runtime_category::EXPERT_CACHE);
-            g_moe_expert_vram_reserve = capped_reserve;
-            GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB "
-                          "(%zu popular experts x %u layers, %.1f MB/expert)\n",
-                          capped_reserve / (1024.0 * 1024.0), popular_count,
-                          g_model_n_layer, per_expert_bytes / (1024.0 * 1024.0));
-        }
-    }
 
     // Check if tiered mode should be enabled based on VRAM budget
     size_t free_mem = 0, total_mem = 0;
@@ -10707,6 +10667,35 @@ static void ggml_sycl_preload_model_weights() {
                       dense_cached, dense_failed, moe_cached, moe_failed,
                       total_bytes / (1024.0f * 1024.0f), (long long) elapsed,
                       elapsed > 0 ? (total_bytes / (1024.0 * 1024.0 * 1024.0)) / (elapsed / 1000.0) : 0.0);
+
+        // Register MoE expert VRAM reserve AFTER cache creation.
+        // Must happen here (not in set_tensor_inventory) because the unified cache
+        // absorbs pre-existing g_runtime_reserved_bytes into its baseline at creation
+        // time — reserves registered before the cache is created have no effect on
+        // available_for_compute().  The cache is now created (by ensure_cached_layout
+        // calls above), so this reserve will properly reduce the budget seen by KV tiering.
+        if (g_moe_expert_total_bytes > 0 && g_moe_n_experts_total > 0 && g_model_n_layer > 0) {
+            const int    device           = g_tensor_inventory_device;
+            const size_t n_expert_tensors = static_cast<size_t>(g_moe_n_experts_total) * static_cast<size_t>(g_model_n_layer);
+            const size_t per_expert_bytes = g_moe_expert_total_bytes / n_expert_tensors;
+            const size_t popular_count    = std::max(size_t(1), static_cast<size_t>(g_moe_n_experts_total) * 30 / 100);
+            // per_expert_bytes already includes all tensor types (gate + up + down + norm)
+            const size_t raw_reserve      = popular_count * per_expert_bytes * static_cast<size_t>(g_model_n_layer);
+            // Cap at 60% of cache budget (cache exists now, so total_managed is valid)
+            const size_t budget           = ggml_sycl::unified_cache_total_managed(device);
+            const size_t capped_reserve   = std::min(raw_reserve, budget * 60 / 100);
+
+            if (capped_reserve > 0) {
+                ggml_sycl::unified_cache_add_runtime_bytes(device, capped_reserve,
+                                                           ggml_sycl::runtime_category::EXPERT_CACHE);
+                g_moe_expert_vram_reserve = capped_reserve;
+                GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB "
+                              "(%zu popular experts x %u layers, %.1f MB/expert, budget=%.1f MB)\n",
+                              capped_reserve / (1024.0 * 1024.0), popular_count,
+                              g_model_n_layer, per_expert_bytes / (1024.0 * 1024.0),
+                              budget / (1024.0 * 1024.0));
+            }
+        }
         return;
     }
 
