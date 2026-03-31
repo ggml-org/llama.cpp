@@ -287,6 +287,47 @@ et_barrier_raw(uint32_t flb, uint32_t fcc, uint32_t thread_count,
     return shire_barrier(flb, fcc, thread_count, mask_t0, mask_t1);
 }
 
+// One-way semaphore between harts (non-blocking post, blocking wait).
+//
+// et_sem_post(): increment the partner hart's semaphore. Non-blocking.
+//   the caller continues immediately. Multiple posts accumulate.
+//
+// et_sem_wait(): block until the semaphore is non-zero, then decrement it.
+//
+// Backed by hardware FCC (Flow Control Credit) counters. Uses FCC 0 for
+// ET_BARRIER_MINION scope. Counters are per-hart private, so both harts
+// can post/wait on the same scope independently.
+//
+// Must not be mixed with et_barrier() of the same scope in the
+// same kernel (shared FCC channel).
+static inline void __attribute__((always_inline))
+et_sem_post(et_barrier_scope_t scope)
+{
+    if (scope == ET_BARRIER_MINION) {
+        uint64_t hart_id = get_hart_id();
+        uint32_t local_minion = (hart_id >> 1) & 0x1F;
+        uint32_t mask = 1u << local_minion;
+        uint64_t shire_id = get_shire_id();
+
+        if (hart_id & 1) {
+            // Hart 1 → hart 0
+            fcc_send(shire_id, THREAD_0, FCC_0, mask);
+        } else {
+            // Hart 0 → hart 1
+            fcc_send(shire_id, THREAD_1, FCC_0, mask);
+        }
+    }
+}
+
+// Block until a post from et_sem_post() is available, then consume it.
+static inline void __attribute__((always_inline))
+et_sem_wait(et_barrier_scope_t scope)
+{
+    if (scope == ET_BARRIER_MINION) {
+        fcc_consume(FCC_0);
+    }
+}
+
 //******************************************************************************
 // Tensor Engine Wait & Error Macros
 //
