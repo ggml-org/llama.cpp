@@ -165,9 +165,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_set_rows(ggml_me
     char base[256];
     char name[256];
 
-    // iso4/planar4 reuse turbo4 set_rows kernel (same block format + WHT rotation)
+    // iso4 reuses turbo4 set_rows; planar4 has its own Givens kernel
     const char * dst_name = ggml_type_name(tdst);
-    if (tdst == GGML_TYPE_ISO4_0 || tdst == GGML_TYPE_PLANAR4_0) {
+    if (tdst == GGML_TYPE_ISO4_0) {
         dst_name = "turbo4";
     }
 

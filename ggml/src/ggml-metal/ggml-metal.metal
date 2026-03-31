@@ -7250,18 +7250,97 @@ template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk576_dv512")]] kernel f
 
 
 
+constant float planar_centroids_3bit[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+
+// Rotation parameters (seed=42, 64 cos/sin pairs for d=128)
+constant float planar_cos_64[64] = {
+    -0.9095053397f, 0.1535578452f, -0.8537489227f, -0.6827218011f, -0.4249387949f, 0.9864510046f, 0.9906673944f, 0.5752363372f,
+    -0.9866459035f, 0.9878848090f, -0.6215683804f, -0.9835597698f, 0.8777263755f, -0.4624640047f, 0.2843135922f, -0.7739960698f,
+    0.2385234222f, 0.9121914932f, -0.8815003943f, -0.2639699512f, -0.5517087300f, -0.9035294557f, -0.8520543188f, -0.5600635985f,
+    -0.7667286376f, -0.9877949369f, -0.9781949787f, -0.9953372831f, -0.8622053901f, -0.7382118186f, 0.9136037642f, -0.2558504503f,
+    -0.8541000475f, -0.6159335408f, 0.9861256679f, -0.6758560284f, 0.4249571682f, -0.6219544719f, 0.9130573430f, -0.5948161096f,
+    0.5759782996f, 0.9729901203f, 0.6535998325f, 0.9222195491f, -0.7668084044f, 0.5116178563f, -0.7848786574f, 0.9902111051f,
+    0.1997167840f, 0.7173003220f, -0.9999998006f, -0.9557868691f, 0.5594852693f, -0.9980111824f, 0.9782398557f, -0.9150004329f,
+    -0.4084754305f, 0.0071549185f, 0.9558482753f, -0.0971921648f, -0.9469334002f, 0.9999492419f, 0.6100589016f, 0.0350818915f,
+};
+constant float planar_sin_64[64] = {
+    -0.4156922383f, 0.9881396603f, 0.5206849114f, -0.7306784124f, -0.9052220836f, 0.1640561354f, 0.1363015542f, 0.8179872593f,
+    0.1628798979f, 0.1551889303f, 0.7833599099f, -0.1805828875f, -0.4791621957f, 0.8866380571f, -0.9587313395f, 0.6331904010f,
+    -0.9711367448f, 0.4097641756f, 0.4721832852f, -0.9645309040f, 0.8340368561f, 0.4285259884f, 0.5234533769f, 0.8284496156f,
+    0.6419713361f, -0.1557599517f, -0.2076886701f, 0.0964556523f, 0.5065588468f, -0.6745689815f, -0.4066056591f, -0.9667163736f,
+    0.5201087471f, -0.7877981171f, 0.1660005034f, -0.7370336688f, 0.9052134584f, 0.7830534049f, -0.4078312009f, -0.8038618014f,
+    0.8174649829f, -0.2308467584f, -0.7568403127f, -0.3866666566f, 0.6418760557f, -0.8592131104f, 0.6196494922f, 0.1395778183f,
+    0.9798536657f, 0.6967641265f, -0.0006314605f, 0.2940603015f, 0.8288402943f, -0.0630371303f, 0.2074771907f, 0.4034528570f,
+    0.9127693152f, -0.9999744032f, 0.2938606379f, 0.9952656344f, 0.3214298299f, 0.0100754012f, -0.7923560668f, -0.9993844410f,
+};
+
+
 // ===== iso4 and planar4: aliases for turbo4 dequantize (same block layout) =====
 // The CPU quantize path uses turbo4's WHT rotation for both.
 // Custom Metal set_rows kernels with quaternion/Givens rotation are future work.
 
+// planar4 dequantize: nibble unpack → centroid lookup → inverse Givens rotation
 template <typename type4x4>
 void dequantize_planar4_0(device const block_planar4_0 * xb, short il, thread type4x4 & reg) {
-    dequantize_turbo4_0(xb, il, reg);
+    const float norm = float(xb->norm);
+    const int base_elem = il * 16;
+    float4x4 reg_f;
+
+    for (int g = 0; g < 4; g++) {
+        float4 raw;
+        for (int k = 0; k < 4; k++) {
+            const int j = base_elem + g * 4 + k;
+            uint8_t idx = (xb->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
+            raw[k] = turbo_centroids_4bit[idx];
+        }
+
+        // Inverse Givens rotation on pairs
+        int pair0 = (base_elem + g * 4) / 2;
+        int pair1 = pair0 + 1;
+
+        float c0 = planar_cos_64[pair0], s0 = planar_sin_64[pair0];
+        float c1 = planar_cos_64[pair1], s1 = planar_sin_64[pair1];
+
+        float f0 =  c0 * raw[0] + s0 * raw[1];
+        float f1 = -s0 * raw[0] + c0 * raw[1];
+        float f2 =  c1 * raw[2] + s1 * raw[3];
+        float f3 = -s1 * raw[2] + c1 * raw[3];
+
+        reg_f[g] = float4(f0 * norm, f1 * norm, f2 * norm, f3 * norm);
+    }
+    reg = (type4x4) reg_f;
 }
 
 template <typename type4>
 void dequantize_planar4_0_t4(device const block_planar4_0 * xb, short il, thread type4 & reg) {
-    dequantize_turbo4_0_t4(xb, il, reg);
+    const float norm = float(xb->norm);
+    const device uint8_t * qs = xb->qs + il * 2;
+    const uint8_t qb0 = qs[0];
+    const uint8_t qb1 = qs[1];
+
+    float4 raw = float4(
+        turbo_centroids_4bit[(qb0     ) & 0xF],
+        turbo_centroids_4bit[(qb0 >> 4) & 0xF],
+        turbo_centroids_4bit[(qb1     ) & 0xF],
+        turbo_centroids_4bit[(qb1 >> 4) & 0xF]
+    );
+
+    // Inverse Givens rotation
+    int pair0 = il * 2;  // each il covers 4 elements = 2 pairs
+    int pair1 = pair0 + 1;
+
+    float c0 = planar_cos_64[pair0], s0 = planar_sin_64[pair0];
+    float c1 = planar_cos_64[pair1], s1 = planar_sin_64[pair1];
+
+    float f0 =  c0 * raw[0] + s0 * raw[1];
+    float f1 = -s0 * raw[0] + c0 * raw[1];
+    float f2 =  c1 * raw[2] + s1 * raw[3];
+    float f3 = -s1 * raw[2] + c1 * raw[3];
+
+    reg = (type4) float4(f0 * norm, f1 * norm, f2 * norm, f3 * norm);
 }
 
 template <typename type4x4>
@@ -7486,32 +7565,6 @@ kernel void kernel_set_rows_iso3(
 // Same block layout as turbo3, but inverse rotation is per-pair Givens.
 // Much simpler than WHT: only 4 FMAs per pair, no full-block dependency.
 
-constant float planar_centroids_3bit[8] = {
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
-};
-
-// Rotation parameters (seed=42, 64 cos/sin pairs for d=128)
-constant float planar_cos_64[64] = {
-    -0.9095053397f, 0.1535578452f, -0.8537489227f, -0.6827218011f, -0.4249387949f, 0.9864510046f, 0.9906673944f, 0.5752363372f,
-    -0.9866459035f, 0.9878848090f, -0.6215683804f, -0.9835597698f, 0.8777263755f, -0.4624640047f, 0.2843135922f, -0.7739960698f,
-    0.2385234222f, 0.9121914932f, -0.8815003943f, -0.2639699512f, -0.5517087300f, -0.9035294557f, -0.8520543188f, -0.5600635985f,
-    -0.7667286376f, -0.9877949369f, -0.9781949787f, -0.9953372831f, -0.8622053901f, -0.7382118186f, 0.9136037642f, -0.2558504503f,
-    -0.8541000475f, -0.6159335408f, 0.9861256679f, -0.6758560284f, 0.4249571682f, -0.6219544719f, 0.9130573430f, -0.5948161096f,
-    0.5759782996f, 0.9729901203f, 0.6535998325f, 0.9222195491f, -0.7668084044f, 0.5116178563f, -0.7848786574f, 0.9902111051f,
-    0.1997167840f, 0.7173003220f, -0.9999998006f, -0.9557868691f, 0.5594852693f, -0.9980111824f, 0.9782398557f, -0.9150004329f,
-    -0.4084754305f, 0.0071549185f, 0.9558482753f, -0.0971921648f, -0.9469334002f, 0.9999492419f, 0.6100589016f, 0.0350818915f,
-};
-constant float planar_sin_64[64] = {
-    -0.4156922383f, 0.9881396603f, 0.5206849114f, -0.7306784124f, -0.9052220836f, 0.1640561354f, 0.1363015542f, 0.8179872593f,
-    0.1628798979f, 0.1551889303f, 0.7833599099f, -0.1805828875f, -0.4791621957f, 0.8866380571f, -0.9587313395f, 0.6331904010f,
-    -0.9711367448f, 0.4097641756f, 0.4721832852f, -0.9645309040f, 0.8340368561f, 0.4285259884f, 0.5234533769f, 0.8284496156f,
-    0.6419713361f, -0.1557599517f, -0.2076886701f, 0.0964556523f, 0.5065588468f, -0.6745689815f, -0.4066056591f, -0.9667163736f,
-    0.5201087471f, -0.7877981171f, 0.1660005034f, -0.7370336688f, 0.9052134584f, 0.7830534049f, -0.4078312009f, -0.8038618014f,
-    0.8174649829f, -0.2308467584f, -0.7568403127f, -0.3866666566f, 0.6418760557f, -0.8592131104f, 0.6196494922f, 0.1395778183f,
-    0.9798536657f, 0.6967641265f, -0.0006314605f, 0.2940603015f, 0.8288402943f, -0.0630371303f, 0.2074771907f, 0.4034528570f,
-    0.9127693152f, -0.9999744032f, 0.2938606379f, 0.9952656344f, 0.3214298299f, 0.0100754012f, -0.7923560668f, -0.9993844410f,
-};
 
 // Non-vec dequantize: 16 elements per call (il in {0..NL_PLANAR3-1})
 template <typename type4x4>
@@ -11895,6 +11948,81 @@ template [[host_name("kernel_set_rows_turbo2_i64")]] kernel set_rows_turbo2_t ke
 template [[host_name("kernel_set_rows_turbo2_i32")]] kernel set_rows_turbo2_t kernel_set_rows_turbo2<int32_t>;
 
 // TurboQuant4 set_rows instantiations (dedicated kernel, 128-element blocks with QJL)
+
+// PlanarQuant 4-bit set_rows: Givens rotation + 16-centroid nibble pack
+template<typename TI>
+kernel void kernel_set_rows_planar4(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI i1 = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+    device block_planar4_0 * dst_row = (device block_planar4_0 *) ((device char *) dst + i1*args.nb1 + i02*args.nb2 + i03*args.nb3);
+    const device float * src_row = (const device float *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    for (int blk = 0; blk < args.nk0; blk++) {
+        const device float * grp_src = src_row + blk * QK_PLANAR4;
+        device block_planar4_0 * dst_blk = &dst_row[blk];
+
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < 128; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < 128; j++) buf[j] *= inv_norm;
+
+        // Forward Givens rotation per pair
+        float rotated[128];
+        for (int p = 0; p < 64; p++) {
+            float c = planar_cos_64[p];
+            float s = planar_sin_64[p];
+            rotated[p*2]     = c * buf[p*2] - s * buf[p*2+1];
+            rotated[p*2 + 1] = s * buf[p*2] + c * buf[p*2+1];
+        }
+
+        // 4-bit quantize + nibble pack
+        for (int j = 0; j < 64; j++) dst_blk->qs[j] = 0;
+
+        float recon_sq = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            float val = rotated[j];
+            // Nearest centroid (binary search on sorted centroids)
+            uint8_t idx = 0;
+            float best_d = abs(val - turbo_centroids_4bit[0]);
+            for (int c = 1; c < 16; c++) {
+                float d = abs(val - turbo_centroids_4bit[c]);
+                if (d < best_d) { best_d = d; idx = c; }
+            }
+            dst_blk->qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
+            recon_sq += turbo_centroids_4bit[idx] * turbo_centroids_4bit[idx];
+        }
+
+        float recon_norm = sqrt(recon_sq);
+        float corrected = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
+        dst_blk->norm = half(corrected);
+        dst_blk->rnorm = half(0.0f);
+    }
+}
+
+typedef decltype(kernel_set_rows_planar4<int64_t>) set_rows_planar4_t;
+template [[host_name("kernel_set_rows_planar4_i64")]] kernel set_rows_planar4_t kernel_set_rows_planar4<int64_t>;
+template [[host_name("kernel_set_rows_planar4_i32")]] kernel set_rows_planar4_t kernel_set_rows_planar4<int32_t>;
+
 typedef decltype(kernel_set_rows_turbo4<int64_t>) set_rows_turbo4_t;
 
 template [[host_name("kernel_set_rows_turbo4_i64")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int64_t>;
