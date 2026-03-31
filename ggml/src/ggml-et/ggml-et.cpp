@@ -846,15 +846,17 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             // Stride requirements: first dimension must be contiguous for all tensors
             if(op->type == GGML_TYPE_F32 && ((op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32)
                     || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16))
-                && op->src[0]->ne[1] % 16 == 0 // m
-                && op->src[0]->ne[0] % 16 == 0 &&  // k
+                && op->ne[0] % 16 == 0 &&          // dst row length for tensor-store path
+                op->src[0]->ne[1] % 16 == 0 &&     // m
+                op->src[0]->ne[0] % 16 == 0 &&     // k
                 ggml_is_contiguous(op->src[0]) &&
                 ggml_is_contiguous(op->src[1])) {
                 // Special path for the FP32 TensorFMA kernel
-                // Limitation - N is free but the other dims must be multiple of 16
+                // Limitation - generic kernels can tolerate non-cache-aligned dst rows
+                // because they publish each output element atomically. The matrix
+                // engine path still uses tiled tensor stores, so keep dst rows aligned.
                 // The m edge is difficult to do because of the 4 conseqtive load hardware limitation
                 // And the k edge is impossible because that is encoded as `stride & 0xFFFFFFFFFFC0ULL` which becomes 0 for stride 16 (4x FP32) :(
-                // Can loosen but no real way to make them free. The n edge is the only free one
                 // FIXME: Right now this overwrites the mul_mat_f32 kernel - whatever. Fix later. Demo code
                 supported = true;
             }
