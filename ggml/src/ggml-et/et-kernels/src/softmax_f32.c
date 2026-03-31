@@ -451,6 +451,29 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
     const int64_t ne02 = src0->ne[2];  // Batch/head dimension
     const int64_t ne03 = src0->ne[3];  // Outer batch dimension
 
+    // Fast path: softmax of a single element is always 1.0
+    // (exp(x) / exp(x) == 1 for any x, regardless of scale/mask/bias)
+    // Skip all ALiBi, mask, and sink setup.
+    //
+    // Each output element is 4 bytes.  A cache line is 64 bytes = 16 floats.
+    // L1 is not coherent across harts, so each thread must own whole cache
+    // lines to avoid cross-hart conflicts.
+    if (ne00 == 1) {
+        const int64_t total_elems = ne01 * ne02 * ne03;
+        const int64_t elems_per_cl = ET_CACHE_LINE_SIZE_BYTES / (int64_t)sizeof(float); // 16
+        const int64_t total_cls = (total_elems + elems_per_cl - 1) / elems_per_cl;
+
+        for (int64_t cl = thread_id; cl < total_cls; cl += num_threads) {
+            const int64_t start = cl * elems_per_cl;
+            int64_t end = start + elems_per_cl;
+            if (end > total_elems) end = total_elems;
+            for (int64_t idx = start; idx < end; idx++) {
+                dst_data[idx] = 1.0f;
+            }
+        }
+        return 0;
+    }
+
     const int64_t ne10 = use_mask ? src1->ne[0] : 0;  // Mask sequence length
     const int64_t ne11 = use_mask ? src1->ne[1] : 0;  // Mask rows
     const int64_t ne12 = use_mask ? src1->ne[2] : 0;  // Mask batch/head dimension
