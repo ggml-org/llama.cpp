@@ -114,6 +114,60 @@ static inline void chunk_transform_ps_8_branchless_mask(
     );
 }
 
+// chunk_transform_ps_8_tail
+//
+// Same as chunk_transform_ps_8_branchless_mask but gates loads, compute,
+// and stores with a caller-supplied m0 mask so that only `count` elements
+// (1-7) are touched.  Used for the last sub-8 chunk of a non-aligned row.
+static inline void chunk_transform_ps_8_tail(
+    float       *tmp8,
+    const float *src,
+    const float *mask,
+    float scale,
+    float slope,
+    unsigned long tail_m0)
+{
+    unsigned long ms;
+    const float zero = 0.0f;
+    const unsigned long mask_load_m0 = (mask != NULL) ? tail_m0 : 0x00ul;
+    const float *mp = (mask != NULL) ? mask : &zero;
+
+    __asm__ volatile (
+        "mova.x.m  %[ms]                \n\t"
+
+        // Broadcast constants with all lanes enabled
+        "mov.m.x   m0, x0, 0xFF         \n\t"
+        "fbc.ps    f10, 0(%[p_scale])   \n\t"
+        "fbc.ps    f11, 0(%[p_slope])   \n\t"
+        "fbc.ps    f1, 0(%[p_zero])    \n\t"
+
+        // Load mask data gated by tail mask
+        "mov.m.x   m0, %[maskm0], 0     \n\t"
+        "flw.ps    f1, 0(%[mp])         \n\t"
+
+        // Load source, compute, and store gated by tail mask
+        "mov.m.x   m0, %[tailm0], 0     \n\t"
+
+        "flw.ps    f0, 0(%[sp])         \n\t"
+        "fmul.ps   f0, f0, f10          \n\t"
+        "fmul.ps   f1, f1, f11          \n\t"
+        "fadd.ps   f0, f0, f1, rne      \n\t"
+        "fsw.ps    f0, 0(%[tp])         \n\t"
+
+        "mova.m.x  %[ms]                \n\t"
+        : [ms] "=&r"(ms)
+        : [tp]      "r"(tmp8),
+          [sp]      "r"(src),
+          [mp]      "r"(mp),
+          [p_zero]  "r"(&zero),
+          [p_scale] "r"(&scale),
+          [p_slope] "r"(&slope),
+          [maskm0]  "r"(mask_load_m0),
+          [tailm0]  "r"(tail_m0)
+        : "f0", "f1", "f10", "f11", "memory"
+    );
+}
+
 // softmax_pass1_range
 //
 // Computes the numerically-stable softmax scan over a sub-range of a row.
@@ -166,9 +220,68 @@ static inline softmax_params_t softmax_pass1_range(
         : "f20", "f21", "f22", "f23"
     );
 
+    const int aligned_end = begin + ((end - begin) & ~7);
+
+    // Process full 8-element chunks
     int i = begin;
-    for (; i < end; i += 8) {
+    for (; i < aligned_end; i += 8) {
         chunk_transform_ps_8_branchless_mask(tmp, src + i, mask ? (mask + i) : NULL, scale, slope);
+
+        uint8_t cur_mask = 0;
+        for (int j = 0; j < 8; ++j) {
+            if (softmax_lane_is_valid(tmp[j])) {
+                cur_mask |= (uint8_t)(1u << j);
+            }
+        }
+
+        const uint8_t init_mask = (uint8_t)(cur_mask & ~valid_mask);
+        const uint8_t upd_mask  = (uint8_t)(cur_mask &  valid_mask);
+
+        if (init_mask || upd_mask) {
+            __asm__ volatile (
+                "flw.ps    f0, 0(%[p_tmp])       \n\t"
+
+                "mov.m.x   m0, %[initm], 0       \n\t"
+                "fcmovm.ps f20, f0,  f20         \n\t"
+                "fcmovm.ps f21, f22, f21         \n\t"
+
+                "mov.m.x   m0, %[updm], 0        \n\t"
+                "fmax.ps   f1, f20, f0           \n\t"
+
+                "fsub.ps   f2, f20, f1, rne      \n\t"
+                "fmul.ps   f2, f2,  f23          \n\t"
+                "fexp.ps   f2, f2                \n\t"
+
+                "fsub.ps   f3, f0,  f1, rne      \n\t"
+                "fmul.ps   f3, f3,  f23          \n\t"
+                "fexp.ps   f3, f3                \n\t"
+
+                "fmul.ps   f21, f21, f2          \n\t"
+                "fadd.ps   f21, f21, f3, rne     \n\t"
+                "fcmovm.ps f20, f1,  f20         \n\t"
+
+                "mov.m.x   m0, x0, 0xFF          \n\t"
+                :
+                : [p_tmp] "r"(tmp),
+                  [initm] "r"((unsigned long)init_mask),
+                  [updm]  "r"((unsigned long)upd_mask)
+                : "f0", "f1", "f2", "f3", "memory"
+            );
+
+            valid_mask |= cur_mask;
+        }
+    }
+
+    // Tail chunk: m0-gated load/compute/store for remaining 1-7 elements
+    if (i < end) {
+        const unsigned long tail_m0 = (1ul << (end - i)) - 1;
+
+        // Fill tmp with NaN so invalid lanes fail softmax_lane_is_valid
+        for (int j = 0; j < 8; j++) {
+            tmp[j] = __builtin_nanf("");
+        }
+
+        chunk_transform_ps_8_tail(tmp, src + i, mask ? (mask + i) : NULL, scale, slope, tail_m0);
 
         uint8_t cur_mask = 0;
         for (int j = 0; j < 8; ++j) {
@@ -308,6 +421,8 @@ static inline void softmax_pass2_range(
         : "f10", "f12", "f13"
     );
 
+    const int aligned_end = begin + ((end - begin) & ~7);
+
     if (mask != NULL) {
         __asm__ volatile (
             "fbc.ps    f11, 0(%[p_sl2]) \n\t"
@@ -316,7 +431,7 @@ static inline void softmax_pass2_range(
             : "f11"
         );
 
-        for (int c = begin; c < end; c += 8) {
+        for (int c = begin; c < aligned_end; c += 8) {
             __asm__ volatile (
                 "flw.ps    f0, 0(%[sp])           \n\t"
                 "flw.ps    f1, 0(%[mp])           \n\t"
@@ -330,8 +445,28 @@ static inline void softmax_pass2_range(
                 : "f0", "f1", "memory"
             );
         }
+
+        // Tail chunk with m0 gating
+        if (aligned_end < end) {
+            const unsigned long tail_m0 = (1ul << (end - aligned_end)) - 1;
+            __asm__ volatile (
+                "mov.m.x   m0, %[tm], 0              \n\t"
+                "flw.ps    f0, 0(%[sp])           \n\t"
+                "flw.ps    f1, 0(%[mp])           \n\t"
+                "fmadd.ps  f0, f0, f10, f12       \n\t"
+                "fmadd.ps  f0, f1, f11, f0        \n\t"
+                "fexp.ps   f0, f0                 \n\t"
+                "fmul.ps   f0, f0, f13            \n\t"
+                "fsw.ps    f0, 0(%[dp])           \n\t"
+                "mov.m.x   m0, x0, 0xFF           \n\t"
+                :
+                : [sp] "r"(src + aligned_end), [mp] "r"(mask + aligned_end),
+                  [dp] "r"(dst + aligned_end), [tm] "r"(tail_m0)
+                : "f0", "f1", "memory"
+            );
+        }
     } else {
-        for (int c = begin; c < end; c += 8) {
+        for (int c = begin; c < aligned_end; c += 8) {
             __asm__ volatile (
                 "flw.ps    f0, 0(%[sp])           \n\t"
                 "fmadd.ps  f0, f0, f10, f12       \n\t"
@@ -340,6 +475,24 @@ static inline void softmax_pass2_range(
                 "fsw.ps    f0, 0(%[dp])           \n\t"
                 :
                 : [sp] "r"(src + c), [dp] "r"(dst + c)
+                : "f0", "memory"
+            );
+        }
+
+        // Tail chunk with m0 gating
+        if (aligned_end < end) {
+            const unsigned long tail_m0 = (1ul << (end - aligned_end)) - 1;
+            __asm__ volatile (
+                "mov.m.x   m0, %[tm], 0              \n\t"
+                "flw.ps    f0, 0(%[sp])           \n\t"
+                "fmadd.ps  f0, f0, f10, f12       \n\t"
+                "fexp.ps   f0, f0                 \n\t"
+                "fmul.ps   f0, f0, f13            \n\t"
+                "fsw.ps    f0, 0(%[dp])           \n\t"
+                "mov.m.x   m0, x0, 0xFF           \n\t"
+                :
+                : [sp] "r"(src + aligned_end), [dp] "r"(dst + aligned_end),
+                  [tm] "r"(tail_m0)
                 : "f0", "memory"
             );
         }
@@ -352,7 +505,8 @@ static inline void softmax_pass2_range(
 }
 
 // Single-core row path.
-// Handles arbitrary ne0 by splitting into SIMD-aligned portion + scalar tail.
+// pass1_range and pass2_range handle non-8-aligned cols internally via
+// m0-gated tail chunks, so this function just passes cols directly.
 static inline void compute_softmax_row(
     float *dst,
     const float *src,
@@ -363,31 +517,7 @@ static inline void compute_softmax_row(
     float sink_value,
     bool use_sinks)
 {
-    const int aligned_cols = cols & ~7;  // round down to multiple of 8
-    const int tail = cols - aligned_cols;
-
-    softmax_params_t params = softmax_params_empty();
-    if (aligned_cols > 0) {
-        params = softmax_pass1_range(src, mask, 0, aligned_cols, scale, slope);
-    }
-
-    // Scalar tail: merge remaining elements into the SIMD result
-    for (int i = aligned_cols; i < cols; i++) {
-        float x = src[i] * scale;
-        if (mask != NULL) x += mask[i] * slope;
-        if (!softmax_lane_is_valid(x)) continue;
-
-        if (params.max_val == -INFINITY) {
-            params.max_val = x;
-            params.sum_val = 1.0f;
-        } else if (x > params.max_val) {
-            params.sum_val = params.sum_val * et_expf(params.max_val - x) + 1.0f;
-            params.max_val = x;
-        } else {
-            params.sum_val += et_expf(x - params.max_val);
-        }
-        params.valid_mask = 1;
-    }
+    softmax_params_t params = softmax_pass1_range(src, mask, 0, cols, scale, slope);
 
     if (use_sinks) {
         // For sinks, use fully scalar et_expf to match the reference CPU
@@ -416,20 +546,7 @@ static inline void compute_softmax_row(
         if (!params.valid_mask) {
             return;
         }
-
-        if (aligned_cols > 0) {
-            softmax_pass2_range(dst, src, mask, 0, aligned_cols, scale, slope, params);
-        }
-
-        // Scalar tail for pass 2
-        if (tail > 0) {
-            float inv_sum = et_fdiv(1.0f, params.sum_val);
-            for (int i = aligned_cols; i < cols; i++) {
-                float x = src[i] * scale;
-                if (mask != NULL) x += mask[i] * slope;
-                dst[i] = et_expf(x - params.max_val) * inv_sum;
-            }
-        }
+        softmax_pass2_range(dst, src, mask, 0, cols, scale, slope, params);
     }
 }
 
