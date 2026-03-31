@@ -1205,12 +1205,16 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                                          op->src[1]->type == GGML_TYPE_TURBO3_0 ||
                                          op->src[1]->type == GGML_TYPE_TURBO4_0 ||
                                          op->src[1]->type == GGML_TYPE_PLANAR3_0 ||
-                                         op->src[1]->type == GGML_TYPE_ISO3_0);
+                                         op->src[1]->type == GGML_TYPE_ISO3_0 ||
+                                         op->src[1]->type == GGML_TYPE_PLANAR4_0 ||
+                                         op->src[1]->type == GGML_TYPE_ISO4_0);
                 const bool v_is_turbo = (op->src[2]->type == GGML_TYPE_TURBO2_0 ||
                                          op->src[2]->type == GGML_TYPE_TURBO3_0 ||
                                          op->src[2]->type == GGML_TYPE_TURBO4_0 ||
                                          op->src[2]->type == GGML_TYPE_PLANAR3_0 ||
-                                         op->src[2]->type == GGML_TYPE_ISO3_0);
+                                         op->src[2]->type == GGML_TYPE_ISO3_0 ||
+                                         op->src[2]->type == GGML_TYPE_PLANAR4_0 ||
+                                         op->src[2]->type == GGML_TYPE_ISO4_0);
                 const bool k_is_q8 = (op->src[1]->type == GGML_TYPE_Q8_0);
                 const bool v_is_q8 = (op->src[2]->type == GGML_TYPE_Q8_0);
                 const bool supported = (k_is_turbo && v_is_turbo) ||
@@ -1333,6 +1337,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     case GGML_TYPE_TURBO4_0:
                     case GGML_TYPE_PLANAR3_0:
                     case GGML_TYPE_ISO3_0:
+                    case GGML_TYPE_PLANAR4_0:
+                    case GGML_TYPE_ISO4_0:
                         return true;
                     default:
                         return false;

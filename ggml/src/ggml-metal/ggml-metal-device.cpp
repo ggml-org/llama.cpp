@@ -165,7 +165,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_set_rows(ggml_me
     char base[256];
     char name[256];
 
-    snprintf(base, 256, "kernel_set_rows_%s_%s", ggml_type_name(tdst), ggml_type_name(tidx));
+    // iso4/planar4 reuse turbo4 set_rows kernel (same block format + WHT rotation)
+    const char * dst_name = ggml_type_name(tdst);
+    if (tdst == GGML_TYPE_ISO4_0 || tdst == GGML_TYPE_PLANAR4_0) {
+        dst_name = "turbo4";
+    }
+
+    snprintf(base, 256, "kernel_set_rows_%s_%s", dst_name, ggml_type_name(tidx));
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);

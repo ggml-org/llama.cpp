@@ -7248,6 +7248,35 @@ template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk576_dv512")]] kernel f
 
 
 
+
+
+// ===== iso4 and planar4: aliases for turbo4 dequantize (same block layout) =====
+// The CPU quantize path uses turbo4's WHT rotation for both.
+// Custom Metal set_rows kernels with quaternion/Givens rotation are future work.
+
+template <typename type4x4>
+void dequantize_planar4_0(device const block_planar4_0 * xb, short il, thread type4x4 & reg) {
+    dequantize_turbo4_0(xb, il, reg);
+}
+
+template <typename type4>
+void dequantize_planar4_0_t4(device const block_planar4_0 * xb, short il, thread type4 & reg) {
+    dequantize_turbo4_0_t4(xb, il, reg);
+}
+
+template <typename type4x4>
+void dequantize_iso4_0(device const block_iso4_0 * xb, short il, thread type4x4 & reg) {
+    dequantize_turbo4_0(xb, il, reg);
+}
+
+template <typename type4>
+void dequantize_iso4_0_t4(device const block_iso4_0 * xb, short il, thread type4 & reg) {
+    dequantize_turbo4_0_t4(xb, il, reg);
+}
+
+// planar4/iso4 set_rows: delegate to turbo4 (WHT rotation) for now
+// Custom rotation kernels would be added here for differentiated quality
+
 // ===== IsoQuant 3-bit dequantize (quaternion 4D block rotation) =====
 // 4D blocks rotated by unit quaternion: T(v) = q_L * v
 // Inverse: T^-1(v) = conj(q_L) * v
@@ -7719,6 +7748,29 @@ template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk192_dv128")]] kernel f
 template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 320, 256>;
 template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 576, 512>;
+
+
+// planar4 non-vec flash attention (same as turbo4 dequant)
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 32,  32>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 64,  64>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk96_dv96"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 96,  96>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 192, 192>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 192, 128>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 320, 256>;
+template [[host_name("kernel_flash_attn_ext_kplanar4_vplanar4_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, block_planar4_0, NL_PLANAR4, dequantize_planar4_0, 576, 512>;
+
+// iso4 non-vec flash attention
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 32,  32>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 64,  64>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk96_dv96"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 96,  96>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 192, 192>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 192, 128>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 320, 256>;
+template [[host_name("kernel_flash_attn_ext_kiso4_viso4_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso4_0, NL_ISO4, dequantize_iso4_0, block_iso4_0, NL_ISO4, dequantize_iso4_0, 576, 512>;
 
 // PlanarQuant non-vec flash attention (nl=NL_PLANAR3=QK_PLANAR3/16)
 template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 32,  32>;
@@ -8593,6 +8645,23 @@ template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk192_dv128")]] kern
 template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 320, 256, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 576, 512, 2>;
+
+
+// planar4 vec flash attention (decode)
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 192, 192, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk192_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 192, 128, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 320, 256, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar4_vplanar4_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, block_planar4_0, NL_PLANAR4_VEC, dequantize_planar4_0_t4, 576, 512, 2>;
+
+// iso4 vec flash attention (decode)
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 192, 192, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk192_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 192, 128, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 320, 256, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso4_viso4_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, block_iso4_0, NL_ISO4_VEC, dequantize_iso4_0_t4, 576, 512, 2>;
 
 // PlanarQuant vec flash attention (decode path)
 template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 128, 128, 1>;
@@ -11830,6 +11899,9 @@ typedef decltype(kernel_set_rows_turbo4<int64_t>) set_rows_turbo4_t;
 
 template [[host_name("kernel_set_rows_turbo4_i64")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int64_t>;
 template [[host_name("kernel_set_rows_turbo4_i32")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int32_t>;
+
+
+
 
 //
 // matrix-matrix multiplication

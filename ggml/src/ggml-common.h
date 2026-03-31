@@ -367,6 +367,19 @@ typedef struct {
 } block_iso3_0;
 static_assert(sizeof(block_iso3_0) == sizeof(ggml_half) + QK_ISO3/4 + QK_ISO3/8, "wrong iso3_0 block size/padding");
 
+// PlanarQuant 4-bit and IsoQuant 4-bit: same block layout as turbo4
+// 3-bit indices (nibble-packed) + 1-bit QJL signs + norm
+#define QK_PLANAR4 128
+#define NL_PLANAR4 8
+#define NL_PLANAR4_VEC 32
+#define QK_ISO4 128
+#define NL_ISO4 8
+#define NL_ISO4_VEC 32
+// Reuse block_turbo4_0 layout: these are typedef aliases
+typedef block_turbo4_0 block_planar4_0;
+typedef block_turbo4_0 block_iso4_0;
+
+
 //
 // Super-block quantization structures
 //
