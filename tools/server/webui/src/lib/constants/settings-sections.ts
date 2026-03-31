@@ -10,6 +10,7 @@ export const SETTINGS_SECTION_TITLES = {
 	SAMPLING: 'Sampling',
 	PENALTIES: 'Penalties',
 	IMPORT_EXPORT: 'Import/Export',
+	AGENTIC: 'Agentic',
 	MCP: 'MCP',
 	DEVELOPER: 'Developer'
 } as const;

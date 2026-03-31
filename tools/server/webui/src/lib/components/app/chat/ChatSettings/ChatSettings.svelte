@@ -7,7 +7,8 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		ListRestart
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -257,17 +258,12 @@
 			]
 		},
 		{
-			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
-			icon: Database,
-			fields: []
-		},
-		{
-			title: SETTINGS_SECTION_TITLES.MCP,
-			icon: McpLogo,
+			title: SETTINGS_SECTION_TITLES.AGENTIC,
+			icon: ListRestart,
 			fields: [
 				{
 					key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
-					label: 'Agentic loop max turns',
+					label: 'Agentic turns',
 					type: SettingsFieldType.INPUT
 				},
 				{
@@ -286,6 +282,16 @@
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
+			icon: Database,
+			fields: []
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.MCP,
+			icon: McpLogo,
+			fields: []
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.DEVELOPER,
@@ -526,19 +532,10 @@
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
 				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
-					<div class="space-y-6">
-						<ChatSettingsFields
-							fields={currentSection.fields}
-							{localConfig}
-							onConfigChange={handleConfigChange}
-							onThemeChange={handleThemeChange}
-						/>
+					<McpServersSettings />
+				{/if}
 
-						<div class="border-t border-border/30 pt-6">
-							<McpServersSettings />
-						</div>
-					</div>
-				{:else}
+				{#if currentSection.fields}
 					<div class="space-y-6">
 						<ChatSettingsFields
 							fields={currentSection.fields}
@@ -550,7 +547,7 @@
 				{/if}
 			</div>
 
-			<div class="mt-8 border-t pt-6">
+			<div class="mt-8 border-t border-border/30 pt-6">
 				<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
 			</div>
 		</div>

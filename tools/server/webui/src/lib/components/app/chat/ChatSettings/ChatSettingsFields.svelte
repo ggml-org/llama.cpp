@@ -70,7 +70,7 @@
 				{/if}
 			</div>
 
-			<div class="relative w-full md:max-w-md">
+			<div class="relative w-full">
 				<Input
 					id={field.key}
 					value={currentValue}
@@ -176,7 +176,7 @@
 					}
 				}}
 			>
-				<div class="relative w-full md:w-auto md:max-w-md">
+				<div class="relative w-full md:w-auto">
 					<Select.Trigger class="w-full">
 						<div class="flex items-center gap-2">
 							{#if selectedOption?.icon}
