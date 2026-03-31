@@ -1689,16 +1689,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
             n_outputs = n_outputs_new;
         }
 
-        // Deferred quantization: convert F16 K-cache to quantized after prefill.
-        // Must happen BEFORE process_ubatch + re-reserve scheduler so it sees the new tensors.
-        if (ubatch.n_tokens == 1 && memory) {
-            auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
-            if (kv && kv->convert_deferred_keys()) {
-                // Pointer swapped — force re-reserve scheduler with new tensor mappings
-                sched_need_reserve = true;
-                sched_reserve();
-            }
-        }
+        // Deferred quantization: DISABLED — conversion works (5.1x compression)
+        // but CUDA flash attention has no dequantize kernels for our types.
+        // The converted quantized K-cache can't be read by FA during decode.
+        // Need: CUDA FA dequantize template instances for planar3/iso3/planar4/iso4
+        // (same work as Metal FA templates we already built).
+        //
+        // if (ubatch.n_tokens == 1 && memory) {
+        //     auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+        //     if (kv && kv->convert_deferred_keys()) {
+        //         sched_need_reserve = true;
+        //         sched_reserve();
+        //     }
+        // }
 
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);

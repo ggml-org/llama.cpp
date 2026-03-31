@@ -343,9 +343,18 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
+        // Pre-build quantized stream views (for deferred types)
+        std::vector<ggml_tensor *> k_quant_stream;
+        if (defer_k && k_quant) {
+            for (uint32_t s = 0; s < n_stream; ++s) {
+                k_quant_stream.push_back(ggml_view_2d(ctx, k_quant, n_embd_k_gqa_eff, kv_size, k_quant->nb[1], s*k_quant->nb[2]));
+            }
+        }
+
         layers.push_back({ il, k, v, k_stream, v_stream, });
         if (defer_k && !layers.empty()) {
             layers.back().k_quant = k_quant;
+            layers.back().k_quant_stream = k_quant_stream;
             layers.back().target_type_k = layer_type_k;
             layers.back().k_needs_convert = true;
         }
@@ -2818,22 +2827,15 @@ bool llama_kv_cache::convert_deferred_keys() {
         // Write quantized data to the pre-allocated quantized tensor
         ggml_backend_tensor_set(layer.k_quant, quant_buf.data(), 0, quant_bytes);
 
-        // Swap: k now points to quantized tensor
-        // The old F16 tensor stays allocated (freed when context is destroyed)
+        // Swap tensor AND pre-built stream views together
         layer.k = layer.k_quant;
+        layer.k_stream = layer.k_quant_stream;
         layer.k_quant = nullptr;
+        layer.k_quant_stream.clear();
         layer.k_needs_convert = false;
         any_converted = true;
-
-        // Rebuild k_stream views for the new tensor
-        layer.k_stream.clear();
-        const int64_t n_embd = layer.k->ne[0];
-        const int64_t kv_sz = layer.k->ne[1];
-        for (uint32_t s = 0; s < (uint32_t)layer.k->ne[2]; ++s) {
-            // Note: can't create views without a ggml_context.
-            // For now, leave k_stream empty — it's only used for multi-stream
-            // which isn't common. Single-stream uses layer.k directly.
-        }
+        fprintf(stderr, "llama_kv_cache: converted layer %d K-cache F16→%s (%zu→%zu bytes)\n",
+                layer.il, ggml_type_name(layer.k->type), f16_bytes, quant_bytes);
     }
 
     return any_converted;

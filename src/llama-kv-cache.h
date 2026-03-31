@@ -237,8 +237,9 @@ private:
 
         // deferred quantization: double-buffer for post-prefill conversion
         // During prefill: k = F16 tensor (k_quant = pre-allocated quantized, empty)
-        // After convert: k = k_quant (quantized), k_f16 freed
-        ggml_tensor * k_quant = nullptr;   // pre-allocated quantized tensor
+        // After convert: k = k_quant, k_stream = k_quant_stream
+        ggml_tensor * k_quant = nullptr;
+        std::vector<ggml_tensor *> k_quant_stream;  // pre-built views for quantized tensor
         ggml_type target_type_k = GGML_TYPE_F16;
         bool      k_needs_convert = false;
     };
