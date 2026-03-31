@@ -216,14 +216,16 @@ struct ggml_cann_pool_alloc {
 #ifdef USE_ACL_GRAPH
 struct ggml_graph_node_properties {
     // dst tensor
-    void *  node_address;
-    int64_t ne[GGML_MAX_DIMS];
-    size_t  nb[GGML_MAX_DIMS];
+    void *    node_address;
+    ggml_type node_type;
+    int64_t   ne[GGML_MAX_DIMS];
+    size_t    nb[GGML_MAX_DIMS];
 
     // src tensor
-    void *  src_address[GGML_MAX_SRC];
-    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
-    size_t  src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    void *    src_address[GGML_MAX_SRC];
+    ggml_type src_type[GGML_MAX_SRC];
+    int64_t   src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t    src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
 
     // op
     ggml_op node_op;
@@ -247,6 +249,10 @@ struct ggml_graph_node_properties {
             return false;
         }
 
+        if (node->type != this->node_type) {
+            return false;
+        }
+
         for (int i = 0; i < GGML_MAX_DIMS; i++) {
             if (node->ne[i] != this->ne[i]) {
                 return false;
@@ -259,6 +265,10 @@ struct ggml_graph_node_properties {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             if (node->src[i]) {
                 if (node->src[i]->data != this->src_address[i] && node->op != GGML_OP_VIEW) {
+                    return false;
+                }
+
+                if (node->src[i]->type != this->src_type[i]) {
                     return false;
                 }
 
@@ -277,10 +287,7 @@ struct ggml_graph_node_properties {
             }
         }
 
-        if (node->op == GGML_OP_SCALE || node->op == GGML_OP_UNARY || node->op == GGML_OP_GLU || node->op == GGML_OP_ROPE){
-            return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
-        }
-        return true;
+        return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
     }
 };
 
@@ -322,6 +329,7 @@ struct ggml_cann_graph {
 
             prop.node_address = node->data;
             prop.node_op      = node->op;
+            prop.node_type    = node->type;
 
             std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
             std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
@@ -329,10 +337,12 @@ struct ggml_cann_graph {
             for (int src = 0; src < GGML_MAX_SRC; ++src) {
                 if (node->src[src]) {
                     prop.src_address[src] = node->src[src]->data;
+                    prop.src_type[src]    = node->src[src]->type;
                     std::copy_n(node->src[src]->ne, GGML_MAX_DIMS, prop.src_ne[src]);
                     std::copy_n(node->src[src]->nb, GGML_MAX_DIMS, prop.src_nb[src]);
                 } else {
                     prop.src_address[src] = nullptr;
+                    prop.src_type[src]    = GGML_TYPE_COUNT;
                     std::fill_n(prop.src_ne[src], GGML_MAX_DIMS, 0);
                     std::fill_n(prop.src_nb[src], GGML_MAX_DIMS, 0);
                 }
