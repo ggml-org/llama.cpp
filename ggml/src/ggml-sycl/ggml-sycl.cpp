@@ -832,7 +832,7 @@ static std::atomic<bool> g_prestage_completed{ false };
 
 // Upfront VRAM budget reserved for MoE experts at inventory time (Phase 1).
 // Released after prestage completes and actual usage is tracked in cache (Phase 2).
-static size_t g_moe_expert_vram_reserve = 0;
+static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_moe_expert_vram_reserve = {};
 
 // Check if an expert's weights are fully resident in VRAM on a given device.
 // Checks the unified cache for ALL 3 tensors (gate, up, down) across multiple
@@ -1345,16 +1345,17 @@ static void moe_prestage_popular_experts() {
 
     ggml_sycl_watchdog_heartbeat();
 
-    // Release the upfront expert VRAM reserve now that actual staging is tracked
+    // Release per-device expert reserves now that actual staging is tracked
     // in the cache's used_ bytes via allocate_slot().  Keeping the reserve would
     // double-count: reserved_ + used_ both consuming budget.
-    if (g_moe_expert_vram_reserve > 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(
-            device, g_moe_expert_vram_reserve, ggml_sycl::runtime_category::EXPERT_CACHE);
-        GGML_LOG_INFO("[MOE-PRESTAGE] Released upfront VRAM reserve: %.1f MB "
-                      "(actual expert usage tracked in cache)\n",
-                      g_moe_expert_vram_reserve / (1024.0 * 1024.0));
-        g_moe_expert_vram_reserve = 0;
+    for (int d = 0; d < GGML_SYCL_MAX_DEVICES; d++) {
+        if (g_moe_expert_vram_reserve[d] > 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(
+                d, g_moe_expert_vram_reserve[d], ggml_sycl::runtime_category::EXPERT_CACHE);
+            GGML_LOG_INFO("[MOE-PRESTAGE] Released device %d upfront VRAM reserve: %.1f MB\n",
+                          d, g_moe_expert_vram_reserve[d] / (1024.0 * 1024.0));
+            g_moe_expert_vram_reserve[d] = 0;
+        }
     }
 
     // Phase 2: Fill secondary GPUs with the NEXT TIER of popular experts.
@@ -5602,7 +5603,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // AFTER the unified cache is created.  Registering here (before cache creation)
     // gets absorbed into the cache's runtime_reserved_baseline and has no effect
     // on available_for_compute().
-    g_moe_expert_vram_reserve = 0;
+    g_moe_expert_vram_reserve.fill(0);
 
     // Check if tiered mode should be enabled based on VRAM budget
     size_t free_mem = 0, total_mem = 0;
@@ -10675,26 +10676,40 @@ static void ggml_sycl_preload_model_weights() {
         // available_for_compute().  The cache is now created (by ensure_cached_layout
         // calls above), so this reserve will properly reduce the budget seen by KV tiering.
         if (g_moe_expert_total_bytes > 0 && g_moe_n_experts_total > 0 && g_model_n_layer > 0) {
-            const int    device           = g_tensor_inventory_device;
             const size_t n_expert_tensors = static_cast<size_t>(g_moe_n_experts_total) * static_cast<size_t>(g_model_n_layer);
             const size_t per_expert_bytes = g_moe_expert_total_bytes / n_expert_tensors;
-            const size_t popular_count    = std::max(size_t(1), static_cast<size_t>(g_moe_n_experts_total) * 30 / 100);
-            // per_expert_bytes already includes all tensor types (gate + up + down + norm)
-            const size_t raw_reserve      = popular_count * per_expert_bytes * static_cast<size_t>(g_model_n_layer);
-            // Cap at 60% of cache budget (cache exists now, so total_managed is valid)
-            const size_t budget           = ggml_sycl::unified_cache_total_managed(device);
-            const size_t capped_reserve   = std::min(raw_reserve, budget * 60 / 100);
 
-            if (capped_reserve > 0) {
-                ggml_sycl::unified_cache_add_runtime_bytes(device, capped_reserve,
-                                                           ggml_sycl::runtime_category::EXPERT_CACHE);
-                g_moe_expert_vram_reserve = capped_reserve;
-                GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB "
-                              "(%zu popular experts x %u layers, %.1f MB/expert, budget=%.1f MB)\n",
-                              capped_reserve / (1024.0 * 1024.0), popular_count,
-                              g_model_n_layer, per_expert_bytes / (1024.0 * 1024.0),
-                              budget / (1024.0 * 1024.0));
+            // Working set = n_experts_used * multiplier (default 2x, covers token-to-token variation)
+            int ws_mult = 2;
+            const char * mult_env = std::getenv("GGML_SYCL_EXPERT_RESERVE_MULT");
+            if (mult_env) {
+                ws_mult = std::max(1, std::min(16, std::atoi(mult_env)));
             }
+            const size_t popular_count = std::min(
+                static_cast<size_t>(g_moe_n_experts_used) * static_cast<size_t>(ws_mult),
+                static_cast<size_t>(g_moe_n_experts_total));
+            // per_expert_bytes already includes all tensor types (gate + up + down + norm)
+            const size_t raw_reserve = popular_count * per_expert_bytes * static_cast<size_t>(g_model_n_layer);
+
+            // Register reserve on all GPU devices with active caches
+            const int total_gpus = ggml_sycl_info().total_gpu_count;
+            for (int d = 0; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
+                size_t device_budget = ggml_sycl::unified_cache_total_managed(d);
+                if (device_budget == 0) continue;  // cache not created for this device
+                // Cap at 40% of device cache budget
+                size_t device_reserve = std::min(raw_reserve, device_budget * 40 / 100);
+                if (device_reserve > 0) {
+                    ggml_sycl::unified_cache_add_runtime_bytes(d, device_reserve,
+                                                               ggml_sycl::runtime_category::EXPERT_CACHE);
+                    g_moe_expert_vram_reserve[d] = device_reserve;
+                }
+            }
+            GGML_LOG_INFO("[SYCL-BUDGET] MoE expert VRAM reserve: %.1f MB "
+                          "(%zu experts = %d active x %d mult, %u layers, %.1f MB/expert, budget=%.1f MB)\n",
+                          g_moe_expert_vram_reserve[0] / (1024.0 * 1024.0), popular_count,
+                          g_moe_n_experts_used, ws_mult,
+                          g_model_n_layer, per_expert_bytes / (1024.0 * 1024.0),
+                          ggml_sycl::unified_cache_total_managed(0) / (1024.0 * 1024.0));
         }
         return;
     }
