@@ -50,7 +50,6 @@
 		"eslint-config-prettier": "^10.0.1",
 		"eslint-plugin-storybook": "^10.2.4",
 		"eslint-plugin-svelte": "^3.0.0",
-		"fflate": "^0.8.2",
 		"globals": "^16.0.0",
 		"http-server": "^14.1.1",
 		"mdast": "^3.0.0",

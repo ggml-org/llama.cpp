@@ -221,7 +221,7 @@ using chat_template_caps = jinja::caps;
 struct common_chat_templates {
     bool add_bos;
     bool add_eos;
-    bool has_explicit_template;  // Model had builtin template or template overridde was specified.
+    bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
 };
@@ -971,6 +971,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start           = p.rule("start", p.literal("<|start|>assistant"));
@@ -979,9 +980,19 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto channel         = p.literal("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
         auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
 
-        auto analysis = p.rule("analysis", p.literal("<|channel|>analysis<|message|>") + p.reasoning(content) + end);
+        if (extract_reasoning) {
+            p.rule("analysis", p.literal("<|channel|>analysis<|message|>") + p.reasoning(content) + end);
+        } else {
+            p.rule("analysis", p.content(p.literal("<|channel|>analysis<|message|>") + content + end));
+        }
+
+        auto analysis = p.ref("analysis");
         auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
         auto final_msg = p.rule("final", p.literal("<|channel|>final<|message|>") + p.content(content));
+
+        // Consume any unsolicited tool calls, e.g. builtin functions
+        auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
+
         auto any = p.rule("any", preamble | analysis);
 
         if (has_response_format) {
@@ -1025,7 +1036,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             return p.zero_or_more(start + any) + start + (tool_call | final_msg);
         }
 
-        return p.zero_or_more(start + any) + start + final_msg;
+        return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
     });
 
     data.parser = parser.save();

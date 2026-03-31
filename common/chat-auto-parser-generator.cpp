@@ -65,7 +65,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                auto         schema   = function.at("parameters");
+                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
                 builder.resolve_refs(schema);
             });
             parser.build_grammar(builder, data.grammar_lazy);
@@ -221,7 +221,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
-        const auto & schema = func.at("parameters");
+        const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
 
         // Build call_id parser based on position (if supported)
         common_peg_parser call_id_section = p.eps();
@@ -282,19 +282,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     common_peg_parser tool_choice = p.choice();
 
     foreach_function(inputs.tools, [&](const json & tool) {
-        const auto & func   = tool.at("function");
-        std::string  name   = func.at("name");
-        const auto & params = func.at("parameters");
-
-        if (!params.contains("properties") || !params.at("properties").is_object()) {
-            return;
-        }
-
-        const auto &          properties = params.at("properties");
+        const auto &          func       = tool.at("function");
+        std::string           name       = func.at("name");
+        const auto &          params     = func.contains("parameters") ? func.at("parameters") : json::object();
+        const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
         std::set<std::string> required;
-        if (params.contains("required") && params.at("required").is_array()) {
-            params.at("required").get_to(required);
-        }
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
@@ -311,17 +303,18 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                 }
             }
 
-            auto arg = p.tool_arg(
-                p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
-                                arguments.name_suffix) +
-                arguments.value_prefix +
-                (type == "string" ? p.tool_arg_string_value(p.schema(p.until(arguments.value_suffix),
-                                                                     "tool-" + name + "-arg-" + param_name + "-schema",
-                                                                     param_schema, true)) :
-                                    p.tool_arg_json_value(p.schema(
-                                        p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
-                                        p.space()) +
-                p.tool_arg_close(p.literal(arguments.value_suffix)));
+            auto arg =
+                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                                           arguments.name_suffix) +
+                           arguments.value_prefix +
+                           (type == "string" ?
+                                p.tool_arg_string_value(p.schema(p.until(arguments.value_suffix),
+                                                                 "tool-" + name + "-arg-" + param_name + "-schema",
+                                                                 param_schema, true)) :
+                                p.tool_arg_json_value(p.schema(
+                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
+                                    p.space()) +
+                           p.tool_arg_close(p.literal(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
             if (is_required) {

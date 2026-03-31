@@ -9,9 +9,9 @@
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-	import { DialogChatSettings } from '$lib/components/app/dialogs';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
+
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
@@ -54,6 +54,7 @@
 		onMcpResourcesClick
 	}: Props = $props();
 
+	let showChatSettingsDialogWithMcpSection = $state(false);
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let isOffline = $derived(!!serverError());
@@ -169,8 +170,6 @@
 		selectorModelRef?.open();
 	}
 
-	let showChatSettingsDialogWithMcpSection = $state(false);
-
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
@@ -260,9 +259,3 @@
 		/>
 	{/if}
 </div>
-
-<DialogChatSettings
-	open={showChatSettingsDialogWithMcpSection}
-	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
-	initialSection={SETTINGS_SECTION_TITLES.MCP}
-/>

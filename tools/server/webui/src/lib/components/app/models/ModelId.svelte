@@ -20,7 +20,8 @@
 		hideQuantization = false,
 		aliases,
 		tags,
-		class: className = ''
+		class: className = '',
+		...rest
 	}: Props = $props();
 
 	const badgeClass =
@@ -38,9 +39,9 @@
 </script>
 
 {#if resolvedShowRaw}
-	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} />
+	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} {...rest} />
 {:else}
-	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}">
+	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}" {...rest}>
 		<span class="min-w-0 truncate font-medium">
 			{#if !hideOrgName && parsed.orgName && !(aliases && aliases.length > 0)}{parsed.orgName}/{/if}{displayName}
 		</span>
