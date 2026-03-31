@@ -797,15 +797,6 @@ private:
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
-
-                if (kv_keep_only_active) {
-                    for (const auto & s : slots) {
-                        if (s.id != id_slot && s.prompt.n_tokens() > 0) {
-                            slot_save_and_clear(slots[id_slot]);
-                            break;
-                        }
-                    }
-                }
             };
 
             slot.reset();

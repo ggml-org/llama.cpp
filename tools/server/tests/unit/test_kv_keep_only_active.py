@@ -42,7 +42,7 @@ LONG_PROMPT = (
 )
 
 
-# idle slot cleared on release should restore from cache-ram
+# idle slot cleared on launch should restore from cache-ram
 def test_clear_and_restore():
     global server
     server.start()
