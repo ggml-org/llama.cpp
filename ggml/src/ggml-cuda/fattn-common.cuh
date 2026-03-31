@@ -313,15 +313,18 @@ static __device__ __forceinline__ void prepare_fattn_vec_Q_tq3_0(
 
 #pragma unroll
     for (int ib = 0; ib < D / QK_TQ3_0; ++ib) {
-        const int q_i32 = Q_q8[ib];
+        // Each thread reads its own Q value (per-thread storage for TQ3_0)
+        const int q_i32 = Q_q8[ib * nthreads + subgroup_lane];
         const int8_t * q_q8 = (const int8_t *) &q_i32;
 
+        // Load Q values WITHOUT signs (signs applied after WHT to match K treatment)
         float q_rot[4];
 #pragma unroll
         for (int l = 0; l < 4; ++l) {
-            q_rot[l] = float(q_q8[l]) * signs[subgroup_lane * 4 + l];
+            q_rot[l] = float(q_q8[l]);
         }
 
+        // Local 4-point WHT (first stage)
         float a0 = q_rot[0], a1 = q_rot[1], a2 = q_rot[2], a3 = q_rot[3];
         q_rot[0] = a0 + a1;
         q_rot[1] = a0 - a1;
@@ -334,6 +337,7 @@ static __device__ __forceinline__ void prepare_fattn_vec_Q_tq3_0(
         q_rot[2] = a0 - a2;
         q_rot[3] = a1 - a3;
 
+        // Cooperative 32-point WHT via shuffles
 #pragma unroll
         for (int xor_lane = 1; xor_lane < nthreads; xor_lane <<= 1) {
             const bool upper_half = (subgroup_lane & xor_lane) != 0;
@@ -344,9 +348,15 @@ static __device__ __forceinline__ void prepare_fattn_vec_Q_tq3_0(
             }
         }
 
-        const float q_scale = Q_aux[ib].ds.x * inv_wht_norm;
-        Q_aux[ib].tq[0] = make_half2(q_rot[0] * q_scale, q_rot[1] * q_scale);
-        Q_aux[ib].tq[1] = make_half2(q_rot[2] * q_scale, q_rot[3] * q_scale);
+        // Apply signs AFTER WHT (to match K's treatment where signs are part of inverse WHT)
+#pragma unroll
+        for (int l = 0; l < 4; ++l) {
+            q_rot[l] *= signs[subgroup_lane * 4 + l];
+        }
+
+        const float q_scale = Q_aux[ib * nthreads + subgroup_lane].ds.x * inv_wht_norm;
+        Q_aux[ib * nthreads + subgroup_lane].tq[0] = make_half2(q_rot[0] * q_scale, q_rot[1] * q_scale);
+        Q_aux[ib * nthreads + subgroup_lane].tq[1] = make_half2(q_rot[2] * q_scale, q_rot[3] * q_scale);
     }
 }
 
@@ -369,8 +379,8 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tq3_0(
     for (int ib = 0; ib < D / QK_TQ3_0; ++ib) {
         const float k_scale = __half2float(K_tq3_0[ib].gamma);
         const uint8_t codes = K_tq3_0[ib].qs[subgroup_lane];
-        const float2 q_rot_01 = __half22float2(Q_aux[ib].tq[0]);
-        const float2 q_rot_23 = __half22float2(Q_aux[ib].tq[1]);
+        const float2 q_rot_01 = __half22float2(Q_aux[ib * nthreads + subgroup_lane].tq[0]);
+        const float2 q_rot_23 = __half22float2(Q_aux[ib * nthreads + subgroup_lane].tq[1]);
 
         float partial = 0.0f;
         partial += q_rot_01.x * centroids[(codes >> 0) & 0x3];
