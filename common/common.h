@@ -530,7 +530,6 @@ struct common_params {
     bool ctx_shift         = false; // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
-    bool kv_clear_idle     = true;  // save and clear idle slots' KV on release
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool use_mmap          = true;  // enable mmap to use filesystem cache
@@ -579,8 +578,9 @@ struct common_params {
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
-    int32_t n_ctx_checkpoints   = 32;     // max number of context checkpoints per slot
-    int32_t checkpoint_every_nt = 8192;   // make a checkpoint every n tokens during prefill
+    bool    clear_idle          = true;  // save and clear idle slots upon starting a new task
+    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";

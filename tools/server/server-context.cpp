@@ -573,7 +573,6 @@ private:
     int slots_debug = 0;
     int n_empty_consecutive = 0;
 
-    bool kv_keep_only_active = false;
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
@@ -610,6 +609,7 @@ private:
         if (slot.prompt.n_tokens() == 0) {
             return;
         }
+        SLT_INF(slot, "%s", "saving idle slot to prompt cache\n");
         slot.prompt_save(*prompt_cache);
         slot.prompt_clear(false);
         prompt_cache->update();
@@ -874,14 +874,15 @@ private:
 
         metrics.init();
 
-        if (params_base.kv_clear_idle) {
+        if (params_base.clear_idle) {
             if (!params_base.kv_unified) {
-                SRV_WRN("%s\n", "--kv-clear-idle requires --kv-unified, disabling");
+                SRV_WRN("%s: --clear-idle requires --kv-unified, disabling\n", __func__);
+                params_base.clear_idle = false;
             } else if (params_base.cache_ram_mib == 0) {
-                SRV_WRN("%s\n", "--kv-clear-idle requires --cache-ram, disabling");
+                SRV_WRN("%s: --clear-idle requires --cache-ram, disabling\n", __func__);
+                params_base.clear_idle = false;
             } else {
-                kv_keep_only_active = true;
-                SRV_INF("%s\n", "kv-clear-idle: idle slots' KV will be saved to cache-ram and cleared on release");
+                SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
             }
         }
 
@@ -1100,14 +1101,6 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
-        if (kv_keep_only_active) {
-            for (auto & s : slots) {
-                if (s.id != slot.id && !s.is_processing()) {
-                    slot_save_and_clear(s);
-                }
-            }
-        }
-
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -1721,9 +1714,7 @@ private:
                     const int id_slot = task.id_slot;
                     const int id_task = task.id;
 
-                    server_slot * slot = id_slot != -1
-                                            ? get_slot_by_id(id_slot)
-                                            : get_available_slot(task);
+                    server_slot * slot = id_slot != -1 ? get_slot_by_id(id_slot) : get_available_slot(task);
 
                     //
                     // slot scheduling logic
@@ -1759,6 +1750,14 @@ private:
                     } else if (!launch_slot_with_task(*slot, std::move(task))) {
                         SRV_ERR("failed to launch slot with task, id_task = %d\n", id_task);
                         break; // drop the task
+                    }
+
+                    if (params_base.clear_idle) {
+                        for (auto & s : slots) {
+                            if (!s.is_processing()) {
+                                slot_save_and_clear(s);
+                            }
+                        }
                     }
                 } break;
             case SERVER_TASK_TYPE_CANCEL:
