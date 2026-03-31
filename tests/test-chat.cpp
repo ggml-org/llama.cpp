@@ -3077,6 +3077,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
+
+
+        // Unsolicited tool calls. There is no good way to handle these, so we return empty content.
+
+        // Builtin function - recipient in role
+        tst.test(
+               "<|channel|>analysis<|message|>I will execute python to say hello<|end|>"
+               "<|start|>assistant to=container.exec<|channel|>commentary<|message|>python3 -c 'print(\"hello\")'")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I will execute python to say hello")
+            .expect_content("")
+            .run();
+
+        // Builtin function - recipient in channel
+        tst.test(
+               "<|channel|>analysis<|message|>I will execute python to say hello<|end|>"
+               "<|start|>assistant<|channel|>commentary to=python <|constrain|>code<|message|>print(\"hello\")")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I will execute python to say hello")
+            .expect_content("")
+            .run();
     }
 
     {
