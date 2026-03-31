@@ -146,6 +146,8 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q8_0-iso4_0.cu
             template-instances/fattn-vec-instance-planar3_0-q8_0.cu
             template-instances/fattn-vec-instance-iso3_0-q8_0.cu
+            template-instances/fattn-vec-instance-planar4_0-q8_0.cu
+            template-instances/fattn-vec-instance-iso4_0-q8_0.cu
             template-instances/fattn-vec-instance-f16-q8_0.cu)
     endif()
 
