@@ -9612,6 +9612,9 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_mem              B_image1d;
     cl_mem              B_sub_buffer;
     cl_mem              S_image1d;
+    // for B transpose
+    cl_mem              B_image1d_trans = nullptr;
+    cl_mem              B_d = nullptr;
 
     cl_mem              D_image1d;
     cl_mem              D_sub_buffer;
@@ -9703,9 +9706,6 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         global_work_size[2] = 1;
     } else {
         cl_ulong offsetd = extrad->offset + dst->view_offs;
-        cl_mem              B_image1d_trans = nullptr;
-        // for B transpose
-        cl_mem B_d = nullptr;
         int padding;
 
         //how many extra elements beyond multiple of 8
@@ -9800,6 +9800,12 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     CL_CHECK(clReleaseMemObject(S_image1d));
     CL_CHECK(clReleaseMemObject(D_sub_buffer));
     CL_CHECK(clReleaseMemObject(D_image1d));
+    if (B_image1d_trans) {
+        CL_CHECK(clReleaseMemObject(B_image1d_trans));
+    }
+    if (B_d) {
+        CL_CHECK(clReleaseMemObject(B_d));
+    }
 #else
     GGML_UNUSED(backend);
     GGML_UNUSED(src0);
