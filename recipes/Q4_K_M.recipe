@@ -1,0 +1,24 @@
+# Q4_K_M quantization recipe
+
+name    Q4_K_M
+default Q4_K
+
+[OUTPUT]
+  *                              : Q6_K
+  arch=falcon                    : Q8_0
+
+[ATTENTION_WV]
+  model_type=70B                 : Q5_K
+  more_bits                      : Q6_K
+  n_expert=8                     : Q8_0
+
+[ATTENTION_K]
+  n_expert=8                     : Q8_0
+
+[FFN_DOWN]
+  layer=more_bits                : Q6_K
+  arch=falcon, layer<1/16        : Q6_K
+  arch=falcon, layer=more_bits   : Q5_K
+
+[ATTENTION_OUTPUT]
+  n_expert=8                     : Q5_K

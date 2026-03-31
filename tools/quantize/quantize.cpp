@@ -19,7 +19,7 @@
 #include <filesystem>
 
 // result of parsing --tensor-type option
-// (changes to this struct must be reflected in src/llama-quant.cpp)
+// (changes to this struct must be reflected in src/llama-quant.h)
 struct tensor_type_option {
     std::string name;
     ggml_type type = GGML_TYPE_COUNT;
@@ -125,7 +125,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
+    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--recipe]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -164,7 +164,11 @@ static void usage(const char * executable) {
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
     printf("                                      calculate and show the final quantization size without performing quantization\n");
-    printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
+    printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n");
+    printf("  --recipe name_or_path\n");
+    printf("                                      use a quantization recipe instead of ftype-based type selection\n");
+    printf("                                      if the argument is a file path, load it directly\n");
+    printf("                                      otherwise, look for a built-in recipe (e.g., --recipe Q4_K_M)\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
@@ -500,6 +504,7 @@ int main(int argc, char ** argv) {
 
     int arg_idx = 1;
     std::string imatrix_file;
+    std::string recipe_path;
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
@@ -568,6 +573,12 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
+        } else if (strcmp(argv[arg_idx], "--recipe") == 0) {
+            if (arg_idx < argc-1) {
+                recipe_path = argv[++arg_idx];
+            } else {
+                usage(argv[0]);
+            }
         } else {
             usage(argv[0]);
         }
@@ -630,6 +641,10 @@ int main(int argc, char ** argv) {
     }
     if (!prune_layers.empty()) {
         params.prune_layers = &prune_layers;
+    }
+
+    if (!recipe_path.empty()) {
+        params.recipe_path = recipe_path.c_str();
     }
 
     llama_backend_init();
