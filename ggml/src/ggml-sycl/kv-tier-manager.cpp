@@ -91,9 +91,11 @@ void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers,
     kv_per_layer_ = total_bytes / n_layers;
 
     // Query unified cache for per-layer weight residency
-    int device_layers = 0;
+    std::vector<bool> layer_has_device_weights(n_layers, false);
+    int               device_layers = 0;
     for (uint32_t l = 0; l < n_layers; l++) {
         if (unified_cache_get_layer_vram_bytes(device, static_cast<int>(l)) > 0) {
+            layer_has_device_weights[l] = true;
             device_layers++;
         }
     }
@@ -104,14 +106,15 @@ void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers,
         return;
     }
 
-    // Co-locate KV with device-resident weights: fill hot layers contiguously
-    // from layer 0 while weights are on device and VRAM cap permits
-    hot_layers_    = 0;
-    size_t hot_bytes = 0;
-    for (uint32_t l = 0; l < n_layers && hot_bytes + kv_per_layer_ <= kv_vram_cap; l++) {
-        if (unified_cache_get_layer_vram_bytes(device, static_cast<int>(l)) > 0) {
-            hot_layers_ = l + 1;  // contiguous from layer 0
-            hot_bytes += kv_per_layer_;
+    // Co-locate KV with device-resident weights: advance contiguously from
+    // layer 0, checking ALL layers against the budget (not just those with
+    // device weights).  hot_layers_ tracks the last device-weighted layer.
+    hot_layers_ = 0;
+    for (uint32_t l = 0; l < n_layers; l++) {
+        size_t candidate_bytes = static_cast<size_t>(l + 1) * kv_per_layer_;
+        if (candidate_bytes > kv_vram_cap) break;
+        if (layer_has_device_weights[l]) {
+            hot_layers_ = l + 1;
         }
     }
 
