@@ -918,6 +918,10 @@ class unified_cache {
     // Used by KV tier manager to co-locate KV with layer weights.
     size_t get_layer_vram_bytes(int layer_id) const;
 
+    // Returns total VRAM bytes held by unpinned MoE expert entries that
+    // could be evicted to make room for KV layer promotion.
+    size_t evictable_expert_bytes() const;
+
     void print_stats() const;
 
     // Access the internal SYCL queue (for deferred free of temp allocations
@@ -1656,6 +1660,10 @@ size_t unified_cache_weight_bytes(int device);
 // Returns total VRAM bytes used by weight entries for a specific layer on a device.
 // Used by KV tier manager to co-locate KV with layer weights.
 size_t unified_cache_get_layer_vram_bytes(int device, int layer_id);
+
+// Returns total VRAM bytes held by unpinned MoE expert entries that could be
+// evicted to make room for other allocations (e.g., KV layer promotion).
+size_t unified_cache_evictable_expert_bytes(int device);
 
 // Log budget summary (weights, runtime, available) for diagnostics
 void unified_cache_log_budget_summary(int device);

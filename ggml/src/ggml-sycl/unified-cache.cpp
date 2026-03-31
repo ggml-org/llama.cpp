@@ -5517,6 +5517,19 @@ size_t unified_cache::get_layer_vram_bytes(int layer_id) const {
     return total;
 }
 
+size_t unified_cache::evictable_expert_bytes() const {
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    size_t                              total = 0;
+    for (const auto & [key, entry] : entries_) {
+        if (entry.type == cache_entry_type::MOE_EXPERT &&
+            entry.state == cache_entry_state::READY &&
+            !entry.pinned && !entry.host_resident) {
+            total += entry.size;
+        }
+    }
+    return total;
+}
+
 void unified_cache::print_stats() const {
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
@@ -7089,6 +7102,18 @@ size_t unified_cache_get_layer_vram_bytes(int device, int layer_id) {
         return 0;
     }
     return cache->get_layer_vram_bytes(layer_id);
+}
+
+size_t unified_cache_evictable_expert_bytes(int device) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
+        return 0;
+    }
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
+        return 0;
+    }
+    return cache->evictable_expert_bytes();
 }
 
 // === Budget Summary Diagnostic ===

@@ -1981,6 +1981,49 @@ static void moe_periodic_rerank() {
 
 
 // ---------------------------------------------------------------------------
+// KV-expert rebalance monitoring: periodically checks whether cold KV layers
+// could be promoted to VRAM by evicting unpopular experts.  Advisory only —
+// logs the opportunity but does not migrate KV data mid-inference.
+// Gated by GGML_SYCL_KV_REBALANCE=0 to disable.
+// ---------------------------------------------------------------------------
+
+static bool kv_rebalance_enabled() {
+    static int cached = -1;
+    if (cached == -1) {
+        const char * env = std::getenv("GGML_SYCL_KV_REBALANCE");
+        cached = (env && std::atoi(env) == 0) ? 0 : 1;
+    }
+    return cached != 0;
+}
+
+static void kv_expert_rebalance_check(int device) {
+    if (!kv_rebalance_enabled()) return;
+
+    auto & mgr = ggml_sycl::get_kv_tier_manager(device);
+    if (!mgr.is_active()) return;  // All KV on device — nothing to rebalance
+
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
+    if (!cache) return;
+
+    size_t evictable = cache->evictable_expert_bytes();
+    size_t kv_per_layer = mgr.kv_per_layer();
+    if (kv_per_layer == 0 || evictable < kv_per_layer) return;
+
+    uint32_t promotable = static_cast<uint32_t>(evictable / kv_per_layer);
+    uint32_t current_hot = mgr.hot_layers();
+    uint32_t new_hot = std::min(current_hot + promotable, mgr.total_layers());
+
+    if (new_hot <= current_hot) return;
+
+    GGML_LOG_INFO("[KV-REBALANCE] Could promote %u KV layers from host to device "
+                  "(evictable expert VRAM: %.1f MB, KV/layer: %.1f MB)\n",
+                  new_hot - current_hot,
+                  evictable / (1024.0 * 1024.0),
+                  kv_per_layer / (1024.0 * 1024.0));
+}
+
+
+// ---------------------------------------------------------------------------
 // Adaptive expert prestage: background thread that promotes hot CPU-resident
 // experts to VRAM based on runtime routing frequency.  Gated by env var
 // GGML_SYCL_ADAPTIVE_PRESTAGE=1 (off by default).
@@ -45385,6 +45428,16 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             }
         }
         prev_was_decode = cached_is_decode;
+    }
+
+    // Periodic KV-expert rebalance check (advisory — logs opportunities only).
+    // Runs every 100 TG tokens to detect when cold KV layers could be promoted
+    // to VRAM by evicting unpopular experts.
+    {
+        static std::atomic<int> rebalance_token_count{0};
+        if (cached_is_decode && rebalance_token_count.fetch_add(1) % 100 == 0) {
+            kv_expert_rebalance_check(sycl_ctx->device);
+        }
     }
 
     // NOTE: split_config_init is NOT called here — calling it before graph
