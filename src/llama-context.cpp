@@ -1690,14 +1690,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // Deferred quantization: convert F16 K-cache to quantized after prefill.
+        // Only on CUDA — Metal FA doesn't support mixed planar3/iso3 K + F16 V yet.
+#ifdef GGML_USE_CUDA
         if (ubatch.n_tokens == 1 && memory) {
             auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
             if (kv && kv->convert_deferred_keys()) {
-                // Force full scheduler re-creation with new tensor types
                 sched_need_reserve = true;
                 sched_reserve();
             }
         }
+#endif
 
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
