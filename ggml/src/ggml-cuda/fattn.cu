@@ -437,7 +437,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         // Allow mixed turbo KV types (any combination of turbo2, turbo3, q8_0)
         auto is_turbo = [](ggml_type t) {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_Q8_0 ||
-                   t == GGML_TYPE_PLANAR3_0 || t == GGML_TYPE_ISO3_0 || t == GGML_TYPE_PLANAR4_0 || t == GGML_TYPE_ISO4_0;
+                   t == GGML_TYPE_PLANAR3_0 || t == GGML_TYPE_ISO3_0 || t == GGML_TYPE_PLANAR4_0 || t == GGML_TYPE_ISO4_0 ||
+                   t == GGML_TYPE_F16;  // F16 V cache is always supported with quantized K
         };
         if (!is_turbo(K->type) || !is_turbo(V->type)) {
             return BEST_FATTN_KERNEL_NONE;
@@ -477,6 +478,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
+        case GGML_TYPE_PLANAR3_0:
+        case GGML_TYPE_ISO3_0:
+        case GGML_TYPE_PLANAR4_0:
+        case GGML_TYPE_ISO4_0:
+            // planar/iso VEC kernel instantiated for D in {64, 128, 256}.
+            if (K->ne[0] % 64 != 0) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            break;
         default:
             return BEST_FATTN_KERNEL_NONE;
     }
@@ -487,6 +497,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // PlanarQuant/IsoQuant: force VEC kernel (only implementation we have).
+    if (K->type == GGML_TYPE_PLANAR3_0 || K->type == GGML_TYPE_ISO3_0 ||
+        K->type == GGML_TYPE_PLANAR4_0 || K->type == GGML_TYPE_ISO4_0) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {

@@ -2834,8 +2834,6 @@ bool llama_kv_cache::convert_deferred_keys() {
         layer.k_quant_stream.clear();
         layer.k_needs_convert = false;
         any_converted = true;
-        fprintf(stderr, "llama_kv_cache: converted layer %d K-cache F16→%s (%zu→%zu bytes)\n",
-                layer.il, ggml_type_name(layer.k->type), f16_bytes, quant_bytes);
     }
 
     return any_converted;
