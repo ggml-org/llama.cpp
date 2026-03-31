@@ -278,6 +278,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_add_id(ctx, idx);
             } break;
+        case GGML_OP_ADD1:
+            {
+                n_fuse = ggml_metal_op_add1(ctx, idx);
+            } break;
         case GGML_OP_REPEAT:
             {
                 n_fuse = ggml_metal_op_repeat(ctx, idx);
@@ -2437,6 +2441,67 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nr0*nsg - 1)/(nr0*nsg), (_ne1 + nr1 - 1)/nr1, ne123, 32, nsg, 1);
         }
     }
+
+    return 1;
+}
+
+int ggml_metal_op_add1(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    // GGML_TENSOR_LOCALS(type, prefix, tensor, field) expands to:
+    //   type prefix##0 = tensor->field[0];
+    //   type prefix##1 = tensor->field[1];
+    //   type prefix##2 = tensor->field[2];
+    //   type prefix##3 = tensor->field[3];
+    //
+    // So these give us:
+    //   ne00, ne01, ne02, ne03  — src0 dimensions
+    //   nb00, nb01, nb02, nb03  — src0 byte strides
+    //   ne0,  ne1,  ne2,  ne3   — dst  dimensions
+    //   nb0,  nb1,  nb2,  nb3   — dst  byte strides
+
+    GGML_TENSOR_LOCALS(int64_t,  ne0, op->src[0], ne)
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb)
+    GGML_TENSOR_LOCALS(int64_t,  ne,  op,         ne)
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb)
+
+    GGML_UNUSED(ne00);
+    GGML_UNUSED(ne01);
+    GGML_UNUSED(ne02);
+    GGML_UNUSED(ne03);
+
+    ggml_metal_kargs_add1 args = {
+        /*.ne0  =*/ ne0,
+        /*.ne1  =*/ ne1,
+        /*.ne2  =*/ ne2,
+        /*.ne3  =*/ ne3,
+        /*.nb0  =*/ nb0,
+        /*.nb1  =*/ nb1,
+        /*.nb2  =*/ nb2,
+        /*.nb3  =*/ nb3,
+        /*.nb00 =*/ nb00,
+        /*.nb01 =*/ nb01,
+        /*.nb02 =*/ nb02,
+        /*.nb03 =*/ nb03,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_add1(lib, op);
+
+    const int64_t n = ne0 * ne1 * ne2 * ne3;
+
+    int nth = 256;
+    int ntg = (int)((n + nth - 1) / nth);
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),        3);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, ntg, 1, 1, nth, 1, 1);
 
     return 1;
 }

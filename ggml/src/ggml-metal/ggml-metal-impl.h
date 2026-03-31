@@ -217,6 +217,22 @@ typedef struct {
     uint64_t o1[8];
 } ggml_metal_kargs_bin;
 
+
+typedef struct {
+    int64_t ne0;
+    int64_t ne1;
+    int64_t ne2;
+    int64_t ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+} ggml_metal_kargs_add1;
+
 typedef struct {
     int64_t ne0;
     int64_t ne1;
