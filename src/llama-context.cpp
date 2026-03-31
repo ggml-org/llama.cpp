@@ -6,6 +6,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-cache.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -1686,6 +1687,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
+        }
+
+        // Deferred quantization: convert F16 K-cache to quantized after prefill
+        // Triggered on first single-token ubatch (= first decode step)
+        if (ubatch.n_tokens == 1 && memory) {
+            auto * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+            if (kv) {
+                kv->convert_deferred_keys();
+            }
         }
 
         ggml_status status;
