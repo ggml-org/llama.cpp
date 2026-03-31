@@ -302,7 +302,7 @@ static __device__ __forceinline__ void prepare_fattn_vec_Q_tq3_0(
 
     static_assert(nthreads == QK_TQ3_0 / int(sizeof(int)), "TQ3_0 FlashAttention expects 8-lane KQ groups");
 
-    constexpr float inv_wht_norm = 1.0f / 32.0f;
+    constexpr float inv_wht_norm = 0.17677669529663688f;  // 1/sqrt(32), not 1/32!
     constexpr int8_t signs[QK_TQ3_0] = {
         +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
         +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
