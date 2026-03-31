@@ -8366,6 +8366,14 @@ template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk192_dv128")]] 
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 320, 256, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 576, 512, 2>;
+// PlanarQuant vec flash attention (decode path)
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 192, 192, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk192_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 192, 128, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 320, 256, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 576, 512, 2>;
+
 
 // Asymmetric K/V TurboQuant vec flash attention — turbo2 K, turbo3 V
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo3_0, NL_TURBO3_VEC, dequantize_turbo3_0_t4, 128, 128, 1>;
