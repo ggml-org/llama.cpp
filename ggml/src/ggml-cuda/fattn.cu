@@ -341,7 +341,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case 112:
         case 256:
         case 512:
-            if (V->ne[0] != K->ne[0]) {
+            if (!gqa_opt_applies) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
