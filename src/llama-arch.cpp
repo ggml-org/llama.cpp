@@ -1035,6 +1035,8 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_QWEN35:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_POS_EMBD,
+                LLM_TENSOR_TOKEN_TYPES,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
                 LLM_TENSOR_ATTN_NORM,
@@ -1061,6 +1063,8 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_QWEN35MOE:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_POS_EMBD,
+                LLM_TENSOR_TOKEN_TYPES,
                 LLM_TENSOR_OUTPUT_NORM,
                 LLM_TENSOR_OUTPUT,
                 LLM_TENSOR_ATTN_NORM,
