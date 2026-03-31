@@ -1,5 +1,5 @@
 [environment]
-extra-paths = ["./gguf-py", "./examples/model-conversion/scripts", "./tools/server/tests"]
+extra-paths = ["./gguf-py", "./examples/model-conversion/scripts", "./tools/server/tests", "./scripts/snapdragon/qdc/tests"]
 python-version = "3.10"
 
 [rules]

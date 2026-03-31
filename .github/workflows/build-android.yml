@@ -1,30 +1,39 @@
 name: CI (android)
 
 on:
-  workflow_dispatch: # allows manual triggering
-  workflow_call: # allows being called as a reusable workflow
+  workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - master
-    paths: [
-      '.github/workflows/build-android.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp'
-    ]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - '**/CMakeLists.txt'
+      - '**/.cmake'
+      - '**/*.h'
+      - '**/*.hpp'
+      - '**/*.c'
+      - '**/*.cpp'
+      - 'ggml/include/ggml-hexagon.h'
+      - 'ggml/src/ggml-hexagon/**'
+      - 'docs/backend/snapdragon/**'
+      - 'scripts/snapdragon/**'
+      - 'CMakePresets.json'
 
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-android.yml',
-      'examples/llama.android/**'
-    ]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - 'examples/llama.android/**'
+      - 'ggml/include/ggml-hexagon.h'
+      - 'ggml/src/ggml-hexagon/**'
+      - 'docs/backend/snapdragon/**'
+      - 'scripts/snapdragon/**'
+      - 'CMakePresets.json'
 
+# When called via workflow_call, use a unique group to avoid deadlocking with the caller's concurrency group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  group: ${{ github.event_name == 'workflow_call' && format('sub-{0}', github.run_id) || format('{0}-{1}', github.workflow, github.head_ref && github.ref || github.run_id) }}
   cancel-in-progress: true
 
 env:
@@ -35,6 +44,24 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  # Detects whether Snapdragon-specific files changed so test-hexagon-qdc can be skipped otherwise.
+  check-snapdragon:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.snapdragon }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            snapdragon:
+              - 'ggml/include/ggml-hexagon.h'
+              - 'ggml/src/ggml-hexagon/**'
+              - 'docs/backend/snapdragon/**'
+              - 'scripts/snapdragon/**'
+              - 'CMakePresets.json'
+
   android:
     runs-on: ubuntu-latest
 
@@ -100,3 +127,50 @@ jobs:
         with:
           name: llama-cpp-android-${{ matrix.build }}
           path: pkg-adb/llama.cpp
+
+  test-hexagon-qdc:
+    name: Test on QDC Android Device (${{ matrix.device }})
+    needs: [android-ndk, check-snapdragon]
+    # Run on Snapdragon path changes, or always when manually dispatched.
+    if: github.event_name == 'workflow_dispatch' || needs.check-snapdragon.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [SM8750, SM8650, SM8850]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: llama-cpp-android-arm64-snapdragon
+          path: pkg-snapdragon/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: pip
+
+      - name: Install QDC SDK wheel
+        run: |
+          curl -fSL -o qdc_sdk.zip https://softwarecenter.qualcomm.com/api/download/software/tools/Qualcomm_Device_Cloud_SDK/All/0.2.3/qualcomm_device_cloud_sdk-0.2.3.zip
+          unzip qdc_sdk.zip -d qdc_sdk
+          pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
+
+      - name: Run QDC tests (${{ matrix.device }})
+        run: |
+          python scripts/snapdragon/qdc/run_qdc_jobs.py \
+              --test       all \
+              --pkg-dir    pkg-snapdragon/llama.cpp \
+              --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
+              --device     ${{ matrix.device }}
+        env:
+          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf pkg-snapdragon qdc_sdk qdc_sdk.zip

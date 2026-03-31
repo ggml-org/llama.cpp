@@ -1,33 +1,11 @@
 name: Build and Test - Hexagon Android (QDC)
 
+# Manual trigger only. Automatic build+test on Snapdragon path changes is handled by build-android.yml.
 on:
   workflow_dispatch:
 
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/test-android-hexagon.yml'
-      - '.github/workflows/build-android.yml'
-      - 'ggml/include/ggml-hexagon.h'
-      - 'ggml/src/ggml-hexagon/**'
-      - 'docs/backend/snapdragon/**'
-      - 'scripts/snapdragon/**'
-      - 'CMakePresets.json'
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/test-android-hexagon.yml'
-      - '.github/workflows/build-android.yml'
-      - 'ggml/include/ggml-hexagon.h'
-      - 'ggml/src/ggml-hexagon/**'
-      - 'docs/backend/snapdragon/**'
-      - 'scripts/snapdragon/**'
-      - 'CMakePresets.json'
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -37,49 +15,3 @@ jobs:
       contents: read
       packages: read
       id-token: write
-
-  test-hexagon-qdc:
-    name: Test on QDC Android Device (${{ matrix.device }})
-    needs: build-hexagon-android
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        device: [SM8750, SM8650, SM8850]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: llama-cpp-android-artifact
-          path: pkg-snapdragon/
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-          cache: pip
-
-      - name: Install QDC SDK wheel
-        run: |
-          curl -fSL -o qdc_sdk.zip https://softwarecenter.qualcomm.com/api/download/software/tools/Qualcomm_Device_Cloud_SDK/All/0.2.3/qualcomm_device_cloud_sdk-0.2.3.zip
-          unzip qdc_sdk.zip -d qdc_sdk
-          pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
-
-      - name: Run QDC tests (${{ matrix.device }})
-        run: |
-          python scripts/snapdragon/qdc/run_qdc_jobs.py \
-              --test       all \
-              --pkg-dir    pkg-snapdragon/llama.cpp \
-              --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
-              --device     ${{ matrix.device }}
-        env:
-          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
-
-      - name: Cleanup
-        if: always()
-        run: rm -rf pkg-snapdragon qdc_sdk qdc_sdk.zip
-

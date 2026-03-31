@@ -38,9 +38,9 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from qualcomm_device_cloud_sdk.api import qdc_api
-from qualcomm_device_cloud_sdk.logging import configure_logging
-from qualcomm_device_cloud_sdk.models import ArtifactType, JobMode, JobState, JobSubmissionParameter, JobType, TestFramework
+from qualcomm_device_cloud_sdk.api import qdc_api  # ty: ignore[unresolved-import]
+from qualcomm_device_cloud_sdk.logging import configure_logging  # ty: ignore[unresolved-import]
+from qualcomm_device_cloud_sdk.models import ArtifactType, JobMode, JobState, JobSubmissionParameter, JobType, TestFramework  # ty: ignore[unresolved-import]
 
 configure_logging(level=logging.INFO, handlers=[logging.StreamHandler()])
 log = logging.getLogger(__name__)
@@ -68,12 +68,14 @@ _PYTEST_LINE_RE = re.compile(
 _EXCLUDED_LOGS = {"qdc_android_whole_host-000.log", "qdc_kernel_host-000.log"}
 _NON_TERMINAL_STATE_VALUES = {s.value for s in NON_TERMINAL_STATES}
 
+
 @dataclass
 class JobResult:
     passed: bool
     tests: dict[str, bool] = field(default_factory=dict)
     raw_logs: dict[str, str] = field(default_factory=dict)
     failure_details: dict[str, str] = field(default_factory=dict)
+
 
 def build_artifact_zip(
     pkg_dir: Path,
@@ -103,6 +105,7 @@ def build_artifact_zip(
     shutil.copy(_CONFTEST, tests_dir / "conftest.py")
 
     if test_mode in ("bench", "all"):
+        assert model_url is not None, "--model-url is required for bench/all test modes"
         (tests_dir / "test_bench_posix.py").write_text(
             _RUN_BENCH.read_text().replace("<<MODEL_URL>>", model_url)
         )
@@ -114,6 +117,7 @@ def build_artifact_zip(
     zip_base = str(stage_dir / "artifact")
     shutil.make_archive(zip_base, "zip", stage_dir)
     return Path(f"{zip_base}.zip")
+
 
 def wait_for_job(client, job_id: str, timeout: int) -> str:
     elapsed = 0
@@ -130,6 +134,7 @@ def wait_for_job(client, job_id: str, timeout: int) -> str:
         elapsed += POLL_INTERVAL
     raise TimeoutError(f"Job {job_id} did not finish within {timeout}s")
 
+
 def wait_for_log_upload(client, job_id: str) -> None:
     elapsed = 0
     while elapsed <= LOG_UPLOAD_TIMEOUT:
@@ -140,6 +145,7 @@ def wait_for_log_upload(client, job_id: str) -> None:
         time.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
     log.warning("Timed out waiting for log upload after %ds", LOG_UPLOAD_TIMEOUT)
+
 
 def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
     """Block until the user's active (non-terminal) QDC job count is below max_jobs."""
@@ -158,6 +164,7 @@ def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
         time.sleep(CAPACITY_POLL)
         elapsed += CAPACITY_POLL
     log.warning("Capacity wait timed out after %ds; proceeding anyway", CAPACITY_TIMEOUT)
+
 
 def _parse_junit_xml(content: str) -> tuple[dict[str, bool], dict[str, str]]:
     try:
@@ -179,11 +186,13 @@ def _parse_junit_xml(content: str) -> tuple[dict[str, bool], dict[str, str]]:
             failures[name] = "\n".join(p for p in parts if p).strip()
     return results, failures
 
+
 def _parse_pytest_output(content: str) -> dict[str, bool]:
     results: dict[str, bool] = {}
     for m in _PYTEST_LINE_RE.finditer(content):
         results[m.group(1)] = m.group(2) == "PASSED"
     return results
+
 
 def fetch_logs_and_parse_tests(
     client, job_id: str
@@ -217,7 +226,7 @@ def fetch_logs_and_parse_tests(
                     if fname in _EXCLUDED_LOGS:
                         continue
                     log.info("--- %s ---", fname)
-                    print(content)
+                    log.info("%s", content)
                     raw_logs[fname] = content
                     pytest_fallback.update(_parse_pytest_output(content))
 
