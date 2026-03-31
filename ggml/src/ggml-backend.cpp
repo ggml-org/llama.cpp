@@ -1566,11 +1566,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // compute stream waits for previous prefetch to complete
                 ggml_backend_event_wait(split_backend, sched->copy_events[split_backend_id]);
 
-                // prefetch next split's weights on the copy stream (overlaps with current split's compute)
+                // prefetch next split's weights on the copy stream
                 if (split_id + 1 < sched->n_splits) {
                     struct ggml_backend_sched_split * next = &splits[split_id + 1];
-                    // only prefetch when next split is on the same device (multi-GPU safety)
-                    // and only for CPU->GPU transfers (host buffers)
+                    // only prefetch when next split is on the same device
                     if (next->backend_id == split_backend_id) {
                         // copy stream waits for previous compute to complete
                         ggml_backend_event_wait(copy_backend, sched->compute_events[split_backend_id]);
@@ -1988,7 +1987,6 @@ void ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool en
     sched->prefetch_weights = enabled;
 
     if (enabled) {
-        // create copy backends and events for backends that support copy_stream
         for (int b = 0; b < sched->n_backends; b++) {
             if (sched->copy_backends[b] != NULL) {
                 continue;
@@ -2006,7 +2004,6 @@ void ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool en
             }
         }
     } else {
-        // free copy backends and events
         for (int b = 0; b < sched->n_backends; b++) {
             ggml_backend_event_free(sched->copy_events[b]);
             sched->copy_events[b] = NULL;

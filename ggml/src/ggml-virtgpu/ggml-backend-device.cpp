@@ -68,6 +68,7 @@ static void ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, ggml_
     props->caps.buffer_from_host_ptr = false;
     props->caps.async                = false;
     props->caps.events               = false;
+    props->caps.copy_stream          = false;
 }
 
 ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
