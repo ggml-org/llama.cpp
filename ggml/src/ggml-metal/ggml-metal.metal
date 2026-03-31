@@ -7278,6 +7278,32 @@ constant float planar_sin_64[64] = {
 };
 
 
+// IsoQuant quaternion rotation parameters (seed=42, 32 unit quaternions for d=128)
+constant float iso_qw_32[32] = {
+    0.0802934347f, 0.6225181162f, 0.3747126104f, -0.6740884451f, -0.3537887442f, 0.7620602746f, 0.3578645709f, 0.0084074857f,
+    0.6784872304f, 0.7137713509f, -0.6499854122f, -0.1852518494f, -0.1562777774f, -0.2510198599f, -0.9291601430f, -0.3051900743f,
+    -0.6788636800f, 0.1431840120f, 0.5668277857f, 0.7046420734f, -0.6883691168f, -0.3730590262f, 0.1713097776f, 0.9196614866f,
+    -0.3787581456f, 0.7802238888f, 0.7984311074f, -0.2209202886f, 0.3212155097f, 0.9537663843f, -0.3764481598f, -0.8631927862f,
+};
+constant float iso_qx_32[32] = {
+    -0.4466194410f, -0.7282201252f, -0.2065995467f, -0.5542964634f, -0.7863645986f, 0.2018140785f, -0.3216182801f, -0.1860052789f,
+    0.1853529215f, -0.2461146810f, -0.3799125885f, -0.0876585125f, 0.0485238935f, -0.7142686664f, 0.0110605997f, 0.3035207274f,
+    -0.3713760006f, 0.7461906450f, -0.0433887663f, -0.3710325637f, 0.3220700358f, 0.6068730652f, 0.7206557200f, 0.0456404769f,
+    -0.1318186355f, 0.3533650879f, -0.5522954239f, -0.8632296933f, 0.9386664238f, -0.1187466113f, 0.9244263727f, -0.3009463076f,
+};
+constant float iso_qy_32[32] = {
+    0.4259443204f, -0.0970891911f, -0.7872366771f, -0.4859352865f, -0.4973242253f, 0.2838025306f, -0.5503661517f, 0.9823943492f,
+    0.5412906224f, -0.4238235158f, -0.3835424018f, 0.6110326502f, 0.9662522674f, 0.6047628077f, -0.3252919722f, -0.5608427684f,
+    -0.6206708809f, 0.3430037036f, -0.7363050118f, 0.5348247359f, -0.0572340714f, 0.5040206101f, 0.6672224065f, -0.1667266147f,
+    0.3782857476f, 0.4791631899f, -0.1992364623f, 0.3937924098f, -0.1238423417f, 0.1231648462f, -0.0147054151f, -0.1029547442f,
+};
+constant float iso_qz_32[32] = {
+    0.7827231153f, -0.2697041588f, -0.4440332208f, -0.0471921199f, -0.0955659850f, 0.5458858298f, -0.6823428243f, 0.0152542781f,
+    0.4607644027f, 0.5003315399f, 0.5348650437f, 0.7646154837f, -0.1989453284f, -0.2471259771f, 0.1752832694f, 0.7072408188f,
+    -0.1264580076f, 0.5523099848f, -0.3669858389f, -0.2824480254f, 0.6474126289f, 0.4883597755f, 0.0782467478f, -0.3526215150f,
+    -0.8343057039f, 0.1917979027f, 0.1333505287f, 0.2257349346f, 0.0197234777f, 0.2471018964f, -0.0592149919f, -0.3920839890f,
+};
+
 // ===== iso4 and planar4: aliases for turbo4 dequantize (same block layout) =====
 // The CPU quantize path uses turbo4's WHT rotation for both.
 // Custom Metal set_rows kernels with quaternion/Givens rotation are future work.
@@ -7343,14 +7369,60 @@ void dequantize_planar4_0_t4(device const block_planar4_0 * xb, short il, thread
     reg = (type4) float4(f0 * norm, f1 * norm, f2 * norm, f3 * norm);
 }
 
+// iso4 dequantize: nibble unpack → centroid lookup → inverse quaternion rotation
 template <typename type4x4>
 void dequantize_iso4_0(device const block_iso4_0 * xb, short il, thread type4x4 & reg) {
-    dequantize_turbo4_0(xb, il, reg);
+    const float norm = float(xb->norm);
+    const int base_elem = il * 16;
+    float4x4 reg_f;
+
+    for (int g = 0; g < 4; g++) {
+        float4 raw;
+        for (int k = 0; k < 4; k++) {
+            const int j = base_elem + g * 4 + k;
+            uint8_t idx = (xb->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
+            raw[k] = turbo_centroids_4bit[idx];
+        }
+
+        // Inverse quaternion rotation: conj(q_L) * v
+        int qg = (base_elem + g * 4) / 4;  // quaternion group index
+        float qw = iso_qw_32[qg], qx = -iso_qx_32[qg], qy = -iso_qy_32[qg], qz = -iso_qz_32[qg];
+        float vw = raw[0], vx = raw[1], vy = raw[2], vz = raw[3];
+
+        float rw = qw*vw - qx*vx - qy*vy - qz*vz;
+        float rx = qw*vx + qx*vw + qy*vz - qz*vy;
+        float ry = qw*vy - qx*vz + qy*vw + qz*vx;
+        float rz = qw*vz + qx*vy - qy*vx + qz*vw;
+
+        reg_f[g] = float4(rw * norm, rx * norm, ry * norm, rz * norm);
+    }
+    reg = (type4x4) reg_f;
 }
 
 template <typename type4>
 void dequantize_iso4_0_t4(device const block_iso4_0 * xb, short il, thread type4 & reg) {
-    dequantize_turbo4_0_t4(xb, il, reg);
+    const float norm = float(xb->norm);
+    const device uint8_t * qs = xb->qs + il * 2;
+    const uint8_t qb0 = qs[0];
+    const uint8_t qb1 = qs[1];
+
+    float4 raw = float4(
+        turbo_centroids_4bit[(qb0     ) & 0xF],
+        turbo_centroids_4bit[(qb0 >> 4) & 0xF],
+        turbo_centroids_4bit[(qb1     ) & 0xF],
+        turbo_centroids_4bit[(qb1 >> 4) & 0xF]
+    );
+
+    // Inverse quaternion rotation
+    int qg = il;  // each il = 4 elements = 1 quaternion group
+    float qw = iso_qw_32[qg], qx = -iso_qx_32[qg], qy = -iso_qy_32[qg], qz = -iso_qz_32[qg];
+
+    float rw = qw*raw[0] - qx*raw[1] - qy*raw[2] - qz*raw[3];
+    float rx = qw*raw[1] + qx*raw[0] + qy*raw[3] - qz*raw[2];
+    float ry = qw*raw[2] - qx*raw[3] + qy*raw[0] + qz*raw[1];
+    float rz = qw*raw[3] + qx*raw[2] - qy*raw[1] + qz*raw[0];
+
+    reg = (type4) float4(rw * norm, rx * norm, ry * norm, rz * norm);
 }
 
 // planar4/iso4 set_rows: delegate to turbo4 (WHT rotation) for now
@@ -7366,31 +7438,7 @@ constant float iso_centroids_3bit[8] = {
      0.021460f,  0.065717f,  0.117832f,  0.190685f
 };
 
-// IsoQuant quaternion rotation parameters (seed=42, 32 unit quaternions for d=128)
-constant float iso_qw_32[32] = {
-    0.0802934347f, 0.6225181162f, 0.3747126104f, -0.6740884451f, -0.3537887442f, 0.7620602746f, 0.3578645709f, 0.0084074857f,
-    0.6784872304f, 0.7137713509f, -0.6499854122f, -0.1852518494f, -0.1562777774f, -0.2510198599f, -0.9291601430f, -0.3051900743f,
-    -0.6788636800f, 0.1431840120f, 0.5668277857f, 0.7046420734f, -0.6883691168f, -0.3730590262f, 0.1713097776f, 0.9196614866f,
-    -0.3787581456f, 0.7802238888f, 0.7984311074f, -0.2209202886f, 0.3212155097f, 0.9537663843f, -0.3764481598f, -0.8631927862f,
-};
-constant float iso_qx_32[32] = {
-    -0.4466194410f, -0.7282201252f, -0.2065995467f, -0.5542964634f, -0.7863645986f, 0.2018140785f, -0.3216182801f, -0.1860052789f,
-    0.1853529215f, -0.2461146810f, -0.3799125885f, -0.0876585125f, 0.0485238935f, -0.7142686664f, 0.0110605997f, 0.3035207274f,
-    -0.3713760006f, 0.7461906450f, -0.0433887663f, -0.3710325637f, 0.3220700358f, 0.6068730652f, 0.7206557200f, 0.0456404769f,
-    -0.1318186355f, 0.3533650879f, -0.5522954239f, -0.8632296933f, 0.9386664238f, -0.1187466113f, 0.9244263727f, -0.3009463076f,
-};
-constant float iso_qy_32[32] = {
-    0.4259443204f, -0.0970891911f, -0.7872366771f, -0.4859352865f, -0.4973242253f, 0.2838025306f, -0.5503661517f, 0.9823943492f,
-    0.5412906224f, -0.4238235158f, -0.3835424018f, 0.6110326502f, 0.9662522674f, 0.6047628077f, -0.3252919722f, -0.5608427684f,
-    -0.6206708809f, 0.3430037036f, -0.7363050118f, 0.5348247359f, -0.0572340714f, 0.5040206101f, 0.6672224065f, -0.1667266147f,
-    0.3782857476f, 0.4791631899f, -0.1992364623f, 0.3937924098f, -0.1238423417f, 0.1231648462f, -0.0147054151f, -0.1029547442f,
-};
-constant float iso_qz_32[32] = {
-    0.7827231153f, -0.2697041588f, -0.4440332208f, -0.0471921199f, -0.0955659850f, 0.5458858298f, -0.6823428243f, 0.0152542781f,
-    0.4607644027f, 0.5003315399f, 0.5348650437f, 0.7646154837f, -0.1989453284f, -0.2471259771f, 0.1752832694f, 0.7072408188f,
-    -0.1264580076f, 0.5523099848f, -0.3669858389f, -0.2824480254f, 0.6474126289f, 0.4883597755f, 0.0782467478f, -0.3526215150f,
-    -0.8343057039f, 0.1917979027f, 0.1333505287f, 0.2257349346f, 0.0197234777f, 0.2471018964f, -0.0592149919f, -0.3920839890f,
-};
+
 
 // Non-vec dequantize: 16 elements per call (il in {0..NL_ISO3-1})
 template <typename type4x4>
@@ -11948,6 +11996,81 @@ template [[host_name("kernel_set_rows_turbo2_i64")]] kernel set_rows_turbo2_t ke
 template [[host_name("kernel_set_rows_turbo2_i32")]] kernel set_rows_turbo2_t kernel_set_rows_turbo2<int32_t>;
 
 // TurboQuant4 set_rows instantiations (dedicated kernel, 128-element blocks with QJL)
+
+
+// IsoQuant 4-bit set_rows: quaternion 4D rotation + 16-centroid nibble pack
+template<typename TI>
+kernel void kernel_set_rows_iso4(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI i1 = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+    device block_iso4_0 * dst_row = (device block_iso4_0 *) ((device char *) dst + i1*args.nb1 + i02*args.nb2 + i03*args.nb3);
+    const device float * src_row = (const device float *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    for (int blk = 0; blk < args.nk0; blk++) {
+        const device float * grp_src = src_row + blk * QK_ISO4;
+        device block_iso4_0 * dst_blk = &dst_row[blk];
+
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < 128; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < 128; j++) buf[j] *= inv_norm;
+
+        // Forward quaternion rotation per 4D group
+        float rotated[128];
+        for (int g = 0; g < 32; g++) {
+            float qw = iso_qw_32[g], qx = iso_qx_32[g], qy = iso_qy_32[g], qz = iso_qz_32[g];
+            float v0 = buf[g*4], v1 = buf[g*4+1], v2 = buf[g*4+2], v3 = buf[g*4+3];
+            rotated[g*4]   = qw*v0 - qx*v1 - qy*v2 - qz*v3;
+            rotated[g*4+1] = qw*v1 + qx*v0 + qy*v3 - qz*v2;
+            rotated[g*4+2] = qw*v2 - qx*v3 + qy*v0 + qz*v1;
+            rotated[g*4+3] = qw*v3 + qx*v2 - qy*v1 + qz*v0;
+        }
+
+        // 4-bit quantize + nibble pack
+        for (int j = 0; j < 64; j++) dst_blk->qs[j] = 0;
+        float recon_sq = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            float val = rotated[j];
+            uint8_t idx = 0;
+            float best_d = abs(val - turbo_centroids_4bit[0]);
+            for (int c = 1; c < 16; c++) {
+                float d = abs(val - turbo_centroids_4bit[c]);
+                if (d < best_d) { best_d = d; idx = c; }
+            }
+            dst_blk->qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
+            recon_sq += turbo_centroids_4bit[idx] * turbo_centroids_4bit[idx];
+        }
+
+        float recon_norm = sqrt(recon_sq);
+        float corrected = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
+        dst_blk->norm = half(corrected);
+        dst_blk->rnorm = half(0.0f);
+    }
+}
+
+typedef decltype(kernel_set_rows_iso4<int64_t>) set_rows_iso4_t;
+template [[host_name("kernel_set_rows_iso4_i64")]] kernel set_rows_iso4_t kernel_set_rows_iso4<int64_t>;
+template [[host_name("kernel_set_rows_iso4_i32")]] kernel set_rows_iso4_t kernel_set_rows_iso4<int32_t>;
 
 // PlanarQuant 4-bit set_rows: Givens rotation + 16-centroid nibble pack
 template<typename TI>

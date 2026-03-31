@@ -167,9 +167,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_set_rows(ggml_me
 
     // iso4 reuses turbo4 set_rows; planar4 has its own Givens kernel
     const char * dst_name = ggml_type_name(tdst);
-    if (tdst == GGML_TYPE_ISO4_0) {
-        dst_name = "turbo4";
-    }
+    // iso4 and planar4 have their own set_rows kernels now
 
     snprintf(base, 256, "kernel_set_rows_%s_%s", dst_name, ggml_type_name(tidx));
     snprintf(name, 256, "%s", base);
