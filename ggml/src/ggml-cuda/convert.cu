@@ -486,6 +486,50 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
     }
 }
 
+// TurboQuant TQ3_0: 2-bit codebook dequantization + inverse WHT
+// Dequantize to rotated space, then apply inverse WHT32 cooperatively
+template<typename dst_t>
+static __global__ void dequantize_block_tq3_0(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const float centroids[4] = { -1.510f, -0.4528f, 0.4528f, 1.510f };
+    const int8_t signs[32] = {
+        +1, -1, +1, +1, -1, -1, +1, -1, +1, +1, -1, +1, -1, +1, -1, -1,
+        +1, -1, -1, +1, +1, -1, +1, -1, -1, +1, +1, +1, -1, -1, +1, -1
+    };
+
+    const int64_t i = blockIdx.x;
+    const block_tq3_0 * x = (const block_tq3_0 *)vx;
+    const int tid = threadIdx.x;
+    if (tid >= 32) return;
+
+    const float d = __half2float(x[i].gamma);
+
+    // Step 1: Each thread dequantizes its value (in rotated space)
+    const int byte_idx = tid / 4;
+    const int bit_shift = 2 * (tid % 4);
+    const int idx = (x[i].qs[byte_idx] >> bit_shift) & 3;
+
+    __shared__ float shmem[32];
+    shmem[tid] = d * centroids[idx];
+    __syncthreads();
+
+    // Step 2: Cooperative inverse WHT (5 butterfly stages)
+    for (int step = 1; step < 32; step <<= 1) {
+        int partner = tid ^ step;  // butterfly partner
+        float a = shmem[tid];
+        float b = shmem[partner];
+        __syncthreads();
+        if (tid < partner) {
+            shmem[tid]     = a + b;
+            shmem[partner] = a - b;
+        }
+        __syncthreads();
+    }
+
+    // Step 3: Normalize and undo sign flips
+    const float inv_sqrt32 = 0.17677669529663688f;
+    yy[i * QK_TQ3_0 + tid] = shmem[tid] * inv_sqrt32 * signs[tid];
+}
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void dequantize_block_cuda(const void * vx, dst_t * y,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -656,6 +700,13 @@ static void dequantize_row_nvfp4_cuda(
     const int nb = k / QK_NVFP4;
     dequantize_block_nvfp4<<<nb, 32, 0, stream>>>(vx, y, k);
 }
+
+template<typename dst_t>
+static void dequantize_row_tq3_0_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_TQ3_0;
+    dequantize_block_tq3_0<<<nb, 32, 0, stream>>>(vx, y);
+}
+
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01,
@@ -756,6 +807,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_TQ3_0:
+            return dequantize_row_tq3_0_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -809,6 +862,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_TQ3_0:
+            return dequantize_row_tq3_0_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:

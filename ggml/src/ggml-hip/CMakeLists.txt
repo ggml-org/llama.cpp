@@ -82,6 +82,8 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
+    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*tq3_0-f16.cu")
+    list(APPEND GGML_SOURCES_ROCM ${SRCS})
 endif()
 
 ggml_add_backend_library(ggml-hip
