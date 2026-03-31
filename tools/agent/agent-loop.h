@@ -12,15 +12,10 @@
 
 #include <atomic>
 #include <functional>
-#include <set>
 #include <string>
 #include <vector>
 
 using json = nlohmann::ordered_json;
-
-// Callback for reporting tool calls (used by subagents to report to parent display)
-// Parameters: tool_name, args_summary, elapsed_ms
-using tool_call_callback = std::function<void(const std::string &, const std::string &, int)>;
 
 // Stop reasons for the agent loop
 enum class agent_stop_reason {
@@ -62,12 +57,6 @@ struct session_stats {
     int32_t total_cached = 0;      // Total tokens served from KV cache
     double total_prompt_ms = 0;    // Total prompt evaluation time
     double total_predicted_ms = 0; // Total generation time
-
-    // Subagent-specific stats (subset of totals above)
-    int32_t subagent_input = 0;    // Prompt tokens from subagents
-    int32_t subagent_output = 0;   // Output tokens from subagents
-    int32_t subagent_cached = 0;   // Cached tokens from subagents
-    int32_t subagent_count = 0;    // Number of subagent runs
 };
 
 // Event types for streaming API
@@ -166,22 +155,11 @@ using agent_event_callback = std::function<void(const agent_event &)>;
 // The main agent loop class
 class agent_loop {
 public:
-    // Standard constructor for main agent
+    // Standard constructor
     agent_loop(server_context & server_ctx,
                const common_params & params,
                const agent_config & config,
                std::atomic<bool> & is_interrupted);
-
-    // Constructor for subagents with filtered tools and custom system prompt
-    agent_loop(server_context & server_ctx,
-               const common_params & params,
-               const agent_config & config,
-               std::atomic<bool> & is_interrupted,
-               const std::set<std::string> & allowed_tools,
-               const std::vector<std::string> & bash_patterns,  // For read-only bash filtering
-               const std::string & custom_system_prompt,
-               int subagent_depth,
-               tool_call_callback on_tool_call = nullptr);
 
     // Run the agent loop with an initial user prompt
     agent_loop_result run(const std::string & user_prompt);
@@ -236,7 +214,7 @@ private:
                                   const tool_result & result);
 
     server_context & server_ctx_;
-    const common_params * params_;  // Stored for subagent construction
+    const common_params * params_;
     agent_config config_;
     std::atomic<bool> & is_interrupted_;
 
@@ -245,14 +223,4 @@ private:
     permission_manager permission_mgr_;
     tool_context tool_ctx_;
     session_stats stats_;
-
-    // Subagent support
-    std::set<std::string> allowed_tools_;     // Empty = all tools allowed
-    std::vector<std::string> bash_patterns_;  // Allowed bash command prefixes (for read-only subagents)
-    tool_call_callback on_tool_call_;         // Optional callback for tool reporting
-    bool is_subagent_ = false;                // True if this is a subagent
-
-    // Common initialization logic
-    void init_common(const common_params & params);
-    void init_system_prompt(const std::string & custom_system_prompt = "");
 };

@@ -9,7 +9,6 @@ A coding agent that runs entirely inside [llama.cpp](https://github.com/ggml-org
 - [Quick Start](#quick-start)
 - [Available Tools](#available-tools)
 - [Commands](#commands)
-- [Subagents](#subagents)
 - [Skills](#skills)
 - [AGENTS.md Support](#agentsmd-support)
 - [MCP Server Support](#mcp-server-support)
@@ -110,7 +109,6 @@ The agent can use these tools to interact with your codebase and system.
 | `write` | Create or overwrite files |
 | `edit` | Search and replace in files |
 | `glob` | Find files matching a pattern |
-| `task` | Spawn a subagent for complex tasks |
 
 ## Commands
 
@@ -123,100 +121,6 @@ Interactive commands available during a session. Type these directly in the chat
 | `/tools` | List available tools |
 | `/skills` | List available skills |
 | `/agents` | List discovered AGENTS.md files |
-
-## Subagents
-
-Subagents are specialized child agents that handle complex tasks independently, keeping the main conversation context clean and efficient.
-
-| Flag | Description |
-|------|-------------|
-| `--subagents` | Enable subagents (disabled by default) |
-| `--max-subagent-depth N` | Set max nesting depth (0-5, default: 1 when enabled) |
-| `--no-subagents` | Explicitly disable subagents |
-
-### Why Subagents?
-
-Without subagents, every file read and search pollutes your main context. With subagents, only a summary enters main context. The detailed exploration is discarded afterward.
-
-```
-Main context:
-└── task(explore) → "Found 3 TODO items in src/main.cpp:42,87,156" (50 tokens)
-    └── Instead of ~5,700 tokens for all the exploration.
-```
-
-### Subagent Types
-
-| Type | Purpose | Tools Available |
-|------|---------|-----------------|
-| `explore` | Search and understand code (read-only) | `glob`, `read`, `bash` (read-only) |
-| `bash` | Execute shell commands | `bash` |
-| `plan` | Design implementation approaches | `glob`, `read`, `bash` |
-| `general` | General-purpose tasks | All tools |
-
-<details>
-<summary><strong>How subagents work (architecture)</strong></summary>
-
-```
-┌─────────────────┐
-│   Main Agent    │  "Find where errors are handled"
-└────────┬────────┘
-         │ task(explore, "find error handling")
-         ▼
-┌─────────────────┐
-│    Subagent     │  Does detailed exploration:
-│    (explore)    │  - glob **/*.cpp
-│                 │  - read 5 files
-│                 │  - grep patterns
-└────────┬────────┘
-         │ Returns summary only
-         ▼
-┌─────────────────┐
-│   Main Agent    │  Receives: "Errors handled in src/error.cpp:45
-│                 │  via ErrorHandler class..."
-└─────────────────┘
-```
-
-</details>
-
-<details>
-<summary><strong>Memory efficiency & parallel execution</strong></summary>
-
-**Memory Efficiency**
-
-Subagents share the model, so no additional VRAM is used:
-
-| Resource | Main Agent | Subagent | Total |
-|----------|------------|----------|-------|
-| Model weights | ✓ | Shared | 1x |
-| KV cache | ✓ | Shared via slots | 1x |
-| Context window | Own | Own (discarded after) | Efficient |
-
-**Parallel Execution**
-
-Multiple subagents can run in the background simultaneously:
-
-```
-> Run tests and check for lint errors at the same time
-
-[task-a1b2] ┌── ⚡ run-tests (bash)
-[task-c3d4] ┌── ⚡ check-lint (bash)
-[task-c3d4] │   └── done (1.8s)
-[task-a1b2] │   └── done (2.1s)
-```
-
-**KV Cache Prefix Sharing**
-
-Subagent prompts share a common prefix with the main agent, enabling automatic KV cache reuse:
-
-```
-Main agent prompt:    "You are llama-agent... [base] + [main agent instructions]"
-Subagent prompt:      "You are llama-agent... [base] + # Subagent Mode: explore..."
-                       ↑─────── shared prefix ──────↑
-```
-
-This reduces subagent startup latency and saves compute.
-
-</details>
 
 ## Usage Examples
 

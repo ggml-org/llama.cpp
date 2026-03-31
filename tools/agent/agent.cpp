@@ -7,7 +7,6 @@
 #include "permission.h"
 #include "skills/skills-manager.h"
 #include "agents-md/agents-md-manager.h"
-#include "subagent/subagent-display.h"
 
 #ifndef _WIN32
 #include "mcp/mcp-server-manager.h"
@@ -108,7 +107,6 @@ int main(int argc, char ** argv) {
     bool enable_skills = true;
     bool enable_agents_md = true;
     std::vector<std::string> extra_skills_paths;
-    int max_subagent_depth = 0;  // Default: subagents disabled (use --subagents to enable)
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -169,42 +167,6 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "--max-iterations requires a value\n");
                 return 1;
             }
-        } else if (arg == "--max-subagent-depth") {
-            if (i + 1 < argc) {
-                try {
-                    max_subagent_depth = std::stoi(argv[i + 1]);
-                    if (max_subagent_depth < 0) max_subagent_depth = 0;
-                    if (max_subagent_depth > 5) max_subagent_depth = 5;
-                } catch (...) {
-                    fprintf(stderr, "Invalid --max-subagent-depth value: %s\n", argv[i + 1]);
-                    return 1;
-                }
-                // Remove both the flag and its value
-                for (int j = i; j < argc - 2; j++) {
-                    argv[j] = argv[j + 2];
-                }
-                argc -= 2;
-                i--;  // Re-check this position
-            } else {
-                fprintf(stderr, "--max-subagent-depth requires a value\n");
-                return 1;
-            }
-        } else if (arg == "--no-subagents") {
-            max_subagent_depth = 0;
-            // Remove from argv
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;  // Re-check this position
-        } else if (arg == "--subagents") {
-            max_subagent_depth = 1;
-            // Remove from argv
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;  // Re-check this position
         }
     }
 
@@ -351,9 +313,6 @@ int main(int argc, char ** argv) {
     config.enable_agents_md = enable_agents_md;
     config.agents_md_prompt_section = agents_md_mgr.generate_prompt_section();
 
-    // Configure subagent support
-    subagent_display::instance().set_max_depth(max_subagent_depth);
-
     // Create agent loop
     agent_loop agent(ctx_server, params, config, g_is_interrupted);
 
@@ -477,26 +436,6 @@ int main(int argc, char ** argv) {
                     console::log("  Cached tokens:  %d\n", stats.total_cached);
                 }
                 console::log("  Total tokens:   %d\n", stats.total_input + stats.total_output);
-
-                // Show subagent breakdown if any subagents were used
-                if (stats.subagent_count > 0) {
-                    console::log("\n  Subagent breakdown (%d run%s):\n",
-                        stats.subagent_count, stats.subagent_count == 1 ? "" : "s");
-                    console::log("    Prompt tokens:  %d\n", stats.subagent_input);
-                    console::log("    Output tokens:  %d\n", stats.subagent_output);
-                    if (stats.subagent_cached > 0) {
-                        console::log("    Cached tokens:  %d\n", stats.subagent_cached);
-                    }
-                    console::log("    Total tokens:   %d\n", stats.subagent_input + stats.subagent_output);
-
-                    // Show main agent stats (total minus subagent)
-                    int32_t main_input = stats.total_input - stats.subagent_input;
-                    int32_t main_output = stats.total_output - stats.subagent_output;
-                    console::log("\n  Main agent:\n");
-                    console::log("    Prompt tokens:  %d\n", main_input);
-                    console::log("    Output tokens:  %d\n", main_output);
-                    console::log("    Total tokens:   %d\n", main_input + main_output);
-                }
 
                 if (stats.total_prompt_ms > 0) {
                     console::log("  Prompt time:    %.2fs\n", stats.total_prompt_ms / 1000.0);
