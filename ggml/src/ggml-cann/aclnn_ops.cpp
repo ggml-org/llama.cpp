@@ -2248,62 +2248,41 @@ static void aclnn_index_fill_tensor(ggml_backend_cann_context & ctx,
  * @param indep_sects        Whether each dimension runs independent exponent
  *                           resets based on @p sections.
  */
-static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
-                                  ggml_tensor *               dst,
-                                  float *                     corr_dims,
-                                  float                       ext_factor,
-                                  float                       theta_scale,
-                                  float                       freq_scale,
-                                  float                       attn_factor,
-                                  bool                        is_neox,
-                                  int                         sections[4],
-                                  bool                        mrope_used,
-                                  bool                        is_imrope,
-                                  bool                        indep_sects,
-                                  int64_t                     rope_dims) {
-    ggml_tensor * src1 = dst->src[1];  // position
-    ggml_tensor * src2 = dst->src[2];  // freq_factors
+/**
+ * @brief Perform CPU-side computation, device memory allocation, and host-to-device
+ *        copies needed by the RoPE cache.
+ *
+ * This function is idempotent within a single cache cycle: if the host_prepared
+ * flag is already set it returns immediately.  It sets the following flags on
+ * ctx.rope_cache so that the subsequent aclnn_rope_cache_init can skip the
+ * host/malloc/memcpy work and only issue device-side operations:
+ *   - host_prepared
+ *   - theta_scale_host_updated
+ *   - yarn_ramp_host_updated
+ *   - freq_scale_host_changed
+ */
+static void aclnn_rope_cache_prepare_host(ggml_backend_cann_context & ctx,
+                                           ggml_tensor *               dst,
+                                           float                       ext_factor,
+                                           float                       theta_scale,
+                                           float                       freq_scale,
+                                           int                         sections[4],
+                                           bool                        mrope_used,
+                                           bool                        is_imrope,
+                                           bool                        indep_sects,
+                                           int64_t                     rope_dims) {
+    if (ctx.rope_cache.host_prepared) {
+        return;
+    }
 
     int64_t theta_scale_length = rope_dims / 2;
     int64_t position_length    = dst->ne[2];
 
-    // TODO: check theta_scale_length and position_length.
-    if (src2 == nullptr && ctx.rope_cache.cached &&
-        ctx.rope_cache.equal(theta_scale_length, position_length, ext_factor, theta_scale, freq_scale, attn_factor,
-                             is_neox, indep_sects, mrope_used, is_imrope, sections)) {
-        // use cache.
-        return;
-    }
-
-    // Step0: calculate tensor shape.
-    int64_t theta_scale_ne[] = { theta_scale_length, 1, 1, 1 };
-    size_t  theta_scale_nb[] = { sizeof(float), theta_scale_length * sizeof(float), theta_scale_length * sizeof(float),
-                                 theta_scale_length * sizeof(float) };
-
-    GGML_ASSERT(src1->type == GGML_TYPE_I32);
-    int64_t position_ne[] = { 1, 1, position_length, 1 };
-    size_t  position_nb[] = { sizeof(int32_t), sizeof(int32_t), sizeof(int32_t), sizeof(int32_t) * position_length };
-
-    int64_t cache_ne[] = { theta_scale_length, 1, position_length, 1 };
-    size_t  cache_nb[GGML_MAX_DIMS];
-    cache_nb[0] = sizeof(float);
-    for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        cache_nb[i] = cache_nb[i - 1] * cache_ne[i - 1];
-    }
-
-    // Step1: Compute the coefficient of theta. During the cache_init process, aside from
-    // (1) multiplying by the position,
-    // (2) dividing by freq_factors,
-    // (3) computing the sine and cosine,
-    // the other parameters used in the computation generally do not change in most scenarios.
-    // Therefore, we can first compute this part of the result and then cache it.
-
-    // Step1.1: prepare theta_scale exponent. if this exponent updated, should update theta_scale_tensor.
-    acl_tensor_ptr acl_theta_scale_tensor;
-    bool           theta_scale_updated = false;
+    // Step 1.1: theta_scale_exp – CPU computation + device alloc + H2D copy
+    ctx.rope_cache.theta_scale_host_updated = false;
     if (ctx.rope_cache.theta_scale_length != theta_scale_length || ctx.rope_cache.theta_scale != theta_scale ||
         ctx.rope_cache.indep_sects != indep_sects) {
-        theta_scale_updated = true;
+        ctx.rope_cache.theta_scale_host_updated = true;
         if (ctx.rope_cache.theta_scale_exp_host != nullptr) {
             free(ctx.rope_cache.theta_scale_exp_host);
         }
@@ -2340,80 +2319,24 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
                                    ctx.rope_cache.theta_scale_exp_host, theta_scale_length * sizeof(float),
                                    ACL_MEMCPY_HOST_TO_DEVICE, ctx.stream()));
     }
-    acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
-                                                     theta_scale_ne, theta_scale_nb, 1);
 
-    // Step1.2: prepare rope_yarn_ramp, if this part updated, should update theta_scale_tensor.
-    // TODO: acl_yarn_ramp_tensor use rope cache.
-    bool           yarn_ramp_tensor_updated = false;
-    acl_tensor_ptr acl_yarn_ramp_tensor;
-    if (ext_factor != 0 && (theta_scale_updated || ctx.rope_cache.theta_scale_length != theta_scale_length ||
+    // Step 1.2: yarn_ramp_cache – device alloc only (device ops stay in aclnn_rope_cache_init)
+    ctx.rope_cache.yarn_ramp_host_updated = false;
+    if (ext_factor != 0 && (ctx.rope_cache.theta_scale_host_updated ||
+                            ctx.rope_cache.theta_scale_length != theta_scale_length ||
                             ctx.rope_cache.freq_scale != freq_scale)) {
-        yarn_ramp_tensor_updated = true;
+        ctx.rope_cache.yarn_ramp_host_updated = true;
         if (ctx.rope_cache.yarn_ramp_cache != nullptr) {
             ACL_CHECK(aclrtFree(ctx.rope_cache.yarn_ramp_cache));
         }
         ACL_CHECK(aclrtMalloc(&ctx.rope_cache.yarn_ramp_cache, theta_scale_length * sizeof(float),
                               ACL_MEM_MALLOC_HUGE_FIRST));
-        // -rope_yarn_ramp
-        // const float y = (i0 / 2 - low) / MAX(0.001f, high - low);
-        // return MIN(1, MAX(0, y)) - 1;
-        acl_yarn_ramp_tensor      = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
-                                                            theta_scale_ne, theta_scale_nb, 1);
-        float          zero_value = 0, one_value = 1;
-        float          denom_safe_value = MAX(0.001f, corr_dims[1] - corr_dims[0]);
-        acl_scalar_ptr low              = ggml_cann_create_scalar(&corr_dims[0], aclDataType::ACL_FLOAT);
-        acl_scalar_ptr zero             = ggml_cann_create_scalar(&zero_value, aclDataType::ACL_FLOAT);
-        acl_scalar_ptr one              = ggml_cann_create_scalar(&one_value, aclDataType::ACL_FLOAT);
-        acl_scalar_ptr denom_safe       = ggml_cann_create_scalar(&denom_safe_value, aclDataType::ACL_FLOAT);
-        acl_scalar_ptr ext_factor_sc    = ggml_cann_create_scalar(&ext_factor, aclDataType::ACL_FLOAT);
-
-        aclnn_arange(ctx, acl_yarn_ramp_tensor.get(), 0, theta_scale_length, 1, theta_scale_length);
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), low.get(), one.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceDivs, acl_yarn_ramp_tensor.get(), denom_safe.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceThreshold, acl_yarn_ramp_tensor.get(), zero.get(), zero.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceClampMax, acl_yarn_ramp_tensor.get(), one.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), one.get(), one.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), ext_factor_sc.get());
-
-        // theta_interp = freq_scale * theta_extrap;
-        // theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
-        // theta = freq_scale * theta_extrap * (1 - ramp_mix) + theta_extrap * ramp_mix;
-        // theta = freq_scale * theta_extrap - freq_scale * theta_extrap * ramp_mix + theta_extrap * ramp_mix;
-        // theta = theta_extrap * (freq_scale - freq_scale * ramp_mix + ramp_mix);
-        //
-        // we cache (freq_scale - freq_scale * ramp_mix + ramp_mix), Considering that the rope_yarn_ramp here is the inverse
-        // cache freq_scale + (freq_scale - 1) * ramp_mix
-        float          freq_scale_1    = freq_scale - 1;
-        acl_scalar_ptr freq_scale_sc   = ggml_cann_create_scalar(&freq_scale, aclDataType::ACL_FLOAT);
-        acl_scalar_ptr freq_scale_1_sc = ggml_cann_create_scalar(&freq_scale_1, aclDataType::ACL_FLOAT);
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), freq_scale_1_sc.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdds, acl_yarn_ramp_tensor.get(), freq_scale_sc.get(), one.get());
-    } else {
-        acl_yarn_ramp_tensor = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
-                                                       theta_scale_ne, theta_scale_nb, 1);
-    }
-    // Step 1.3: update theta_scale_tensor according to ext_factor or freq_scale.
-    if (ext_factor != 0) {
-        if (theta_scale_updated || yarn_ramp_tensor_updated) {
-            theta_scale_updated = true;
-            aclnn_mul(ctx, acl_theta_scale_tensor.get(), acl_yarn_ramp_tensor.get());
-        }
-    } else {
-        if (freq_scale != 1 && (ctx.rope_cache.freq_scale != freq_scale || theta_scale_updated)) {
-            theta_scale_updated = true;
-            aclnn_muls(ctx, acl_theta_scale_tensor.get(), freq_scale, nullptr, true);
-        }
     }
 
-    // Nothing changed, use cache.
-    if (!theta_scale_updated) {
-        acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
-                                                         theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
-    }
+    // Step 1.3 flag: record whether freq_scale differs from cache
+    ctx.rope_cache.freq_scale_host_changed = (ctx.rope_cache.freq_scale != freq_scale);
 
-    // Step 1.4: prepare select index if mrope
-    acl_tensor_ptr position_select_index_tensor;
+    // Step 1.4: position_select_index – CPU computation + device alloc + H2D copy
     if (mrope_used) {
         if (ctx.rope_cache.sections[0] != sections[0] || ctx.rope_cache.sections[1] != sections[1] ||
             ctx.rope_cache.sections[2] != sections[2] || ctx.rope_cache.sections[3] != sections[3] ||
@@ -2463,7 +2386,151 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
                                        ctx.rope_cache.position_select_index_host, theta_scale_length * sizeof(int),
                                        ACL_MEMCPY_HOST_TO_DEVICE, ctx.stream()));
         }
+    }
 
+    // Step 5 (partial): sin/cos cache – device alloc only
+    if (position_length > ctx.rope_cache.position_length) {
+        if (ctx.rope_cache.sin_cache != nullptr) {
+            ACL_CHECK(aclrtFree(ctx.rope_cache.sin_cache));
+        }
+        if (ctx.rope_cache.cos_cache != nullptr) {
+            ACL_CHECK(aclrtFree(ctx.rope_cache.cos_cache));
+        }
+        int64_t repeat_theta_length = theta_scale_length * position_length * 2;
+        ACL_CHECK(
+            aclrtMalloc(&ctx.rope_cache.sin_cache, repeat_theta_length * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST));
+        ACL_CHECK(
+            aclrtMalloc(&ctx.rope_cache.cos_cache, repeat_theta_length * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST));
+        ctx.rope_cache.position_length = position_length;
+    }
+
+    ctx.rope_cache.host_prepared = true;
+}
+
+/**
+ * @brief Initialise the RoPE sin/cos cache (device-side operations).
+ *
+ * Calls aclnn_rope_cache_prepare_host internally if it has not already been
+ * called, then executes all on-device computations (yarn ramp, freq_factor
+ * division, position multiply, sin/cos, repeat) and updates the cache metadata.
+ */
+static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
+                                  ggml_tensor *               dst,
+                                  float *                     corr_dims,
+                                  float                       ext_factor,
+                                  float                       theta_scale,
+                                  float                       freq_scale,
+                                  float                       attn_factor,
+                                  bool                        is_neox,
+                                  int                         sections[4],
+                                  bool                        mrope_used,
+                                  bool                        is_imrope,
+                                  bool                        indep_sects,
+                                  int64_t                     rope_dims) {
+    ggml_tensor * src1 = dst->src[1];  // position
+    ggml_tensor * src2 = dst->src[2];  // freq_factors
+
+    int64_t theta_scale_length = rope_dims / 2;
+    int64_t position_length    = dst->ne[2];
+
+    // TODO: check theta_scale_length and position_length.
+    if (src2 == nullptr && ctx.rope_cache.cached &&
+        ctx.rope_cache.equal(theta_scale_length, position_length, ext_factor, theta_scale, freq_scale, attn_factor,
+                             is_neox, indep_sects, mrope_used, is_imrope, sections)) {
+        // use cache.
+        return;
+    }
+
+    // Ensure host-side work (CPU compute + malloc + H2D) is done.
+    aclnn_rope_cache_prepare_host(ctx, dst, ext_factor, theta_scale, freq_scale, sections, mrope_used, is_imrope,
+                                  indep_sects, rope_dims);
+
+    // Step0: calculate tensor shape.
+    int64_t theta_scale_ne[] = { theta_scale_length, 1, 1, 1 };
+    size_t  theta_scale_nb[] = { sizeof(float), theta_scale_length * sizeof(float), theta_scale_length * sizeof(float),
+                                 theta_scale_length * sizeof(float) };
+
+    GGML_ASSERT(src1->type == GGML_TYPE_I32);
+    int64_t position_ne[] = { 1, 1, position_length, 1 };
+    size_t  position_nb[] = { sizeof(int32_t), sizeof(int32_t), sizeof(int32_t), sizeof(int32_t) * position_length };
+
+    int64_t cache_ne[] = { theta_scale_length, 1, position_length, 1 };
+    size_t  cache_nb[GGML_MAX_DIMS];
+    cache_nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS; i++) {
+        cache_nb[i] = cache_nb[i - 1] * cache_ne[i - 1];
+    }
+
+    // Step1.1: create theta_scale tensor from pre-allocated device buffer.
+    bool           theta_scale_updated = ctx.rope_cache.theta_scale_host_updated;
+    acl_tensor_ptr acl_theta_scale_tensor;
+    acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
+                                                     theta_scale_ne, theta_scale_nb, 1);
+
+    // Step1.2: prepare rope_yarn_ramp – device ops only (alloc done by prepare_host).
+    bool           yarn_ramp_tensor_updated = ctx.rope_cache.yarn_ramp_host_updated;
+    acl_tensor_ptr acl_yarn_ramp_tensor;
+    if (yarn_ramp_tensor_updated) {
+        // -rope_yarn_ramp
+        // const float y = (i0 / 2 - low) / MAX(0.001f, high - low);
+        // return MIN(1, MAX(0, y)) - 1;
+        acl_yarn_ramp_tensor      = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
+                                                            theta_scale_ne, theta_scale_nb, 1);
+        float          zero_value = 0, one_value = 1;
+        float          denom_safe_value = MAX(0.001f, corr_dims[1] - corr_dims[0]);
+        acl_scalar_ptr low              = ggml_cann_create_scalar(&corr_dims[0], aclDataType::ACL_FLOAT);
+        acl_scalar_ptr zero             = ggml_cann_create_scalar(&zero_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr one              = ggml_cann_create_scalar(&one_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr denom_safe       = ggml_cann_create_scalar(&denom_safe_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr ext_factor_sc    = ggml_cann_create_scalar(&ext_factor, aclDataType::ACL_FLOAT);
+
+        aclnn_arange(ctx, acl_yarn_ramp_tensor.get(), 0, theta_scale_length, 1, theta_scale_length);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), low.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceDivs, acl_yarn_ramp_tensor.get(), denom_safe.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceThreshold, acl_yarn_ramp_tensor.get(), zero.get(), zero.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceClampMax, acl_yarn_ramp_tensor.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), one.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), ext_factor_sc.get());
+
+        // theta_interp = freq_scale * theta_extrap;
+        // theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
+        // theta = freq_scale * theta_extrap * (1 - ramp_mix) + theta_extrap * ramp_mix;
+        // theta = freq_scale * theta_extrap - freq_scale * theta_extrap * ramp_mix + theta_extrap * ramp_mix;
+        // theta = theta_extrap * (freq_scale - freq_scale * ramp_mix + ramp_mix);
+        //
+        // we cache (freq_scale - freq_scale * ramp_mix + ramp_mix), Considering that the rope_yarn_ramp here is the inverse
+        // cache freq_scale + (freq_scale - 1) * ramp_mix
+        float          freq_scale_1    = freq_scale - 1;
+        acl_scalar_ptr freq_scale_sc   = ggml_cann_create_scalar(&freq_scale, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr freq_scale_1_sc = ggml_cann_create_scalar(&freq_scale_1, aclDataType::ACL_FLOAT);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), freq_scale_1_sc.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdds, acl_yarn_ramp_tensor.get(), freq_scale_sc.get(), one.get());
+    } else {
+        acl_yarn_ramp_tensor = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
+                                                       theta_scale_ne, theta_scale_nb, 1);
+    }
+    // Step 1.3: update theta_scale_tensor according to ext_factor or freq_scale.
+    if (ext_factor != 0) {
+        if (theta_scale_updated || yarn_ramp_tensor_updated) {
+            theta_scale_updated = true;
+            aclnn_mul(ctx, acl_theta_scale_tensor.get(), acl_yarn_ramp_tensor.get());
+        }
+    } else {
+        if (freq_scale != 1 && (ctx.rope_cache.freq_scale_host_changed || theta_scale_updated)) {
+            theta_scale_updated = true;
+            aclnn_muls(ctx, acl_theta_scale_tensor.get(), freq_scale, nullptr, true);
+        }
+    }
+
+    // Nothing changed, use cache.
+    if (!theta_scale_updated) {
+        acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
+                                                         theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
+    }
+
+    // Step 1.4: create select index tensor if mrope (alloc + H2D done by prepare_host)
+    acl_tensor_ptr position_select_index_tensor;
+    if (mrope_used) {
         position_select_index_tensor = ggml_cann_create_tensor(ctx.rope_cache.position_select_index, ACL_INT32,
                                                                sizeof(int), theta_scale_ne, theta_scale_nb, 1);
     }
@@ -2561,22 +2628,6 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
     aclnn_mul(ctx, acl_position_tensor.get(), acl_theta_scale_tensor.get(), acl_theta_tensor.get());
 
     // Step5: calculate sin cos.
-    // init sin_repeat && cos_repeat, only to accelerate first layer on each device
-    if (position_length > ctx.rope_cache.position_length) {
-        ctx.rope_cache.position_length = position_length;
-        if (ctx.rope_cache.sin_cache != nullptr) {
-            ACL_CHECK(aclrtFree(ctx.rope_cache.sin_cache));
-        }
-        if (ctx.rope_cache.cos_cache != nullptr) {
-            ACL_CHECK(aclrtFree(ctx.rope_cache.cos_cache));
-        }
-        int64_t repeat_theta_length = theta_scale_length * position_length * 2;
-        ACL_CHECK(
-            aclrtMalloc(&ctx.rope_cache.sin_cache, repeat_theta_length * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST));
-        ACL_CHECK(
-            aclrtMalloc(&ctx.rope_cache.cos_cache, repeat_theta_length * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST));
-    }
-
     // sin/cos
     ggml_cann_pool_alloc sin_allocator(ctx.pool(), theta_length * sizeof(float));
     void *               sin_buffer = sin_allocator.get();
@@ -2626,8 +2677,9 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
         aclnn_repeat_interleave(ctx, acl_cos_tensor.get(), acl_cos_repeat_tensor.get(), dim, num_repeats, output_size);
     }
 
-    // Update cached value.
-    ctx.rope_cache.cached = true;
+    // Update cached value and reset host_prepared flag.
+    ctx.rope_cache.cached        = true;
+    ctx.rope_cache.host_prepared = false;
     ctx.rope_cache.set(theta_scale_length, position_length, ext_factor, theta_scale, freq_scale, attn_factor, is_neox,
                        indep_sects, mrope_used, is_imrope, sections);
 }
@@ -3014,53 +3066,33 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 void ggml_cann_rope_cache_preload(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_tensor * src0 = dst->src[0];
 
-    float     freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    float     freq_base, freq_scale, ext_factor;
     int       sections[4];
-    const int n_dims     = ((int32_t *) dst->op_params)[1];
-    const int mode       = ((int32_t *) dst->op_params)[2];
-    const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
-
-    GGML_TENSOR_UNARY_OP_LOCALS
+    const int n_dims = ((int32_t *) dst->op_params)[1];
+    const int mode   = ((int32_t *) dst->op_params)[2];
 
     memcpy(&freq_base, (int32_t *) dst->op_params + 5, sizeof(float));
     memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
     memcpy(&ext_factor, (int32_t *) dst->op_params + 7, sizeof(float));
-    memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
-    memcpy(&beta_fast, (int32_t *) dst->op_params + 9, sizeof(float));
-    memcpy(&beta_slow, (int32_t *) dst->op_params + 10, sizeof(float));
     memcpy(&sections, (int32_t *) dst->op_params + 11, sizeof(int) * 4);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
-    float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
-
-    bool       is_neox    = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_imrope  = mode == GGML_ROPE_TYPE_IMROPE;
     const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
     const bool is_vision  = mode == GGML_ROPE_TYPE_VISION;
-
-    if (is_imrope || mrope_used) {
-        is_neox = true;
-    }
 
     int64_t rope_dims = n_dims;
     if (is_vision) {
         rope_dims = src0->ne[0];
     }
 
-    // Run the full cache init on the non-captured stream.  This performs all
-    // host-to-device memcpy, aclrtMalloc/Free, and on-device computations
-    // so that the memory pool is warmed up and cache metadata is populated.
-    aclnn_rope_cache_init(ctx, dst, corr_dims, ext_factor, theta_scale, freq_scale, attn_factor, is_neox, sections,
-                          mrope_used, is_imrope, is_vision, rope_dims);
-
-    // Reset `cached` so that during graph capture the on-device computations
-    // (sin/cos, position multiply, repeat, etc.) still execute and get recorded
-    // into the captured graph.  The cache metadata (theta_scale_length,
-    // theta_scale, sections, position_length, etc.) remains set, which causes
-    // all host-to-device copy and malloc/free branches to be skipped.
-    ctx.rope_cache.cached = false;
+    // Only perform host-side work (CPU compute + device malloc + H2D memcpy).
+    // Device-side operations (sin/cos, position multiply, repeat, etc.) are
+    // left to aclnn_rope_cache_init which will be called during graph capture
+    // and recorded into the captured graph.
+    aclnn_rope_cache_prepare_host(ctx, dst, ext_factor, theta_scale, freq_scale, sections, mrope_used, is_imrope,
+                                  is_vision, rope_dims);
 }
 
 void ggml_cann_argmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {

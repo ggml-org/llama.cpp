@@ -516,6 +516,13 @@ struct ggml_cann_rope_cache {
     // sin/cos cache, used only to accelerate first layer on each device
     void *  sin_cache                  = nullptr;
     void *  cos_cache                  = nullptr;
+    // Flags indicating host-side operations have been completed (CPU compute + H2D + device malloc).
+    // These are set by aclnn_rope_cache_prepare_host and consumed by aclnn_rope_cache_init.
+    bool    host_prepared              = false;
+    bool    theta_scale_host_updated   = false;
+    bool    yarn_ramp_host_updated     = false;
+    bool    freq_scale_host_changed    = false;
+
     // Properties to check before reusing the sincos cache
     int64_t theta_scale_length         = 0;
     int64_t position_length            = 0;
