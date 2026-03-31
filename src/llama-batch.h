@@ -18,7 +18,7 @@ struct llama_ubatch {
     }
 
     // typical for M-RoPE cases:
-    //   0 - sequantial position of the tokens/embeddings in the sequence
+    //   0 - sequential position of the tokens/embeddings in the sequence
     //   1 - y position in the image
     //   2 - x position in the image
     //   3 - other

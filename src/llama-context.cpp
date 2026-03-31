@@ -586,7 +586,7 @@ void llama_context::sched_reserve() {
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
-        // TODO: not sure if the following graph would be worster case for multi-stream KV caches:
+        // TODO: not sure if the following graph would be worst case for multi-stream KV caches:
         //
         // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
         //
