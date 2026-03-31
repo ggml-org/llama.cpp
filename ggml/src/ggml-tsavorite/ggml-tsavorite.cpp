@@ -912,9 +912,10 @@ static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     if (b->ne[0] != K) return false;
 
     if (K == 64 || K == 576 || K == 1536 || K == 256) {
-    //if ((K == 64 || K == 576)) {
 	    return true;
     }
+    // Disable MAT_MUL offloading to Tsavorite for the Tiny‑Llama‑v0.3‑FP32‑1.1B model
+    return false;
 
     // (optional but usually correct for ggml mul_mat wiring)
     // If this blocks valid cases in your build, comment it out.
