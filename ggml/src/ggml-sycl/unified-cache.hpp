@@ -740,10 +740,6 @@ class unified_cache {
     cache_ptr_view get_view(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
     // Get device pointer, waiting for IN_PROGRESS entries to complete.
-    // Returns nullptr only if entry doesn't exist at all.
-    // This prevents returning mmap'd pointers when cache fill is in flight.
-    void * get_or_wait(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
-
     // Fast path for cache lookup using shared_lock (reader-writer lock).
     // Returns device_ptr if entry exists, is READY, and layout matches.
     // Otherwise returns nullptr. Does not update LRU/LFU stats.
@@ -759,10 +755,7 @@ class unified_cache {
                                      sycl::event *              out_event,
                                      bool *                     out_has_event);
 
-    // Fallback lookup by data pointer (aux_id) when primary key lookup fails.
-    // Used during graph recording to find entries with aliased tensor names.
-    // Only searches entries where src_ptr matches the given data_ptr.
-    void * get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layout_mode layout);
+    // get_by_data_ptr REMOVED — O(N) scan with zero callers (dead code)
 
     // Remove a cache entry (free device memory).
     void remove(const ggml_sycl_cache_id & key,

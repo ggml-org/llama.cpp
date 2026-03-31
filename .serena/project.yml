@@ -8,10 +8,10 @@ project_name: "llama.cpp"
 #   fortran             fsharp              go                  groovy              haskell
 #   java                julia               kotlin              lua                 markdown
 #   matlab              nix                 pascal              perl                php
-#   powershell          python              python_jedi         r                   rego
-#   ruby                ruby_solargraph     rust                scala               swift
-#   terraform           toml                typescript          typescript_vts      vue
-#   yaml                zig
+#   php_phpactor        powershell          python              python_jedi         r
+#   rego                ruby                ruby_solargraph     rust                scala
+#   swift               terraform           toml                typescript          typescript_vts
+#   vue                 yaml                zig
 #   (This list may be outdated. For the current list, see values of Language enum here:
 #   https://github.com/oraios/serena/blob/main/src/solidlsp/ls_config.py
 #   For some languages, there are alternative language servers, e.g. csharp_omnisharp, ruby_solargraph.)
@@ -35,8 +35,9 @@ encoding: "utf-8"
 # whether to use project's .gitignore files to ignore files
 ignore_all_files_in_gitignore: true
 
-# list of additional paths to ignore in all projects
-# same syntax as gitignore, so you can use * and **
+# list of additional paths to ignore in this project.
+# Same syntax as gitignore, so you can use * and **.
+# Note: global ignored_paths from serena_config.yml are also applied additively.
 ignored_paths: []
 
 # whether the project is in read-only mode
@@ -44,7 +45,9 @@ ignored_paths: []
 # Added on 2025-04-18
 read_only: false
 
-# list of tool names to exclude. We recommend not excluding any tools, see the readme for more details.
+# list of tool names to exclude.
+# This extends the existing exclusions (e.g. from the global configuration)
+#
 # Below is the complete list of tools for convenience.
 # To make sure you have the latest list of tools, and to view their descriptions, 
 # execute `uv run scripts/print_tool_overview.py`.
@@ -85,7 +88,8 @@ read_only: false
 #  * `write_memory`: Writes a named memory (for future reference) to Serena's project-specific memory store.
 excluded_tools: []
 
-# list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default)
+# list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default).
+# This extends the existing inclusions (e.g. from the global configuration).
 included_optional_tools: []
 
 # fixed set of tools to use as the base tool set (if non-empty), replacing Serena's default set of tools.
@@ -111,8 +115,10 @@ default_modes:
 # (contrary to the memories, which are loaded on demand).
 initial_prompt: ""
 
-# override of the corresponding setting in serena_config.yml, see the documentation there.
-# If null or missing, the value from the global config is used.
+# time budget (seconds) per tool call for the retrieval of additional symbol information
+# such as docstrings or parameter information.
+# This overrides the corresponding setting in the global configuration; see the documentation there.
+# If null or missing, use the setting from the global configuration.
 symbol_info_budget:
 
 # The language backend to use for this project.
@@ -121,3 +127,26 @@ symbol_info_budget:
 # Note: the backend is fixed at startup. If a project with a different backend
 # is activated post-init, an error will be returned.
 language_backend:
+
+# line ending convention to use when writing source files.
+# Possible values: unset (use global setting), "lf", "crlf", or "native" (platform default)
+# This does not affect Serena's own files (e.g. memories and configuration files), which always use native line endings.
+line_ending:
+
+# list of regex patterns which, when matched, mark a memory entry as read‑only.
+# Extends the list from the global configuration, merging the two lists.
+read_only_memory_patterns: []
+
+# list of regex patterns for memories to completely ignore.
+# Matching memories will not appear in list_memories or activate_project output
+# and cannot be accessed via read_memory or write_memory.
+# To access ignored memory files, use the read_file tool on the raw file path.
+# Extends the list from the global configuration, merging the two lists.
+# Example: ["_archive/.*", "_episodes/.*"]
+ignored_memory_patterns: []
+
+# advanced configuration option allowing to configure language server-specific options.
+# Maps the language key to the options.
+# Have a look at the docstring of the constructors of the LS implementations within solidlsp (e.g., for C# or PHP) to see which options are available.
+# No documentation on options means no options are available.
+ls_specific_settings: {}

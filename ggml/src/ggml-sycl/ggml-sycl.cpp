@@ -7456,22 +7456,8 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                 ggml_sycl::layer_streaming_register_host_ptr(device, tensor->name, tensor->data, ggml_nbytes(tensor));
             }
 
-            if (ggml_sycl::unified_cache_enabled() && is_weight) {
-                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-                    if (cache_key.valid) {
-                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
-                        if (cached) {
-                            GGML_SYCL_DEBUG(
-                                "ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, non-device fallback to cache=%p "
-                                "(type=%d)\n",
-                                tensor->name, device, cached, (int) ptr_type);
-                            g_data_ptr_cache[tensor] = cached;
-                            return cached;
-                        }
-                    }
-                }
-            }
+            // NOTE: get_or_wait removed — legacy synchronous blocking pattern.
+            // The async fill + try_get_cached_fast path handles all weight lookups.
 
             // Check layer stream manager for host-resident weight
             if (is_weight && ggml_sycl::layer_streaming_active(device) && tensor->name) {
