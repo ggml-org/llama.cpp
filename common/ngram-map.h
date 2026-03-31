@@ -51,7 +51,7 @@ struct common_ngram_map_value {
 // statistics of a n-gram
 struct common_ngram_map_key {
     size_t   key_idx;   // index of key n-gram in token-history
-    size_t   stat_idx;  // index of last token of stastistics computation (key_num, values)
+    size_t   stat_idx;  // index of last token of statistics computation (key_num, values)
 
     uint16_t key_num;   // number of occurrences of this key n-gram in token-history
     common_ngram_map_value values[COMMON_NGRAM_MAX_VALUES]; // some known values after the key

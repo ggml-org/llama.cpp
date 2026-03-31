@@ -221,7 +221,7 @@ using chat_template_caps = jinja::caps;
 struct common_chat_templates {
     bool add_bos;
     bool add_eos;
-    bool has_explicit_template;  // Model had builtin template or template overridde was specified.
+    bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
 };
