@@ -343,13 +343,12 @@ zero_acc_vec(float * acc, int64_t dv) {
     unsigned long old_mask;
     __asm__ volatile("mova.x.m %0" : "=r"(old_mask));
     __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    __asm__ volatile("fbc.ps  f2, 0(%[z])" :: [z] "r"(&zero) : "f2");
 
     for (int64_t d = 0; d < dv; d += 8) {
         __asm__ volatile(
-            "fbc.ps  f2, 0(%[z])     \n\t"
             "fsw.ps  f2, 0(%[a])     \n\t"
-            :
-            : [z] "r"(&zero), [a] "r"(acc + d)
+            :: [a] "r"(acc + d)
             : "f2", "memory"
         );
     }
