@@ -142,6 +142,15 @@ static inline void block_sub_broadcast(float* dst_block, const float* src0_block
     }
 }
 
+static inline float scalar_el_map(float src0, float src1, enum ggml_op operation) {
+    switch (operation) {
+        case GGML_OP_MUL: return src0 * src1;
+        case GGML_OP_ADD: return src0 + src1;
+        case GGML_OP_SUB: return src0 - src1;
+        default: return 0.0f;
+    }
+}
+
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -190,10 +199,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const size_t nb00 = src0->nb[0], nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
     const size_t nb10 = src1->nb[0], nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
 
-    bool cache_aligned = (dst->ne[0] % 16 == 0);
-    if(!cache_aligned) {
-        return 1;
-    }
+    const bool cache_aligned = (dst->ne[0] % 16 == 0);
 
     // Fast path: no broadcasting, contiguous
     const bool no_broadcast = (ne10 == ne0 && ne11 == ne1 && ne12 == ne2 && ne13 == ne3);
@@ -235,12 +241,60 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
         return 0;
     }
 
-    // Slow path: broadcasting or non-contiguous: row based or bcast on last row
+    // Slow path: broadcasting or non-contiguous
     const int64_t total_rows = ne1 * ne2 * ne3;
 
-    const int64_t rows_per_thread = (total_rows + num_threads - 1) / num_threads;
-    const int64_t start_row = thread_id * rows_per_thread;
-    const int64_t end_row = (start_row + rows_per_thread < total_rows) ? (start_row + rows_per_thread) : total_rows;
+    int64_t start_row;
+    int64_t end_row;
+
+    if (cache_aligned) {
+        const int64_t rows_per_thread = (total_rows + num_threads - 1) / num_threads;
+        start_row = thread_id * rows_per_thread;
+        end_row = (start_row + rows_per_thread < total_rows) ? (start_row + rows_per_thread) : total_rows;
+    } else {
+        const int64_t rows_per_group = et_rows_per_cacheline_group(ne0, sizeof(float));
+        const int64_t total_groups = (total_rows + rows_per_group - 1) / rows_per_group;
+
+        if (thread_id >= total_groups) {
+            return 0;
+        }
+
+        const int64_t group_start = thread_id;
+        for (int64_t grp = group_start; grp < total_groups; grp += num_threads) {
+            const int64_t group_row_start = grp * rows_per_group;
+            int64_t group_row_end = group_row_start + rows_per_group;
+            if (group_row_end > total_rows) {
+                group_row_end = total_rows;
+            }
+
+            for (int64_t ir = group_row_start; ir < group_row_end; ir++) {
+                const int64_t i03 = ir / (ne2 * ne1);
+                const int64_t i02 = (ir - i03 * ne2 * ne1) / ne1;
+                const int64_t i01 = (ir - i03 * ne2 * ne1 - i02 * ne1);
+
+                const int64_t i13 = i03 % ne13;
+                const int64_t i12 = i02 % ne12;
+                const int64_t i11 = i01 % ne11;
+
+                float* dst_ptr = (float*)((char*)dst_data + i03*nb3 + i02*nb2 + i01*nb1);
+                const float* src0_ptr = (const float*)((const char*)src0_data + i03*nb03 + i02*nb02 + i01*nb01);
+                const float* src1_ptr = (const float*)((const char*)src1_data + i13*nb13 + i12*nb12 + i11*nb11);
+
+                if (ne10 == 1) {
+                    const float scalar = src1_ptr[0];
+                    for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                        dst_ptr[i0] = scalar_el_map(src0_ptr[i0], scalar, operation);
+                    }
+                } else {
+                    for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                        dst_ptr[i0] = scalar_el_map(src0_ptr[i0], src1_ptr[i0 % ne10], operation);
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
 
     if (start_row >= total_rows) {
         return 0;
