@@ -1052,6 +1052,98 @@ static __device__ __forceinline__ void dequantize_V_turbo4_0(const void * __rest
     }
 }
 
+// ── PlanarQuant3 V dequantize ──
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_planar3_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_planar3_0 * x = (const block_planar3_0 *) vx;
+    const int64_t ib = i0 / QK_PLANAR3;
+    const int     j0 = i0 % QK_PLANAR3;
+    const float   norm = __half2float(x[ib].norm);
+
+    // Unpack + inverse Givens rotation per pair
+    static_assert(ne == 2 || ne == 4, "bad ne");
+    float vals[4];
+    for (int c = 0; c < ne; c++) {
+        int j = j0 + c;
+        uint8_t low = (x[ib].qs[j/4] >> ((j%4)*2)) & 0x3;
+        uint8_t hi = (x[ib].signs[j/8] >> (j%8)) & 0x1;
+        vals[c] = FA_CENTROIDS_3BIT[low | (hi << 2)];
+    }
+    // Apply inverse Givens per pair
+    float out[4];
+    for (int p = 0; p < ne/2; p++) {
+        int pair_idx = (ib * QK_PLANAR3 + j0) / 2 + p;
+        float c = d_planar_cos[pair_idx % 64];
+        float s = d_planar_sin[pair_idx % 64];
+        out[p*2]   = ( c * vals[p*2] + s * vals[p*2+1]) * norm;
+        out[p*2+1] = (-s * vals[p*2] + c * vals[p*2+1]) * norm;
+    }
+
+    if constexpr (ne == 4) {
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *)dst)[0] = make_float2(out[0], out[1]);
+            ((float2 *)dst)[1] = make_float2(out[2], out[3]);
+        } else {
+            ((half2 *)dst)[0] = make_half2(__float2half(out[0]), __float2half(out[1]));
+            ((half2 *)dst)[1] = make_half2(__float2half(out[2]), __float2half(out[3]));
+        }
+    } else {
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *)dst)[0] = out[0];
+            ((float *)dst)[1] = out[1];
+        } else {
+            ((half2 *)dst)[0] = make_half2(__float2half(out[0]), __float2half(out[1]));
+        }
+    }
+}
+
+// ── IsoQuant3 V dequantize ──
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_iso3_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_iso3_0 * x = (const block_iso3_0 *) vx;
+    const int64_t ib = i0 / QK_ISO3;
+    const int     j0 = i0 % QK_ISO3;
+    const float   norm = __half2float(x[ib].norm);
+
+    // Must dequantize full 4-element quaternion group
+    int g = (ib * QK_ISO3 + j0) / 4;
+    int base = (g % 32) * 4;
+    float qvals[4];
+    for (int c = 0; c < 4; c++) {
+        int jj = base + c;
+        uint8_t low = (x[ib].qs[jj/4] >> ((jj%4)*2)) & 0x3;
+        uint8_t hi = (x[ib].signs[jj/8] >> (jj%8)) & 0x1;
+        qvals[c] = FA_CENTROIDS_3BIT[low | (hi << 2)];
+    }
+
+    int qg = g % 32;
+    float qw = d_iso_qw[qg], qx = -d_iso_qx[qg], qy = -d_iso_qy[qg], qz = -d_iso_qz[qg];
+    float rw = qw*qvals[0] - qx*qvals[1] - qy*qvals[2] - qz*qvals[3];
+    float rx = qw*qvals[1] + qx*qvals[0] + qy*qvals[3] - qz*qvals[2];
+    float ry = qw*qvals[2] - qx*qvals[3] + qy*qvals[0] + qz*qvals[1];
+    float rz = qw*qvals[3] + qx*qvals[2] - qy*qvals[1] + qz*qvals[0];
+
+    float results[4] = {rw * norm, rx * norm, ry * norm, rz * norm};
+    int offset = j0 % 4;
+
+    if constexpr (ne == 4) {
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *)dst)[0] = make_float2(results[0], results[1]);
+            ((float2 *)dst)[1] = make_float2(results[2], results[3]);
+        } else {
+            ((half2 *)dst)[0] = make_half2(__float2half(results[0]), __float2half(results[1]));
+            ((half2 *)dst)[1] = make_half2(__float2half(results[2]), __float2half(results[3]));
+        }
+    } else {
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *)dst)[0] = results[offset];
+            ((float *)dst)[1] = results[offset + 1];
+        } else {
+            ((half2 *)dst)[0] = make_half2(__float2half(results[offset]), __float2half(results[offset+1]));
+        }
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -1108,6 +1200,12 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_turbo2_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBO4_0) {
         return dequantize_V_turbo4_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_PLANAR3_0) {
+        return dequantize_V_planar3_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_ISO3_0) {
+        return dequantize_V_iso3_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_PLANAR4_0 || type_V == GGML_TYPE_ISO4_0) {
+        return dequantize_V_turbo4_0<T, ne>;  // same block layout
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
