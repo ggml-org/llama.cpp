@@ -34,7 +34,7 @@ Safe interpretation:
 
 **[turbo-tan/Qwen3.5-27B-TQ3_1S on Hugging Face](https://huggingface.co/turbo-tan/Qwen3.5-27B-TQ3_1S)** — download and run immediately.
 
-## Installation
+## Build From Source
 
 ```bash
 git clone https://github.com/turbo-tan/llama.cpp-tq3.git
