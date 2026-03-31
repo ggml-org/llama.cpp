@@ -1118,7 +1118,15 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const size_t k_elem = op->src[1]->type == GGML_TYPE_F16 ? 2 : 4;
                 const size_t v_elem = op->src[2]->type == GGML_TYPE_F16 ? 2 : 4;
 
+                // Only support matrix engine path (F16 K/V, dk%32==0);
+                // mask scalar F32 fallback to get baseline perf readings
+                const bool me_eligible =
+                    op->src[1]->type == GGML_TYPE_F16 &&
+                    op->src[2]->type == GGML_TYPE_F16 &&
+                    (op->src[0]->ne[0] % 32) == 0;
+
                 supported =
+                    me_eligible &&
                     mask_ok &&
                     (prec == GGML_PREC_F32 || prec == GGML_PREC_DEFAULT) &&
                     max_bias == 0.0f &&
