@@ -17,11 +17,12 @@ using namespace std::chrono_literals;
 int main(int argc, char ** argv) {
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    common_init();
     llama_backend_init();
     llama_numa_init(params.numa);
     auto mparams = common_model_params_to_llama(params);

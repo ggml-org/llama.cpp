@@ -400,6 +400,8 @@ int main(int argc, char ** argv) {
 
     params.out_file = "control_vector.gguf";
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CVECTOR_GENERATOR, print_usage)) {
         return 1;
     }

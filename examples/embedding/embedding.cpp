@@ -99,11 +99,11 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EMBEDDING)) {
         return 1;
     }
-
-    common_init();
 
     params.embedding = true;
 

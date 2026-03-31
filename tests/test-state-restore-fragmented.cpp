@@ -22,11 +22,11 @@ int main(int argc, char ** argv) {
     params.n_parallel = 3;
     params.n_ctx = 256;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
-
-    common_init();
 
     // init
     common_init_result_ptr llama_init = common_init_from_params(params);

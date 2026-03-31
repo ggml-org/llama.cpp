@@ -90,11 +90,11 @@ int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 

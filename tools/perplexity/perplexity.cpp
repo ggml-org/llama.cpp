@@ -2012,11 +2012,11 @@ int main(int argc, char ** argv) {
     params.n_ctx = 512;
     params.escape = false;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
-
-    common_init();
 
     const int32_t n_ctx = params.n_ctx;
 

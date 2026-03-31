@@ -551,14 +551,14 @@ int main(int argc, char ** argv) {
     params.sampling.top_k = 4;
     params.sampling.samplers = { COMMON_SAMPLER_TYPE_TOP_K, };
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
         return 1;
     }
 
     const int n_parallel = params.n_parallel;
     const int n_predict  = params.n_predict;
-
-    common_init();
 
     // init LLM
 

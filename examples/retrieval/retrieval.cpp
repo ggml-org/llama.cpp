@@ -117,11 +117,11 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_RETRIEVAL, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     // For BERT models, batch size must be equal to ubatch size
     params.n_ubatch = params.n_batch;

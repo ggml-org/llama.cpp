@@ -347,6 +347,8 @@ int main(int argc, char ** argv) {
 
     params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CLI)) {
         return 1;
     }
@@ -356,8 +358,6 @@ int main(int argc, char ** argv) {
         console::error("--no-conversation is not supported by llama-cli\n");
         console::error("please use llama-completion instead\n");
     }
-
-    common_init();
 
     // struct that contains llama context and inference
     cli_context ctx_cli(params);

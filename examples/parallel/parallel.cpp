@@ -163,11 +163,11 @@ int main(int argc, char ** argv) {
     params.n_predict = 128;
     params.n_junk = 1;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
     }
-
-    common_init();
 
     // number of simultaneous "clients" to simulate
     const int32_t n_clients = params.n_parallel;
