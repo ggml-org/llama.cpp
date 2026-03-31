@@ -208,6 +208,7 @@ add_library(ggml-base
             ggml-quants.h
             ggml-turbo-quant.c
             ggml-planar-quant.c
+            ggml-iso-quant.c
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES

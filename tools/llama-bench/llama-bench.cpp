@@ -504,6 +504,9 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "planar3") {
         return GGML_TYPE_PLANAR3_0;
     }
+    if (s == "iso3") {
+        return GGML_TYPE_ISO3_0;
+    }
 
     return GGML_TYPE_COUNT;
 }

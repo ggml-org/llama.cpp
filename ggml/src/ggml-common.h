@@ -357,6 +357,16 @@ typedef struct {
 } block_planar3_0;
 static_assert(sizeof(block_planar3_0) == sizeof(ggml_half) + QK_PLANAR3/4 + QK_PLANAR3/8, "wrong planar3_0 block size/padding");
 
+#define QK_ISO3 128
+#define NL_ISO3 (QK_ISO3 / 16)
+#define NL_ISO3_VEC (QK_ISO3 / 4)
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_ISO3 / 4];
+    uint8_t    signs[QK_ISO3 / 8];
+} block_iso3_0;
+static_assert(sizeof(block_iso3_0) == sizeof(ggml_half) + QK_ISO3/4 + QK_ISO3/8, "wrong iso3_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

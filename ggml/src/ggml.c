@@ -776,6 +776,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_planar3_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_planar3_0_ref,
     },
+    [GGML_TYPE_ISO3_0] = {
+        .type_name                = "iso3",
+        .blck_size                = QK_ISO3,
+        .type_size                = sizeof(block_iso3_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iso3_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_iso3_0_ref,
+    },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
         .blck_size                = QK_K,
@@ -7767,6 +7775,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBO4_0: result = quantize_turbo4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBO2_0: result = quantize_turbo2_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_PLANAR3_0: result = quantize_planar3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_ISO3_0: result = quantize_iso3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

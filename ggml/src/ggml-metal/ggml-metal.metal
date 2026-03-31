@@ -7246,6 +7246,213 @@ template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk512_dv512")]] kernel f
 template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
 
 
+
+
+// ===== IsoQuant 3-bit dequantize (quaternion 4D block rotation) =====
+// 4D blocks rotated by unit quaternion: T(v) = q_L * v
+// Inverse: T^-1(v) = conj(q_L) * v
+// 16 FMAs per quaternion multiply, 32 groups for d=128
+
+constant float iso_centroids_3bit[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+
+// IsoQuant quaternion rotation parameters (seed=42, 32 unit quaternions for d=128)
+constant float iso_qw_32[32] = {
+    0.0802934347f, 0.6225181162f, 0.3747126104f, -0.6740884451f, -0.3537887442f, 0.7620602746f, 0.3578645709f, 0.0084074857f,
+    0.6784872304f, 0.7137713509f, -0.6499854122f, -0.1852518494f, -0.1562777774f, -0.2510198599f, -0.9291601430f, -0.3051900743f,
+    -0.6788636800f, 0.1431840120f, 0.5668277857f, 0.7046420734f, -0.6883691168f, -0.3730590262f, 0.1713097776f, 0.9196614866f,
+    -0.3787581456f, 0.7802238888f, 0.7984311074f, -0.2209202886f, 0.3212155097f, 0.9537663843f, -0.3764481598f, -0.8631927862f,
+};
+constant float iso_qx_32[32] = {
+    -0.4466194410f, -0.7282201252f, -0.2065995467f, -0.5542964634f, -0.7863645986f, 0.2018140785f, -0.3216182801f, -0.1860052789f,
+    0.1853529215f, -0.2461146810f, -0.3799125885f, -0.0876585125f, 0.0485238935f, -0.7142686664f, 0.0110605997f, 0.3035207274f,
+    -0.3713760006f, 0.7461906450f, -0.0433887663f, -0.3710325637f, 0.3220700358f, 0.6068730652f, 0.7206557200f, 0.0456404769f,
+    -0.1318186355f, 0.3533650879f, -0.5522954239f, -0.8632296933f, 0.9386664238f, -0.1187466113f, 0.9244263727f, -0.3009463076f,
+};
+constant float iso_qy_32[32] = {
+    0.4259443204f, -0.0970891911f, -0.7872366771f, -0.4859352865f, -0.4973242253f, 0.2838025306f, -0.5503661517f, 0.9823943492f,
+    0.5412906224f, -0.4238235158f, -0.3835424018f, 0.6110326502f, 0.9662522674f, 0.6047628077f, -0.3252919722f, -0.5608427684f,
+    -0.6206708809f, 0.3430037036f, -0.7363050118f, 0.5348247359f, -0.0572340714f, 0.5040206101f, 0.6672224065f, -0.1667266147f,
+    0.3782857476f, 0.4791631899f, -0.1992364623f, 0.3937924098f, -0.1238423417f, 0.1231648462f, -0.0147054151f, -0.1029547442f,
+};
+constant float iso_qz_32[32] = {
+    0.7827231153f, -0.2697041588f, -0.4440332208f, -0.0471921199f, -0.0955659850f, 0.5458858298f, -0.6823428243f, 0.0152542781f,
+    0.4607644027f, 0.5003315399f, 0.5348650437f, 0.7646154837f, -0.1989453284f, -0.2471259771f, 0.1752832694f, 0.7072408188f,
+    -0.1264580076f, 0.5523099848f, -0.3669858389f, -0.2824480254f, 0.6474126289f, 0.4883597755f, 0.0782467478f, -0.3526215150f,
+    -0.8343057039f, 0.1917979027f, 0.1333505287f, 0.2257349346f, 0.0197234777f, 0.2471018964f, -0.0592149919f, -0.3920839890f,
+};
+
+// Non-vec dequantize: 16 elements per call (il in {0..NL_ISO3-1})
+template <typename type4x4>
+void dequantize_iso3_0(device const block_iso3_0 * xb, short il, thread type4x4 & reg) {
+    const float norm = float(xb->norm);
+    const int qs_off = il * 4;
+    float4x4 reg_f;
+
+    for (int g = 0; g < 4; g++) {
+        const uint8_t qb = xb->qs[qs_off + g];
+        const uint8_t sb = xb->signs[il * 2 + g / 2];
+        const int sshift = (g & 1) * 4;
+
+        // Unpack 4 3-bit indices to centroid values
+        float4 raw;
+        raw[0] = iso_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)];
+        raw[1] = iso_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)];
+        raw[2] = iso_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)];
+        raw[3] = iso_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)];
+
+        // Inverse quaternion rotation on 4D group
+        // Element indices within block: il*16 + g*4 + {0,1,2,3}
+        // Quaternion group index: (il*16 + g*4) / 4 = il*4 + g
+        int qg = il * 4 + g;
+
+        // conj(q) * v: Hamilton product with conjugate quaternion
+        float qw = iso_qw_32[qg], qx = -iso_qx_32[qg], qy = -iso_qy_32[qg], qz = -iso_qz_32[qg];
+        float vw = raw[0], vx = raw[1], vy = raw[2], vz = raw[3];
+
+        float rw = qw*vw - qx*vx - qy*vy - qz*vz;
+        float rx = qw*vx + qx*vw + qy*vz - qz*vy;
+        float ry = qw*vy - qx*vz + qy*vw + qz*vx;
+        float rz = qw*vz + qx*vy - qy*vx + qz*vw;
+
+        reg_f[g] = float4(rw * norm, rx * norm, ry * norm, rz * norm);
+    }
+    reg = (type4x4) reg_f;
+}
+
+// Vec dequantize: 4 elements per call (il in {0..NL_ISO3_VEC-1})
+template <typename type4>
+void dequantize_iso3_0_t4(device const block_iso3_0 * xb, short il, thread type4 & reg) {
+    const float norm = float(xb->norm);
+    const uint8_t qb = xb->qs[il];
+    const uint8_t sb = xb->signs[il / 2];
+    const int sshift = (il & 1) * 4;
+
+    float4 raw;
+    raw[0] = iso_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)];
+    raw[1] = iso_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)];
+    raw[2] = iso_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)];
+    raw[3] = iso_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)];
+
+    // Quaternion group = il (since each group is 4 elements)
+    int qg = il;
+    float qw = iso_qw_32[qg], qx = -iso_qx_32[qg], qy = -iso_qy_32[qg], qz = -iso_qz_32[qg];
+    float vw = raw[0], vx = raw[1], vy = raw[2], vz = raw[3];
+
+    float rw = qw*vw - qx*vx - qy*vy - qz*vz;
+    float rx = qw*vx + qx*vw + qy*vz - qz*vy;
+    float ry = qw*vy - qx*vz + qy*vw + qz*vx;
+    float rz = qw*vz + qx*vy - qy*vx + qz*vw;
+
+    reg = (type4) float4(rw * norm, rx * norm, ry * norm, rz * norm);
+}
+
+// IsoQuant quantize (for set_rows — block level, no rotation here)
+void quantize_iso3_0(device const float * src, device block_iso3_0 & dst) {
+#pragma METAL fp math_mode(safe)
+    float norm_sq = 0.0f;
+    for (int j = 0; j < QK_ISO3; j++) norm_sq += src[j] * src[j];
+    float norm = sqrt(norm_sq);
+    float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
+    dst.norm = half(norm);
+
+    for (int j = 0; j < QK_ISO3 / 4; j++) dst.qs[j] = 0;
+    for (int j = 0; j < QK_ISO3 / 8; j++) dst.signs[j] = 0;
+
+    for (int j = 0; j < QK_ISO3; j++) {
+        float val = src[j] * inv_norm;
+        uint8_t idx;
+        if      (val < turbo_mid_3bit[0]) idx = 0;
+        else if (val < turbo_mid_3bit[1]) idx = 1;
+        else if (val < turbo_mid_3bit[2]) idx = 2;
+        else if (val < turbo_mid_3bit[3]) idx = 3;
+        else if (val < turbo_mid_3bit[4]) idx = 4;
+        else if (val < turbo_mid_3bit[5]) idx = 5;
+        else if (val < turbo_mid_3bit[6]) idx = 6;
+        else                              idx = 7;
+        dst.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+        if (idx & 0x4) dst.signs[j / 8] |= (1 << (j % 8));
+    }
+}
+
+// IsoQuant set_rows: quaternion 4D rotation
+template<typename TI>
+kernel void kernel_set_rows_iso3(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI i1 = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+    device block_iso3_0 * dst_row = (device block_iso3_0 *) ((device char *) dst + i1*args.nb1 + i02*args.nb2 + i03*args.nb3);
+    const device float * src_row = (const device float *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    for (int blk = 0; blk < args.nk0; blk++) {
+        const device float * grp_src = src_row + blk * QK_ISO3;
+        device block_iso3_0 * dst_blk = &dst_row[blk];
+
+        // 1. L2 norm
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < QK_ISO3; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < QK_ISO3; j++) buf[j] *= inv_norm;
+
+        // 2. Forward quaternion rotation per 4D group (32 groups)
+        float rotated[128];
+        for (int g = 0; g < 32; g++) {
+            float qw = iso_qw_32[g], qx = iso_qx_32[g], qy = iso_qy_32[g], qz = iso_qz_32[g];
+            float vw = buf[g*4], vx = buf[g*4+1], vy = buf[g*4+2], vz = buf[g*4+3];
+            rotated[g*4+0] = qw*vw - qx*vx - qy*vy - qz*vz;
+            rotated[g*4+1] = qw*vx + qx*vw + qy*vz - qz*vy;
+            rotated[g*4+2] = qw*vy - qx*vz + qy*vw + qz*vx;
+            rotated[g*4+3] = qw*vz + qx*vy - qy*vx + qz*vw;
+        }
+
+        // 3. Quantize + pack
+        for (int j = 0; j < QK_ISO3 / 4; j++) dst_blk->qs[j] = 0;
+        for (int j = 0; j < QK_ISO3 / 8; j++) dst_blk->signs[j] = 0;
+
+        float recon_sq = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            float val = rotated[j];
+            uint8_t idx;
+            if      (val < turbo_mid_3bit[0]) idx = 0;
+            else if (val < turbo_mid_3bit[1]) idx = 1;
+            else if (val < turbo_mid_3bit[2]) idx = 2;
+            else if (val < turbo_mid_3bit[3]) idx = 3;
+            else if (val < turbo_mid_3bit[4]) idx = 4;
+            else if (val < turbo_mid_3bit[5]) idx = 5;
+            else if (val < turbo_mid_3bit[6]) idx = 6;
+            else                              idx = 7;
+            dst_blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+            if (idx & 0x4) dst_blk->signs[j / 8] |= (1 << (j % 8));
+            recon_sq += iso_centroids_3bit[idx] * iso_centroids_3bit[idx];
+        }
+
+        float recon_norm = sqrt(recon_sq);
+        float corrected = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
+        dst_blk->norm = half(corrected);
+    }
+}
+
 // ===== PlanarQuant 3-bit dequantize (2D Givens rotation) =====
 // Same block layout as turbo3, but inverse rotation is per-pair Givens.
 // Much simpler than WHT: only 4 FMAs per pair, no full-block dependency.
@@ -7500,6 +7707,18 @@ kernel void kernel_set_rows_planar3(
     }
 }
 
+
+
+// IsoQuant non-vec flash attention
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 32,  32>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 64,  64>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk96_dv96"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 96,  96>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 192, 192>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 192, 128>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 320, 256>;
+template [[host_name("kernel_flash_attn_ext_kiso3_viso3_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_iso3_0, NL_ISO3, dequantize_iso3_0, block_iso3_0, NL_ISO3, dequantize_iso3_0, 576, 512>;
 
 // PlanarQuant non-vec flash attention (nl=NL_PLANAR3=QK_PLANAR3/16)
 template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 32,  32>;
@@ -8366,6 +8585,15 @@ template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk192_dv128")]] 
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 320, 256, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vturbo2_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, block_turbo2_0, NL_TURBO2_VEC, dequantize_turbo2_0_t4, 576, 512, 2>;
+
+// IsoQuant vec flash attention (decode)
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 192, 192, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk192_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 192, 128, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk320_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 320, 256, 2>;
+template [[host_name("kernel_flash_attn_ext_vec_kiso3_viso3_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, block_iso3_0, NL_ISO3_VEC, dequantize_iso3_0_t4, 576, 512, 2>;
+
 // PlanarQuant vec flash attention (decode path)
 template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 128, 128, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kplanar3_vplanar3_dk192_dv192")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, block_planar3_0, NL_PLANAR3_VEC, dequantize_planar3_0_t4, 192, 192, 2>;
@@ -11584,6 +11812,11 @@ typedef decltype(kernel_set_rows_planar3<int64_t>) set_rows_planar3_t;
 
 template [[host_name("kernel_set_rows_planar3_i64")]] kernel set_rows_planar3_t kernel_set_rows_planar3<int64_t>;
 template [[host_name("kernel_set_rows_planar3_i32")]] kernel set_rows_planar3_t kernel_set_rows_planar3<int32_t>;
+// IsoQuant set_rows template instantiations
+typedef decltype(kernel_set_rows_iso3<int64_t>) set_rows_iso3_t;
+template [[host_name("kernel_set_rows_iso3_i64")]] kernel set_rows_iso3_t kernel_set_rows_iso3<int64_t>;
+template [[host_name("kernel_set_rows_iso3_i32")]] kernel set_rows_iso3_t kernel_set_rows_iso3<int32_t>;
+
 
 
 // TurboQuant2 set_rows instantiations (dedicated kernel, 4x32-element blocks, no signs)
