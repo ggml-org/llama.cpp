@@ -2336,6 +2336,394 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ====================== PolarQuant (TurboQuant KV cache quantization)
+
+// Fast Walsh-Hadamard Transform (in-place, size must be power of 2)
+static void fwht_inplace(float * x, int n) {
+    for (int len = 1; len < n; len <<= 1) {
+        for (int i = 0; i < n; i += len << 1) {
+            for (int j = 0; j < len; j++) {
+                float u = x[i + j];
+                float v = x[i + j + len];
+                x[i + j]       = u + v;
+                x[i + j + len] = u - v;
+            }
+        }
+    }
+    // Normalize by 1/sqrt(n) to make the transform orthonormal
+    const float norm = 1.0f / sqrtf((float)n);
+    for (int i = 0; i < n; i++) {
+        x[i] *= norm;
+    }
+}
+
+// Precomputed sin/cos lookup tables for PolarQuant angle dequantization
+// Angles are uniformly spaced over [-pi, pi): angle = -pi + (i + 0.5) * 2*pi / num_levels
+
+// 4-bit: 16 levels
+static const float pq4_cos_table[16] = {
+    -0.98078528f, -0.83146961f, -0.55557023f, -0.19509032f,
+     0.19509032f,  0.55557023f,  0.83146961f,  0.98078528f,
+     0.98078528f,  0.83146961f,  0.55557023f,  0.19509032f,
+    -0.19509032f, -0.55557023f, -0.83146961f, -0.98078528f,
+};
+static const float pq4_sin_table[16] = {
+    -0.19509032f, -0.55557023f, -0.83146961f, -0.98078528f,
+    -0.98078528f, -0.83146961f, -0.55557023f, -0.19509032f,
+     0.19509032f,  0.55557023f,  0.83146961f,  0.98078528f,
+     0.98078528f,  0.83146961f,  0.55557023f,  0.19509032f,
+};
+
+// 3-bit: 8 levels
+static const float pq3_cos_table[8] = {
+    -0.92387953f, -0.38268343f,  0.38268343f,  0.92387953f,
+     0.92387953f,  0.38268343f, -0.38268343f, -0.92387953f,
+};
+static const float pq3_sin_table[8] = {
+    -0.38268343f, -0.92387953f, -0.92387953f, -0.38268343f,
+     0.38268343f,  0.92387953f,  0.92387953f,  0.38268343f,
+};
+
+// 2-bit: 4 levels
+static const float pq2_cos_table[4] = {
+    -0.70710678f,  0.70710678f,  0.70710678f, -0.70710678f,
+};
+static const float pq2_sin_table[4] = {
+    -0.70710678f, -0.70710678f,  0.70710678f,  0.70710678f,
+};
+
+// === PQ4_0: 4-bit PolarQuant (no QJL) ===
+
+void quantize_row_pq4_0_ref(const float * GGML_RESTRICT x, block_pq4_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float tmp[QK_PQ];
+        memcpy(tmp, x + i * QK_PQ, QK_PQ * sizeof(float));
+
+        // Apply Walsh-Hadamard rotation
+        fwht_inplace(tmp, QK_PQ);
+
+        // Compute block L2 norm for radius
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            norm_sq += tmp[j] * tmp[j];
+        }
+        const float block_norm = sqrtf(norm_sq);
+        y[i].d = GGML_FP32_TO_FP16(block_norm);
+
+        // Convert pairs to polar and quantize angles to 4 bits
+        const int n_pairs = QK_PQ / 2; // 128
+        for (int j = 0; j < n_pairs; j++) {
+            float px = tmp[2 * j];
+            float py = tmp[2 * j + 1];
+            float angle = atan2f(py, px); // [-pi, pi]
+
+            // Map to [0, 16): uniform quantization over [-pi, pi]
+            float angle_norm = (angle + (float)M_PI) / (2.0f * (float)M_PI); // [0, 1)
+            int qa = (int)(angle_norm * 16.0f);
+            if (qa < 0)  qa = 0;
+            if (qa > 15) qa = 15;
+
+            // Pack nibbles: even index = low nibble, odd index = high nibble
+            if (j % 2 == 0) {
+                y[i].qs[j / 2] = (uint8_t)qa;
+            } else {
+                y[i].qs[j / 2] |= (uint8_t)(qa << 4);
+            }
+        }
+    }
+}
+
+void dequantize_row_pq4_0(const block_pq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float * out = y + i * QK_PQ;
+        const float block_norm = GGML_FP16_TO_FP32(x[i].d);
+        // Estimated per-pair radius assuming uniform energy distribution after WHT
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        const int n_pairs = QK_PQ / 2;
+        for (int j = 0; j < n_pairs; j++) {
+            int qa;
+            if (j % 2 == 0) {
+                qa = x[i].qs[j / 2] & 0x0F;
+            } else {
+                qa = (x[i].qs[j / 2] >> 4) & 0x0F;
+            }
+
+            out[2 * j]     = r_est * pq4_cos_table[qa];
+            out[2 * j + 1] = r_est * pq4_sin_table[qa];
+        }
+
+        // Apply inverse Walsh-Hadamard (WHT is its own inverse up to normalization)
+        fwht_inplace(out, QK_PQ);
+    }
+}
+
+size_t quantize_pq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights;
+    size_t row_size = ggml_row_size(GGML_TYPE_PQ4_0, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; row++) {
+        quantize_row_pq4_0_ref(src + row * n_per_row, (block_pq4_0 *)qrow, n_per_row);
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+// === PQ3_0: 3-bit PolarQuant + 1-bit QJL ===
+
+// Helper: pack 128 3-bit values into 48 bytes (16 groups of 8, each group = 3 bytes)
+static void pq3_pack_angles(uint8_t * dst, const int * angles, int n) {
+    assert(n == 128);
+    // Pack 8 values (24 bits) into 3 bytes, 16 groups
+    for (int g = 0; g < 16; g++) {
+        uint32_t bits = 0;
+        for (int j = 0; j < 8; j++) {
+            bits |= ((uint32_t)(angles[g * 8 + j] & 0x7)) << (j * 3);
+        }
+        dst[g * 3 + 0] = (uint8_t)(bits & 0xFF);
+        dst[g * 3 + 1] = (uint8_t)((bits >> 8) & 0xFF);
+        dst[g * 3 + 2] = (uint8_t)((bits >> 16) & 0xFF);
+    }
+}
+
+// Helper: unpack 128 3-bit values from 48 bytes
+static void pq3_unpack_angles(const uint8_t * src, int * angles, int n) {
+    assert(n == 128);
+    for (int g = 0; g < 16; g++) {
+        uint32_t bits = (uint32_t)src[g * 3 + 0]
+                      | ((uint32_t)src[g * 3 + 1] << 8)
+                      | ((uint32_t)src[g * 3 + 2] << 16);
+        for (int j = 0; j < 8; j++) {
+            angles[g * 8 + j] = (int)((bits >> (j * 3)) & 0x7);
+        }
+    }
+}
+
+void quantize_row_pq3_0_ref(const float * GGML_RESTRICT x, block_pq3_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float tmp[QK_PQ];
+        memcpy(tmp, x + i * QK_PQ, QK_PQ * sizeof(float));
+
+        // Apply Walsh-Hadamard rotation
+        fwht_inplace(tmp, QK_PQ);
+
+        // Compute block L2 norm
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            norm_sq += tmp[j] * tmp[j];
+        }
+        const float block_norm = sqrtf(norm_sq);
+        y[i].d = GGML_FP32_TO_FP16(block_norm);
+
+        // Quantize angles to 3 bits
+        const int n_pairs = QK_PQ / 2;
+        int angles[128];
+        for (int j = 0; j < n_pairs; j++) {
+            float px = tmp[2 * j];
+            float py = tmp[2 * j + 1];
+            float angle = atan2f(py, px);
+            float angle_norm = (angle + (float)M_PI) / (2.0f * (float)M_PI);
+            int qa = (int)(angle_norm * 8.0f);
+            if (qa < 0) qa = 0;
+            if (qa > 7) qa = 7;
+            angles[j] = qa;
+        }
+        pq3_pack_angles(y[i].qs, angles, 128);
+
+        // Compute QJL residual: dequantize, subtract from rotated original, project
+        float r_est = block_norm / sqrtf(128.0f);
+        float residual[QK_PQ];
+        for (int j = 0; j < n_pairs; j++) {
+            float recon_x = r_est * pq3_cos_table[angles[j]];
+            float recon_y = r_est * pq3_sin_table[angles[j]];
+            residual[2 * j]     = tmp[2 * j]     - recon_x;
+            residual[2 * j + 1] = tmp[2 * j + 1] - recon_y;
+        }
+
+        // Store sign bits of residual for QJL correction
+        // RMS residual magnitude is used during dequant to reconstruct approximate correction
+        memset(y[i].qj, 0, sizeof(y[i].qj));
+        float res_sq_sum = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            res_sq_sum += residual[j] * residual[j];
+            if (residual[j] >= 0.0f) {
+                y[i].qj[j / 8] |= (1 << (j % 8));
+            }
+        }
+        // Store residual RMS in unused high bits of d — for now we estimate from angle quantization error
+        (void)res_sq_sum;
+    }
+}
+
+void dequantize_row_pq3_0(const block_pq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    // Expected RMS error per element for 3-bit uniform angle quantization on unit circle:
+    // bin_width = 2*pi/8, RMS angular error = bin_width / sqrt(12)
+    // For radius r, positional RMS error ≈ r * bin_width / sqrt(12) ≈ r * 0.227
+    static const float pq3_rms_factor = 0.227f;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float * out = y + i * QK_PQ;
+        const float block_norm = GGML_FP16_TO_FP32(x[i].d);
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        // Unpack 3-bit angles
+        int angles[128];
+        pq3_unpack_angles(x[i].qs, angles, 128);
+
+        // Reconstruct Cartesian from polar
+        const int n_pairs = QK_PQ / 2;
+        for (int j = 0; j < n_pairs; j++) {
+            out[2 * j]     = r_est * pq3_cos_table[angles[j]];
+            out[2 * j + 1] = r_est * pq3_sin_table[angles[j]];
+        }
+
+        // Apply QJL sign-bit correction: nudge each element in the direction of the residual sign
+        const float qjl_scale = r_est * pq3_rms_factor;
+        for (int j = 0; j < QK_PQ; j++) {
+            float sign = (x[i].qj[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+            out[j] += qjl_scale * sign;
+        }
+
+        // Apply inverse Walsh-Hadamard
+        fwht_inplace(out, QK_PQ);
+    }
+}
+
+size_t quantize_pq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights;
+    size_t row_size = ggml_row_size(GGML_TYPE_PQ3_0, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; row++) {
+        quantize_row_pq3_0_ref(src + row * n_per_row, (block_pq3_0 *)qrow, n_per_row);
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+// === PQ2_0: 2-bit PolarQuant + 1-bit QJL ===
+
+void quantize_row_pq2_0_ref(const float * GGML_RESTRICT x, block_pq2_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float tmp[QK_PQ];
+        memcpy(tmp, x + i * QK_PQ, QK_PQ * sizeof(float));
+
+        // Apply Walsh-Hadamard rotation
+        fwht_inplace(tmp, QK_PQ);
+
+        // Compute block L2 norm
+        float norm_sq = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            norm_sq += tmp[j] * tmp[j];
+        }
+        const float block_norm = sqrtf(norm_sq);
+        y[i].d = GGML_FP32_TO_FP16(block_norm);
+
+        // Quantize angles to 2 bits and pack (128 angles * 2 bits = 32 bytes)
+        const int n_pairs = QK_PQ / 2;
+        int angles[128];
+        for (int j = 0; j < n_pairs; j++) {
+            float px = tmp[2 * j];
+            float py = tmp[2 * j + 1];
+            float angle = atan2f(py, px);
+            float angle_norm = (angle + (float)M_PI) / (2.0f * (float)M_PI);
+            int qa = (int)(angle_norm * 4.0f);
+            if (qa < 0) qa = 0;
+            if (qa > 3) qa = 3;
+            angles[j] = qa;
+
+            // Pack: 4 angles per byte
+            int byte_idx = j / 4;
+            int bit_pos  = (j % 4) * 2;
+            if (j % 4 == 0) {
+                y[i].qs[byte_idx] = (uint8_t)(qa << bit_pos);
+            } else {
+                y[i].qs[byte_idx] |= (uint8_t)(qa << bit_pos);
+            }
+        }
+
+        // Compute QJL residual
+        float r_est = block_norm / sqrtf(128.0f);
+        float residual[QK_PQ];
+        for (int j = 0; j < n_pairs; j++) {
+            float recon_x = r_est * pq2_cos_table[angles[j]];
+            float recon_y = r_est * pq2_sin_table[angles[j]];
+            residual[2 * j]     = tmp[2 * j]     - recon_x;
+            residual[2 * j + 1] = tmp[2 * j + 1] - recon_y;
+        }
+
+        // Store sign bits of residual for QJL correction
+        memset(y[i].qj, 0, sizeof(y[i].qj));
+        for (int j = 0; j < QK_PQ; j++) {
+            if (residual[j] >= 0.0f) {
+                y[i].qj[j / 8] |= (1 << (j % 8));
+            }
+        }
+    }
+}
+
+void dequantize_row_pq2_0(const block_pq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_PQ == 0);
+    const int64_t nb = k / QK_PQ;
+
+    // Expected RMS error per element for 2-bit uniform angle quantization:
+    // bin_width = 2*pi/4, RMS angular error = bin_width / sqrt(12)
+    // Positional RMS error ≈ r * bin_width / sqrt(12) ≈ r * 0.454
+    static const float pq2_rms_factor = 0.454f;
+
+    for (int64_t i = 0; i < nb; i++) {
+        float * out = y + i * QK_PQ;
+        const float block_norm = GGML_FP16_TO_FP32(x[i].d);
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        // Unpack 2-bit angles and reconstruct Cartesian
+        const int n_pairs = QK_PQ / 2;
+        for (int j = 0; j < n_pairs; j++) {
+            int byte_idx = j / 4;
+            int bit_pos  = (j % 4) * 2;
+            int qa = (x[i].qs[byte_idx] >> bit_pos) & 0x3;
+
+            out[2 * j]     = r_est * pq2_cos_table[qa];
+            out[2 * j + 1] = r_est * pq2_sin_table[qa];
+        }
+
+        // Apply QJL sign-bit correction
+        const float qjl_scale = r_est * pq2_rms_factor;
+        for (int j = 0; j < QK_PQ; j++) {
+            float sign = (x[i].qj[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+            out[j] += qjl_scale * sign;
+        }
+
+        // Apply inverse Walsh-Hadamard
+        fwht_inplace(out, QK_PQ);
+    }
+}
+
+size_t quantize_pq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights;
+    size_t row_size = ggml_row_size(GGML_TYPE_PQ2_0, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; row++) {
+        quantize_row_pq2_0_ref(src + row * n_per_row, (block_pq2_0 *)qrow, n_per_row);
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {

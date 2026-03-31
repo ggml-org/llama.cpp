@@ -266,6 +266,37 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// PolarQuant types (TurboQuant KV cache quantization)
+// Uses Walsh-Hadamard rotation + polar coordinate decomposition
+// Block size matches QK_K (256 elements -> 128 polar pairs)
+#define QK_PQ 256
+
+// 2.0625 bpw - 4-bit PolarQuant angles, no QJL residual
+// 128 angles at 4 bits = 64 bytes + 2 bytes radius
+typedef struct {
+    ggml_half d;          // block radius (L2 norm scale)
+    uint8_t qs[QK_PQ / 4]; // 128 angles packed as 4-bit nibbles (64 bytes)
+} block_pq4_0;
+static_assert(sizeof(block_pq4_0) == sizeof(ggml_half) + QK_PQ / 4, "wrong pq4_0 block size/padding");
+
+// 2.5625 bpw - 3-bit PolarQuant angles + 1-bit QJL residual
+// 128 angles at 3 bits = 48 bytes + 256 QJL sign bits = 32 bytes + 2 bytes radius
+typedef struct {
+    ggml_half d;              // block radius (L2 norm scale)
+    uint8_t qs[3 * QK_PQ / 16]; // 128 angles packed as 3-bit (48 bytes)
+    uint8_t qj[QK_PQ / 8];     // 256 QJL sign bits (32 bytes)
+} block_pq3_0;
+static_assert(sizeof(block_pq3_0) == sizeof(ggml_half) + 3 * QK_PQ / 16 + QK_PQ / 8, "wrong pq3_0 block size/padding");
+
+// 2.0625 bpw - 2-bit PolarQuant angles + 1-bit QJL residual
+// 128 angles at 2 bits = 32 bytes + 256 QJL sign bits = 32 bytes + 2 bytes radius
+typedef struct {
+    ggml_half d;            // block radius (L2 norm scale)
+    uint8_t qs[QK_PQ / 8]; // 128 angles packed as 2-bit (32 bytes)
+    uint8_t qj[QK_PQ / 8]; // 256 QJL sign bits (32 bytes)
+} block_pq2_0;
+static_assert(sizeof(block_pq2_0) == sizeof(ggml_half) + QK_PQ / 8 + QK_PQ / 8, "wrong pq2_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

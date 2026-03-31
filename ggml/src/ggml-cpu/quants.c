@@ -108,6 +108,24 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+void quantize_row_pq4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_PQ == 0);
+    block_pq4_0 * GGML_RESTRICT y = vy;
+    quantize_row_pq4_0_ref(x, y, k);
+}
+
+void quantize_row_pq3_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_PQ == 0);
+    block_pq3_0 * GGML_RESTRICT y = vy;
+    quantize_row_pq3_0_ref(x, y, k);
+}
+
+void quantize_row_pq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_PQ == 0);
+    block_pq2_0 * GGML_RESTRICT y = vy;
+    quantize_row_pq2_0_ref(x, y, k);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -451,6 +469,201 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
 
         sumf += (float) sumi * d;
+    }
+
+    *s = sumf;
+}
+
+// PolarQuant vec_dot: dequantize PQ block to float, then dot with Q8_K
+// Shared sin/cos tables (same as in ggml-quants.c)
+static const float pq4_cos_lut[16] = {
+    -0.98078528f, -0.83146961f, -0.55557023f, -0.19509032f,
+     0.19509032f,  0.55557023f,  0.83146961f,  0.98078528f,
+     0.98078528f,  0.83146961f,  0.55557023f,  0.19509032f,
+    -0.19509032f, -0.55557023f, -0.83146961f, -0.98078528f,
+};
+static const float pq4_sin_lut[16] = {
+    -0.19509032f, -0.55557023f, -0.83146961f, -0.98078528f,
+    -0.98078528f, -0.83146961f, -0.55557023f, -0.19509032f,
+     0.19509032f,  0.55557023f,  0.83146961f,  0.98078528f,
+     0.98078528f,  0.83146961f,  0.55557023f,  0.19509032f,
+};
+static const float pq3_cos_lut[8] = {
+    -0.92387953f, -0.38268343f,  0.38268343f,  0.92387953f,
+     0.92387953f,  0.38268343f, -0.38268343f, -0.92387953f,
+};
+static const float pq3_sin_lut[8] = {
+    -0.38268343f, -0.92387953f, -0.92387953f, -0.38268343f,
+     0.38268343f,  0.92387953f,  0.92387953f,  0.38268343f,
+};
+static const float pq2_cos_lut[4] = {
+    -0.70710678f,  0.70710678f,  0.70710678f, -0.70710678f,
+};
+static const float pq2_sin_lut[4] = {
+    -0.70710678f, -0.70710678f,  0.70710678f,  0.70710678f,
+};
+
+static void pq_fwht(float * x, int n) {
+    for (int len = 1; len < n; len <<= 1) {
+        for (int i = 0; i < n; i += len << 1) {
+            for (int j = 0; j < len; j++) {
+                float u = x[i + j];
+                float v = x[i + j + len];
+                x[i + j]       = u + v;
+                x[i + j + len] = u - v;
+            }
+        }
+    }
+    const float norm = 1.0f / sqrtf((float)n);
+    for (int i = 0; i < n; i++) {
+        x[i] *= norm;
+    }
+}
+
+void ggml_vec_dot_pq4_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    assert(n % QK_PQ == 0);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_pq4_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_PQ;
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i++) {
+        const float block_norm = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        // Dequantize PQ4_0 block to float
+        float tmp[QK_PQ];
+        for (int j = 0; j < QK_PQ / 2; j++) {
+            int qa = (j % 2 == 0) ? (x[i].qs[j / 2] & 0x0F) : ((x[i].qs[j / 2] >> 4) & 0x0F);
+            tmp[2 * j]     = r_est * pq4_cos_lut[qa];
+            tmp[2 * j + 1] = r_est * pq4_sin_lut[qa];
+        }
+        pq_fwht(tmp, QK_PQ);
+
+        // Dot with Q8_K
+        const float d_q = y[i].d;
+        float block_sum = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            block_sum += tmp[j] * (float)y[i].qs[j];
+        }
+        sumf += block_sum * d_q;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_pq3_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    assert(n % QK_PQ == 0);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_pq3_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_PQ;
+    float sumf = 0.0f;
+
+    // RMS factor matching dequantize_row_pq3_0
+    static const float pq3_rms = 0.227f;
+
+    for (int i = 0; i < nb; i++) {
+        const float block_norm = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        // Unpack 3-bit angles
+        int angles[128];
+        for (int g = 0; g < 16; g++) {
+            uint32_t bits = (uint32_t)x[i].qs[g * 3 + 0]
+                          | ((uint32_t)x[i].qs[g * 3 + 1] << 8)
+                          | ((uint32_t)x[i].qs[g * 3 + 2] << 16);
+            for (int j = 0; j < 8; j++) {
+                angles[g * 8 + j] = (int)((bits >> (j * 3)) & 0x7);
+            }
+        }
+
+        // Reconstruct Cartesian from polar
+        float tmp[QK_PQ];
+        for (int j = 0; j < QK_PQ / 2; j++) {
+            tmp[2 * j]     = r_est * pq3_cos_lut[angles[j]];
+            tmp[2 * j + 1] = r_est * pq3_sin_lut[angles[j]];
+        }
+
+        // Apply QJL sign-bit correction (must match dequantize_row_pq3_0)
+        const float qjl_scale = r_est * pq3_rms;
+        for (int j = 0; j < QK_PQ; j++) {
+            float sign = (x[i].qj[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+            tmp[j] += qjl_scale * sign;
+        }
+
+        pq_fwht(tmp, QK_PQ);
+
+        const float d_q = y[i].d;
+        float block_sum = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            block_sum += tmp[j] * (float)y[i].qs[j];
+        }
+        sumf += block_sum * d_q;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_pq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    assert(n % QK_PQ == 0);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_pq2_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_PQ;
+    float sumf = 0.0f;
+
+    // RMS factor matching dequantize_row_pq2_0
+    static const float pq2_rms = 0.454f;
+
+    for (int i = 0; i < nb; i++) {
+        const float block_norm = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float r_est = block_norm / sqrtf(128.0f);
+
+        // Unpack 2-bit angles and reconstruct
+        float tmp[QK_PQ];
+        for (int j = 0; j < QK_PQ / 2; j++) {
+            int byte_idx = j / 4;
+            int bit_pos  = (j % 4) * 2;
+            int qa = (x[i].qs[byte_idx] >> bit_pos) & 0x3;
+            tmp[2 * j]     = r_est * pq2_cos_lut[qa];
+            tmp[2 * j + 1] = r_est * pq2_sin_lut[qa];
+        }
+
+        // Apply QJL sign-bit correction (must match dequantize_row_pq2_0)
+        const float qjl_scale = r_est * pq2_rms;
+        for (int j = 0; j < QK_PQ; j++) {
+            float sign = (x[i].qj[j / 8] & (1 << (j % 8))) ? 1.0f : -1.0f;
+            tmp[j] += qjl_scale * sign;
+        }
+
+        pq_fwht(tmp, QK_PQ);
+
+        const float d_q = y[i].d;
+        float block_sum = 0.0f;
+        for (int j = 0; j < QK_PQ; j++) {
+            block_sum += tmp[j] * (float)y[i].qs[j];
+        }
+        sumf += block_sum * d_q;
     }
 
     *s = sumf;
