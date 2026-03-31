@@ -13010,7 +13010,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     }
 
     auto & mgr = ggml_sycl::get_kv_tier_manager(device);
-    mgr.configure(device, n_layers, kv_vram_cap, size);
+    mgr.configure_with_weights(device, n_layers, kv_vram_cap, size);
 
     size_t hot_size = 0, cold_size = 0;
 

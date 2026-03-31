@@ -914,6 +914,10 @@ class unified_cache {
         return entries_.size();
     }
 
+    // Returns total VRAM bytes used by weight entries for a specific layer.
+    // Used by KV tier manager to co-locate KV with layer weights.
+    size_t get_layer_vram_bytes(int layer_id) const;
+
     void print_stats() const;
 
     // Access the internal SYCL queue (for deferred free of temp allocations
@@ -1648,6 +1652,10 @@ size_t unified_cache_total_managed(int device);
 
 // Current weight bytes on device
 size_t unified_cache_weight_bytes(int device);
+
+// Returns total VRAM bytes used by weight entries for a specific layer on a device.
+// Used by KV tier manager to co-locate KV with layer weights.
+size_t unified_cache_get_layer_vram_bytes(int device, int layer_id);
 
 // Log budget summary (weights, runtime, available) for diagnostics
 void unified_cache_log_budget_summary(int device);

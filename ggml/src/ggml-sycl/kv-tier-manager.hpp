@@ -24,6 +24,11 @@ class kv_tier_manager {
     // Returns true if tiering is active (some layers on host)
     bool configure(int device, uint32_t n_layers, size_t kv_vram_cap, size_t total_bytes);
 
+    // Weight-aware configuration: queries unified cache for per-layer weight
+    // residency and co-locates KV with device-resident weights.
+    // Falls back to budget-based configure() when cache data is unavailable.
+    void configure_with_weights(int device, uint32_t n_layers, size_t kv_vram_cap, size_t total_bytes);
+
     // Query tier state
     bool is_active() const { return active_; }
 
