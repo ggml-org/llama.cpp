@@ -34,21 +34,80 @@ Safe interpretation:
 
 **[turbo-tan/Qwen3.5-27B-TQ3_1S on Hugging Face](https://huggingface.co/turbo-tan/Qwen3.5-27B-TQ3_1S)** — download and run immediately.
 
-## Quick Start
+## Installation
 
 ```bash
-# Build
-cmake -B build -DGGML_CUDA=ON
+git clone https://github.com/turbo-tan/llama.cpp-tq3.git
+cd llama.cpp-tq3
+
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-
-# Serve
-./build/bin/llama-server \
-    -m Qwen3.5-27B-TQ3_1S.gguf \
-    -ngl 99 -fa on -c 4096
-
-# Benchmark
-./build/bin/llama-bench -m Qwen3.5-27B-TQ3_1S.gguf -ngl 99 -fa on
 ```
+
+## Quick Start
+
+Set portable path variables:
+
+```bash
+export USERNAME="${USERNAME:-$USER}"
+export CODE_ROOT="/home/$USERNAME/code"
+export MODEL_ROOT="/home/$USERNAME/models"
+```
+
+Download the published GGUF from Hugging Face:
+
+```bash
+mkdir -p "$MODEL_ROOT/turboquant27"
+
+python3 - <<'PY'
+from huggingface_hub import hf_hub_download
+
+hf_hub_download(
+    repo_id="turbo-tan/Qwen3.5-27B-TQ3_1S",
+    filename="Qwen3.5-27B-TQ3_1S.gguf",
+    local_dir=f"/home/{__import__('os').environ.get('USERNAME', __import__('os').environ.get('USER'))}/models/turboquant27",
+)
+PY
+```
+
+```bash
+# Serve the published 27B model
+./build/bin/llama-server \
+    -m "$MODEL_ROOT/turboquant27/Qwen_Qwen3.5-27B-TQ3_1S.gguf" \
+    -ngl 99 \
+    -fa on \
+    -c 4096 \
+    --port 8090 \
+    --reasoning off \
+    --reasoning-budget 0 \
+    --reasoning-format none
+```
+
+## Benchmark
+
+Gold-standard perplexity run:
+
+```bash
+./build/bin/llama-perplexity \
+    -m "$MODEL_ROOT/turboquant27/Qwen_Qwen3.5-27B-TQ3_1S.gguf" \
+    -f "$CODE_ROOT/llama.cpp/wikitext-2-raw/wiki.test.raw" \
+    -c 512 \
+    -ngl 99 \
+    -fa 1 \
+    -t 8 \
+    --no-warmup
+```
+
+Quick throughput check:
+
+```bash
+./build/bin/llama-bench \
+    -m "$MODEL_ROOT/turboquant27/Qwen_Qwen3.5-27B-TQ3_1S.gguf" \
+    -ngl 99 \
+    -fa on
+```
+
+If you downloaded the GGUF from Hugging Face into a different location, replace `MODEL_ROOT` accordingly.
 
 ## How TQ3_1S Works
 
