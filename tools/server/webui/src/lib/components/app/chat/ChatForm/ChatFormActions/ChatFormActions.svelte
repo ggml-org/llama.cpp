@@ -6,21 +6,21 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		McpActiveServersAvatars,
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
+	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
-	import { getFileTypeCategory } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import McpActiveServersAvatars from '$lib/components/app/mcp/McpActiveServersAvatars.svelte';
+	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
 		canSend?: boolean;
@@ -54,7 +54,8 @@
 		onMcpResourcesClick
 	}: Props = $props();
 
-	let showChatSettingsDialogWithMcpSection = $state(false);
+	const chatSettingsDialog = getChatSettingsDialogContext();
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let isOffline = $derived(!!serverError());
@@ -213,7 +214,7 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-2">
-		<McpActiveServersAvatars onClick={() => (showChatSettingsDialogWithMcpSection = true)} />
+		<McpActiveServersAvatars onClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)} />
 
 		{#if isMobile.current}
 			<ModelsSelectorSheet
