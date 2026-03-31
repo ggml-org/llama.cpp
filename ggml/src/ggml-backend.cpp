@@ -732,7 +732,8 @@ struct ggml_backend_sched {
 
     // prefetch support: copy backends and events for compute/transfer overlap
     ggml_backend_t       copy_backends[GGML_SCHED_MAX_BACKENDS];
-    ggml_backend_event_t copy_events[GGML_SCHED_MAX_BACKENDS];
+    ggml_backend_event_t copy_events[GGML_SCHED_MAX_BACKENDS];    // copy -> compute sync
+    ggml_backend_event_t compute_events[GGML_SCHED_MAX_BACKENDS]; // compute -> copy sync
 
     int debug;
 
@@ -1572,9 +1573,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // and only for CPU->GPU transfers (host buffers)
                     if (next->backend_id == split_backend_id) {
                         // copy stream waits for previous compute to complete
-                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                            ggml_backend_event_wait(copy_backend, sched->events[split_backend_id][sched->cur_copy]);
-                        }
+                        ggml_backend_event_wait(copy_backend, sched->compute_events[split_backend_id]);
 
                         for (int input_id = 0; input_id < next->n_inputs; input_id++) {
                             struct ggml_tensor * input = next->inputs[input_id];
@@ -1763,6 +1762,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
+        // record compute done for copy stream sync
+        if (sched->compute_events[split_backend_id] != NULL) {
+            ggml_backend_event_record(sched->compute_events[split_backend_id], split_backend);
+        }
+
         // record the event of this copy
         if (split->n_inputs > 0) {
             if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -1853,6 +1857,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
             ggml_backend_event_free(sched->events[b][c]);
         }
         ggml_backend_event_free(sched->copy_events[b]);
+        ggml_backend_event_free(sched->compute_events[b]);
         if (sched->copy_backends[b] != NULL) {
             ggml_backend_free(sched->copy_backends[b]);
         }
@@ -1995,17 +2000,18 @@ void ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool en
             struct ggml_backend_dev_props props;
             ggml_backend_dev_get_props(dev, &props);
             if (props.caps.copy_stream) {
-                sched->copy_backends[b] = ggml_backend_dev_init(dev, NULL);
-                sched->copy_events[b]   = ggml_backend_event_new(dev);
+                sched->copy_backends[b]  = ggml_backend_dev_init(dev, NULL);
+                sched->copy_events[b]    = ggml_backend_event_new(dev);
+                sched->compute_events[b] = ggml_backend_event_new(dev);
             }
         }
     } else {
         // free copy backends and events
         for (int b = 0; b < sched->n_backends; b++) {
-            if (sched->copy_events[b] != NULL) {
-                ggml_backend_event_free(sched->copy_events[b]);
-                sched->copy_events[b] = NULL;
-            }
+            ggml_backend_event_free(sched->copy_events[b]);
+            sched->copy_events[b] = NULL;
+            ggml_backend_event_free(sched->compute_events[b]);
+            sched->compute_events[b] = NULL;
             if (sched->copy_backends[b] != NULL) {
                 ggml_backend_free(sched->copy_backends[b]);
                 sched->copy_backends[b] = NULL;
