@@ -344,6 +344,19 @@ typedef struct {
 } block_turbo2_0;                       // 10 bytes total
 static_assert(sizeof(block_turbo2_0) == sizeof(ggml_half) + QK_TURBO2/4, "wrong turbo2_0 block size/padding");
 
+// PlanarQuant 3-bit: 2D Givens rotation + 2-bit quantized + 1-bit QJL
+// Same block layout as turbo3 (norm + 2-bit indices + 1-bit signs)
+// but uses cos/sin pair rotation instead of WHT
+#define QK_PLANAR3 128
+#define NL_PLANAR3 (QK_PLANAR3 / 16)
+#define NL_PLANAR3_VEC (QK_PLANAR3 / 4)
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_PLANAR3 / 4];
+    uint8_t    signs[QK_PLANAR3 / 8];
+} block_planar3_0;
+static_assert(sizeof(block_planar3_0) == sizeof(ggml_half) + QK_PLANAR3/4 + QK_PLANAR3/8, "wrong planar3_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

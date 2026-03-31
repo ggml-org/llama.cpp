@@ -7245,6 +7245,114 @@ template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk320_dv256")]] kernel f
 template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 512, 512>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vq8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
 
+
+// ===== PlanarQuant 3-bit dequantize (2D Givens rotation) =====
+// Same block layout as turbo3, but inverse rotation is per-pair Givens.
+// Much simpler than WHT: only 4 FMAs per pair, no full-block dependency.
+
+constant float planar_centroids_3bit[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+
+// Rotation parameters (seed=42, 64 cos/sin pairs for d=128)
+constant float planar_cos_64[64] = {
+    -0.9095053397f, 0.1535578452f, -0.8537489227f, -0.6827218011f, -0.4249387949f, 0.9864510046f, 0.9906673944f, 0.5752363372f,
+    -0.9866459035f, 0.9878848090f, -0.6215683804f, -0.9835597698f, 0.8777263755f, -0.4624640047f, 0.2843135922f, -0.7739960698f,
+    0.2385234222f, 0.9121914932f, -0.8815003943f, -0.2639699512f, -0.5517087300f, -0.9035294557f, -0.8520543188f, -0.5600635985f,
+    -0.7667286376f, -0.9877949369f, -0.9781949787f, -0.9953372831f, -0.8622053901f, -0.7382118186f, 0.9136037642f, -0.2558504503f,
+    -0.8541000475f, -0.6159335408f, 0.9861256679f, -0.6758560284f, 0.4249571682f, -0.6219544719f, 0.9130573430f, -0.5948161096f,
+    0.5759782996f, 0.9729901203f, 0.6535998325f, 0.9222195491f, -0.7668084044f, 0.5116178563f, -0.7848786574f, 0.9902111051f,
+    0.1997167840f, 0.7173003220f, -0.9999998006f, -0.9557868691f, 0.5594852693f, -0.9980111824f, 0.9782398557f, -0.9150004329f,
+    -0.4084754305f, 0.0071549185f, 0.9558482753f, -0.0971921648f, -0.9469334002f, 0.9999492419f, 0.6100589016f, 0.0350818915f,
+};
+constant float planar_sin_64[64] = {
+    -0.4156922383f, 0.9881396603f, 0.5206849114f, -0.7306784124f, -0.9052220836f, 0.1640561354f, 0.1363015542f, 0.8179872593f,
+    0.1628798979f, 0.1551889303f, 0.7833599099f, -0.1805828875f, -0.4791621957f, 0.8866380571f, -0.9587313395f, 0.6331904010f,
+    -0.9711367448f, 0.4097641756f, 0.4721832852f, -0.9645309040f, 0.8340368561f, 0.4285259884f, 0.5234533769f, 0.8284496156f,
+    0.6419713361f, -0.1557599517f, -0.2076886701f, 0.0964556523f, 0.5065588468f, -0.6745689815f, -0.4066056591f, -0.9667163736f,
+    0.5201087471f, -0.7877981171f, 0.1660005034f, -0.7370336688f, 0.9052134584f, 0.7830534049f, -0.4078312009f, -0.8038618014f,
+    0.8174649829f, -0.2308467584f, -0.7568403127f, -0.3866666566f, 0.6418760557f, -0.8592131104f, 0.6196494922f, 0.1395778183f,
+    0.9798536657f, 0.6967641265f, -0.0006314605f, 0.2940603015f, 0.8288402943f, -0.0630371303f, 0.2074771907f, 0.4034528570f,
+    0.9127693152f, -0.9999744032f, 0.2938606379f, 0.9952656344f, 0.3214298299f, 0.0100754012f, -0.7923560668f, -0.9993844410f,
+};
+
+// Non-vec dequantize: 16 elements per call (il in {0..NL_PLANAR3-1})
+template <typename type4x4>
+void dequantize_planar3_0(device const block_planar3_0 * xb, short il, thread type4x4 & reg) {
+    const float norm = float(xb->norm);
+    const int qs_off = il * 4;
+    float4x4 reg_f;
+
+    for (int g = 0; g < 4; g++) {
+        const uint8_t qb = xb->qs[qs_off + g];
+        const uint8_t sb = xb->signs[il * 2 + g / 2];
+        const int sshift = (g & 1) * 4;
+
+        // Unpack 4 3-bit indices
+        float4 raw;
+        raw[0] = planar_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)];
+        raw[1] = planar_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)];
+        raw[2] = planar_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)];
+        raw[3] = planar_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)];
+
+        // Inverse Givens rotation on pairs
+        // Element indices within block: il*16 + g*4 + {0,1,2,3}
+        // Pair indices: (il*16 + g*4)/2 + {0,1}
+        int base_elem = il * 16 + g * 4;
+        int pair0 = base_elem / 2;
+        int pair1 = pair0 + 1;
+
+        float c0 = planar_cos_64[pair0];
+        float s0 = planar_sin_64[pair0];
+        float c1 = planar_cos_64[pair1];
+        float s1 = planar_sin_64[pair1];
+
+        // Pair 0: elements 0,1
+        float f0 =  c0 * raw[0] + s0 * raw[1];
+        float f1 = -s0 * raw[0] + c0 * raw[1];
+        // Pair 1: elements 2,3
+        float f2 =  c1 * raw[2] + s1 * raw[3];
+        float f3 = -s1 * raw[2] + c1 * raw[3];
+
+        reg_f[g] = float4(f0 * norm, f1 * norm, f2 * norm, f3 * norm);
+    }
+    reg = (type4x4) reg_f;
+}
+
+// Vec dequantize: 4 elements per call (il in {0..NL_PLANAR3_VEC-1})
+template <typename type4>
+void dequantize_planar3_0_t4(device const block_planar3_0 * xb, short il, thread type4 & reg) {
+    const float norm = float(xb->norm);
+    const uint8_t qb = xb->qs[il];
+    const uint8_t sb = xb->signs[il / 2];
+    const int sshift = (il & 1) * 4;
+
+    float4 raw;
+    raw[0] = planar_centroids_3bit[(qb & 0x03)        | (((sb >> (sshift + 0)) & 1) << 2)];
+    raw[1] = planar_centroids_3bit[((qb >> 2) & 0x03) | (((sb >> (sshift + 1)) & 1) << 2)];
+    raw[2] = planar_centroids_3bit[((qb >> 4) & 0x03) | (((sb >> (sshift + 2)) & 1) << 2)];
+    raw[3] = planar_centroids_3bit[((qb >> 6) & 0x03) | (((sb >> (sshift + 3)) & 1) << 2)];
+
+    // Inverse Givens rotation on pairs
+    int base_elem = il * 4;
+    int pair0 = base_elem / 2;
+    int pair1 = pair0 + 1;
+
+    float c0 = planar_cos_64[pair0];
+    float s0 = planar_sin_64[pair0];
+    float c1 = planar_cos_64[pair1];
+    float s1 = planar_sin_64[pair1];
+
+    float f0 =  c0 * raw[0] + s0 * raw[1];
+    float f1 = -s0 * raw[0] + c0 * raw[1];
+    float f2 =  c1 * raw[2] + s1 * raw[3];
+    float f3 = -s1 * raw[2] + c1 * raw[3];
+
+    reg = (type4) float4(f0 * norm, f1 * norm, f2 * norm, f3 * norm);
+}
+
+
 // TurboQuant non-vec flash attention (nl=NL_TURBO3=QK_TURBO3/16)
 template [[host_name("kernel_flash_attn_ext_kturbo3_vturbo3_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_kturbo3_vturbo3_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 64,  64>;
@@ -7285,6 +7393,125 @@ template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk96_dv96"  )]] kern
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 128, 128>;
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 192, 192>;
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 192, 128>;
+
+
+// PlanarQuant quantize: same per-block quantize as turbo3 (rotation is per-group in set_rows)
+void quantize_planar3_0(device const float * src, device block_planar3_0 & dst) {
+#pragma METAL fp math_mode(safe)
+    float norm_sq = 0.0f;
+    for (int j = 0; j < QK_PLANAR3; j++) norm_sq += src[j] * src[j];
+    float norm = sqrt(norm_sq);
+    float inv_norm = norm > 1e-10f ? 1.0f / norm : 0.0f;
+    dst.norm = half(norm);
+
+    for (int j = 0; j < QK_PLANAR3 / 4; j++) dst.qs[j] = 0;
+    for (int j = 0; j < QK_PLANAR3 / 8; j++) dst.signs[j] = 0;
+
+    for (int j = 0; j < QK_PLANAR3; j++) {
+        float val = src[j] * inv_norm;
+        uint8_t idx;
+        if      (val < turbo_mid_3bit[0]) idx = 0;
+        else if (val < turbo_mid_3bit[1]) idx = 1;
+        else if (val < turbo_mid_3bit[2]) idx = 2;
+        else if (val < turbo_mid_3bit[3]) idx = 3;
+        else if (val < turbo_mid_3bit[4]) idx = 4;
+        else if (val < turbo_mid_3bit[5]) idx = 5;
+        else if (val < turbo_mid_3bit[6]) idx = 6;
+        else                              idx = 7;
+        dst.qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+        if (idx & 0x4) dst.signs[j / 8] |= (1 << (j % 8));
+    }
+}
+
+// PlanarQuant set_rows: Givens rotation (cos/sin per pair) instead of WHT
+// Uses same args struct as generic set_rows. nk0 = ne00/QK_PLANAR3 = number of blocks.
+// For QK_PLANAR3=128, nk0 = 1 per 128-element head_dim, so one block per row.
+template<typename TI>
+kernel void kernel_set_rows_planar3(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) return;
+
+    const int32_t i10 = i01;
+    const TI i1 = ((const device TI *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+    device block_planar3_0 * dst_row = (device block_planar3_0 *) ((device char *) dst + i1*args.nb1 + i02*args.nb2 + i03*args.nb3);
+    const device float * src_row = (const device float *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    // nk0 = number of 128-element blocks per row
+    for (int g = 0; g < args.nk0; g++) {
+        const device float * grp_src = src_row + g * QK_PLANAR3;
+        device block_planar3_0 * blk = &dst_row[g];
+
+        // 1. L2 norm
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < QK_PLANAR3; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrt(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < QK_PLANAR3; j++) buf[j] *= inv_norm;
+
+        // 2. Forward Givens rotation per pair
+        float rotated[128];
+        for (int p = 0; p < 64; p++) {
+            float c = planar_cos_64[p];
+            float s = planar_sin_64[p];
+            rotated[p*2]     = c * buf[p*2] - s * buf[p*2+1];
+            rotated[p*2 + 1] = s * buf[p*2] + c * buf[p*2+1];
+        }
+
+        // 3. Quantize + pack
+        for (int j = 0; j < QK_PLANAR3 / 4; j++) blk->qs[j] = 0;
+        for (int j = 0; j < QK_PLANAR3 / 8; j++) blk->signs[j] = 0;
+
+        float recon_sq = 0.0f;
+        for (int j = 0; j < QK_PLANAR3; j++) {
+            float val = rotated[j];
+            uint8_t idx;
+            if      (val < turbo_mid_3bit[0]) idx = 0;
+            else if (val < turbo_mid_3bit[1]) idx = 1;
+            else if (val < turbo_mid_3bit[2]) idx = 2;
+            else if (val < turbo_mid_3bit[3]) idx = 3;
+            else if (val < turbo_mid_3bit[4]) idx = 4;
+            else if (val < turbo_mid_3bit[5]) idx = 5;
+            else if (val < turbo_mid_3bit[6]) idx = 6;
+            else                              idx = 7;
+            blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+            if (idx & 0x4) blk->signs[j / 8] |= (1 << (j % 8));
+            recon_sq += turbo_centroids_3bit[idx] * turbo_centroids_3bit[idx];
+        }
+
+        float recon_norm = sqrt(recon_sq);
+        float corrected = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
+        blk->norm = half(corrected);
+    }
+}
+
+
+// PlanarQuant non-vec flash attention (nl=NL_PLANAR3=QK_PLANAR3/16)
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 32,  32>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 64,  64>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk96_dv96"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 96,  96>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk192_dv192")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 192, 192>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk192_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 192, 128>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 320, 256>;
+template [[host_name("kernel_flash_attn_ext_kplanar3_vplanar3_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, block_planar3_0, NL_PLANAR3, dequantize_planar3_0, 576, 512>;
+
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 320, 256>;
 template [[host_name("kernel_flash_attn_ext_kturbo2_vturbo3_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, NL_TURBO2, dequantize_turbo2_0, block_turbo3_0, NL_TURBO3, dequantize_turbo3_0, 576, 512>;
@@ -11343,6 +11570,13 @@ typedef decltype(kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quant
 
 template [[host_name("kernel_set_rows_turbo3_i64")]] kernel set_rows_turbo3_t kernel_set_rows_turbo<int64_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
 template [[host_name("kernel_set_rows_turbo3_i32")]] kernel set_rows_turbo3_t kernel_set_rows_turbo<int32_t, block_turbo3_0, QK_TURBO3, quantize_turbo3_0>;
+
+// PlanarQuant set_rows template instantiations
+typedef decltype(kernel_set_rows_planar3<int64_t>) set_rows_planar3_t;
+
+template [[host_name("kernel_set_rows_planar3_i64")]] kernel set_rows_planar3_t kernel_set_rows_planar3<int64_t>;
+template [[host_name("kernel_set_rows_planar3_i32")]] kernel set_rows_planar3_t kernel_set_rows_planar3<int32_t>;
+
 
 // TurboQuant2 set_rows instantiations (dedicated kernel, 4x32-element blocks, no signs)
 typedef decltype(kernel_set_rows_turbo2<int64_t>) set_rows_turbo2_t;
