@@ -42,6 +42,7 @@ import type {
 import {
 	buildProxiedUrl,
 	buildProxiedHeaders,
+	getAuthHeaders,
 	throwIfAborted,
 	isAbortError,
 	createBase64DataUrl
@@ -124,7 +125,14 @@ export class MCPService {
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
-			requestInit.headers = buildProxiedHeaders(config.headers);
+			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
+		}
+
+		if (useProxy) {
+			requestInit.headers = {
+				...getAuthHeaders(),
+				...(requestInit.headers as Record<string, string>)
+			};
 		}
 
 		if (config.credentials) {
