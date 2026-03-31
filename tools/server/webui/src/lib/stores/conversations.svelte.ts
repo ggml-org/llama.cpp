@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
+import { filterByLeafNodeId, findLeafNode, runLegacyMigration } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 import {
@@ -128,6 +128,10 @@ class ConversationsStore {
 		if (this.isInitialized) return;
 
 		try {
+			// @deprecated Legacy migration for old marker-based messages.
+			// Remove once all users have migrated to the structured format.
+			await runLegacyMigration();
+
 			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {

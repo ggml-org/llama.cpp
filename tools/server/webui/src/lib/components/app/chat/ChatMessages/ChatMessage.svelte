@@ -4,7 +4,7 @@
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { DatabaseService } from '$lib/services';
+	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { MessageRole, AttachmentType } from '$lib/enums';
 	import {
@@ -19,6 +19,7 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
@@ -26,6 +27,7 @@
 	let {
 		class: className = '',
 		message,
+		toolMessages = [],
 		isLastAssistantMessage = false,
 		siblingInfo = null
 	}: Props = $props();
@@ -302,6 +304,7 @@
 		{deletionInfo}
 		{isLastAssistantMessage}
 		{message}
+		{toolMessages}
 		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}
 		onContinue={handleContinue}
