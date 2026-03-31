@@ -37,6 +37,14 @@ static ggml_et_cpu_compare_config l2_norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config group_norm_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config unary_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -1037,6 +1045,59 @@ bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     }
 
     ET_PERF_END_EXT("L2_NORM", kernel_name, node, "eps=%.6f", (double)eps);
+    return kernel_result;
+}
+
+bool ggml_et_op_group_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for GROUP_NORM operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: GROUP_NORM operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: GROUP_NORM operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    const int32_t n_groups = ggml_get_op_params_i32(node, 0);
+    float eps;
+    memcpy(&eps, (const float *) node->op_params + 1, sizeof(float));
+
+    ggml_et_group_norm_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+    params.n_groups = n_groups;
+    params.eps = eps;
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (group_norm_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_GROUP_NORM)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for GROUP_NORM operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "group_norm_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &group_norm_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for GROUP_NORM operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END_EXT("GROUP_NORM", "group_norm_f32", node, "eps=%.6f|n_groups=%d", (double)eps, n_groups);
     return kernel_result;
 }
 

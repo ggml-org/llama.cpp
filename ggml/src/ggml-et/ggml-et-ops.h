@@ -89,6 +89,13 @@ struct ggml_et_l2_norm_params {
     float eps;         // Epsilon parameter for numerical stability
 };
 
+struct ggml_et_group_norm_params {
+    ggml_tensor src0;      // F32 input tensor
+    ggml_tensor dst;       // F32 output tensor
+    int32_t n_groups;      // Number of channel groups
+    float eps;             // Epsilon parameter for numerical stability
+};
+
 struct ggml_et_glu_params {
     ggml_tensor src0;     // F32 input tensor A (or combined tensor if src1 is null)
     ggml_tensor src1;     // F32 input tensor B (null for single tensor mode)
@@ -307,6 +314,7 @@ bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_l2_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_group_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
