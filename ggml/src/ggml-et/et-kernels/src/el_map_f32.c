@@ -8,139 +8,103 @@
 #include "ggml_tensor.h"
 #include "platform.h"
 
-// TODO: only even threads
-
-// Block operation implementations using ET vector instructions
-static inline void block_mul_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
-    // Process 8 elements at a time using vector multiplication
-    int32_t vec_end = (elements / 8) * 8;
-
-    // Set mask register to enable all 8 vector elements
-    unsigned long temp_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
-    __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
-
-    for (int32_t i = 0; i < vec_end; i += 8) {
-        // Compute results into temporary buffer
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
-            "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
-            "fmul.ps f12, f10, f11\n"          // dst = src0 * src1 (8-wide)
-            "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
-
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
-            : "f10", "f11", "f12"
-        );
-    }
-
-    // Restore original mask
-    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+// Generic m0-gated element-wise block operation.  Processes full 8-wide
+// chunks with m0=0xFF, then a single tail chunk with m0 = (1<<tail)-1.
+// The OP parameter selects the instruction: "fmul.ps", "fadd.ps", "fsub.ps".
+#define DEFINE_BLOCK_OP(name, op_insn)                                         \
+static inline void name(float* dst_block, const float* src0_block,             \
+                        const float* src1_block, int elements) {               \
+    const int32_t vec_end = (elements / 8) * 8;                                \
+    const int32_t tail = elements - vec_end;                                   \
+                                                                               \
+    unsigned long temp_mask;                                                    \
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));                         \
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");                                  \
+                                                                               \
+    for (int32_t i = 0; i < vec_end; i += 8) {                                \
+        __asm__ volatile(                                                       \
+            "flw.ps f10, %[s0]\n"                                              \
+            "flw.ps f11, %[s1]\n"                                              \
+            op_insn " f12, f10, f11\n"                                         \
+            "fsw.ps f12, %[d]\n"                                               \
+            : [d] "=m"(*(float(*)[8])&dst_block[i])                            \
+            : [s0] "m"(*(const float(*)[8])&src0_block[i]),                    \
+              [s1] "m"(*(const float(*)[8])&src1_block[i])                     \
+            : "f10", "f11", "f12"                                              \
+        );                                                                     \
+    }                                                                          \
+                                                                               \
+    if (tail > 0) {                                                            \
+        const unsigned long tail_m0 = (1ul << tail) - 1;                       \
+        __asm__ volatile(                                                       \
+            "mov.m.x m0, %[tm], 0\n"                                           \
+            "flw.ps f10, 0(%[s0])\n"                                           \
+            "flw.ps f11, 0(%[s1])\n"                                           \
+            op_insn " f12, f10, f11\n"                                         \
+            "fsw.ps f12, 0(%[d])\n"                                            \
+            :                                                                   \
+            : [s0] "r"(&src0_block[vec_end]),                                  \
+              [s1] "r"(&src1_block[vec_end]),                                  \
+              [d]  "r"(&dst_block[vec_end]),                                   \
+              [tm] "r"(tail_m0)                                                \
+            : "f10", "f11", "f12", "memory"                                    \
+        );                                                                     \
+    }                                                                          \
+                                                                               \
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));                         \
 }
 
-static inline void block_add_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
-    // Process 8 elements at a time using vector addition
-    int32_t vec_end = (elements / 8) * 8;
+DEFINE_BLOCK_OP(block_mul_cache_aligned, "fmul.ps")
+DEFINE_BLOCK_OP(block_add_cache_aligned, "fadd.ps")
+DEFINE_BLOCK_OP(block_sub_cache_aligned, "fsub.ps")
 
-    // Set mask register to enable all 8 vector elements
-    unsigned long temp_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
-    __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
-
-    for (int32_t i = 0; i < vec_end; i += 8) {
-        // Compute results into temporary buffer
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
-            "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
-            "fadd.ps f12, f10, f11\n"          // dst = src0 + src1 (8-wide)
-            "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
-
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
-            : "f10", "f11", "f12"
-        );
-    }
-
-    // Restore original mask
-    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+// Broadcast variants: src1 is a single scalar, broadcast to all 8 lanes.
+#define DEFINE_BLOCK_OP_BROADCAST(name, op_insn)                               \
+static inline void name(float* dst_block, const float* src0_block,             \
+                        float scalar, int elements) {                          \
+    const int32_t vec_end = (elements / 8) * 8;                                \
+    const int32_t tail = elements - vec_end;                                   \
+                                                                               \
+    unsigned long temp_mask;                                                    \
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));                         \
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");                                  \
+                                                                               \
+    for (int32_t i = 0; i < vec_end; i += 8) {                                \
+        __asm__ volatile(                                                       \
+            "flw.ps f10, %[s0]\n"                                              \
+            "fbc.ps f11, %[s]\n"                                               \
+            op_insn " f12, f10, f11\n"                                         \
+            "fsw.ps f12, %[d]\n"                                               \
+            : [d] "=m"(*(float(*)[8])&dst_block[i])                            \
+            : [s0] "m"(*(const float(*)[8])&src0_block[i]),                    \
+              [s] "m"(scalar)                                                  \
+            : "f10", "f11", "f12"                                              \
+        );                                                                     \
+    }                                                                          \
+                                                                               \
+    if (tail > 0) {                                                            \
+        const unsigned long tail_m0 = (1ul << tail) - 1;                       \
+        __asm__ volatile(                                                       \
+            "mov.m.x m0, %[tm], 0\n"                                           \
+            "flw.ps f10, 0(%[s0])\n"                                           \
+            "fbc.ps f11, 0(%[ps])\n"                                           \
+            op_insn " f12, f10, f11\n"                                         \
+            "fsw.ps f12, 0(%[d])\n"                                            \
+            :                                                                   \
+            : [s0] "r"(&src0_block[vec_end]),                                  \
+              [ps] "r"(&scalar),                                               \
+              [d]  "r"(&dst_block[vec_end]),                                   \
+              [tm] "r"(tail_m0)                                                \
+            : "f10", "f11", "f12", "memory"                                    \
+        );                                                                     \
+    }                                                                          \
+                                                                               \
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));                         \
 }
 
-static inline void block_sub_cache_aligned(float* dst_block, const float* src0_block, const float* src1_block, int elements) {
-    // Process 8 elements at a time using vector addition
-    int32_t vec_end = (elements / 8) * 8;
-
-    // Set mask register to enable all 8 vector elements
-    unsigned long temp_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
-    __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
-
-    for (int32_t i = 0; i < vec_end; i += 8) {
-        // Compute results into temporary buffer
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"        // Load 8 src0 values
-            "flw.ps f11, %[src1_vec]\n"        // Load 8 src1 values
-            "fsub.ps f12, f10, f11\n"          // dst = src0 + src1 (8-wide)
-            "fsw.ps f12, %[dst_vec]\n"         // Store 8 results to temp buffer
-
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [src1_vec] "m"(*(const float(*)[8])&src1_block[i])
-            : "f10", "f11", "f12"
-        );
-    }
-
-    // Restore original mask
-    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
-}
-
-
-// Broadcast variants: src1 is a single scalar, broadcast to all 8 lanes via fbc.ps
-static inline void block_mul_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
-    for (int32_t i = 0; i < elements; i += 8) {
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"
-            "fbc.ps f11, %[s]\n"
-            "fmul.ps f12, f10, f11\n"
-            "fsw.ps f12, %[dst_vec]\n"
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [s] "m"(scalar)
-            : "f10", "f11", "f12"
-        );
-    }
-}
-
-static inline void block_add_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
-    for (int32_t i = 0; i < elements; i += 8) {
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"
-            "fbc.ps f11, %[s]\n"
-            "fadd.ps f12, f10, f11\n"
-            "fsw.ps f12, %[dst_vec]\n"
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [s] "m"(scalar)
-            : "f10", "f11", "f12"
-        );
-    }
-}
-
-static inline void block_sub_broadcast(float* dst_block, const float* src0_block, float scalar, int elements) {
-    for (int32_t i = 0; i < elements; i += 8) {
-        __asm__ volatile(
-            "flw.ps f10, %[src0_vec]\n"
-            "fbc.ps f11, %[s]\n"
-            "fsub.ps f12, f10, f11\n"
-            "fsw.ps f12, %[dst_vec]\n"
-            : [dst_vec] "=m"(*(float(*)[8])&dst_block[i])
-            : [src0_vec] "m"(*(const float(*)[8])&src0_block[i]),
-              [s] "m"(scalar)
-            : "f10", "f11", "f12"
-        );
-    }
-}
+DEFINE_BLOCK_OP_BROADCAST(block_mul_broadcast, "fmul.ps")
+DEFINE_BLOCK_OP_BROADCAST(block_add_broadcast, "fadd.ps")
+DEFINE_BLOCK_OP_BROADCAST(block_sub_broadcast, "fsub.ps")
 
 static inline float scalar_el_map(float src0, float src1, enum ggml_op operation) {
     switch (operation) {
