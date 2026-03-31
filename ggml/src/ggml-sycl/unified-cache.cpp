@@ -4885,7 +4885,14 @@ static int eviction_tier(const unified_cache_entry & entry) {
 }
 
 size_t unified_cache::evict_one(size_t /* new_size */) {
-    process_deferred_frees();
+    // NOTE: process_deferred_frees() was removed from here to fix a BCS CAT
+    // error [18].  The race: evict_one is called from stage_expert_group
+    // during prestage, which also submits BCS copies.  Processing deferred
+    // frees here would call sycl::free on entries whose barrier was submitted
+    // BEFORE the current batch's BCS copies — unmapping VRAM while BCS is
+    // still writing to nearby pages.  Callers must drain all queues and call
+    // process_deferred_frees() explicitly at safe synchronization points
+    // (e.g., the prestage yield loop, finalize_pending_fills).
 
     // Block eviction while GPU kernels are in flight (graph_compute_impl).
     // Evicting frees VRAM that MUL_MAT_ID kernels may still reference via
@@ -4973,34 +4980,18 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                         (int) it->second.layout, entry_size, host_resident ? 1 : 0);
 
         if (!host_resident) {
-            // Free device memory.  During prestage (outside graph_compute_impl),
-            // synchronize then free.  When the entry has a write event, wait on
-            // just that event instead of draining all 4 queues — the write event
-            // covers the specific fill/reorder that last touched this buffer.
-            // Fall back to full queue drain when no write event is available.
-            if (!g_graph_compute_active.load(std::memory_order_acquire)) {
-                const bool has_evt = it->second.has_write_event;
-                if (has_evt) {
-                    // Per-entry event: wait only on the fill/reorder that wrote here
-                    try { it->second.last_write_event.wait(); } catch (...) {}
-                } else {
-                    // No write event: fall back to draining all queues for safety
-                    try { queue_.wait(); } catch (...) {}
-                    if (dma_queue_) { try { dma_queue_->wait(); } catch (...) {} }
-                    if (bcs_queue_) { try { bcs_queue_->wait(); } catch (...) {} }
-                    if (compute_queue_) { try { compute_queue_->wait(); } catch (...) {} }
-                }
-                // Now safe to free — no in-flight work references this memory
-                const bool is_pool = layout_pool_ && layout_pool_->owns(ptr);
-                if (!is_pool) {
-                    try { sycl::free(ptr, queue_); } catch (...) {}
-                }
-                saturating_sub_used(entry_size);
-            } else {
-                // During inference: defer free (graph_compute_active blocks eviction
-                // via the guard at the top of evict_one, so this shouldn't happen,
-                // but keep as safety net)
+            // Always defer device memory frees.  Direct sycl::free inside evict_one
+            // causes BCS CAT errors: eviction during prestage unmaps VRAM pages
+            // while concurrent BCS copies (from stage_expert_group in the same
+            // prestage loop) are still writing to nearby pages in the same L0
+            // allocation region.  Deferred frees are processed at safe sync points
+            // (after queue drains) where no BCS work is in-flight.
+            const bool is_pool = layout_pool_ && layout_pool_->owns(ptr);
+            if (!is_pool) {
                 enqueue_deferred_free(ptr, entry_size);
+            } else {
+                // Pool entries: memory stays in pool, just update accounting
+                saturating_sub_used(entry_size);
             }
             has_evictions_.store(true, std::memory_order_release);
         }

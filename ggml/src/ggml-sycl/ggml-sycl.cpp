@@ -1283,6 +1283,9 @@ static void moe_prestage_popular_experts() {
                     cache->get_dma_queue().wait();
                     cache->get_bcs_queue().wait();
                     cache->finalize_pending_fills();
+                    // Process deferred frees NOW — all queues drained, safe to unmap VRAM.
+                    // evict_one defers frees to prevent BCS CAT errors during prestage.
+                    cache->process_deferred_frees_public();
                 } catch (...) {
                 }
                 ggml_sycl_watchdog_heartbeat();
@@ -1296,6 +1299,8 @@ static void moe_prestage_popular_experts() {
                 cache->get_dma_queue().wait();
                 cache->get_bcs_queue().wait();
                 cache->finalize_pending_fills();
+                // Process any deferred frees accumulated during eviction.
+                cache->process_deferred_frees_public();
             } catch (...) {
             }
         }
@@ -10611,6 +10616,7 @@ static void ggml_sycl_preload_model_weights() {
                         cache->get_bcs_queue().wait();
                         stream.wait();
                         cache->finalize_pending_fills();
+                        cache->process_deferred_frees_public();
                     } catch (...) {
                     }
                     ggml_sycl_watchdog_heartbeat();
@@ -10629,6 +10635,7 @@ static void ggml_sycl_preload_model_weights() {
 
             // Mark all IN_PROGRESS entries as READY now that DMA is complete
             cache->finalize_pending_fills();
+            cache->process_deferred_frees_public();
 
             // Pin all successfully cached dense weights — never evict during inference.
             // MoE experts are NOT pinned — they compete for remaining VRAM via LRU.
