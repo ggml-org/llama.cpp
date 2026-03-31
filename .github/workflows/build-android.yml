@@ -2,7 +2,6 @@ name: CI (android)
 
 on:
   workflow_dispatch:
-  workflow_call:
   push:
     branches:
       - master
@@ -31,9 +30,8 @@ on:
       - 'scripts/snapdragon/**'
       - 'CMakePresets.json'
 
-# When called via workflow_call, use a unique group to avoid deadlocking with the caller's concurrency group.
 concurrency:
-  group: ${{ github.event_name == 'workflow_call' && format('sub-{0}', github.run_id) || format('{0}-{1}', github.workflow, github.head_ref && github.ref || github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
