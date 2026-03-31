@@ -831,9 +831,6 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
-                       op->ne[0] % 16 == 0 && // cache-aligned
-                       op->src[0]->ne[0] % 16 == 0 &&
-                       (op->src[1]->ne[0] % 16 == 0 || op->src[1]->ne[0] == 1) &&
                        op->nb[0] == sizeof(float) &&
                        op->src[0]->nb[0] == sizeof(float) &&
                        (op->src[1]->nb[0] == sizeof(float) || op->src[1]->ne[0] == 1) &&
