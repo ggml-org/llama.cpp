@@ -140,7 +140,7 @@ permission_response permission_manager::prompt_user(const permission_request & r
     // Display permission request
     console::log("\n");
     console::log("+-- PERMISSION: %s ", request.tool_name.c_str());
-    for (size_t i = request.tool_name.length() + 16; i < 60; i++) console::log("-");
+    for (size_t i = request.tool_name.length() + 17; i < 60; i++) console::log("-");
     console::log("+\n");
 
     if (!request.details.empty()) {
