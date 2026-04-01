@@ -41,6 +41,7 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <pthread.h>
 #endif
 
 using json = nlohmann::ordered_json;
@@ -48,6 +49,45 @@ using json = nlohmann::ordered_json;
 //
 // downloader
 //
+
+// On musl-based systems (like Alpine Linux), the default thread stack size is only ~130KB.
+// httplib uses std::regex internally (e.g. for redirect URL parsing), and libstdc++'s
+// implementation uses deep recursion for backtracking, which overflows musl's small stack.
+// This helper creates a thread with a 1MB stack to avoid the segfault.
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+static std::future<bool> async_with_large_stack(std::function<bool()> fn) {
+    auto p = std::make_shared<std::promise<bool>>();
+    auto future = p->get_future();
+
+    auto * ctx = new std::pair<std::shared_ptr<std::promise<bool>>, std::function<bool()>>{p, std::move(fn)};
+
+    pthread_t th;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1 << 20); // 1 MB
+
+    int ret = pthread_create(&th, &attr, [](void * arg) -> void * {
+        auto * c = static_cast<std::pair<std::shared_ptr<std::promise<bool>>, std::function<bool()>> *>(arg);
+        try {
+            c->first->set_value(c->second());
+        } catch (...) {
+            c->first->set_exception(std::current_exception());
+        }
+        delete c;
+        return nullptr;
+    }, ctx);
+
+    pthread_attr_destroy(&attr);
+
+    if (ret != 0) {
+        delete ctx;
+        throw std::runtime_error("failed to create download thread");
+    }
+
+    pthread_detach(th);
+    return future;
+}
+#endif
 
 // validate repo name format: owner/repo
 static void write_file(const std::string & fname, const std::string & content) {
@@ -728,12 +768,15 @@ common_download_model_result common_download_model(const common_params_model    
 
     std::vector<std::future<bool>> futures;
     for (const auto & task : tasks) {
-        futures.push_back(std::async(std::launch::async,
-            [&task, &bearer_token, offline = opts.offline, &headers, is_hf]() {
-                int status = common_download_file_single(task.url, task.path, bearer_token, offline, headers, is_hf);
-                return is_http_status_ok(status);
-            }
-        ));
+        auto download = [&task, &bearer_token, offline = opts.offline, &headers, is_hf]() {
+            int status = common_download_file_single(task.url, task.path, bearer_token, offline, headers, is_hf);
+            return is_http_status_ok(status);
+        };
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+        futures.push_back(async_with_large_stack(std::move(download)));
+#else
+        futures.push_back(std::async(std::launch::async, std::move(download)));
+#endif
     }
 
     for (auto & f : futures) {
