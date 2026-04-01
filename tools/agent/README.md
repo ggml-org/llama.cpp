@@ -29,44 +29,45 @@ A coding agent that runs entirely inside [llama.cpp](https://github.com/ggml-org
 ## Quick Start
 
 ```bash
+# Install (macOS / Linux)
+brew install gary149/llama-agent/llama-agent
+
+# Run (downloads model automatically)
+llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
+```
+
+Or download pre-built binaries from [GitHub Releases](https://github.com/gary149/llama-agent/releases).
+
+<details>
+<summary><strong>Build from source</strong></summary>
+
+```bash
 # Build CLI agent
 cmake -B build
 cmake --build build --target llama-agent
 
-# Run (downloads model automatically)
+# Run
 ./build/bin/llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
 
 # Or with a local model
 ./build/bin/llama-agent -m model.gguf
 ```
 
-<details>
-<summary><strong>Build & run the HTTP API server</strong></summary>
+**Add to PATH for global access:**
 
 ```bash
-# Build with HTTP support
-cmake -B build -DLLAMA_HTTPLIB=ON
-cmake --build build --target llama-agent-server
-
-# Run API server
-./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL --port 8081
-```
-
-</details>
-
-<details>
-<summary><strong>Add to PATH for global access</strong></summary>
-
-```bash
-# Run from the llama.cpp directory after building
 # For zsh:
 echo "export PATH=\"\$PATH:$(pwd)/build/bin\"" >> ~/.zshrc
 # For bash:
 echo "export PATH=\"\$PATH:$(pwd)/build/bin\"" >> ~/.bashrc
+```
 
-# Open a new terminal, then run from anywhere
-cd /path/to/your/project
-llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
+**Build the HTTP API server:**
+
+```bash
+cmake -B build -DLLAMA_HTTPLIB=ON
+cmake --build build --target llama-agent-server
+./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL --port 8081
 ```
 
 </details>
