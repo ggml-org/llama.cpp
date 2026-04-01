@@ -807,9 +807,9 @@ common_peg_parser common_chat_peg_builder::prefix(const std::string & s, const s
         return eps();
     }
     if (delimiter.empty()) {
-        return literal(s) + space();
+        return literal(s);
     }
-    return literal(s.substr(0, s.rfind(delimiter))) + space();
+    return literal(s.substr(0, s.rfind(delimiter)));
 }
 
 common_peg_parser common_chat_peg_builder::standard_json_tools(
