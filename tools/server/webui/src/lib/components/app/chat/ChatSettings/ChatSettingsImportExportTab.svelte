@@ -6,6 +6,7 @@
 	import { ISO_DATE_TIME_SEPARATOR } from '$lib/constants';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
+	import { fade } from 'svelte/transition';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -174,7 +175,7 @@
 	}
 </script>
 
-<div class="space-y-6">
+<div class="space-y-6" in:fade={{ duration: 150 }}>
 	<div class="flex items-center gap-2 pb-4">
 		<Database class="h-5 w-5 md:h-6 md:w-6" />
 

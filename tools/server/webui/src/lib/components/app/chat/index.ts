@@ -683,7 +683,7 @@ export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProc
  * />
  * ```
  */
-export { default as ChatSettings } from './ChatSettings/ChatSettings.svelte';
+export { default as ChatSettings } from '../settings/SettingsChat.svelte';
 
 /**
  * Footer with save/cancel buttons for settings panel. Positioned at bottom
@@ -704,7 +704,7 @@ export { default as ChatSettingsFields } from './ChatSettings/ChatSettingsFields
  * to export all conversations as JSON file and import from JSON file.
  * Handles file download/upload and data validation.
  */
-export { default as ChatSettingsImportExportTab } from './ChatSettings/ChatSettingsImportExportTab.svelte';
+export { default as ChatSettingsImportExportTab } from '../settings/SettingsImportExport.svelte';
 
 /**
  * Badge indicating parameter source for sampling settings. Shows one of:

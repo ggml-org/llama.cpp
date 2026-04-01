@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { McpServersSettings } from '$lib/components/app';
+	import { SettingsMcpServers } from '$lib/components/app/settings';
 </script>
 
-<McpServersSettings class="mx-auto w-full p-4 md:p-8" />
+<SettingsMcpServers class="mx-auto w-full p-4 md:p-8" />

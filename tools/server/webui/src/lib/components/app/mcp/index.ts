@@ -39,7 +39,7 @@
  * <McpServersSettings />
  * ```
  */
-export { default as McpServersSettings } from './McpServersSettings.svelte';
+export { default as McpServersSettings } from '../settings/SettingsMcpServers.svelte';
 
 /**
  * **McpActiveServersAvatars** - Active MCP servers indicator

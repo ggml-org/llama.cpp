@@ -23,6 +23,7 @@
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { SettingsFieldType } from '$lib/enums/settings';
+	import { fade } from 'svelte/transition';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -97,6 +98,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					label: 'Show tool call in progress',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
 					label: 'Keep stats visible after generation',
 					type: SettingsFieldType.CHECKBOX
@@ -135,11 +141,6 @@
 				{
 					key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					label: 'Always show agentic turns in conversation',
-					type: SettingsFieldType.CHECKBOX
-				},
-				{
-					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
-					label: 'Show tool call in progress',
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
@@ -427,7 +428,7 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-y-auto {className} w-full">
+<div class="flex h-full flex-col overflow-y-auto {className} w-full" in:fade={{ duration: 150 }}>
 	<div class="flex flex-1 flex-col gap-4 md:flex-row">
 		<!-- Desktop Sidebar -->
 		<div class="sticky top-0 hidden w-64 flex-col self-start bg-background pt-8 pb-4 md:flex">
@@ -510,7 +511,7 @@
 			</div>
 		</div>
 
-		<div class="mx-auto max-w-2xl flex-1">
+		<div class="mx-auto max-w-3xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
 					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">

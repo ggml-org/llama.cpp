@@ -29,7 +29,7 @@
 	}
 </script>
 
-<div class="sticky bottom-0 mx-auto mt-4 flex w-full max-w-4xl justify-between p-6">
+<div class="sticky bottom-0 mx-auto mt-4 flex w-full justify-between p-6">
 	<div class="flex gap-2">
 		<Button variant="outline" onclick={handleResetClick}>
 			<RotateCcw class="h-3 w-3" />
@@ -38,7 +38,7 @@
 		</Button>
 	</div>
 
-	<Button class="sticky bottom-6 z-10" onclick={handleSave}>Save settings</Button>
+	<Button onclick={handleSave}>Save settings</Button>
 </div>
 
 <AlertDialog.Root bind:open={showResetDialog}>

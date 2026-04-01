@@ -33,7 +33,7 @@
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
-	import { fade, fly, slide } from 'svelte/transition';
+	import { fade, fly } from 'svelte/transition';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
@@ -431,55 +431,55 @@
 		role="main"
 	>
 		{#key introKey}
-		<div class="w-full max-w-[48rem] px-4">
-			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
+			<div class="w-full max-w-[48rem] px-4">
+				<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
+					<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
-				<p class="text-muted-foreground md:text-lg">
-					{serverStore.props?.modalities?.audio
-						? 'Record audio, type a message '
-						: 'Type a message'} or upload files to get started
-				</p>
-			</div>
-
-			{#if hasPropsError}
-				<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
-					<Alert.Root variant="destructive">
-						<AlertTriangle class="h-4 w-4" />
-
-						<Alert.Title class="flex items-center justify-between">
-							<span>Server unavailable</span>
-
-							<button
-								onclick={() => serverStore.fetch()}
-								disabled={isServerLoading}
-								class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
-							>
-								<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-								{isServerLoading ? 'Retrying...' : 'Retry'}
-							</button>
-						</Alert.Title>
-
-						<Alert.Description>{serverError()}</Alert.Description>
-					</Alert.Root>
+					<p class="text-muted-foreground md:text-lg">
+						{serverStore.props?.modalities?.audio
+							? 'Record audio, type a message '
+							: 'Type a message'} or upload files to get started
+					</p>
 				</div>
-			{/if}
 
-			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
-				<ChatScreenForm
-					disabled={hasPropsError}
-					{initialMessage}
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => chatStore.stopGeneration()}
-					onSystemPromptAdd={handleSystemPromptAdd}
-					showHelperText
-					bind:uploadedFiles
-				/>
+				{#if hasPropsError}
+					<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
+						<Alert.Root variant="destructive">
+							<AlertTriangle class="h-4 w-4" />
+
+							<Alert.Title class="flex items-center justify-between">
+								<span>Server unavailable</span>
+
+								<button
+									onclick={() => serverStore.fetch()}
+									disabled={isServerLoading}
+									class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+								>
+									<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
+									{isServerLoading ? 'Retrying...' : 'Retry'}
+								</button>
+							</Alert.Title>
+
+							<Alert.Description>{serverError()}</Alert.Description>
+						</Alert.Root>
+					</div>
+				{/if}
+
+				<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
+					<ChatScreenForm
+						disabled={hasPropsError}
+						{initialMessage}
+						isLoading={isCurrentConversationLoading}
+						onFileRemove={handleFileRemove}
+						onFileUpload={handleFileUpload}
+						onSend={handleSendMessage}
+						onStop={() => chatStore.stopGeneration()}
+						onSystemPromptAdd={handleSystemPromptAdd}
+						showHelperText
+						bind:uploadedFiles
+					/>
+				</div>
 			</div>
-		</div>
 		{/key}
 	</div>
 {/if}

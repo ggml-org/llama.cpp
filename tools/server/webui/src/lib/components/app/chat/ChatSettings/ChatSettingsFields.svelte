@@ -117,7 +117,7 @@
 				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
 				placeholder=""
-				class="min-h-[10rem] w-full md:max-w-2xl"
+				class="min-h-[10rem] w-full md:max-w-3xl"
 			/>
 
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}

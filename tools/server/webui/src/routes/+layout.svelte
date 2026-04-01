@@ -13,8 +13,7 @@
 	} from '$lib/components/app';
 	import { Database, Settings, Search, SquarePen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
@@ -25,14 +24,9 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	// import type { SettingsSectionTitle } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import {
-		// setChatSettingsDialogContext,
-		// setMcpServersDialogContext,
-		setImportExportDialogContext
-	} from '$lib/contexts';
+	import { setImportExportDialogContext } from '$lib/contexts';
 
 	let { children } = $props();
 
@@ -56,24 +50,8 @@
 	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
 	let isSettingsActive = $derived(page.route.id === '/settings/chat');
 	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
-	// let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
 	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
-
-	// setChatSettingsDialogContext({
-	// 	open: (initialSection?: SettingsSectionTitle) => {
-	// 		chatSettingsInitialSection = initialSection;
-	// 		activePanel = 'settings';
-	// 	},
-	// 	isActive: () => activePanel === 'settings'
-	// });
-
-	// setMcpServersDialogContext({
-	// 	open: () => {
-	// 		activePanel = 'mcp';
-	// 	},
-	// 	isActive: () => activePanel === 'mcp'
-	// });
 
 	setImportExportDialogContext({
 		open: () => {
