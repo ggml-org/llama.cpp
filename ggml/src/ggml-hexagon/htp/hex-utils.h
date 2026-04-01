@@ -70,7 +70,7 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
 }
 
 #define HEX_L2_LINE_SIZE  64
-#define HEX_L2_FLUSH_SIZE (4 * 1024 * 1024)
+#define HEX_L2_FLUSH_SIZE (2 * 1024 * 1024)
 
 static inline void hex_l2clear(void * addr, size_t size)
 {
