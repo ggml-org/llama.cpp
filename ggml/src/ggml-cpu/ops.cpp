@@ -3,6 +3,7 @@
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
+#include "ggml-tq-adaptive.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -682,6 +683,12 @@ void ggml_compute_forward_add(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1135,6 +1142,12 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1267,6 +1280,12 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4438,6 +4457,12 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4717,6 +4742,12 @@ void ggml_compute_forward_set(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4781,6 +4812,8 @@ static void ggml_compute_forward_get_rows_q(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
+    const ggml_tq3_ap_extra * ap = src0->type == GGML_TYPE_TQ3_1S ? (const ggml_tq3_ap_extra *) src0->extra : nullptr;
+
     for (int64_t i = ir0; i < ir1; ++i) {
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
@@ -4792,6 +4825,18 @@ static void ggml_compute_forward_get_rows_q(
         float * out = (float *) ((char *) dst->data + i10*nb1 + i11*nb2 + i12*nb3);
         const void * row = (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03);
         dequantize_row_q(row, out, nc);
+
+        if (ap && ap->magic == GGML_TQ3_AP_MAGIC) {
+            const int64_t row_block0 = i01 * ap->blocks_per_row;
+            uint32_t promoted_idx = ap->row_offsets[i01];
+            for (int64_t b = 0; b < ap->blocks_per_row; ++b) {
+                if (!ggml_tq3_ap_is_promoted(ap, row_block0 + b)) {
+                    continue;
+                }
+                const float mean = GGML_FP16_TO_FP32(ap->means[promoted_idx++]);
+                ggml_vec_acc1_f32(QK_TQ3_0, out + b * QK_TQ3_0, mean);
+            }
+        }
     }
 }
 
@@ -4943,6 +4988,12 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -5671,6 +5722,12 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_1S_AP1:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:

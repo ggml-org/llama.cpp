@@ -58,6 +58,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_TQ2_0:    return "TQ2_0 - 2.06 bpw ternary";
         case LLAMA_FTYPE_MOSTLY_TQ3_0:    return "TQ3_0 - 3.50 bpw turbo";
         case LLAMA_FTYPE_MOSTLY_TQ3_1S:   return "TQ3_1S - 4.00 bpw turbo two-scale";
+        case LLAMA_FTYPE_MOSTLY_TQ3_4S:   return "TQ3_4S - 4.00 bpw turbo four-scale";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
@@ -752,6 +753,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_TQ2_0:   ftype = LLAMA_FTYPE_MOSTLY_TQ2_0;   break;
             case GGML_TYPE_TQ3_0:   ftype = LLAMA_FTYPE_MOSTLY_TQ3_0;   break;
             case GGML_TYPE_TQ3_1S:  ftype = LLAMA_FTYPE_MOSTLY_TQ3_1S;  break;
+            case GGML_TYPE_TQ3_4S:  ftype = LLAMA_FTYPE_MOSTLY_TQ3_4S;  break;
             case GGML_TYPE_IQ2_XXS: ftype = LLAMA_FTYPE_MOSTLY_IQ2_XXS; break;
             case GGML_TYPE_IQ2_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_XS;  break;
             case GGML_TYPE_IQ2_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ2_S;   break;
@@ -1164,12 +1166,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                         // when overriding to a CPU buffer, consider the extra buffer types
                         buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
-                        if (use_mmap) {
-                            static std::once_flag once;
-                            std::call_once(once, [] {
-                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance\n");
-                            });
-                        }
                     } else {
                         buft = overrides->buft;
                     }
@@ -1318,6 +1314,13 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 void llama_model_loader::done_getting_tensors() const {
     int n_expected_created = 0;
     for (const auto & it : weights_map) {
+        const std::string & name = it.first;
+        if (name.size() >= 14 && name.rfind(".tq3_ap_bitmap") == name.size() - 14) {
+            continue;
+        }
+        if (name.size() >= 16 && name.rfind(".tq3_ap_promoted") == name.size() - 16) {
+            continue;
+        }
         ++n_expected_created;
     }
 
