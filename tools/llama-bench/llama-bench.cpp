@@ -2193,18 +2193,22 @@ int main(int argc, char ** argv) {
         llama_attach_threadpool(ctx, threadpool, NULL);
 
         // warmup run
+#define NUM_BENCH_WARMUPS 4 // 4 stabilizes results without adding significant delay
         if (!params.no_warmup) {
             if (t.n_prompt > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
-                if (!res) {
-                    fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(lmodel);
-                    exit(1);
+                for (int i = 0; i < NUM_BENCH_WARMUPS; i++) {
+                    llama_memory_clear(llama_get_memory(ctx), false);
+                    bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                    if (!res) {
+                        fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 }
             }
             if (t.n_gen > 0) {
