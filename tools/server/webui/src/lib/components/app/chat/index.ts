@@ -425,20 +425,15 @@ export { default as ChatMessage } from './ChatMessages/ChatMessage.svelte';
 /**
  * **ChatMessageAgenticContent** - Agentic workflow output display
  *
- * Specialized renderer for assistant messages containing agentic workflow markers.
- * Parses structured content and displays tool calls and reasoning blocks as
- * interactive collapsible sections with real-time streaming support.
+ * Specialized renderer for assistant messages with tool calls and reasoning.
+ * Derives display sections from structured message data (toolCalls, reasoningContent,
+ * and child tool result messages) and renders them as interactive collapsible sections.
  *
  * **Architecture:**
- * - Uses `parseAgenticContent()` from `$lib/utils` to parse markers
+ * - Uses `deriveAgenticSections()` from `$lib/utils` to build sections from structured data
  * - Renders sections as CollapsibleContentBlock components
  * - Handles streaming state for progressive content display
  * - Falls back to MarkdownContent for plain text sections
- *
- * **Marker Format:**
- * - Tool calls: in constants/agentic.ts (AGENTIC_TAGS)
- * - Reasoning: in constants/agentic.ts (REASONING_TAGS)
- * - Partial markers handled gracefully during streaming
  *
  * **Execution States:**
  * - **Streaming**: Animated spinner, block expanded, auto-scroll enabled

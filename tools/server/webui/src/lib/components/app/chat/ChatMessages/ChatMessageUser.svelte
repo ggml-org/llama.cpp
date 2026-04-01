@@ -21,6 +21,7 @@
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onCopy: () => void;
@@ -35,6 +36,7 @@
 		onEdit,
 		onDelete,
 		onConfirmDelete,
+		onForkConversation,
 		onShowDeleteDialogChange,
 		onNavigateToSibling,
 		onCopy
@@ -114,6 +116,7 @@
 					{onCopy}
 					{onDelete}
 					{onEdit}
+					{onForkConversation}
 					{onNavigateToSibling}
 					{onShowDeleteDialogChange}
 					{siblingInfo}

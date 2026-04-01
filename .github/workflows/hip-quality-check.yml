@@ -8,7 +8,8 @@ on:
     paths: [
       '.github/workflows/hip-quality-check.yml',
       '**/*.cu',
-      '**/*.cuh'
+      '**/*.cuh',
+      'scripts/hip/gcn-cdna-vgpr-check.py'
     ]
 
   pull_request:
@@ -16,7 +17,8 @@ on:
     paths: [
       '.github/workflows/hip-quality-check.yml',
       '**/*.cu',
-      '**/*.cuh'
+      '**/*.cuh',
+      'scripts/hip/gcn-cdna-vgpr-check.py'
     ]
 
 concurrency:

@@ -10,6 +10,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
 	disableReasoningParsing: false,
+	excludeReasoningFromContext: false,
 	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
@@ -106,6 +107,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	disableReasoningParsing:
 		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	excludeReasoningFromContext:
+		'Strip reasoning content from previous messages before sending to the model. When unchecked, reasoning is sent back via the reasoning_content field so the model can see its own chain-of-thought across turns.',
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
@@ -127,7 +130,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
-		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
+		'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 	mcpServerUsageStats:

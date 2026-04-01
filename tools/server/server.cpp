@@ -2,6 +2,7 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-tools.h"
 
 #include "arg.h"
 #include "common.h"
@@ -74,6 +75,8 @@ int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -99,8 +102,6 @@ int main(int argc, char ** argv) {
         params.model_alias.insert(params.model.name);
     }
 
-    common_init();
-
     // struct that contains llama context and inference
     server_context ctx_server;
 
@@ -124,6 +125,7 @@ int main(int argc, char ** argv) {
 
     // register API routes
     server_routes routes(params, ctx_server);
+    server_tools tools;
 
     bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
@@ -211,6 +213,16 @@ int main(int argc, char ** argv) {
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
     }
+    // EXPERIMENTAL built-in tools
+    if (!params.server_tools.empty()) {
+        tools.setup(params.server_tools);
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
+        SRV_WRN("%s", "-----------------\n");
+        ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
+        ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+    }
 
     //
     // Start the server
@@ -258,6 +270,12 @@ int main(int argc, char ** argv) {
 
         // load the model
         LOG_INF("%s: loading model\n", __func__);
+
+        if (server_models::is_child_server()) {
+            ctx_server.on_sleeping_changed([&](bool sleeping) {
+                server_models::notify_router_sleeping_state(sleeping);
+            });
+        }
 
         if (!ctx_server.load_model(params)) {
             clean_up();
@@ -309,9 +327,8 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: starting the main loop...\n", __func__);
 
         // optionally, notify router server that this instance is ready
-        const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
         std::thread monitor_thread;
-        if (router_port != nullptr) {
+        if (server_models::is_child_server()) {
             monitor_thread = server_models::setup_child_server(shutdown_handler);
         }
 

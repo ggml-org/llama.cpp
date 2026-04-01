@@ -461,7 +461,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -480,7 +480,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q4x4x2(y, i, k);
         }
@@ -796,7 +796,7 @@ static void repack_row_q8x4x2(uint8_t * y, const block_q8_0 * x, int64_t k) {
         d[7]          = x[i * 8 + 7].d;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -814,7 +814,7 @@ static void unpack_row_q8x4x2(block_q8_0 * x, const uint8_t * y, int64_t k) {
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_d = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_q8x4x2(y, i, k);
         }
@@ -1149,7 +1149,7 @@ static void repack_row_mxfp4x4x2(uint8_t * y, const block_mxfp4 * x, int64_t k) 
         e[7]        = x[i * 8 + 7].e;
     }
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }
@@ -1168,7 +1168,7 @@ static void unpack_row_mxfp4x4x2(block_mxfp4 * x, const uint8_t * y, int64_t k) 
     const uint8_t * y_q = y + 0;              // quants first
     const uint8_t * y_e = y + qrow_size;      // then scales
 
-    if (opt_verbose > 1) {
+    if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
             dump_packed_block_mxfp4x4x2(y, i, k);
         }
@@ -1406,6 +1406,13 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
             repack_q8_0_q8x4x2(tensor, data, size);
             break;
 
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            // IQ4_NL has identical block layout to Q4_0 (ggml_half d + uint8_t qs[16])
+            repack_q4_0_q4x4x2(tensor, data, size);
+            break;
+
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -1440,6 +1447,12 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8x4x2_q8_0(data, tensor, size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4x4x2_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
@@ -1819,6 +1832,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if (src0->ne[0] % 32) {
                 return false;
@@ -1868,6 +1882,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if ((src0->ne[0] % 32)) {
                 return false;
@@ -2596,8 +2611,26 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     delete backend;
 }
 
+// Map weight type to its activation quantization family.
+// Types in the same family produce identical Q8 formats in VTCM and can
+// safely share quantized activation data via SKIP_QUANTIZE.
+// When adding a new quantized type, assign it the correct family here.
+static inline int act_quant_family(enum ggml_type wtype) {
+    switch (wtype) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+            return 1;  // Q8x4x2
+        default:
+            return 0;  // unknown / not quantized
+    }
+}
+
 static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type));
+    return (op0 && op0->src[1] == op1->src[1] &&
+            act_quant_family(op0->src[0]->type) == act_quant_family(op1->src[0]->type) &&
+            act_quant_family(op0->src[0]->type) != 0);
 }
 
 static inline bool is_compute_op(ggml_tensor *node)
@@ -3363,6 +3396,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_Q8_0 == (unsigned int) GGML_TYPE_Q8_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_MXFP4 == (unsigned int) GGML_TYPE_MXFP4,
+                  "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                   "please update hexagon_type to match ggml_type");
 
     const char * str_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL");

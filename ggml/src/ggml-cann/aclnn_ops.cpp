@@ -434,6 +434,9 @@ void ggml_cann_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_tensor * src = dst->src[0];
 
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
     acl_tensor_ptr acl_src = ggml_cann_create_tensor(src);
     acl_tensor_ptr acl_dst = ggml_cann_create_tensor(dst);
 
@@ -456,6 +459,13 @@ void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     float          p_value  = 2.0f;
     acl_scalar_ptr p_scalar = ggml_cann_create_scalar(&p_value, aclDataType::ACL_FLOAT);
     GGML_CANN_CALL_ACLNN_OP(ctx, Norm, acl_src.get(), p_scalar.get(), dims_array.get(), true, acl_div.get());
+
+    // Clamp norm to at least eps: scale = 1/fmaxf(norm, eps)
+    acl_scalar_ptr acl_min = ggml_cann_create_scalar(&eps, aclDataType::ACL_FLOAT);
+    float          flt_max = FLT_MAX;
+    acl_scalar_ptr acl_max = ggml_cann_create_scalar(&flt_max, aclDataType::ACL_FLOAT);
+    GGML_CANN_CALL_ACLNN_OP(ctx, Clamp, acl_div.get(), acl_min.get(), acl_max.get(), acl_div.get());
+
     GGML_CANN_CALL_ACLNN_OP(ctx, Div, acl_src.get(), acl_div.get(), acl_dst.get());
 }
 
@@ -3009,6 +3019,58 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     if (src_dst_need_trans) {
         aclnn_cast(ctx, acl_dst_trans_tensor.get(), acl_dst.get(), ACL_FLOAT16);
     }
+}
+
+void ggml_cann_rope_cache_preload(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+
+    float     freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    int       sections[4];
+    const int n_dims     = ((int32_t *) dst->op_params)[1];
+    const int mode       = ((int32_t *) dst->op_params)[2];
+    const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    memcpy(&freq_base, (int32_t *) dst->op_params + 5, sizeof(float));
+    memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
+    memcpy(&ext_factor, (int32_t *) dst->op_params + 7, sizeof(float));
+    memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
+    memcpy(&beta_fast, (int32_t *) dst->op_params + 9, sizeof(float));
+    memcpy(&beta_slow, (int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&sections, (int32_t *) dst->op_params + 11, sizeof(int) * 4);
+
+    const float theta_scale = powf(freq_base, -2.0f / n_dims);
+
+    float corr_dims[2];
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+
+    bool       is_neox    = mode & GGML_ROPE_TYPE_NEOX;
+    const bool is_imrope  = mode == GGML_ROPE_TYPE_IMROPE;
+    const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
+    const bool is_vision  = mode == GGML_ROPE_TYPE_VISION;
+
+    if (is_imrope || mrope_used) {
+        is_neox = true;
+    }
+
+    int64_t rope_dims = n_dims;
+    if (is_vision) {
+        rope_dims = src0->ne[0];
+    }
+
+    // Run the full cache init on the non-captured stream.  This performs all
+    // host-to-device memcpy, aclrtMalloc/Free, and on-device computations
+    // so that the memory pool is warmed up and cache metadata is populated.
+    aclnn_rope_cache_init(ctx, dst, corr_dims, ext_factor, theta_scale, freq_scale, attn_factor, is_neox, sections,
+                          mrope_used, is_imrope, is_vision, rope_dims);
+
+    // Reset `cached` so that during graph capture the on-device computations
+    // (sin/cos, position multiply, repeat, etc.) still execute and get recorded
+    // into the captured graph.  The cache metadata (theta_scale_length,
+    // theta_scale, sections, position_length, etc.) remains set, which causes
+    // all host-to-device copy and malloc/free branches to be skipped.
+    ctx.rope_cache.cached = false;
 }
 
 void ggml_cann_argmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
