@@ -1310,6 +1310,8 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
 
         auto reasoning = extract_reasoning ? p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>") : p.eps();
 
+        auto generation_prompt = p.prefix(inputs.generation_prompt, "<think>");
+
         // Tool call markers
         const std::string SECTION_BEGIN = "<use_mcp_tool>";
         const std::string SECTION_END   = "</use_mcp_tool>";
@@ -1322,15 +1324,15 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            return wrap_for_generation_prompt(p, reasoning + p.space() + p.choice({
+            return generation_prompt + (reasoning + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
-            }) + p.end(), inputs, "<think>");
+            }) + p.end());
         }
 
         // Content only parser (no tools)
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return wrap_for_generation_prompt(p, reasoning + p.content(p.rest()) + end, inputs, "<think>");
+            return generation_prompt + (reasoning + p.content(p.rest()) + end);
         }
 
         // Build tool call parsers for each available function
@@ -1372,7 +1374,7 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
 
         auto content_before_tools = p.content(p.until(SECTION_BEGIN));
 
-        return wrap_for_generation_prompt(p, reasoning + content_before_tools + tool_calls + end, inputs, "<think>");
+        return generation_prompt + (reasoning + content_before_tools + tool_calls + end);
     });
 
     data.parser = parser.save();
