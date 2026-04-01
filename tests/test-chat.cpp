@@ -2712,6 +2712,67 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // LFM2.5 tests - uses plain "List of tools: [...]" and bare [name(args)] without wrapper tokens
+    {
+        auto tst = peg_tester("models/templates/LFM2.5-Instruct.jinja", detailed_debug);
+
+        // Basic content only
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Single tool call without reasoning
+        tst.test("[special_function(arg1=1)]")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Tool call with string argument
+        tst.test("[get_time(city=\"XYZCITY\")]")
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", "{\"city\":\"XYZCITY\"}"))
+            .run();
+
+        // Tool call with reasoning (enable_thinking=true)
+        tst.test("<think>I'm\nthinking</think>[special_function(arg1=1)]")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Multiple tool calls (parallel)
+        tst.test("[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+            })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
+        // Tool call with content before tool call
+        tst.test("Let me check the time.[get_time(city=\"Paris\")]")
+            .tools({ get_time_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
+            ))
+            .run();
+
+        // Partial tool call (streaming)
+        tst.test("[special_function(arg1=")
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
+            .run();
+
+        // Tool call with empty arguments
+        tst.test("[empty_args()]")
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+    }
+
     // Apertus-8B-Instruct tests - FUNC_NAME_AS_KEY format
     // Format: <|tools_prefix|>[{"function_name": {...arguments...}}]<|tools_suffix|>
     {
