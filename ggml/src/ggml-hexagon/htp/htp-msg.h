@@ -83,18 +83,19 @@ enum htp_op_code {
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    128
 
+enum htp_tensor_flags {
+    HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
+    HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)
+};
+
 struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
     uint32_t size;                 // Data size in bytes
+    uint32_t flags;                // Buffer / tensor flags
     uint16_t type;                 // Data type
     uint16_t bi;                   // Buffer index
     uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
     uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
-};
-
-enum htp_op_buf_flags {
-    HTP_OP_BUF_WEIGHT  = (1U << 0),
-    HTP_OP_BUF_COMPUTE = (1U << 1)
 };
 
 struct htp_op_buf {

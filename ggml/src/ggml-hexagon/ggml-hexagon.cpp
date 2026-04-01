@@ -2401,23 +2401,21 @@ struct op_request_batch {
             HEX_VERBOSE("ggml-hex: opreq new buffer #%u : fd %d base %p size %lu\n", bi, b->fd, (void*) s_buf->base, (unsigned long) b->size);
         }
 
-        switch (ggml_backend_buffer_get_usage(t->buffer)) {
-        case GGML_BACKEND_BUFFER_USAGE_COMPUTE:
-            b->flags |= HTP_OP_BUF_COMPUTE;
-            break;
-
-        case GGML_BACKEND_BUFFER_USAGE_WEIGHTS:
-        default:
-            b->flags |= HTP_OP_BUF_WEIGHT;
-            break;
-        }
-   
         h->bi    = bi;
         h->type  = t->type;
         h->data  = t_offset;
         h->size  = t_size;
         h->ne[0] = t->ne[0]; h->ne[1] = t->ne[1]; h->ne[2] = t->ne[2]; h->ne[3] = t->ne[3];
         h->nb[0] = t->nb[0]; h->nb[1] = t->nb[1]; h->nb[2] = t->nb[2]; h->nb[3] = t->nb[3];
+
+        h->flags = 0;
+        switch (ggml_backend_buffer_get_usage(t->buffer)) {
+        case GGML_BACKEND_BUFFER_USAGE_COMPUTE:
+            h->flags |= HTP_TENSOR_COMPUTE;
+            break;
+        default:
+            break;
+        }
     }
 
     void req_src_init(htp_tensor *h, const ggml_tensor * t) {

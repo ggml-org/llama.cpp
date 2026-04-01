@@ -486,8 +486,8 @@ static void prep_src_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struc
 
     t->data = bufs[bi].base + offset;
 
-    if (bufs[bi].flags & HTP_OP_BUF_COMPUTE) {
-        // for now always invalidate compute buffers on input
+    if (!(t->flags & HTP_TENSOR_FLUSHED) && (t->flags & HTP_TENSOR_COMPUTE)) {
+        // invalidate non-flushed compute buffers on input
         hex_l2clear((void *) t->data, size);
     }
 
@@ -509,11 +509,12 @@ static void prep_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struc
 }
 
 static void post_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t) {
-    // for now always buffers on output
+    // flush buffers on output
     hex_l2flush((void *) t->data, t->size);
+    t->flags |= HTP_TENSOR_FLUSHED;
 
-    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", bi, (void *) t->data, size,
-        to->ne[0], to->ne[1], to->ne[3], to->ne[3]);
+    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", t->bi, (void *) t->data, size,
+        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
 static void proc_op_req(struct htp_context * ctx, struct htp_op_buf * bufs, struct htp_op_req * req) {
