@@ -1,22 +1,27 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
-// Q4_K × F32 batch GEMM  (SOA flat format, local-memory tiling)
+// Q4_K × F32 batch GEMM — packed AoS format (no SOA conversion needed)
 //
-// Weight layout (SOA, 4 separate buffers per super-block of 256 elements):
-//   src0_qs     — 128 bytes/block: nibble pairs for 8 scale-groups of 32 elements each
-//     qs[   0..31]: lo nibble = element   0..31 (sg=0), hi nibble = element  32..63 (sg=1)
-//     qs[  32..63]: lo nibble = element  64..95 (sg=2), hi nibble = element  96..127 (sg=3)
-//     qs[  64..95]: lo nibble = element 128..159 (sg=4), hi nibble = element 160..191 (sg=5)
-//     qs[ 96..127]: lo nibble = element 192..223 (sg=6), hi nibble = element 224..255 (sg=7)
-//   src0_scales — 12 bytes/block: packed 6-bit scale/min pairs (get_scale_min_k4 layout)
-//   src0_d      — 1 half/block:   super-block scale
-//   src0_dmin   — 1 half/block:   super-block min-scale
+// Weight format: packed block_q4_K structs, 144 bytes per super-block of 256 elements:
+//   offset  0 :  half d        — super-block scale
+//   offset  2 :  half dmin     — super-block min-scale
+//   offset  4 :  uchar scales[12] — packed 6-bit scale/min pairs
+//   offset 16 :  uchar qs[128]    — 4-bit quantized weights
+//
+// qs nibble layout (same as SOA, 8 scale-groups of 32 elements each):
+//   qs[  0..31]: lo nibble = element   0..31 (sg=0), hi nibble = element  32..63 (sg=1)
+//   qs[ 32..63]: lo nibble = element  64..95 (sg=2), hi nibble = element  96..127 (sg=3)
+//   qs[ 64..95]: lo nibble = element 128..159 (sg=4), hi nibble = element 160..191 (sg=5)
+//   qs[ 96..127]:lo nibble = element 192..223 (sg=6), hi nibble = element 224..255 (sg=7)
 //
 // Dequantization:  w[k] = d * scale[sg(k)] * nibble[k]  -  dmin * smin[sg(k)]
 //
-// Tile sizes:  BM=BN=64, BK=32, TM=4, TN=8, LOAD_VEC_A=8, 128 threads per work-group.
-// BK=32 aligns with one Q4_K scale-group (32 elements each), so each BK step uses
-// exactly one (scale, smin) pair — no cross-group mixing inside a tile load.
+// Tile: BM=BN=64, BK=32, TM=4, TN=8, LOAD_VEC_A=8, 128 threads.
+// BK=32 = exactly one Q4_K scale-group, so each BK step uses one (scale, smin).
+//
+// Optimization: d, dmin, and scales[] are the same for all 8 BK steps within a
+// super-block.  Each thread caches them in private registers on sg==0 and reuses
+// them for sg=1..7, saving 7/8 of the d/dmin/scales global reads.
 
 #define LOAD_VEC_A 8
 #define LOAD_VEC_B 4
@@ -27,19 +32,18 @@
 #define TM 4
 #define TN 8
 
-#define QK_K         256
-#define K_SCALE_SIZE 12
+#define QK_K          256
+#define K_SCALE_SIZE  12
+#define BLOCK_Q4_K_SZ 144  // sizeof(block_q4_K) = 2+2+12+128
 
-kernel void kernel_mul_mm_q4_k_f32_l4_lm(
-    global uchar  * src0_qs,      // nibbles:     128 bytes per super-block
-    global uchar  * src0_scales,  // scales/mins: 12 bytes per super-block
-    global half   * src0_d,       // super-block scale: 1 half per super-block
-    global half   * src0_dmin,    // super-block min:   1 half per super-block
-    global float4 * src1,         // activations (F32), shape [ne10=ne00][ne11][ne12][ne13]
+kernel void kernel_mul_mm_q4_k_f32_l4_lm_packed(
+    global char   * src0,       // packed block_q4_K, each 144 bytes
+    ulong           offset0,    // byte offset into src0
+    global float4 * src1,
     ulong           offset1,
     global float  * dst,
     ulong           offsetd,
-    int ne00,           // K  (weight columns, must be divisible by QK_K=256)
+    int ne00,           // K  (must be divisible by QK_K=256)
     int ne01,           // M  (weight rows)
     int ne02,           // batch dim of weights
     int ne11,           // N  (activation tokens)
@@ -51,6 +55,7 @@ kernel void kernel_mul_mm_q4_k_f32_l4_lm(
     int r2,
     int r3
 ) {
+    src0 = src0 + offset0;
     src1 = (global float4*)((global char*)src1 + offset1);
     dst  = (global float *)((global char*)dst  + offsetd);
 
@@ -71,15 +76,13 @@ kernel void kernel_mul_mm_q4_k_f32_l4_lm(
     const int th_r = tid % (BM / TM);  // 0..15
     const int th_c = tid / (BM / TM);  // 0..7
 
-    // Loading roles: each thread loads LOAD_VEC_A elements of A and LOAD_VEC_B of B.
-    const int loadr_a = tid % (BK / LOAD_VEC_A);  // 0..3  (which 8-element chunk in BK)
-    const int loadc_a = tid / (BK / LOAD_VEC_A);  // 0..31 (which row in BM)
+    const int loadr_a = tid % (BK / LOAD_VEC_A);  // 0..3
+    const int loadc_a = tid / (BK / LOAD_VEC_A);  // 0..31
     const int loadr_b = tid % (BK / LOAD_VEC_B);  // 0..7
     const int loadc_b = tid / (BK / LOAD_VEC_B);  // 0..15
 
-    // Number of rows covered per load iteration.
-    const int loadstride_a = get_local_size(0) * LOAD_VEC_A / BK;  // 128*8/32 = 32
-    const int loadstride_b = get_local_size(0) * LOAD_VEC_B / BK;  // 128*4/32 = 16
+    const int loadstride_a = get_local_size(0) * LOAD_VEC_A / BK;  // 32
+    const int loadstride_b = get_local_size(0) * LOAD_VEC_B / BK;  // 16
 
     int pos_b = (batch_idx * batch_stride_b + ic * BN * stride_b) / LOAD_VEC_B;
 
@@ -91,42 +94,58 @@ kernel void kernel_mul_mm_q4_k_f32_l4_lm(
 
     for (int i = 0; i < TM * TN; i++) sums[i] = 0.0f;
 
+    // Private register cache for d, dmin, scales per row.
+    // Each thread handles at most 2 rows (l=0 and l=loadstride_a).
+    // Reloaded only when sg==0 (start of each new super-block).
+    float priv_dall[2];
+    float priv_dmin[2];
+    uchar priv_sc[2][K_SCALE_SIZE];  // 12 bytes per row
+
     for (int block = 0; block < ne00; block += BK) {
-        // Which super-block and which scale-group within it this BK step covers.
-        const int ib_in_row   = block / QK_K;       // super-block index along K
-        const int sg          = (block / BK) % 8;   // scale-group 0..7 (32 elem each)
-        // Byte offset into qs[0..127] for this thread's 8 elements.
+        const int ib_in_row   = block / QK_K;
+        const int sg          = (block / BK) % 8;   // scale-group 0..7
         const int qs_byte_off = (sg / 2) * 32 + loadr_a * 8;
-        const int nibble_hi   = sg & 1;             // 0 = lo nibble, 1 = hi nibble
+        const int nibble_hi   = sg & 1;
+        const int sg_m4 = sg < 4 ? sg : sg - 4;     // safe index for speculative eval
 
-        // Scale extraction helper: sg-4 must be clamped to avoid OOB in speculative eval.
-        // On GPUs both branches of a ternary may be evaluated; use sg_m4 as safe index.
-        const int sg_m4 = sg < 4 ? sg : sg - 4;    // always in {0..3}
-
-        // ---- Load tile of A (weight matrix) ----
+        // ---- Load tile of A (Q4_K weights, packed format) ----
         for (int l = 0; l < BM; l += loadstride_a) {
             const int row = ir * BM + loadc_a + l;
+            const int li  = l / loadstride_a;  // 0 or 1
             if (row < ne01) {
-                // Flat super-block index (across batch, rows, and K).
+                // Flat super-block index
                 ulong bi = (ulong)batch_idx_a * ne01 * nb
                          + (ulong)row * nb
                          + ib_in_row;
 
-                uchar8 q = vload8(0, src0_qs + bi * 128 + qs_byte_off);
+                // Pointer to the packed block_q4_K struct
+                global char * bp = src0 + bi * BLOCK_Q4_K_SZ;
+
+                // Cache d, dmin, scales once per super-block (sg==0).
+                // All 8 BK steps within a super-block share the same d/dmin/sc.
+                if (sg == 0) {
+                    priv_dall[li] = (float)vload_half(0, (global half*)bp);
+                    priv_dmin[li] = (float)vload_half(1, (global half*)bp);
+                    global uchar * sc_g = (global uchar*)(bp + 4);
+                    for (int i = 0; i < K_SCALE_SIZE; i++) {
+                        priv_sc[li][i] = sc_g[i];
+                    }
+                }
+
+                // Scale/min decode following get_scale_min_k4, using cached data
+                float scale = sg < 4
+                    ? (float)(priv_sc[li][sg]   & 63)
+                    : (float)((priv_sc[li][sg + 4] & 0x0F) | ((priv_sc[li][sg_m4] >> 6) << 4));
+                float smin  = sg < 4
+                    ? (float)(priv_sc[li][sg + 4] & 63)
+                    : (float)((priv_sc[li][sg + 4] >>   4) | ((priv_sc[li][sg]   >> 6) << 4));
+                float ds = priv_dall[li] * scale;
+                float dm = priv_dmin[li] * smin;
+
+                // qs at offset 16, then scale-group section, then thread's 8 bytes
+                uchar8 q = vload8(0, (global uchar*)(bp + 16) + qs_byte_off);
                 uchar8 nibbles = nibble_hi ? (q >> (uchar8)4) : (q & (uchar8)0x0F);
 
-                // Decode scale and min for this scale-group (get_scale_min_k4 layout).
-                global uchar * sc = src0_scales + bi * K_SCALE_SIZE;
-                float scale = sg < 4 ? (float)(sc[sg]   & 63)
-                                     : (float)((sc[sg + 4] & 0x0F) | ((sc[sg_m4] >> 6) << 4));
-                float smin  = sg < 4 ? (float)(sc[sg + 4] & 63)
-                                     : (float)((sc[sg + 4] >>   4) | ((sc[sg]   >> 6) << 4));
-                float dall   = (float)vload_half(0, src0_d    + bi);
-                float dmin_v = (float)vload_half(0, src0_dmin + bi);
-                float ds = dall   * scale;
-                float dm = dmin_v * smin;
-
-                // Dequantize: w[k] = d*scale*q[k] - dmin*smin
                 buf_a[(loadr_a * 8 + 0) * BM + loadc_a + l] = ds * (float)nibbles.s0 - dm;
                 buf_a[(loadr_a * 8 + 1) * BM + loadc_a + l] = ds * (float)nibbles.s1 - dm;
                 buf_a[(loadr_a * 8 + 2) * BM + loadc_a + l] = ds * (float)nibbles.s2 - dm;
@@ -147,7 +166,7 @@ kernel void kernel_mul_mm_q4_k_f32_l4_lm(
             }
         }
 
-        // ---- Load tile of B (activation matrix, F32) ----
+        // ---- Load tile of B (activations, F32) ----
         for (int l = 0; l < BN; l += loadstride_b) {
             if (ic * BN + loadc_b + l < ne11) {
                 int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
@@ -169,12 +188,8 @@ kernel void kernel_mul_mm_q4_k_f32_l4_lm(
 
         // ---- Compute tile product ----
         for (int i = 0; i < BK; i++) {
-            for (int j = 0; j < TM; j++) {
-                cache_a[j] = buf_a[i * BM + th_r * TM + j];
-            }
-            for (int j = 0; j < TN; j++) {
-                cache_b[j] = buf_b[i * BN + th_c * TN + j];
-            }
+            for (int j = 0; j < TM; j++) cache_a[j] = buf_a[i * BM + th_r * TM + j];
+            for (int j = 0; j < TN; j++) cache_b[j] = buf_b[i * BN + th_c * TN + j];
             for (int cc = 0; cc < TN; cc++) {
                 for (int cr = 0; cr < TM; cr++) {
                     sums[cc * TM + cr] = mad(cache_a[cr], cache_b[cc], sums[cc * TM + cr]);

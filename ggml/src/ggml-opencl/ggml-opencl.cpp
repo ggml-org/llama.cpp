@@ -29,6 +29,8 @@
 #include <string>
 #include <cmath>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <charconv>
 #include <mutex>
@@ -424,6 +426,9 @@ struct ggml_backend_opencl_context {
 
     std::string driver_version;
 
+    // Compiler options stored for lazy kernel compilation after init
+    std::string kernel_compile_opts;
+
     GPU_FAMILY gpu_family;
     bool use_adreno_kernels;
     bool use_no_subgroups_compat;
@@ -456,6 +461,12 @@ struct ggml_backend_opencl_context {
     // prealloc buffers for src0 and src1
     ggml_cl_buffer prealloc_src0;
     ggml_cl_buffer prealloc_src1;
+
+    // Global tracking for Q4_K qs_t budget: must be computed against the
+    // TOTAL pool (all chunks) not per-chunk, otherwise each chunk gets its
+    // own budget and the total qs_t far exceeds available GPU memory.
+    size_t total_pool_bytes = 0;  // sum of all alloc_buffer sizes
+    size_t total_qs_t_bytes = 0;  // sum of qs_t across all buf ctxs
 
     cl_program program_add;
     cl_program program_add_id;
@@ -633,6 +644,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_q8_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_k_f32_l4_lm;
     cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
+    cl_kernel kernel_mul_mm_q4_k_f32_l4_lm_packed = nullptr;
+    cl_kernel kernel_mul_mm_q4_k_f32_l4_lm_qst     = nullptr;
+    cl_kernel kernel_mul_mm_q4_k_f32_l4_lm_qst_n32 = nullptr;
 
     std::vector<ProfilingInfo> profiling_info;
 
@@ -1060,6 +1074,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_WARN("ggml_opencl: building kernels with no-subgroups compatibility mode for '%s'\n",
             backend_ctx->device_name.c_str());
     }
+
+    backend_ctx->kernel_compile_opts = compile_opts;
+
 
     GGML_LOG_INFO("ggml_opencl: loading OpenCL kernels");
 
@@ -1822,7 +1839,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
-    // mul_mm_q4_k_f32_l4_lm
+    // mul_mm_q4_k_f32_l4_lm (non-SOA fallback — only compiled when SOA_Q is disabled)
+#ifndef GGML_OPENCL_SOA_Q
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
@@ -1838,6 +1856,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
+#endif // !GGML_OPENCL_SOA_Q
 
     // mul_mm_q6_k_f32_l4_lm
     {
@@ -1855,6 +1874,34 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
+
+    // mul_mm_q4_k_f32_l4_lm (SOA batch GEMM for Q4_K on NVIDIA only)
+    // Only compiled on NVIDIA: soa_q4_K_tensors is only populated for NVIDIA
+    // devices in buffer_set_tensor, so this kernel is never dispatched on
+    // Adreno, Apple, or Intel.  Skipping on non-NVIDIA saves ~20-50 MB of
+    // driver-managed GPU memory for the compiled kernel binary.
+#ifdef GGML_OPENCL_SOA_Q
+    if (backend_ctx->device_name.find("NVIDIA") != std::string::npos) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src_q4k_mm {
+            #include "mul_mm_q4_k_f32_l4_lm.cl.h"
+        };
+#else
+        const std::string kernel_src_q4k_mm = read_file("mul_mm_q4_k_f32_l4_lm.cl");
+#endif
+        cl_program prog_q4k_mm =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_q4k_mm.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm = clCreateKernel(prog_q4k_mm, "kernel_mul_mm_q4_k_f32_l4_lm", &err), err));
+        CL_CHECK(clReleaseProgram(prog_q4k_mm));
+        GGML_LOG_CONT(".");
+    }
+#endif // GGML_OPENCL_SOA_Q
+
+    // mul_mm_q4_k_f32_l4_lm_packed, _qst, and _qst_n32 are all compiled lazily
+    // (see ggml_opencl_ensure_q4k_qst_kernels) on the first Q4_K GEMM dispatch.
+    // These kernels are not needed for model loading or KV allocation.
+    // Deferring them frees ~300-500 MB of driver-managed GPU memory at init time,
+    // which allows 7B+ models (pool ~4 GB) to allocate the KV cache successfully.
 
     // mul_mm_f16_f32_kq_kqv
     {
@@ -3117,6 +3164,65 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 // XXX    static bool initialized = false;
 // XXX    static ggml_backend_opencl_context *backend_ctx = nullptr;
 
+// Lazily compile Q4_K GEMM kernels (packed / qst / qst_n32) on first dispatch.
+// These kernels are not needed until the first Q4_K matrix-multiply, so we
+// defer their compilation to avoid consuming ~300-500 MB of driver-managed GPU
+// memory during init.  This allows 7B+ models (pool ~4 GB) to fit in GPU
+// memory alongside the KV cache and compute buffers.
+static void ggml_opencl_ensure_q4k_gemm_kernels(ggml_backend_opencl_context * backend_ctx) {
+    if (backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_packed != nullptr) {
+        return;  // already compiled
+    }
+    GGML_LOG_INFO("ggml_opencl: lazy-compiling Q4_K GEMM kernels (packed/qst/qst_n32)\n");
+    cl_int err;
+    const std::string & compile_opts = backend_ctx->kernel_compile_opts;
+
+    // mul_mm_q4_k_f32_l4_lm_packed (packed AoS fallback, used when qs_t unavailable)
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mm_q4_k_f32_l4_lm_packed.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mm_q4_k_f32_l4_lm_packed.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_packed = clCreateKernel(prog, "kernel_mul_mm_q4_k_f32_l4_lm_packed", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+    }
+
+    // mul_mm_q4_k_f32_l4_lm_qst (coalesced qs_t GEMM, used when qs_t available)
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mm_q4_k_f32_l4_lm_qst.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mm_q4_k_f32_l4_lm_qst.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_qst = clCreateKernel(prog, "kernel_mul_mm_q4_k_f32_l4_lm_qst", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+    }
+
+    // mul_mm_q4_k_f32_l4_lm_qst_n32 (narrow BN=32 qst variant)
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mm_q4_k_f32_l4_lm_qst_n32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mm_q4_k_f32_l4_lm_qst_n32.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_qst_n32 = clCreateKernel(prog, "kernel_mul_mm_q4_k_f32_l4_lm_qst_n32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+    }
+}
+
 static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev);
 
 namespace /* anonymous */ {
@@ -3624,9 +3730,13 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
                           required_B_d_bytes, max_B_d_bytes);
         }
 
-        backend_ctx->prealloc_quant_trans.allocate(context, max_A_q_d_bytes);
-        backend_ctx->prealloc_scales_trans.allocate(context, max_A_s_d_bytes);
         backend_ctx->prealloc_act_trans.allocate(context, max_B_d_bytes);
+
+        // prealloc_quant_trans / prealloc_scales_trans / prealloc_quant_src /
+        // prealloc_scales_src are all allocated lazily in buffer_set_tensor on
+        // first use.  Do NOT preallocate here: for large models (7B+) the pool
+        // already uses ~4 GB, and reserving 350+ MB at init pushes the total
+        // over the GPU memory limit causing context-creation failure.
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
@@ -4715,6 +4825,9 @@ struct ggml_backend_opencl_buffer_context {
         for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K_in_use) {
             delete e;
         }
+        for (auto & kv : q4k_qs_t_buffers) {
+            if (kv.second) { CL_CHECK(clReleaseMemObject(kv.second)); }
+        }
     }
 
     ggml_tensor_extra_cl * ggml_opencl_alloc_temp_tensor_extra() {
@@ -4896,6 +5009,16 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_q8_0 *> temp_tensor_extras_q8_0_in_use;
     std::vector<ggml_tensor_extra_cl_q4_K *> temp_tensor_extras_q4_K;
     std::vector<ggml_tensor_extra_cl_q4_K *> temp_tensor_extras_q4_K_in_use;
+
+    // Tracks tensors whose Q4_K data was successfully converted to SOA format.
+    // When a tensor is NOT in this set (e.g., SOA allocation failed due to OOM),
+    // mul_mat falls back to the packed kernel using the pool buffer.
+    std::unordered_set<const ggml_tensor *> soa_q4_K_tensors;
+
+    // Per-tensor qs_t buffer: qs in [batch, nb, ne01, 128] order for coalesced
+    // GEMM access on Apple M1 (no SOA).  The original packed buffer is kept
+    // for GEMV; this buffer is freed when the buffer context is destroyed.
+    std::unordered_map<const ggml_tensor *, cl_mem> q4k_qs_t_buffers;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K_in_use;
 
@@ -5009,6 +5132,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
     cl_context context = backend_ctx->context;
     cl_command_queue queue = backend_ctx->queue;
+
 
 #ifdef GGML_OPENCL_SOA_Q
     // We separate the quantized bits and scale from block_q4_0 by using an
@@ -5577,6 +5701,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             // Transpose weights
             size_t q_size_bytes = K * M / 4 * sizeof(float);
+            backend_ctx->prealloc_quant_trans.allocate(context, q_size_bytes);
             cl_buffer_region region;
             region.origin = 0;
             region.size = q_size_bytes;
@@ -5626,6 +5751,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             // Transpose scales
             size_t d_size_bytes = M * (K / 32) * 2;
+            backend_ctx->prealloc_scales_trans.allocate(context, d_size_bytes);
             region.origin = 0;
             region.size = d_size_bytes;
             cl_mem dT_d = clCreateSubBuffer(
@@ -5699,7 +5825,24 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         return;
     }
-    if (tensor->type == GGML_TYPE_Q4_K) {
+    if (tensor->type == GGML_TYPE_Q4_K &&
+        offset == 0 && size == ggml_nbytes(tensor) &&
+        backend_ctx->device_name.find("NVIDIA") != std::string::npos) {
+        // Only convert full tensor writes (weight loading).  Partial writes
+        // (e.g. KV-cache updates) bypass SOA and fall through to the pool write.
+        //
+        // Apple M1 is excluded: SOA doubles Q4_K GPU memory (packed AoS + 4 SOA
+        // sub-buffers coexist during conversion), causing OOM on 3B+ models
+        // (max_mem_alloc=1024 MB).  Apple M1 uses the packed-format GEMM kernel
+        // (kernel_mul_mm_q4_k_f32_l4_lm_packed) instead.
+        //
+        // Adreno is intentionally excluded: benchmarks show the flat kernel is
+        // ~40% slower than the packed Adreno kernel (56 t/s vs 95 t/s on 1B
+        // Q4_K_M) even after coalescing the thread mapping (ix=lid/16) and
+        // rewriting scale decode to use 3 aligned ushort reads instead of
+        // divergent byte reads.  The packed Adreno kernel uses image-based
+        // access patterns that the flat SOA kernel cannot replicate.  Additionally,
+        // SOA buffers double Q4_K GPU memory → OOM risk on 7B+ with Q6_K tensors.
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
         GGML_ASSERT(extra_orig && "Tensors in OpenCL backend should have been allocated and initialized");
 
@@ -5846,6 +5989,79 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     #endif // GGML_OPENCL_USE_ADRENO_KERNELS
         }
         return;
+    }
+    // Non-NVIDIA Q4_K: build qs_t buffer in [batch, nb, ne01, 128] order for
+    // coalesced GEMM tile loads.  Adjacent threads read stride-128-byte-apart
+    // addresses instead of the packed format's nb*144 = 1728-byte stride.
+    // The original packed buffer is preserved in the pool for GEMV.
+    if (tensor->type == GGML_TYPE_Q4_K &&
+        offset == 0 && size == ggml_nbytes(tensor) &&
+        backend_ctx->device_name.find("NVIDIA") == std::string::npos) {
+
+        const int ne01_t = tensor->ne[1];
+        const int ne23   = tensor->ne[2] * tensor->ne[3];
+        const int nb_row = tensor->ne[0] / 256;   // super-blocks per row (QK_K=256)
+        const size_t n_blocks  = (size_t)ne01_t * ne23 * nb_row;
+        const size_t size_qs_t = n_blocks * 128;
+
+        // Reorganize qs on the CPU into [ne23, nb_row, ne01, 128] layout
+        std::vector<uint8_t> qs_t_cpu(size_qs_t);
+        const uint8_t * src_data = (const uint8_t *)data;
+
+        for (int b23 = 0; b23 < ne23; b23++) {
+            for (int r = 0; r < ne01_t; r++) {
+                for (int ib = 0; ib < nb_row; ib++) {
+                    // Source: packed block at row-major index
+                    const uint8_t * bp = src_data +
+                        (size_t)(b23 * ne01_t * nb_row + r * nb_row + ib) * 144; // BLOCK_Q4_K_SZ
+                    // Destination: [b23, ib, r] in qs_t
+                    uint8_t * dst_qs = qs_t_cpu.data() +
+                        (size_t)(b23 * nb_row * ne01_t + ib * ne01_t + r) * 128;
+                    memcpy(dst_qs, bp + 16, 128);
+                }
+            }
+        }
+
+        ggml_backend_opencl_buffer_context * buf_ctx =
+            (ggml_backend_opencl_buffer_context *) buffer->context;
+
+        // Cap qs_t allocation so that (total_pool + total_qs_t) stays below
+        // ~4 GB, leaving headroom for KV cache and compute buffers.
+        // IMPORTANT: budget must be computed against the TOTAL pool across all
+        // pool chunks (backend_ctx->total_pool_bytes), NOT the per-chunk size
+        // (buffer->size). Each pool chunk is < max_alloc_size (≈2 GB), so using
+        // buffer->size gives a falsely positive budget even for 7B models where
+        // the true total pool (> 4 GB) leaves no room for qs_t buffers.
+        static constexpr size_t QST_POOL_PLUS_QST_LIMIT =
+            4ULL * 1024 * 1024 * 1024; // 4.0 GB
+        const size_t total_pool = backend_ctx->total_pool_bytes;
+        const size_t qs_t_budget = (total_pool < QST_POOL_PLUS_QST_LIMIT)
+                                 ? (QST_POOL_PLUS_QST_LIMIT - total_pool)
+                                 : 0;
+        if (backend_ctx->total_qs_t_bytes + size_qs_t > qs_t_budget) {
+            GGML_LOG_DEBUG("ggml_opencl: Q4_K qs_t budget exhausted "
+                           "(pool=%.1f GB, qs_t=%.1f GB, limit=%.1f GB) — packed GEMM\n",
+                           total_pool / 1073741824.0,
+                           (double)backend_ctx->total_qs_t_bytes / 1073741824.0,
+                           QST_POOL_PLUS_QST_LIMIT / 1073741824.0);
+            // Fall through: packed data is still written to pool buffer (for GEMV)
+        } else {
+            cl_int err;
+            cl_mem qs_t_buf = clCreateBuffer(
+                backend_ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                size_qs_t, qs_t_cpu.data(), &err);
+            if (err == CL_SUCCESS) {
+                buf_ctx->q4k_qs_t_buffers[tensor] = qs_t_buf;
+                backend_ctx->total_qs_t_bytes += size_qs_t;
+                GGML_LOG_DEBUG("ggml_opencl: Q4_K qs_t buffer created (%.1f MB, total %.1f MB)\n",
+                               size_qs_t / 1048576.0,
+                               (double)backend_ctx->total_qs_t_bytes / 1048576.0);
+            } else {
+                GGML_LOG_WARN("ggml_opencl: Q4_K qs_t buffer allocation failed (%.1f MB) — "
+                              "falling back to packed GEMM\n", size_qs_t / 1048576.0);
+            }
+        }
+        // Fall through: packed data is still written to pool buffer (for GEMV)
     }
     if (tensor->type == GGML_TYPE_Q6_K) {
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
@@ -6548,17 +6764,19 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 
     cl_int err;
     cl_mem mem = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, size, NULL, &err);
-#ifndef __APPLE__
     if (err != CL_SUCCESS && backend_ctx->adreno_use_large_buffer) {
         cl_mem_properties props[] = { 0x41A6 /* CL_LARGE_BUFFER_QCOM */, 1, 0 };
         mem = clCreateBufferWithProperties(backend_ctx->context, props, CL_MEM_READ_WRITE, size, NULL, &err);
     }
-#endif
     if (err != CL_SUCCESS) {
         GGML_LOG_INFO("%s: failed to allocate %.2f MiB (err = %d, context = %p)\n",
                 __func__, size / 1024.0 / 1024.0, err, (void *) backend_ctx->context);
         return nullptr;
     }
+
+    // Accumulate total pool bytes so the global Q4_K qs_t budget can be
+    // computed correctly across all pool chunks (each chunk is a separate call).
+    backend_ctx->total_pool_bytes += size;
 
     ggml_backend_opencl_buffer_context * ctx = new ggml_backend_opencl_buffer_context(mem);
 
@@ -11704,50 +11922,6 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
                 return;
             }
-            case GGML_TYPE_Q4_K: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_K->qs));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_K->scales));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q4_K->d));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q4_K->dmin));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
             case GGML_TYPE_Q6_K: {
                 if (ne11 < 32) {
                     break;
@@ -11791,6 +11965,145 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
                 backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
                 return;
+            }
+            case GGML_TYPE_Q4_K: {
+                if (ne11 < 32) {
+                    break;
+                }
+                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+                    break;
+                }
+#ifdef GGML_OPENCL_SOA_Q
+                {
+                    // NVIDIA SOA path: tensor was converted to 4 separate buffers at load time.
+                    if (src0->buffer != nullptr &&
+                        ((ggml_backend_opencl_buffer_context*)src0->buffer->context)->soa_q4_K_tensors.count(src0) > 0) {
+
+                        kernel = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm;
+                        nth0 = 128; // (BM*BN)/(TM*TN) = (64*64)/(4*8)
+
+                        int batch_stride_b = ne10*ne11;
+                        int batch_stride_d = ne0*ne1;
+
+                        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_K->qs));
+                        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_K->scales));
+                        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q4_K->d));
+                        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q4_K->dmin));
+                        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
+                        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
+                        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+                        CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+                        CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+                        CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
+                        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
+                        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
+                        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_b
+                        CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne01)); // stride_d
+                        CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+                        CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+                        CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+                        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+                        size_t global_work_size_q4k[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+                        size_t local_work_size_q4k[]  = {(size_t)nth0, 1, 1};
+                        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_q4k, local_work_size_q4k, dst);
+                        return;
+                    }
+
+                    // Non-NVIDIA (Apple M1 etc.): prefer qst kernel (coalesced qs access),
+                    // fall back to packed GEMM if qs_t buffer was not created (OOM).
+                    // For 32 ≤ ne11 < 64, use the narrow BN=32 variant to avoid half-empty tiles.
+                    auto & qst_map = ((ggml_backend_opencl_buffer_context*)src0->buffer->context)->q4k_qs_t_buffers;
+                    const bool have_qst = src0->buffer != nullptr && qst_map.count(src0) > 0;
+                    const bool use_n32  = have_qst && ne11 < 64;  // BN=32 path for PP32..63
+
+                    // Q4_K GEMM kernels are compiled lazily (not at init) to save GPU memory.
+                    // This call is a no-op after the first dispatch.
+                    ggml_opencl_ensure_q4k_gemm_kernels(backend_ctx);
+
+                    int nth0_q4k = 128;
+                    int batch_stride_b = ne10 * ne11;
+                    int batch_stride_d = ne0 * ne1;
+
+                    // BN=32 path: tile N width = 32
+                    if (use_n32) {
+                        cl_kernel kq = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_qst_n32;
+                        cl_mem qs_t  = qst_map.at(src0);
+                        size_t gws[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0_q4k), (size_t)(CEIL_DIV(ne11, 32)), (size_t)ne12*ne13};
+                        size_t lws[] = {(size_t)nth0_q4k, 1, 1};
+                        CL_CHECK(clSetKernelArg(kq,  0, sizeof(cl_mem),   &extra0->data_device));
+                        CL_CHECK(clSetKernelArg(kq,  1, sizeof(cl_ulong), &offset0));
+                        CL_CHECK(clSetKernelArg(kq,  2, sizeof(cl_mem),   &qs_t));
+                        CL_CHECK(clSetKernelArg(kq,  3, sizeof(cl_mem),   &extra1->data_device));
+                        CL_CHECK(clSetKernelArg(kq,  4, sizeof(cl_ulong), &offset1));
+                        CL_CHECK(clSetKernelArg(kq,  5, sizeof(cl_mem),   &extrad->data_device));
+                        CL_CHECK(clSetKernelArg(kq,  6, sizeof(cl_ulong), &offsetd));
+                        CL_CHECK(clSetKernelArg(kq,  7, sizeof(int),      &ne00));
+                        CL_CHECK(clSetKernelArg(kq,  8, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(kq,  9, sizeof(int),      &ne02));
+                        CL_CHECK(clSetKernelArg(kq, 10, sizeof(int),      &ne11));
+                        CL_CHECK(clSetKernelArg(kq, 11, sizeof(int),      &ne12));
+                        CL_CHECK(clSetKernelArg(kq, 12, sizeof(int),      &ne10));
+                        CL_CHECK(clSetKernelArg(kq, 13, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(kq, 14, sizeof(int),      &batch_stride_b));
+                        CL_CHECK(clSetKernelArg(kq, 15, sizeof(int),      &batch_stride_d));
+                        CL_CHECK(clSetKernelArg(kq, 16, sizeof(int),      &r2));
+                        CL_CHECK(clSetKernelArg(kq, 17, sizeof(int),      &r3));
+                        backend_ctx->enqueue_ndrange_kernel(kq, 3, gws, lws, dst);
+                        return;
+                    }
+
+                    size_t gws[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0_q4k), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+                    size_t lws[] = {(size_t)nth0_q4k, 1, 1};
+
+                    if (have_qst) {
+                        cl_kernel kq = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_qst;
+                        cl_mem qs_t  = qst_map.at(src0);
+                        CL_CHECK(clSetKernelArg(kq,  0, sizeof(cl_mem),   &extra0->data_device)); // meta
+                        CL_CHECK(clSetKernelArg(kq,  1, sizeof(cl_ulong), &offset0));
+                        CL_CHECK(clSetKernelArg(kq,  2, sizeof(cl_mem),   &qs_t));
+                        CL_CHECK(clSetKernelArg(kq,  3, sizeof(cl_mem),   &extra1->data_device));
+                        CL_CHECK(clSetKernelArg(kq,  4, sizeof(cl_ulong), &offset1));
+                        CL_CHECK(clSetKernelArg(kq,  5, sizeof(cl_mem),   &extrad->data_device));
+                        CL_CHECK(clSetKernelArg(kq,  6, sizeof(cl_ulong), &offsetd));
+                        CL_CHECK(clSetKernelArg(kq,  7, sizeof(int),      &ne00));
+                        CL_CHECK(clSetKernelArg(kq,  8, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(kq,  9, sizeof(int),      &ne02));
+                        CL_CHECK(clSetKernelArg(kq, 10, sizeof(int),      &ne11));
+                        CL_CHECK(clSetKernelArg(kq, 11, sizeof(int),      &ne12));
+                        CL_CHECK(clSetKernelArg(kq, 12, sizeof(int),      &ne10)); // stride_b
+                        CL_CHECK(clSetKernelArg(kq, 13, sizeof(int),      &ne01)); // stride_d
+                        CL_CHECK(clSetKernelArg(kq, 14, sizeof(int),      &batch_stride_b));
+                        CL_CHECK(clSetKernelArg(kq, 15, sizeof(int),      &batch_stride_d));
+                        CL_CHECK(clSetKernelArg(kq, 16, sizeof(int),      &r2));
+                        CL_CHECK(clSetKernelArg(kq, 17, sizeof(int),      &r3));
+                        backend_ctx->enqueue_ndrange_kernel(kq, 3, gws, lws, dst);
+                    } else {
+                        // Packed fallback (qs_t buffer unavailable)
+                        cl_kernel kp = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm_packed;
+                        CL_CHECK(clSetKernelArg(kp,  0, sizeof(cl_mem),   &extra0->data_device));
+                        CL_CHECK(clSetKernelArg(kp,  1, sizeof(cl_ulong), &offset0));
+                        CL_CHECK(clSetKernelArg(kp,  2, sizeof(cl_mem),   &extra1->data_device));
+                        CL_CHECK(clSetKernelArg(kp,  3, sizeof(cl_ulong), &offset1));
+                        CL_CHECK(clSetKernelArg(kp,  4, sizeof(cl_mem),   &extrad->data_device));
+                        CL_CHECK(clSetKernelArg(kp,  5, sizeof(cl_ulong), &offsetd));
+                        CL_CHECK(clSetKernelArg(kp,  6, sizeof(int),      &ne00));
+                        CL_CHECK(clSetKernelArg(kp,  7, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(kp,  8, sizeof(int),      &ne02));
+                        CL_CHECK(clSetKernelArg(kp,  9, sizeof(int),      &ne11));
+                        CL_CHECK(clSetKernelArg(kp, 10, sizeof(int),      &ne12));
+                        CL_CHECK(clSetKernelArg(kp, 11, sizeof(int),      &ne10)); // stride_b
+                        CL_CHECK(clSetKernelArg(kp, 12, sizeof(int),      &ne01)); // stride_d
+                        CL_CHECK(clSetKernelArg(kp, 13, sizeof(int),      &batch_stride_b));
+                        CL_CHECK(clSetKernelArg(kp, 14, sizeof(int),      &batch_stride_d));
+                        CL_CHECK(clSetKernelArg(kp, 15, sizeof(int),      &r2));
+                        CL_CHECK(clSetKernelArg(kp, 16, sizeof(int),      &r3));
+                        backend_ctx->enqueue_ndrange_kernel(kp, 3, gws, lws, dst);
+                    }
+                    return;
+                }
+#endif
             }
             default:
                 break;
@@ -12312,9 +12625,6 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == INTEL) {
                 // nth0=16 for both true Intel and Apple M1 compat mode.
-                // In compat mode the kernel overrides BLOCK_STRIDE to 2 so
-                // that ix ∈ {0,1} (lid/8 with 16 threads) covers all
-                // super-blocks, and uses lm[N_DST*16] for the tree-reduction.
                 nth0 = 16;
                 nth1 = 1;
                 ndst = 4;

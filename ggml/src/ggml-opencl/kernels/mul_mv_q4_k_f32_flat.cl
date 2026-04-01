@@ -230,6 +230,16 @@ kernel void kernel_mul_mv_q4_K_f32_flat(
 
 #define N_SIMDWIDTH 32
 
+// Apple M1 no-subgroups compat mode defines BOTH NVIDIA_GPU and INTEL_GPU.
+// Override N_SIMDWIDTH to 32 to match the nth0=32 workgroup dispatch used for
+// this GPU — with nth0=16 (INTEL path default), lm[N_SIMDWIDTH] would be
+// under-sized and threads lid=16..31 would write out of bounds.
+// BLOCK_STRIDE = 32/16 = 2 so ix ∈ {0,1} covers all super-blocks correctly.
+#if defined(NVIDIA_GPU) && defined(INTEL_GPU)
+#undef  N_SIMDWIDTH
+#define N_SIMDWIDTH 32
+#endif
+
 // 16 threads collaborate on one super-block, BLOCK_STRIDE super-blocks per iteration
 #define BLOCK_STRIDE (N_SIMDWIDTH/16)
 
