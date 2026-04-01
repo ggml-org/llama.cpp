@@ -1,26 +1,18 @@
 #pragma once
 
 // Device quantize functions for planar3/iso3/planar4/iso4 set_rows.
-// These wrap the rotation + quantize logic from cpy-planar-iso.cu
-// into the __device__ function signature required by k_set_rows_quant.
+// These wrap the rotation + quantize logic into the __device__ function
+// signature required by k_set_rows_quant.
+//
+// Uses static __constant__ arrays from planar-iso-constants.cuh so each
+// compilation unit gets its own initialized copy — no cross-TU extern needed.
 
 #include "ggml-common.h"
+#include "planar-iso-constants.cuh"
 #include <cuda_fp16.h>
 #include <cmath>
 
-// ── Constants (must match cpy-planar-iso.cu) ────────────────────────
-// Declared as file-scope __constant__ — initialized by ggml_cuda_init_planar_iso_constants()
-extern __constant__ float d_planar_cos[64];
-extern __constant__ float d_planar_sin[64];
-extern __constant__ float d_iso_qw[32];
-extern __constant__ float d_iso_qx[32];
-extern __constant__ float d_iso_qy[32];
-extern __constant__ float d_iso_qz[32];
-extern __constant__ float d_centroids_3bit[8];
-extern __constant__ float d_centroids_4bit[16];
-extern __constant__ float d_mid_3bit[7];
-
-// Init function from cpy-planar-iso.cu
+// Init function from cpy-planar-iso.cu (still needed for cpy path)
 extern void ggml_cuda_init_planar_iso_constants();
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -66,7 +58,7 @@ __device__ void quantize_f32_planar3_block(const float * x, block_planar3_0 * ds
     // Forward Givens rotation
     float rotated[128];
     for (int p = 0; p < 64; p++) {
-        float c = d_planar_cos[p], s = d_planar_sin[p];
+        float c = PI_COS[p], s = PI_SIN[p];
         rotated[p*2]   = c * buf[p*2] - s * buf[p*2+1];
         rotated[p*2+1] = s * buf[p*2] + c * buf[p*2+1];
     }
@@ -77,10 +69,10 @@ __device__ void quantize_f32_planar3_block(const float * x, block_planar3_0 * ds
 
     float recon_sq = 0.0f;
     for (int j = 0; j < QK_PLANAR3; j++) {
-        uint8_t idx = sr_quantize_3bit(rotated[j], d_mid_3bit);
+        uint8_t idx = sr_quantize_3bit(rotated[j], PI_MID_3BIT);
         dst->qs[j/4] |= (idx & 0x3) << ((j%4)*2);
         if (idx & 0x4) dst->signs[j/8] |= (1 << (j%8));
-        recon_sq += d_centroids_3bit[idx] * d_centroids_3bit[idx];
+        recon_sq += PI_CENTROIDS_3BIT[idx] * PI_CENTROIDS_3BIT[idx];
     }
 
     float recon_norm = sqrtf(recon_sq);
@@ -103,7 +95,7 @@ __device__ void quantize_f32_iso3_block(const float * x, block_iso3_0 * dst) {
     // Forward quaternion rotation per 4D group
     float rotated[128];
     for (int g = 0; g < 32; g++) {
-        float qw = d_iso_qw[g], qx = d_iso_qx[g], qy = d_iso_qy[g], qz = d_iso_qz[g];
+        float qw = PI_QW[g], qx = PI_QX[g], qy = PI_QY[g], qz = PI_QZ[g];
         float v0 = buf[g*4], v1 = buf[g*4+1], v2 = buf[g*4+2], v3 = buf[g*4+3];
         rotated[g*4]   = qw*v0 - qx*v1 - qy*v2 - qz*v3;
         rotated[g*4+1] = qw*v1 + qx*v0 + qy*v3 - qz*v2;
@@ -116,10 +108,10 @@ __device__ void quantize_f32_iso3_block(const float * x, block_iso3_0 * dst) {
 
     float recon_sq = 0.0f;
     for (int j = 0; j < QK_ISO3; j++) {
-        uint8_t idx = sr_quantize_3bit(rotated[j], d_mid_3bit);
+        uint8_t idx = sr_quantize_3bit(rotated[j], PI_MID_3BIT);
         dst->qs[j/4] |= (idx & 0x3) << ((j%4)*2);
         if (idx & 0x4) dst->signs[j/8] |= (1 << (j%8));
-        recon_sq += d_centroids_3bit[idx] * d_centroids_3bit[idx];
+        recon_sq += PI_CENTROIDS_3BIT[idx] * PI_CENTROIDS_3BIT[idx];
     }
 
     float recon_norm = sqrtf(recon_sq);
@@ -141,7 +133,7 @@ __device__ void quantize_f32_planar4_block(const float * x, block_planar4_0 * ds
 
     float rotated[128];
     for (int p = 0; p < 64; p++) {
-        float c = d_planar_cos[p], s = d_planar_sin[p];
+        float c = PI_COS[p], s = PI_SIN[p];
         rotated[p*2]   = c * buf[p*2] - s * buf[p*2+1];
         rotated[p*2+1] = s * buf[p*2] + c * buf[p*2+1];
     }
@@ -149,9 +141,9 @@ __device__ void quantize_f32_planar4_block(const float * x, block_planar4_0 * ds
     for (int j = 0; j < 64; j++) dst->qs[j] = 0;
     float recon_sq = 0.0f;
     for (int j = 0; j < 128; j++) {
-        uint8_t idx = sr_quantize_4bit(rotated[j], d_centroids_4bit);
+        uint8_t idx = sr_quantize_4bit(rotated[j], PI_CENTROIDS_4BIT);
         dst->qs[j/2] |= (idx & 0xF) << ((j%2)*4);
-        recon_sq += d_centroids_4bit[idx] * d_centroids_4bit[idx];
+        recon_sq += PI_CENTROIDS_4BIT[idx] * PI_CENTROIDS_4BIT[idx];
     }
 
     float recon_norm = sqrtf(recon_sq);
@@ -174,7 +166,7 @@ __device__ void quantize_f32_iso4_block(const float * x, block_iso4_0 * dst) {
 
     float rotated[128];
     for (int g = 0; g < 32; g++) {
-        float qw = d_iso_qw[g], qx = d_iso_qx[g], qy = d_iso_qy[g], qz = d_iso_qz[g];
+        float qw = PI_QW[g], qx = PI_QX[g], qy = PI_QY[g], qz = PI_QZ[g];
         float v0 = buf[g*4], v1 = buf[g*4+1], v2 = buf[g*4+2], v3 = buf[g*4+3];
         rotated[g*4]   = qw*v0 - qx*v1 - qy*v2 - qz*v3;
         rotated[g*4+1] = qw*v1 + qx*v0 + qy*v3 - qz*v2;
@@ -185,9 +177,9 @@ __device__ void quantize_f32_iso4_block(const float * x, block_iso4_0 * dst) {
     for (int j = 0; j < 64; j++) dst->qs[j] = 0;
     float recon_sq = 0.0f;
     for (int j = 0; j < 128; j++) {
-        uint8_t idx = sr_quantize_4bit(rotated[j], d_centroids_4bit);
+        uint8_t idx = sr_quantize_4bit(rotated[j], PI_CENTROIDS_4BIT);
         dst->qs[j/2] |= (idx & 0xF) << ((j%2)*4);
-        recon_sq += d_centroids_4bit[idx] * d_centroids_4bit[idx];
+        recon_sq += PI_CENTROIDS_4BIT[idx] * PI_CENTROIDS_4BIT[idx];
     }
 
     float recon_norm = sqrtf(recon_sq);
@@ -210,10 +202,10 @@ __device__ void quantize_f32_planar3_block_norot(const float * x, block_planar3_
     for (int j = 0; j < QK_PLANAR3/8; j++) dst->signs[j] = 0;
     float recon_sq = 0.0f;
     for (int j = 0; j < QK_PLANAR3; j++) {
-        uint8_t idx = sr_quantize_3bit(buf[j], d_mid_3bit);
+        uint8_t idx = sr_quantize_3bit(buf[j], PI_MID_3BIT);
         dst->qs[j/4] |= (idx & 0x3) << ((j%4)*2);
         if (idx & 0x4) dst->signs[j/8] |= (1 << (j%8));
-        recon_sq += d_centroids_3bit[idx] * d_centroids_3bit[idx];
+        recon_sq += PI_CENTROIDS_3BIT[idx] * PI_CENTROIDS_3BIT[idx];
     }
     float rn = sqrtf(recon_sq);
     dst->norm = __float2half(rn > 1e-10f ? grp_norm / rn : grp_norm);
@@ -233,9 +225,9 @@ __device__ void quantize_f32_planar4_block_norot(const float * x, block_planar4_
     for (int j = 0; j < 64; j++) dst->qs[j] = 0;
     float recon_sq = 0.0f;
     for (int j = 0; j < 128; j++) {
-        uint8_t idx = sr_quantize_4bit(buf[j], d_centroids_4bit);
+        uint8_t idx = sr_quantize_4bit(buf[j], PI_CENTROIDS_4BIT);
         dst->qs[j/2] |= (idx & 0xF) << ((j%2)*4);
-        recon_sq += d_centroids_4bit[idx] * d_centroids_4bit[idx];
+        recon_sq += PI_CENTROIDS_4BIT[idx] * PI_CENTROIDS_4BIT[idx];
     }
     float rn = sqrtf(recon_sq);
     dst->norm = __float2half(rn > 1e-10f ? grp_norm / rn : grp_norm);

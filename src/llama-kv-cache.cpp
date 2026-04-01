@@ -1463,7 +1463,6 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     // Turbo zero-padding: pad V head_dim to next multiple of 128
     const bool v_is_turbo = (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0 || v->type == GGML_TYPE_PLANAR3_0 || v->type == GGML_TYPE_ISO3_0 || v->type == GGML_TYPE_PLANAR4_0 || v->type == GGML_TYPE_ISO4_0);
-    const bool v_is_planar_iso = (v->type == GGML_TYPE_PLANAR3_0 || v->type == GGML_TYPE_ISO3_0 || v->type == GGML_TYPE_PLANAR4_0 || v->type == GGML_TYPE_ISO4_0);
     const bool v_needs_pad = v_is_turbo && (n_embd_head % 128 != 0);
     if (v_needs_pad) {
         const int64_t pad_amount = ((n_embd_head + 127) / 128) * 128 - n_embd_head;
@@ -1497,11 +1496,6 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
         if (v_is_turbo) {
             int32_t wht_group = 128;  // always 128 with padding
             memcpy(result->op_params, &wht_group, sizeof(int32_t));
-            // Flag V cache as "no rotation" for planar/iso types (transposed layout)
-            if (v_is_planar_iso) {
-                int32_t no_rotate = 1;
-                memcpy(result->op_params + 1, &no_rotate, sizeof(int32_t));
-            }
         }
         return result;
     }
