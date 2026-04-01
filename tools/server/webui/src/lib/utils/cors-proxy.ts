@@ -28,7 +28,7 @@ export function buildProxiedHeaders(headers: Record<string, string>): Record<str
 	const proxiedHeaders: Record<string, string> = {};
 
 	for (const [key, value] of Object.entries(headers)) {
-		proxiedHeaders[`X-Proxy-Header-${key}`] = value;
+		proxiedHeaders[`x-proxy-header-${key}`] = value;
 	}
 
 	return proxiedHeaders;

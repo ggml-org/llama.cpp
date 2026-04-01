@@ -6,6 +6,8 @@ enable chromium_experimental_subgroup_matrix;
 
 #ifdef KV_F32
 #define KV_TYPE f32
+#elif defined(KV_Q4_0) || defined(KV_Q8_0)
+#define KV_TYPE u32
 #else
 #define KV_TYPE f16
 #endif
@@ -37,11 +39,13 @@ enable chromium_experimental_subgroup_matrix;
 #define NQ 16
 // Q4_0 has 32 elements, 1 f16 for scale, 8 f16 for 4-bit weights
 #define F16_PER_BLOCK 9
+#define BLOCK_SIZE_BYTES 18u
 #define WEIGHTS_PER_F16 4
 #elif defined(KV_Q8_0)
 #define NQ 8
 // Q8_0 has 32 elements, 1 f16 for scale, 16 f16 for 8-bit weights
 #define F16_PER_BLOCK 17
+#define BLOCK_SIZE_BYTES 34u
 #define WEIGHTS_PER_F16 2
 #endif
 #define F16_PER_THREAD (NQ / WEIGHTS_PER_F16)
@@ -54,6 +58,47 @@ fn get_byte(value: u32, index: u32) -> u32 {
 fn get_byte_i32(value: u32, index: u32) -> i32 {
     return bitcast<i32>(((value >> (index * 8)) & 0xFF) << 24) >> 24;
 }
+
+#if defined(KV_Q4_0) || defined(KV_Q8_0)
+fn load_k_u16_at(byte_offset: u32) -> u32 {
+    let word = K[byte_offset / 4u];
+    let shift = (byte_offset & 2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_k_u32_at(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 3u) * 8u;
+    let lo = K[word_idx];
+    if (shift == 0u) {
+        return lo;
+    }
+    let hi = K[word_idx + 1u];
+    return (lo >> shift) | (hi << (32u - shift));
+}
+
+fn load_v_u16_at(byte_offset: u32) -> u32 {
+    let word = V[byte_offset / 4u];
+    let shift = (byte_offset & 2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_v_u32_at(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 3u) * 8u;
+    let lo = V[word_idx];
+    if (shift == 0u) {
+        return lo;
+    }
+    let hi = V[word_idx + 1u];
+    return (lo >> shift) | (hi << (32u - shift));
+}
+
+fn f16_from_u16(bits: u32) -> f16 {
+    let packed = unpack2x16float(bits);
+    return f16(packed[0]);
+}
+#endif
 
 struct Params {
     offset_q: u32,
@@ -254,12 +299,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_k_row < params.seq_len_kv) {
               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = K[base_idx]; // scale
+              let block_byte_base = global_block_idx * BLOCK_SIZE_BYTES;
+              let d = f16_from_u16(load_k_u16_at(block_byte_base));
               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = K[base_idx + 1u + block_offset + j];
-                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                  let q_packed = load_k_u32_at(q_byte_offset);
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte(q_packed, k);
                       let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
@@ -282,12 +326,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_k_row < params.seq_len_kv) {
               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = K[base_idx]; // scale
+              let block_byte_base = global_block_idx * BLOCK_SIZE_BYTES;
+              let d = f16_from_u16(load_k_u16_at(block_byte_base));
               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = K[base_idx + 1u + block_offset + j];
-                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                  let q_packed = load_k_u32_at(q_byte_offset);
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte_i32(q_packed, k);
                       let q_val = f16(q_byte) * d;
@@ -459,12 +502,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_v_row < params.seq_len_kv) {
               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = V[base_idx]; // scale
+              let block_byte_base = global_block_idx * BLOCK_SIZE_BYTES;
+              let d = f16_from_u16(load_v_u16_at(block_byte_base));
               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = V[base_idx + 1u + block_offset + j];
-                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                  let q_packed = load_v_u32_at(q_byte_offset);
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte(q_packed, k);
                       let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
@@ -487,12 +529,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_v_row < params.seq_len_kv) {
               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = V[base_idx]; // scale
+              let block_byte_base = global_block_idx * BLOCK_SIZE_BYTES;
+              let d = f16_from_u16(load_v_u16_at(block_byte_base));
               for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = V[base_idx + 1u + block_offset + j];
-                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                  let q_packed = load_v_u32_at(q_byte_offset);
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte_i32(q_packed, k);
                       let q_val = f16(q_byte) * d;
