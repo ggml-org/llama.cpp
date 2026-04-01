@@ -1,15 +1,25 @@
 <script lang="ts">
-	import { Settings } from '@lucide/svelte';
+	import { Database, Settings } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { McpLogo } from '$lib/components/app';
 	// import { getChatSettingsDialogContext, getMcpServersDialogContext } from '$lib/contexts';
 	import { page } from '$app/state';
+	import * as Sidebar from '$lib/components/ui/sidebar';
 
 	// const chatSettingsDialog = getChatSettingsDialogContext();
 	// const mcpServersDialog = getMcpServersDialogContext();
 
+	const sidebar = Sidebar.useSidebar();
+
 	let isMcpActive = $derived(page.route.id === '/settings/mcp');
 	let isSettingsActive = $derived(page.route.id === '/settings/chat');
+	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
+
+	function handleMobileSidebarItemClick() {
+		if (sidebar.isMobile) {
+			sidebar.toggle();
+		}
+	}
 </script>
 
 <div class="space-y-1 pt-0">
@@ -18,6 +28,7 @@
 			? 'bg-accent text-accent-foreground'
 			: ''}"
 		href="#/settings/mcp"
+		onclick={handleMobileSidebarItemClick}
 		variant="ghost"
 	>
 		<div class="flex items-center gap-2">
@@ -28,10 +39,26 @@
 	</Button>
 
 	<Button
+		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isImportExportActive
+			? 'bg-accent text-accent-foreground'
+			: ''}"
+		href="#/settings/import-export"
+		onclick={handleMobileSidebarItemClick}
+		variant="ghost"
+	>
+		<div class="flex items-center gap-2">
+			<Database class="h-4 w-4" />
+
+			Import / Export
+		</div>
+	</Button>
+
+	<Button
 		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive
 			? 'bg-accent text-accent-foreground'
 			: ''}"
 		href="#/settings/chat"
+		onclick={handleMobileSidebarItemClick}
 		variant="ghost"
 	>
 		<div class="flex items-center gap-2">

@@ -86,14 +86,14 @@
 							side === 'left'
 								? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0'
 								: 'right-3 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0',
-							'my-3 overflow-hidden rounded-2xl border border-sidebar-border shadow-md',
-					  ]
+							'my-3 overflow-hidden rounded-2xl border border-sidebar-border shadow-md'
+						]
 					: [
-							'transition-[left,right,width] h-svh',
+							'h-svh transition-[left,right,width]',
 							side === 'left'
 								? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
-								: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
-					  ],
+								: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]'
+						],
 				// Adjust the padding for inset variant.
 				variant === 'inset'
 					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'

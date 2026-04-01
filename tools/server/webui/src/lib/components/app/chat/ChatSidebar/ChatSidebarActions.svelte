@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { Database, Search, SquarePen } from '@lucide/svelte';
+	import { Search, SquarePen } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { SearchInput } from '$lib/components/app';
-	import { getImportExportDialogContext } from '$lib/contexts';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -19,7 +18,6 @@
 		isCancelAlwaysVisible = false
 	}: Props = $props();
 
-	const importExportDialog = getImportExportDialogContext();
 	let searchInputRef = $state<HTMLInputElement | null>(null);
 
 	function handleSearchModeDeactivate() {
@@ -42,7 +40,7 @@
 			onClose={handleSearchModeDeactivate}
 			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 			placeholder="Search conversations..."
-			isCancelAlwaysVisible={isCancelAlwaysVisible}
+			{isCancelAlwaysVisible}
 		/>
 	{:else}
 		<Button
@@ -72,20 +70,6 @@
 			</div>
 
 			<KeyboardShortcutInfo keys={['cmd', 'k']} />
-		</Button>
-
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
-			onclick={() => {
-				importExportDialog.open();
-			}}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<Database class="h-4 w-4" />
-
-				Import / Export
-			</div>
 		</Button>
 	{/if}
 </div>

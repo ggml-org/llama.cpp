@@ -10,7 +10,6 @@
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-	import { getMcpServersDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -20,6 +19,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { getFileTypeCategory } from '$lib/utils';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		canSend?: boolean;
@@ -52,8 +52,6 @@
 		onMcpPromptClick,
 		onMcpResourcesClick
 	}: Props = $props();
-
-	const mcpServersDialog = getMcpServersDialogContext();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -213,7 +211,7 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-2">
-		<McpActiveServersAvatars onClick={() => mcpServersDialog.open()} />
+		<McpActiveServersAvatars onClick={() => goto('/#/settings/mcp')} />
 
 		{#if isMobile.current}
 			<ModelsSelectorSheet

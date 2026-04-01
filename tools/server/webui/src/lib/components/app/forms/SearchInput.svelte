@@ -65,7 +65,7 @@
 	{#if showClearButton}
 		<button
 			type="button"
-			class="cursor-pointer absolute top-1/2 right-3 -translate-y-1/2 transform text-muted-foreground transition-colors hover:text-foreground"
+			class="absolute top-1/2 right-3 -translate-y-1/2 transform cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
 			onclick={handleClear}
 			aria-label={value ? 'Clear search' : 'Close'}
 		>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Download, Upload, Trash2 } from '@lucide/svelte';
+	import { Download, Upload, Trash2, Database } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
@@ -175,9 +175,15 @@
 </script>
 
 <div class="space-y-6">
+	<div class="flex items-center gap-2 pb-4">
+		<Database class="h-5 w-5 md:h-6 md:w-6" />
+
+		<h1 class="text-xl md:text-2xl font-semibold">Import / Export</h1>
+	</div>
+
 	<div class="space-y-4">
 		<div class="grid">
-			<h4 class="mb-2 text-sm font-medium">Export Conversations</h4>
+			<h4 class="mt-0 mb-2 text-sm font-medium">Export Conversations</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
 				Download all your conversations as a JSON file. This includes all messages, attachments, and
@@ -218,7 +224,7 @@
 		</div>
 
 		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mb-2 text-sm font-medium">Import Conversations</h4>
+			<h4 class="mt-0 mb-2 text-sm font-medium">Import Conversations</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
 				Import one or more conversations from a previously exported JSON file. This will merge with
@@ -258,7 +264,7 @@
 		</div>
 
 		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mb-2 text-sm font-medium text-destructive">Delete All Conversations</h4>
+			<h4 class="mt-0 mb-2 text-sm font-medium text-destructive">Delete All Conversations</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
 				Permanently delete all conversations and their messages. This action cannot be undone.

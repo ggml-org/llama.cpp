@@ -572,21 +572,3 @@
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
-
-<style>
-	.conversation-chat-form {
-		position: relative;
-
-		&::after {
-			content: '';
-			position: absolute;
-			bottom: 0;
-			z-index: -1;
-			left: 0;
-			right: 0;
-			width: 100%;
-			height: 2.375rem;
-			background-color: var(--background);
-		}
-	}
-</style>

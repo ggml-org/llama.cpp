@@ -11,7 +11,7 @@
 		DialogConversationTitleUpdate,
 		DialogChatSettingsImportExport
 	} from '$lib/components/app';
-	import { Settings, Search, SquarePen } from '@lucide/svelte';
+	import { Database, Settings, Search, SquarePen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
@@ -36,10 +36,6 @@
 
 	let { children } = $props();
 
-	let isChatRoute = $derived(page.route.id === '/chat/[id]');
-	let isHomeRoute = $derived(page.route.id === '/');
-	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
-	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
@@ -57,7 +53,9 @@
 
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
 	let isMcpActive = $derived(page.route.id === '/settings/mcp');
+	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
 	let isSettingsActive = $derived(page.route.id === '/settings/chat');
+	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 	// let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
 	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
@@ -269,7 +267,7 @@
 				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(isSettingsRoute && !isDesktop)}
 				<Sidebar.Trigger
 					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
 						? 'md:left-[calc(var(--sidebar-width)+0.75rem)]'
@@ -280,76 +278,64 @@
 
 			{#if isDesktop && !alwaysShowSidebarOnDesktop}
 				<!-- Desktop: icon strip, always rendered, transitions width/opacity -->
-				<aside class="hidden md:flex shrink-0 flex-col items-center justify-between overflow-hidden py-3 transition-[width,opacity] duration-200 ease-linear {sidebarOpen ? 'w-0 opacity-0 pointer-events-none' : 'w-[calc(var(--sidebar-width-icon)+1.5rem)] opacity-100'}">
+				<aside
+					class="hidden shrink-0 flex-col items-center justify-between overflow-hidden py-3 transition-[width,opacity] duration-200 ease-linear md:flex {sidebarOpen
+						? 'pointer-events-none w-0 opacity-0'
+						: 'w-[calc(var(--sidebar-width-icon)+1.5rem)] opacity-100'}"
+				>
 					<div class="mt-12 flex flex-col items-center gap-1">
-							<Button
-								variant="ghost"
-								size="icon-lg"
-								class="rounded-full"
-								href="?new_chat=true#/"
-							>
-								<SquarePen class="h-4 w-4" />
-								<span class="sr-only">New Chat</span>
-							</Button>
-							<Button
-								variant="ghost"
-								size="icon-lg"
-								class="rounded-full"
-								onclick={() => {
-									if (chatSidebar?.activateSearchMode) {
-										chatSidebar.activateSearchMode();
-									}
-									sidebarOpen = true;
-								}}
-							>
-								<Search class="h-4 w-4" />
-								<span class="sr-only">Search</span>
-							</Button>
-						</div>
-						<div class="flex flex-col items-center gap-1">
-							<Button
-								variant="ghost"
-								size="icon-lg"
-								href="#/settings/mcp"
-								class="rounded-full {isMcpActive ? 'bg-accent text-accent-foreground' : ''}"
-							>
-								<McpLogo class="h-4 w-4" />
-								<span class="sr-only">MCP Servers</span>
-							</Button>
-							<Button
-								variant="ghost"
-								size="icon-lg"
-								href="#/settings/chat"
-								class="rounded-full {isSettingsActive ? 'bg-accent text-accent-foreground' : ''}"
-							>
-								<Settings class="h-4 w-4" />
-								<span class="sr-only">Settings</span>
-							</Button>
-						</div>
+						<Button variant="ghost" size="icon-lg" class="rounded-full" href="?new_chat=true#/">
+							<SquarePen class="h-4 w-4" />
+							<span class="sr-only">New Chat</span>
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon-lg"
+							class="rounded-full"
+							onclick={() => {
+								if (chatSidebar?.activateSearchMode) {
+									chatSidebar.activateSearchMode();
+								}
+								sidebarOpen = true;
+							}}
+						>
+							<Search class="h-4 w-4" />
+							<span class="sr-only">Search</span>
+						</Button>
+					</div>
+					<div class="flex flex-col items-center gap-1">
+						<Button
+							variant="ghost"
+							size="icon-lg"
+							href="#/settings/mcp"
+							class="rounded-full {isMcpActive ? 'bg-accent text-accent-foreground' : ''}"
+						>
+							<McpLogo class="h-4 w-4" />
+							<span class="sr-only">MCP Servers</span>
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon-lg"
+							href="#/settings/import-export"
+							class="rounded-full {isImportExportActive ? 'bg-accent text-accent-foreground' : ''}"
+						>
+							<Database class="h-4 w-4" />
+							<span class="sr-only">Import / Export</span>
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon-lg"
+							href="#/settings/chat"
+							class="rounded-full {isSettingsActive ? 'bg-accent text-accent-foreground' : ''}"
+						>
+							<Settings class="h-4 w-4" />
+							<span class="sr-only">Settings</span>
+						</Button>
+					</div>
 				</aside>
 			{/if}
 
-			{#if !sidebarOpen && !isDesktop}
-				<!-- Mobile quick-access buttons -->
-				<div class="absolute bottom-3 left-3 z-[900] flex flex-col gap-1 p-2 md:hidden">
-					<Button
-						variant="ghost"
-						size="icon-lg"
-						href="#/settings/mcp"
-						class={isMcpActive ? 'bg-accent text-accent-foreground' : ''}
-					>
-						<McpLogo class="h-4 w-4" />
-					</Button>
-					<Button
-						variant="ghost"
-						size="icon-lg"
-						href="#/settings/chat"
-						class={isSettingsActive ? 'bg-accent text-accent-foreground' : ''}
-					>
-						<Settings class="h-4 w-4" />
-					</Button>
-				</div>
-			{/if}
+
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-auto">
 				{@render children?.()}

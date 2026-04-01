@@ -8,9 +8,7 @@
 		ChevronLeft,
 		ChevronRight,
 		ListRestart,
-
 		Sliders
-
 	} from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -429,12 +427,11 @@
 	});
 </script>
 
-
 <div class="flex h-full flex-col overflow-y-auto {className} w-full">
-	<div class="flex flex-1 flex-col md:flex-row gap-4">
+	<div class="flex flex-1 flex-col gap-4 md:flex-row">
 		<!-- Desktop Sidebar -->
-		<div class="hidden w-64 md:flex flex-col sticky top-0 self-start bg-background pt-8 pb-4">
-			<div class="flex items-center gap-2 pb-6">
+		<div class="sticky top-0 hidden w-64 flex-col self-start bg-background pt-8 pb-4 md:flex">
+			<div class="flex items-center gap-2 pb-12">
 				<Settings class="h-6 w-6" />
 				<h1 class="text-2xl font-semibold">Settings</h1>
 			</div>
@@ -456,11 +453,13 @@
 		</div>
 
 		<!-- Mobile Header with Horizontal Scrollable Menu -->
-		<div class="flex flex-col md:hidden sticky top-0 z-10 bg-background">
-			<div class="flex items-center gap-2 px-4 pt-6 pb-2">
-				<Settings class="h-6 w-6" />
-				<h1 class="text-2xl font-semibold">Settings</h1>
+		<div class="sticky top-0 z-10 flex flex-col bg-background md:hidden">
+			<div class="flex items-center gap-2 px-4 pt-4 md:pt-6 pb-2">
+				<Settings class="h-5 w-5 md:h-6 md:w-6" />
+
+				<h1 class="text-xl md:text-2xl font-semibold">Settings</h1>
 			</div>
+
 			<div class="border-b border-border/30 py-2">
 				<!-- Horizontal Scrollable Category Menu with Navigation -->
 				<div class="relative flex items-center" style="scroll-padding: 1rem;">
@@ -511,8 +510,8 @@
 			</div>
 		</div>
 
-		<div class="flex-1 max-w-5xl mx-auto">
-			<div class="space-y-6 p-4 md:p-6 md:pt-22">
+		<div class="mx-auto max-w-3xl flex-1">
+			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
 					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
@@ -536,8 +535,8 @@
 					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
 				</div>
 			</div>
+
+			<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
 		</div>
 	</div>
 </div>
-
-<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
