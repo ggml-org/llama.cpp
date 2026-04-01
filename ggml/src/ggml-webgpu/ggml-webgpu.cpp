@@ -131,7 +131,7 @@ struct webgpu_param_arena {
     uint32_t     next_slot   = 0;
 
     void init(wgpu::Device device, size_t slot_size, uint32_t slot_count, size_t alignment) {
-        this->slot_stride = ROUNDUP_POW2(slot_size, alignment);
+        this->slot_stride = alignment;
         this->slot_size   = slot_size;
         this->slot_count  = slot_count;
         this->next_slot   = 0;
@@ -400,81 +400,20 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 
 /** WebGPU Actions */
 
-static bool ggml_backend_webgpu_handle_wait_status(wgpu::WaitStatus status, bool allow_timeout = false) {
-    switch (status) {
-        case wgpu::WaitStatus::Success:
-            return true;
-        case wgpu::WaitStatus::TimedOut:
-            if (allow_timeout) {
-                return false;
-            }
-            GGML_LOG_ERROR("ggml_webgpu: WaitAny timed out unexpectedly\n");
-            return false;
-        case wgpu::WaitStatus::Error:
-            GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an error\n");
-            return false;
-        default:
-            GGML_LOG_ERROR("ggml_webgpu: WaitAny returned an unknown status\n");
-            return false;
-    }
-}
-
 #ifdef GGML_WEBGPU_GPU_PROFILE
-static void ggml_backend_webgpu_erase_completed_futures(std::vector<wgpu::FutureWaitInfo> & futures) {
-    futures.erase(std::remove_if(futures.begin(), futures.end(),
-                                 [](const wgpu::FutureWaitInfo & info) { return info.completed; }),
-                  futures.end());
-}
-
-static size_t ggml_backend_webgpu_wait_profile_futures_pass(webgpu_global_context &             ctx,
-                                                            std::vector<wgpu::FutureWaitInfo> & futures,
-                                                            uint64_t                            timeout_ms,
-                                                            bool                                allow_timeout) {
-    constexpr size_t max_futures_per_wait = 64;
-
-    size_t completed_before = futures.size();
-    for (size_t offset = 0; offset < futures.size();) {
-        const size_t count       = std::min(max_futures_per_wait, futures.size() - offset);
-        auto         wait_status = ctx->instance.WaitAny(count, futures.data() + offset, timeout_ms);
-
-        if (!ggml_backend_webgpu_handle_wait_status(wait_status, allow_timeout)) {
-            break;
-        }
-
-        const size_t size_before_erase = futures.size();
-        ggml_backend_webgpu_erase_completed_futures(futures);
-        if (futures.empty()) {
-            break;
-        }
-
-        if (futures.size() != size_before_erase) {
-            offset = 0;
-            continue;
-        }
-
-        offset += max_futures_per_wait;
-    }
-
-    return completed_before - futures.size();
-}
-
 static void ggml_backend_webgpu_wait_profile_futures(webgpu_global_context &             ctx,
-                                                     std::vector<wgpu::FutureWaitInfo> & futures,
-                                                     bool                                block) {
+                                                     std::vector<wgpu::FutureWaitInfo> & futures) {
     if (futures.empty()) {
         return;
     }
 
-    if (block) {
-        while (!futures.empty()) {
-            if (ggml_backend_webgpu_wait_profile_futures_pass(ctx, futures, 0, true) > 0) {
-                continue;
-            }
+    constexpr size_t max_futures_per_wait = 64;
 
-            ggml_backend_webgpu_wait_profile_futures_pass(ctx, futures, UINT64_MAX, false);
-        }
-    } else {
-        ggml_backend_webgpu_wait_profile_futures_pass(ctx, futures, 0, true);
+    while (!futures.empty()) {
+        ctx->instance.WaitAny(std::min(max_futures_per_wait, futures.size()), futures.data(), UINT64_MAX);
+        futures.erase(std::remove_if(futures.begin(), futures.end(),
+                                     [](const wgpu::FutureWaitInfo & info) { return info.completed; }),
+                      futures.end());
     }
 }
 #endif
@@ -2568,7 +2507,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     }
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    ggml_backend_webgpu_wait_profile_futures(ctx->global_ctx, profile_futures, true);
+    ggml_backend_webgpu_wait_profile_futures(ctx->global_ctx, profile_futures);
 #endif
     WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx->global_ctx);
     return GGML_STATUS_SUCCESS;
