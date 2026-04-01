@@ -2868,6 +2868,61 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_content)
             .run();
     }
+
+    // MiroThinker-v1
+    {
+        auto tst = peg_tester("models/templates/MiroThinker-v1.jinja", detailed_debug);
+
+        tst.test("<think>\nI'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "<use_mcp_tool>\n"
+               "<server_name>whatever_mcp_server</server_name>\n"
+               "<tool_name>special_function</tool_name>\n"
+               "<arguments>\n"
+               "{\"arg1\": 1}\n"
+               "</arguments>\n"
+               "</use_mcp_tool>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "<think>I'm\nthinking</think>\n"
+               "<use_mcp_tool>\n"
+               "<server_name>some_mcp_server</server_name>\n"
+               "<tool_name>special_function</tool_name>\n"
+               "<arguments>\n"
+               "{\"arg1\": 1}\n"
+               "</arguments>\n"
+               "</use_mcp_tool>")
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test(
+               "<think>\nI'm\nthinking\n</think>\n"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("\nI'm\nthinking\n")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+    }
 }
 
 // Test the developer role to system workaround with a simple mock template

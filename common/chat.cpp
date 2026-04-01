@@ -1315,15 +1315,15 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            return reasoning + p.space() + p.choice({
+            return wrap_for_generation_prompt(p, reasoning + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
-            }) + p.end();
+            }) + p.end(), inputs, "<think>");
         }
 
         // Content only parser (no tools)
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return reasoning + p.content(p.rest()) + end;
+            return wrap_for_generation_prompt(p, reasoning + p.content(p.rest()) + end, inputs, "<think>");
         }
 
         // Build tool call parsers for each available function
@@ -1335,7 +1335,7 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
             std::string  name     = function.at("name");
             const auto & schema   = function.at("parameters");
 
-            // Match: {what_ever}</server_name>{spaces}<tool_name>{tool_name}</tool_name>
+            // Match: {what_ever}</server_name>{spaces}<tool_name>{tool_name}</tool_name>{spaces}<arguments>...</arguments>
             auto tool_parser = p.tool(
                 p.tool_open(
                     p.until(CALL_BEGIN2) +
@@ -1343,6 +1343,8 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
                     p.space() +
                     p.literal("<tool_name>") +
                     p.tool_name(p.literal(name)) +
+                    p.literal("</tool_name>") +
+                    p.space() +
                     p.literal(ARGS_BEGIN)
                 ) + p.space() +
                 p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)) +
@@ -1363,13 +1365,13 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
 
         auto content_before_tools = p.content(p.until(SECTION_BEGIN));
 
-        return reasoning + content_before_tools + tool_calls + end;
+        return wrap_for_generation_prompt(p, reasoning + content_before_tools + tool_calls + end, inputs, "<think>");
     });
 
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO || !has_response_format;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
