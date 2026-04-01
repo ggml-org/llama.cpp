@@ -477,16 +477,24 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
 }
 
 static void prep_src_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
+    if (!r_t->ne[0]) {
+        // empty input
+        t->ne[0] = 0; t->data = NULL;
+        return;
+    }
+
+    uint32_t offset = r_t->data;
+    uint32_t size   = r_t->size;
+    uint32_t bi     = r_t->bi;
+    uint32_t data   = bufs[bi].base + offset;
+
+    bool same = (t->data == data && t->size == size);
+
     *t = *r_t;
+    t->data = data;
 
-    uint32_t offset = t->data;
-    uint32_t size   = t->size;
-    uint32_t bi     = t->bi;
-
-    t->data = bufs[bi].base + offset;
-
-    if (!(t->flags & HTP_TENSOR_FLUSHED) && (t->flags & HTP_TENSOR_COMPUTE)) {
-        // invalidate non-flushed compute buffers on input
+    if (!same && (t->flags & HTP_TENSOR_COMPUTE)) {
+        // invalidate compute buffers on input
         hex_l2clear((void *) t->data, size);
     }
 
@@ -495,13 +503,14 @@ static void prep_src_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struc
 }
 
 static void prep_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
+
+    uint32_t offset = r_t->data;
+    uint32_t size   = r_t->size;
+    uint32_t bi     = r_t->bi;
+    uint32_t data   = bufs[bi].base + offset;
+
     *t = *r_t;
-
-    uint32_t offset = t->data;
-    uint32_t size   = t->size;
-    uint32_t bi     = t->bi;
-
-    t->data = bufs[bi].base + offset;
+    t->data = data;
 
     FARF(HIGH, "prep-dst-tensor: bi %u offset %u size %u data %p : %u:%u:%u:%u", t->bi, offset, t->size, (void*) t->data,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
@@ -516,29 +525,25 @@ static void post_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t) {
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void proc_op_req(struct htp_context * ctx, struct htp_op_buf * bufs, struct htp_op_req * req) {
+static void proc_op_req(struct htp_ops_context * octx, struct htp_op_buf * bufs, struct htp_op_req * req) {
     struct profile_data prof;
     profile_start(&prof);
 
-    struct htp_ops_context octx;
-    memset(&octx, 0, sizeof(octx));
-    memcpy(octx.op_params, req->params, sizeof(octx.op_params));
-    octx.ctx       = ctx;
-    octx.n_threads = ctx->n_threads;
-    octx.flags     = req->flags;
-    octx.op        = req->opcode;
+    memcpy(octx->op_params, req->params, sizeof(octx->op_params));
+    octx->flags = req->flags;
+    octx->op    = req->opcode;
 
     FARF(HIGH, "proc-op %u: flags 0x%x", octx.op, octx.flags);
 
-    struct htp_tensor *src = &octx.src0;
-    for (uint32_t i=0; i<HTP_OP_MAX_INPUTS && req->src[i].ne[0]; i++) {
+    struct htp_tensor *src = &octx->src0;
+    for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
         prep_src_tensor(bufs, &src[i], &req->src[i]);
     }
-    prep_dst_tensor(bufs, &octx.dst, &req->dst);
+    prep_dst_tensor(bufs, &octx->dst, &req->dst);
 
-    execute_op(&octx);
+    execute_op(octx);
 
-    post_dst_tensor(bufs, &octx.dst);
+    post_dst_tensor(bufs, &octx->dst);
 
     profile_stop(&prof);
 }
@@ -589,8 +594,13 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         vtcm_acquire(ctx);
 
+        struct htp_ops_context octx;
+        memset(&octx, 0, sizeof(octx));
+        octx.n_threads = ctx->n_threads;
+        octx.ctx       = ctx;
+
         for (uint32_t i=0; i < n_ops; i++) {
-             proc_op_req(ctx, bufs, &reqs[i]);
+             proc_op_req(&octx, bufs, &reqs[i]);
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
