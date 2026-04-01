@@ -16,6 +16,7 @@ struct tool_context {
     std::string working_dir;
     std::atomic<bool> * is_interrupted = nullptr;
     int timeout_ms = 120000;
+    bool has_vision = false;  // whether the loaded model supports image input
 };
 
 // Result returned from tool execution
@@ -23,6 +24,7 @@ struct tool_result {
     bool success = true;
     std::string output;
     std::string error;
+    json content;  // structured content array (text + image blocks); overrides output when non-empty
 };
 
 // Tool definition

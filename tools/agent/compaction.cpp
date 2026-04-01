@@ -4,7 +4,8 @@
 
 static const int TOOL_RESULT_MAX_CHARS = 2000;
 
-// Count chars in a JSON value that may be a string or array of content blocks
+// Count chars in a JSON value that may be a string or array of content blocks.
+// Image blocks are estimated at ~1200 tokens (4800 chars at chars/4 heuristic).
 static int32_t count_content_chars(const json & content) {
     if (content.is_string()) {
         return (int32_t) content.get<std::string>().size();
@@ -12,7 +13,9 @@ static int32_t count_content_chars(const json & content) {
     if (content.is_array()) {
         int32_t chars = 0;
         for (const auto & block : content) {
-            if (block.contains("text") && block["text"].is_string()) {
+            if (block.contains("type") && block["type"] == "image_url") {
+                chars += 4800;  // ~1200 tokens * 4 chars/token
+            } else if (block.contains("text") && block["text"].is_string()) {
                 chars += (int32_t) block["text"].get<std::string>().size();
             }
         }
@@ -181,8 +184,17 @@ std::string compaction_serialize_conversation(const json & messages, size_t star
             }
         } else if (role == "tool") {
             std::string content;
-            if (msg.contains("content") && msg["content"].is_string()) {
-                content = msg["content"].get<std::string>();
+            if (msg.contains("content")) {
+                if (msg["content"].is_string()) {
+                    content = msg["content"].get<std::string>();
+                } else if (msg["content"].is_array()) {
+                    // Extract text blocks only (drop images for summarization)
+                    for (const auto & block : msg["content"]) {
+                        if (block.contains("text") && block["text"].is_string()) {
+                            content += block["text"].get<std::string>();
+                        }
+                    }
+                }
             }
             if (!content.empty()) {
                 out << "[Tool result]: " << truncate_for_summary(content, TOOL_RESULT_MAX_CHARS) << "\n\n";

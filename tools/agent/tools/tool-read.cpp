@@ -1,15 +1,31 @@
 #include "../tool-registry.h"
 #include "../permission.h"
 
+#include "base64.hpp"
+
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <filesystem>
+#include <iterator>
+#include <set>
 
 namespace fs = std::filesystem;
 
 static const int DEFAULT_LIMIT = 2000;
 static const int MAX_LINE_LENGTH = 2000;
+
+static const std::set<std::string> IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"};
+
+static std::string get_mime_type(const std::string & ext) {
+    if (ext == ".png")                  return "image/png";
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".gif")                  return "image/gif";
+    if (ext == ".bmp")                  return "image/bmp";
+    if (ext == ".webp")                 return "image/webp";
+    return "application/octet-stream";
+}
 
 static tool_result read_execute(const json & args, const tool_context & ctx) {
     std::string file_path = args.value("file_path", "");
@@ -39,6 +55,49 @@ static tool_result read_execute(const json & args, const tool_context & ctx) {
     // Block sensitive files
     if (permission_manager::is_sensitive_file(path.string())) {
         return {false, "", "Cannot read sensitive file (contains credentials/secrets): " + path.string()};
+    }
+
+    // Check for image files
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    if (IMAGE_EXTENSIONS.count(ext)) {
+        if (!ctx.has_vision) {
+            return {true, "Binary image file: " + path.string() + " (model does not support vision)", ""};
+        }
+
+        // Cap image size at 10MB (matches server's HTTP download limit)
+        static const size_t MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+        auto file_size = fs::file_size(path);
+        if (file_size > MAX_IMAGE_SIZE) {
+            return {true, "Image file too large: " + path.string() + " (" +
+                    std::to_string(file_size / (1024 * 1024)) + "MB, max 10MB)", ""};
+        }
+
+        // Read binary
+        std::ifstream img(path, std::ios::binary);
+        if (!img.is_open()) {
+            return {false, "", "Cannot open image file: " + path.string()};
+        }
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(img)),
+                                    std::istreambuf_iterator<char>());
+
+        // Base64 encode
+        std::string b64 = base64::encode(
+            reinterpret_cast<const char *>(bytes.data()), bytes.size());
+
+        std::string mime     = get_mime_type(ext);
+        std::string label    = "Image: " + path.filename().string() + " [" + mime + "]";
+        std::string data_uri = "data:" + mime + ";base64," + b64;
+
+        tool_result result;
+        result.success = true;
+        result.output  = label;
+        result.content = json::array({
+            {{"type", "text"}, {"text", label}},
+            {{"type", "image_url"}, {"image_url", {{"url", data_uri}}}}
+        });
+        return result;
     }
 
     // Open file

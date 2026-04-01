@@ -1,6 +1,8 @@
 #include "agent-loop.h"
 #include "console.h"
 
+#include "base64.hpp"
+
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -72,12 +74,14 @@ agent_loop::agent_loop(server_context & server_ctx,
     tool_ctx_.working_dir = config.working_dir.empty() ? "." : config.working_dir;
     tool_ctx_.is_interrupted = &is_interrupted_;
     tool_ctx_.timeout_ms = config.tool_timeout_ms;
+    tool_ctx_.has_vision = server_ctx_.get_meta().has_inp_image;
 
     // Set up permission manager
     permission_mgr_.set_project_root(tool_ctx_.working_dir);
     permission_mgr_.set_yolo_mode(config.yolo_mode);
 
     // Add system prompt for tool usage
+    const bool has_vision = tool_ctx_.has_vision;
     std::string system_prompt = R"(You are llama-agent, a powerful local AI coding assistant running on llama.cpp.
 
 You help users with software engineering tasks by reading files, writing code, running commands, and navigating codebases. You run entirely on the user's machine - no data leaves their system.
@@ -87,7 +91,13 @@ You help users with software engineering tasks by reading files, writing code, r
 You have access to the following tools:
 
 - **bash**: Execute shell commands. Use for git, build commands, running tests, etc.
-- **read**: Read file contents with line numbers. Always read files before editing them.
+)";
+    if (has_vision) {
+        system_prompt += "- **read**: Read file contents with line numbers. Can also read image files (png, jpg, gif, webp, bmp) for visual analysis. Always read files before editing them.\n";
+    } else {
+        system_prompt += "- **read**: Read file contents with line numbers. Always read files before editing them.\n";
+    }
+    system_prompt += R"(
 - **write**: Create new files or overwrite existing ones.
 - **edit**: Make targeted edits using search/replace. The old_string must match exactly. Use replace_all=true to replace all occurrences of a word or phrase.
 - **glob**: Find files matching a pattern. Use to explore project structure.
@@ -269,12 +279,50 @@ void agent_loop::clear() {
     stats_ = session_stats{};
 }
 
-common_chat_params agent_loop::format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools) {
+common_chat_params agent_loop::format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools,
+                                                      std::vector<raw_buffer> & out_files) {
     auto meta = server_ctx_.get_meta();
     auto & chat_params = meta.chat_params;
 
+    // Deep copy messages so we can transform image_url → media_marker without
+    // altering the canonical messages_ (which retains image data for sessions).
+    json transformed = messages_;
+
+    for (auto & msg : transformed) {
+        if (!msg.contains("content") || !msg["content"].is_array()) {
+            continue;
+        }
+
+        json new_content = json::array();
+        for (auto & part : msg["content"]) {
+            std::string type = part.value("type", "");
+            if (type == "image_url") {
+                if (meta.has_inp_image) {
+                    // Decode data URI → raw_buffer
+                    std::string url = part["image_url"].value("url", "");
+                    auto comma = url.find(',');
+                    if (comma != std::string::npos) {
+                        std::string b64 = url.substr(comma + 1);
+                        std::string decoded = base64::decode(b64);
+                        raw_buffer buf(decoded.begin(), decoded.end());
+                        out_files.push_back(std::move(buf));
+                    }
+                    // Replace with media_marker for the chat template
+                    new_content.push_back({
+                        {"type", "media_marker"},
+                        {"text", "<__media__>"}
+                    });
+                }
+                // else: no vision — silently drop image block
+            } else {
+                new_content.push_back(part);
+            }
+        }
+        msg["content"] = new_content;
+    }
+
     common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(messages_);
+    inputs.messages              = common_chat_msgs_parse_oaicompat(transformed);
     inputs.tools                 = chat_tools;
     inputs.tool_choice           = chat_tools.empty() ? COMMON_CHAT_TOOL_CHOICE_NONE : COMMON_CHAT_TOOL_CHOICE_AUTO;
     inputs.json_schema           = ""; // TODO
@@ -303,10 +351,12 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         // Build tools JSON in OAI-compatible format
         auto chat_tools = tool_registry::instance().to_chat_tools();
 
-        auto chat_params = format_chat_with_tools(chat_tools);
+        std::vector<raw_buffer> files;
+        auto chat_params = format_chat_with_tools(chat_tools, files);
 
         task.cli        = true;
         task.cli_prompt = std::move(chat_params.prompt);
+        task.cli_files  = std::move(files);
 
         task.params.chat_parser_params = common_chat_parser_params(chat_params);
         task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -608,7 +658,11 @@ void agent_loop::add_tool_result_message(const std::string & tool_name,
     msg["name"] = tool_name;
 
     if (result.success) {
-        msg["content"] = result.output;
+        if (!result.content.empty()) {
+            msg["content"] = result.content;  // structured content array (e.g. text + image)
+        } else {
+            msg["content"] = result.output;
+        }
     } else {
         // Include output if available (e.g., bash stderr), plus error message if set
         if (!result.output.empty() && !result.error.empty()) {
@@ -896,10 +950,12 @@ common_chat_msg agent_loop::generate_completion_streaming(
 
         auto chat_tools = tool_registry::instance().to_chat_tools();
 
-        auto chat_params = format_chat_with_tools(chat_tools);
+        std::vector<raw_buffer> files;
+        auto chat_params = format_chat_with_tools(chat_tools, files);
 
         task.cli        = true;
         task.cli_prompt = std::move(chat_params.prompt);
+        task.cli_files  = std::move(files);
 
         task.params.chat_parser_params = common_chat_parser_params(chat_params);
         task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
