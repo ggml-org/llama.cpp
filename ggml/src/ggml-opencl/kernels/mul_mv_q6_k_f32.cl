@@ -52,6 +52,39 @@ typedef struct {
     half d;             // super-block scale
 } block_q6_K;
 
+#ifdef NVIDIA_GPU
+inline float block_q6_K_dot_y_aos_ref(global block_q6_K * blk, global float * y) {
+    const float d = vload_half(0, &blk->d);
+
+    global uchar * ql = blk->ql;
+    global uchar * qh = blk->qh;
+    global char  * sc = blk->scales;
+
+    float sum = 0.0f;
+
+    for (int n = 0; n < QK_K; n += 128) {
+        for (int l = 0; l < 32; ++l) {
+            const int is = l / 16;
+            const int q1 = (int)((ql[l +  0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32;
+            const int q2 = (int)((ql[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
+            const int q3 = (int)((ql[l +  0] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32;
+            const int q4 = (int)((ql[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+
+            sum += d * (float) sc[is + 0] * (float) q1 * y[n + l +  0];
+            sum += d * (float) sc[is + 2] * (float) q2 * y[n + l + 32];
+            sum += d * (float) sc[is + 4] * (float) q3 * y[n + l + 64];
+            sum += d * (float) sc[is + 6] * (float) q4 * y[n + l + 96];
+        }
+
+        ql += 64;
+        qh += 32;
+        sc += 8;
+    }
+
+    return sum;
+}
+#endif
+
 //------------------------------------------------------------------------------
 // kernel_mul_mv_q6_K_f32
 //------------------------------------------------------------------------------
@@ -125,6 +158,27 @@ kernel void kernel_mul_mv_q6_K_f32(
 
     float sumf = 0;
 
+#ifdef NVIDIA_GPU
+    if (get_local_id(0) != 0 || get_local_id(1) != 0) {
+        return;
+    }
+
+    row = r0;
+    if (row >= ne01) {
+        return;
+    }
+
+    x = (global block_q6_K *) src0 + row*nb + offset_src0;
+
+    float total = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        total += block_q6_K_dot_y_aos_ref(&x[ib], yy + ib * QK_K);
+    }
+
+    dst[r1*ne0 + im*ne0*ne1 + row] = total;
+    return;
+#endif
+
     // For Q6_K quantization, 16 values forms a subblock, 16 subblock forms a
     // block. Values in a subblock shares a scale that is quantized with 8 bits;
     // the entire block shares a single floating point scale.
@@ -160,7 +214,7 @@ kernel void kernel_mul_mv_q6_K_f32(
 
         global float * y = yy + i * QK_K + y_offset;
 
-        float dall = x[i].d;
+        float dall = vload_half(0, &x[i].d);
 
         float4 sums = {0.f, 0.f, 0.f, 0.f};
 

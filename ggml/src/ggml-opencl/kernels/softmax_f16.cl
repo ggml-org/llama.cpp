@@ -78,6 +78,33 @@ kernel void kernel_soft_max_f16(
         slope = pow(base, exp);
     }
 
+#ifdef NVIDIA_GPU
+    if (get_local_id(0) != 0) {
+        return;
+    }
+
+    float max_nv = psrc2 ? psrc2[i02] : -INFINITY;
+    for (int i00 = 0; i00 < ne00; ++i00) {
+        max_nv = fmax(max_nv, psrc0[i00]*scale + (pmask ? slope*(float)pmask[i00] : 0.0f));
+    }
+
+    float sum_nv = 0.0f;
+    for (int i00 = 0; i00 < ne00; ++i00) {
+        float exp_psrc0 = exp((psrc0[i00]*scale + (pmask ? slope*(float)pmask[i00] : 0.0f)) - max_nv);
+        pdst[i00] = exp_psrc0;
+        sum_nv += exp_psrc0;
+    }
+
+    if (psrc2) {
+        sum_nv += exp(psrc2[i02] - max_nv);
+    }
+
+    for (int i00 = 0; i00 < ne00; ++i00) {
+        pdst[i00] /= sum_nv;
+    }
+    return;
+#endif
+
     // parallel max
     float lmax = psrc2 ? psrc2[i02] : -INFINITY;
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {

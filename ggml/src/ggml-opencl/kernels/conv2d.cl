@@ -143,8 +143,13 @@ kernel void kernel_conv_2d(
 
             for (uint npq_l_vec_reg = 0; npq_l_vec_reg < TS_NPQ_VEC; ++npq_l_vec_reg) {
                 T_FLOAT4 regB = Bsh[crs_l * BS_NPQ_VEC + lid_npq * TS_NPQ_VEC + npq_l_vec_reg];
+#ifdef USE_FP16
+                float4 regBf = (float4)((float)regB.s0, (float)regB.s1, (float)regB.s2, (float)regB.s3);
+#else
+                float4 regBf = regB;
+#endif
                 for (uint k_l_reg = 0; k_l_reg < TS_K; ++k_l_reg) {
-                    regC[k_l_reg][npq_l_vec_reg] = mad(convert_float(regA[k_l_reg]), convert_float4(regB), regC[k_l_reg][npq_l_vec_reg]);
+                    regC[k_l_reg][npq_l_vec_reg] = mad((float) regA[k_l_reg], regBf, regC[k_l_reg][npq_l_vec_reg]);
                 }
             }
         }

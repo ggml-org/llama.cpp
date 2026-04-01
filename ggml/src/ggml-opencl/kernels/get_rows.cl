@@ -58,6 +58,24 @@ void dequantize_q4_0_f32(global struct block_q4_0 * xb, short il, float16 * reg)
 
 //------------------------------------------------------------------------------
 // get_rows
+//
+// Dispatch layout (all three kernels):
+//   dim 0 : ne10 * num_chunks groups, local_size threads each
+//           num_chunks = ceil(ne_per_row / local_size)
+//             ne_per_row = ne00/4 for f32/f16 (float4 vectorized)
+//             ne_per_row = ne00/16 for q4_0 (float16 block per thread)
+//   dim 1 : ne11
+//   dim 2 : ne12
+//
+// Within each workgroup:
+//   - grp / num_chunks -> i10 (row index, workgroup-uniform)
+//   - grp % num_chunks -> chunk (which slice of the row, workgroup-uniform)
+//   - chunk * local_size + lid -> ind (element index in ne_per_row units)
+//   - thread 0 reads r from src1 and stores the row byte offsets in
+//     local memory so every other thread avoids a redundant global load
+//
+// f32/f16: each thread processes 4 contiguous elements (float4 / half4→float4).
+//          Requires ne00 % 4 == 0, which holds for all practical embedding dims.
 //------------------------------------------------------------------------------
 kernel void kernel_get_rows_f32(
         global void * src0,
@@ -82,22 +100,38 @@ kernel void kernel_get_rows_f32(
     src1 = (global int*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    int i10 = get_group_id(0);
-    int i11 = get_group_id(1);
-    int i12 = get_group_id(2);
+    local ulong src_row_off;
+    local ulong dst_row_off;
 
-    int r = ((global int *) ((global char *) src1 + i12*nb12 + i11*nb11 + i10*nb10))[0];
+    int lsz    = (int)get_local_size(0);
+    int grp    = (int)get_group_id(0);
+    int i11    = (int)get_group_id(1);
+    int i12    = (int)get_group_id(2);
+    int lid    = (int)get_local_id(0);
 
-    int i02 = i11;
-    int i03 = i12;
+    // Each thread handles 4 floats (float4).  ne00_4 is the number of float4
+    // elements per row; both the dispatch and this kernel use ne00_4 as the
+    // work unit so num_chunks stays workgroup-uniform (no per-lane divides).
+    int ne00_4 = ne00 / 4;
+    int num_chunks = (ne00_4 + lsz - 1) / lsz;
+    int i10   = grp / num_chunks;
+    int chunk = grp % num_chunks;
 
-    for (int ind = get_local_id(0); ind < ne00; ind += get_local_size(0)) {
-        if (ind >= ne00) {
-            return;
-        }
-        ((global float *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1))[ind] =
-            ((global float *) ((global char *) src0 + r*nb01 + i02*nb02 + i03*nb03))[ind];
+    // Thread 0 reads r from src1 (one global load per workgroup instead of lsz)
+    // and precomputes the row byte offsets shared by all threads.
+    if (lid == 0 && i10 < ne10) {
+        int r = ((global int *)((global char *)src1
+                    + (ulong)i12*nb12 + (ulong)i11*nb11 + (ulong)i10*nb10))[0];
+        src_row_off = (ulong)r * nb01 + (ulong)i11 * nb02 + (ulong)i12 * nb03;
+        dst_row_off = (ulong)i12 * nb3 + (ulong)i11 * nb2 + (ulong)i10 * nb1;
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int ind = chunk * lsz + lid;
+    if (i10 >= ne10 || ind >= ne00_4) return;
+
+    ((global float4 *)((global char *)dst + dst_row_off))[ind] =
+        ((global const float4 *)((global const char *)src0 + src_row_off))[ind];
 }
 
 kernel void kernel_get_rows_f16(
@@ -123,22 +157,36 @@ kernel void kernel_get_rows_f16(
     src1 = (global int*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    int i10 = get_group_id(0);
-    int i11 = get_group_id(1);
-    int i12 = get_group_id(2);
+    local ulong src_row_off;
+    local ulong dst_row_off;
 
-    int r = ((global int32_t *) ((global char *) src1 + i12*nb12 + i11*nb11 + i10*nb10))[0];
+    int lsz    = (int)get_local_size(0);
+    int grp    = (int)get_group_id(0);
+    int i11    = (int)get_group_id(1);
+    int i12    = (int)get_group_id(2);
+    int lid    = (int)get_local_id(0);
 
-    int i02 = i11;
-    int i03 = i12;
+    // Each thread converts 4 halves to 4 floats (half4 → float4).
+    int ne00_4 = ne00 / 4;
+    int num_chunks = (ne00_4 + lsz - 1) / lsz;
+    int i10   = grp / num_chunks;
+    int chunk = grp % num_chunks;
 
-    for (int ind = get_local_id(0); ind < ne00; ind += get_local_size(0)) {
-        if (ind >= ne00) {
-            return;
-        }
-        ((global float *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1))[ind] =
-            ((global half *) ((global char *) src0 + r*nb01 + i02*nb02 + i03*nb03))[ind];
+    if (lid == 0 && i10 < ne10) {
+        int r = ((global int32_t *)((global char *)src1
+                    + (ulong)i12*nb12 + (ulong)i11*nb11 + (ulong)i10*nb10))[0];
+        src_row_off = (ulong)r * nb01 + (ulong)i11 * nb02 + (ulong)i12 * nb03;
+        dst_row_off = (ulong)i12 * nb3 + (ulong)i11 * nb2 + (ulong)i10 * nb1;
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int ind = chunk * lsz + lid;
+    if (i10 >= ne10 || ind >= ne00_4) return;
+
+    global const half4 *src_row = (global const half4 *)((global const char *)src0 + src_row_off);
+    global float4      *dst_row = (global float4 *)((global char *)dst + dst_row_off);
+    half4 h = src_row[ind];
+    dst_row[ind] = (float4)((float)h.x, (float)h.y, (float)h.z, (float)h.w);
 }
 
 kernel void kernel_get_rows_q4_0(
@@ -164,24 +212,36 @@ kernel void kernel_get_rows_q4_0(
     src1 = (global int*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
+    local ulong src_row_off;
+    local ulong dst_row_off;
+
     const int NL = 2;
+    const int ne00_16 = ne00 / 16;  // number of float16 output blocks per row
 
-    int i10 = get_group_id(0);
-    int i11 = get_group_id(1);
-    int i12 = get_group_id(2);
+    int lsz  = (int)get_local_size(0);
+    int grp  = (int)get_group_id(0);
+    int i11  = (int)get_group_id(1);
+    int i12  = (int)get_group_id(2);
+    int lid  = (int)get_local_id(0);
 
-    int r = ((global int32_t *) ((global char *) src1 + i12*nb12 + i11*nb11 + i10*nb10))[0];
+    int num_chunks = (ne00_16 + lsz - 1) / lsz;
+    int i10   = grp / num_chunks;
+    int chunk = grp % num_chunks;
 
-    int i02 = i11;
-    int i03 = i12;
-
-    for (int ind = get_local_id(0); ind < ne00/16; ind += get_local_size(0)) {
-        float16 temp;
-        if (ind >= ne00) {
-            return;
-        }
-        dequantize_q4_0_f32(
-            ((global struct block_q4_0 *) ((global char *) src0 + r*nb01 + i02*nb02 + i03*nb03)) + ind/NL, ind%NL, &temp);
-        *(((global float16 *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1)) + ind) = temp;
+    if (lid == 0 && i10 < ne10) {
+        int r = ((global int32_t *)((global char *)src1
+                    + (ulong)i12*nb12 + (ulong)i11*nb11 + (ulong)i10*nb10))[0];
+        src_row_off = (ulong)r * nb01 + (ulong)i11 * nb02 + (ulong)i12 * nb03;
+        dst_row_off = (ulong)i12 * nb3 + (ulong)i11 * nb2 + (ulong)i10 * nb1;
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int ind = chunk * lsz + lid;
+    if (i10 >= ne10 || ind >= ne00_16) return;
+
+    float16 temp;
+    dequantize_q4_0_f32(
+        ((global struct block_q4_0 *)((global const char *)src0 + src_row_off)) + ind/NL,
+        ind%NL, &temp);
+    *(((global float16 *)((global char *)dst + dst_row_off)) + ind) = temp;
 }

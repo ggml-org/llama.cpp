@@ -78,6 +78,34 @@ kernel void kernel_soft_max_4(
         slope = pow(base, exp);
     }
 
+#ifdef NVIDIA_GPU
+    if (get_local_id(0) != 0) {
+        return;
+    }
+
+    float max_nv = psrc2 ? psrc2[i02] : -INFINITY;
+    for (int i00 = 0; i00 < ne00/4; ++i00) {
+        float4 v = psrc4[i00]*scale + (pmask ? slope*pmask[i00] : 0.0f);
+        max_nv = fmax(max_nv, fmax(fmax(v.s0, v.s1), fmax(v.s2, v.s3)));
+    }
+
+    float sum_nv = 0.0f;
+    for (int i00 = 0; i00 < ne00/4; ++i00) {
+        float4 exp_psrc4 = exp((psrc4[i00]*scale + (pmask ? slope*pmask[i00] : 0.0f)) - max_nv);
+        pdst4[i00] = exp_psrc4;
+        sum_nv += exp_psrc4.s0 + exp_psrc4.s1 + exp_psrc4.s2 + exp_psrc4.s3;
+    }
+
+    if (psrc2) {
+        sum_nv += exp(psrc2[i02] - max_nv);
+    }
+
+    for (int i00 = 0; i00 < ne00/4; ++i00) {
+        pdst4[i00] /= sum_nv;
+    }
+    return;
+#endif
+
     // parallel max
     float4 lmax4 = psrc2 ? psrc2[i02] : -INFINITY;
     for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {

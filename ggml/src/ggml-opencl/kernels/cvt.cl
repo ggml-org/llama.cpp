@@ -357,6 +357,56 @@ typedef struct {
     char qs[QK8_0]; // quants
 } block_q8_0;
 
+//------------------------------------------------------------------------------
+// block_q5_0
+//------------------------------------------------------------------------------
+#define QK5_0 32
+typedef struct {
+    half  d;           // delta
+    uchar qh[4];       // 5-th bit of quants
+    uchar qs[QK5_0/2]; // nibbles / quants
+} block_q5_0;
+
+kernel void kernel_convert_block_q5_0(
+    global block_q5_0 * src0,
+    global uchar * dst_q,
+    global uchar * dst_qh,
+    global half  * dst_d
+) {
+    global block_q5_0 * b  = (global block_q5_0 *) src0 + get_global_id(0);
+    global uchar      * q  = (global uchar *) dst_q  + (QK5_0/2)*get_global_id(0);
+    global uchar      * qh = (global uchar *) dst_qh + 4*get_global_id(0);
+    global half       * d  = (global half *)  dst_d  + get_global_id(0);
+
+    *d = b->d;
+    for (int i = 0; i < 4; ++i) {
+        qh[i] = b->qh[i];
+    }
+    for (int i = 0; i < QK5_0/2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q5_0(
+    global uchar * src_q,
+    global uchar * src_qh,
+    global half  * src_d,
+    global block_q5_0 * dst
+) {
+    global block_q5_0 * b  = (global block_q5_0 *) dst + get_global_id(0);
+    global uchar      * q  = (global uchar *) src_q  + (QK5_0/2)*get_global_id(0);
+    global uchar      * qh = (global uchar *) src_qh + 4*get_global_id(0);
+    global half       * d  = (global half *)  src_d  + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < 4; ++i) {
+        b->qh[i] = qh[i];
+    }
+    for (int i = 0; i < QK5_0/2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
 kernel void kernel_convert_block_q8_0(
     global block_q8_0 * src0,
     global uchar * dst_q,
@@ -552,8 +602,19 @@ kernel void kernel_restore_block_q4_K_noshuffle(
 // This kernel does not deshuffle the bits.
 // Each thread processes a super block.
 //------------------------------------------------------------------------------
+// Block layout (all fields at fixed byte offsets, total 210 bytes):
+//   ql:     offset 0,   size QK_K/2   (128 bytes)
+//   qh:     offset 128, size QK_K/4   (64 bytes)
+//   scales: offset 192, size QK_K/16  (16 bytes)
+//   d:      offset 208, size 2 bytes  (half)
+#define BLOCK_Q6_K_SIZE      210
+#define BLOCK_Q6_K_QL_OFF    0
+#define BLOCK_Q6_K_QH_OFF    128
+#define BLOCK_Q6_K_S_OFF     192
+#define BLOCK_Q6_K_D_OFF     208
+
 kernel void kernel_convert_block_q6_K(
-    global struct block_q6_K * src0,
+    global uchar * src0,
     global uchar * dst_ql,
     global uchar * dst_qh,
     global char  * dst_s,
@@ -561,25 +622,90 @@ kernel void kernel_convert_block_q6_K(
     uchar          mask_lsb_8,
     ulong          n_blk
 ) {
-    if (get_global_id(0) >= n_blk) {
-        return;
-    }
-    global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
-    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
-    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
-    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
-    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+    int gid = get_global_id(0);
+    global uchar * blk = src0 + (size_t)gid * BLOCK_Q6_K_SIZE;
+    global uchar * ql = dst_ql + (size_t)gid * (QK_K/2);
+    global uchar * qh = dst_qh + (size_t)gid * (QK_K/4);
+    global char  * s  = (global char  *)(dst_s) + (size_t)gid * (QK_K/16);
+    global half  * d  = dst_d + gid;
 
-    *d = b->d;
+    vstore_half(vload_half(0, (global half *)(blk + BLOCK_Q6_K_D_OFF)), 0, d);
 
     for (int i = 0; i < QK_K/2; ++i) {
-        ql[i] = b->ql[i];
+        ql[i] = blk[BLOCK_Q6_K_QL_OFF + i];
     }
     for (int i = 0; i < QK_K/4; ++i) {
-        qh[i] = b->qh[i];
+        qh[i] = blk[BLOCK_Q6_K_QH_OFF + i];
     }
     for (int i = 0; i < QK_K/16; ++i) {
-        s[i] = b->scales[i];
+        s[i] = (char)blk[BLOCK_Q6_K_S_OFF + i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q4_K
+// Convert block_q4_K AOS -> SOA (separate d, dmin, scales, qs arrays).
+// Each thread processes one super block.
+// Block layout (total 144 bytes):
+//   d:      offset 0,  size 2 bytes (half)
+//   dmin:   offset 2,  size 2 bytes (half)
+//   scales: offset 4,  size 12 bytes (K_SCALE_SIZE)
+//   qs:     offset 16, size 128 bytes (QK_K/2)
+//------------------------------------------------------------------------------
+#define BLOCK_Q4_K_SIZE     144
+#define BLOCK_Q4_K_D_OFF    0
+#define BLOCK_Q4_K_DMIN_OFF 2
+#define BLOCK_Q4_K_S_OFF    4
+#define BLOCK_Q4_K_QS_OFF   16
+#define K_SCALE_SIZE_4K     12
+#define QK_K_HALF           128  // QK_K/2
+
+kernel void kernel_convert_block_q4_K(
+    global uchar * src0,
+    global half  * dst_d,
+    global half  * dst_dmin,
+    global uchar * dst_scales,
+    global uchar * dst_qs
+) {
+    int gid = get_global_id(0);
+    global uchar * blk    = src0       + (size_t)gid * BLOCK_Q4_K_SIZE;
+    global half  * d      = dst_d      + gid;
+    global half  * dmin   = dst_dmin   + gid;
+    global uchar * sc     = dst_scales + (size_t)gid * K_SCALE_SIZE_4K;
+    global uchar * qs     = dst_qs     + (size_t)gid * QK_K_HALF;
+
+    vstore_half(vload_half(0, (global half *)(blk + BLOCK_Q4_K_D_OFF)),    0, d);
+    vstore_half(vload_half(0, (global half *)(blk + BLOCK_Q4_K_DMIN_OFF)), 0, dmin);
+    for (int i = 0; i < K_SCALE_SIZE_4K; ++i) {
+        sc[i] = blk[BLOCK_Q4_K_S_OFF + i];
+    }
+    for (int i = 0; i < QK_K_HALF; ++i) {
+        qs[i] = blk[BLOCK_Q4_K_QS_OFF + i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_restore_block_q4_K
+// Convert block_q4_K SOA -> AOS (reconstruct original struct layout).
+// Each thread processes one super block.
+//------------------------------------------------------------------------------
+kernel void kernel_restore_block_q4_K(
+    global half  * src_d,
+    global half  * src_dmin,
+    global uchar * src_scales,
+    global uchar * src_qs,
+    global uchar * dst
+) {
+    int gid = get_global_id(0);
+    global uchar * blk = dst + (size_t)gid * BLOCK_Q4_K_SIZE;
+
+    vstore_half(vload_half(0, src_d    + gid), 0, (global half *)(blk + BLOCK_Q4_K_D_OFF));
+    vstore_half(vload_half(0, src_dmin + gid), 0, (global half *)(blk + BLOCK_Q4_K_DMIN_OFF));
+    for (int i = 0; i < K_SCALE_SIZE_4K; ++i) {
+        blk[BLOCK_Q4_K_S_OFF + i] = src_scales[(size_t)gid * K_SCALE_SIZE_4K + i];
+    }
+    for (int i = 0; i < QK_K_HALF; ++i) {
+        blk[BLOCK_Q4_K_QS_OFF + i] = src_qs[(size_t)gid * QK_K_HALF + i];
     }
 }
 

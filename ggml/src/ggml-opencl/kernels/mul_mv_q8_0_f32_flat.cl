@@ -36,6 +36,16 @@ typedef struct {
 #define N_SIMDWIDTH 64
 #endif
 
+// NVIDIA: use one warp (32 lanes) per workgroup.
+#ifdef NVIDIA_GPU
+#undef N_R0_Q8_0
+#undef N_SG_Q8_0
+#undef N_SIMDWIDTH
+#define N_R0_Q8_0  4
+#define N_SG_Q8_0  1
+#define N_SIMDWIDTH 32
+#endif
+
 #ifdef INTEL_GPU
 REQD_SUBGROUP_SIZE_16
 #elif defined (ADRENO_GPU)
@@ -91,17 +101,31 @@ kernel void kernel_mul_mv_q8_0_f32_flat(
     ax0 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
     ad0 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
 
+    // NVIDIA: clamp OOB rows to row 0 — NVIDIA errors on OOB reads even when
+    // the corresponding write is guarded. Intel/Adreno tolerate OOB reads.
+#ifdef NVIDIA_GPU
+    offset_src0 = offset_src0_base + (first_row+1 < ne01 ? (uint)nb01 : 0u);
+#else
     offset_src0 = offset_src0_base + 1*nb01;
+#endif
     offset_src0 = offset_src0/34;
     ax1 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
     ad1 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
 
+#ifdef NVIDIA_GPU
+    offset_src0 = offset_src0_base + (first_row+2 < ne01 ? (uint)(2*nb01) : 0u);
+#else
     offset_src0 = offset_src0_base + 2*nb01;
+#endif
     offset_src0 = offset_src0/34;
     ax2 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
     ad2 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
 
+#ifdef NVIDIA_GPU
+    offset_src0 = offset_src0_base + (first_row+3 < ne01 ? (uint)(3*nb01) : 0u);
+#else
     offset_src0 = offset_src0_base + 3*nb01;
+#endif
     offset_src0 = offset_src0/34;
     ax3 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
     ad3 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
@@ -177,6 +201,34 @@ kernel void kernel_mul_mv_q8_0_f32_flat(
     }
 
     global float * dst_f32 = (global float *) dst + (ulong)im*ne0*ne1 + (ulong)r1*ne0;
+
+#ifdef NVIDIA_GPU
+    // cl_khr_subgroups unavailable on NVIDIA OpenCL: use __local tree-reduction.
+    // N_SIMDWIDTH==32 (warp width), N_SG_Q8_0==1, so local work size = 32x1.
+    __local float lm[N_R0_Q8_0 * N_SIMDWIDTH];
+    int lid = get_local_id(0);
+    lm[0*N_SIMDWIDTH + lid] = sumf.s0;
+    lm[1*N_SIMDWIDTH + lid] = sumf.s1;
+    lm[2*N_SIMDWIDTH + lid] = sumf.s2;
+    lm[3*N_SIMDWIDTH + lid] = sumf.s3;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = N_SIMDWIDTH/2; s > 0; s >>= 1) {
+        if (lid < s) {
+            lm[0*N_SIMDWIDTH + lid] += lm[0*N_SIMDWIDTH + lid + s];
+            lm[1*N_SIMDWIDTH + lid] += lm[1*N_SIMDWIDTH + lid + s];
+            lm[2*N_SIMDWIDTH + lid] += lm[2*N_SIMDWIDTH + lid + s];
+            lm[3*N_SIMDWIDTH + lid] += lm[3*N_SIMDWIDTH + lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid == 0) {
+        if (first_row + 0 < ne01) dst_f32[first_row + 0] = lm[0*N_SIMDWIDTH];
+        if (first_row + 1 < ne01) dst_f32[first_row + 1] = lm[1*N_SIMDWIDTH];
+        if (first_row + 2 < ne01) dst_f32[first_row + 2] = lm[2*N_SIMDWIDTH];
+        if (first_row + 3 < ne01) dst_f32[first_row + 3] = lm[3*N_SIMDWIDTH];
+    }
+    return;
+#endif
 
     float4 tot = (float4)(
         sub_group_reduce_add(sumf.s0),

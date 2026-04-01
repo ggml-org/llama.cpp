@@ -13,7 +13,8 @@ kernel void kernel_sigmoid_f32(
     src0 = (global float*)((global char*)src0 + offset0);
     dst = (global float*)((global char*)dst + offsetd);
 
-    dst[get_global_id(0)] = 1.0f / (1.0f + exp(-src0[get_global_id(0)]));
+    const float x = src0[get_global_id(0)];
+    dst[get_global_id(0)] = 1.0f / (1.0f + exp(-x));
 }
 
 kernel void kernel_sigmoid_f16(
@@ -25,5 +26,10 @@ kernel void kernel_sigmoid_f16(
     src0 = (global half*)((global char*)src0 + offset0);
     dst = (global half*)((global char*)dst + offsetd);
 
-    dst[get_global_id(0)] = 1.0f / (1.0f + exp(-src0[get_global_id(0)]));
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
+    dst[get_global_id(0)] = 1.0h / (1.0h + exp(-src0[get_global_id(0)]));
+#else
+    const float x = (float) src0[get_global_id(0)];
+    dst[get_global_id(0)] = (half) (1.0f / (1.0f + exp(-x)));
+#endif
 }

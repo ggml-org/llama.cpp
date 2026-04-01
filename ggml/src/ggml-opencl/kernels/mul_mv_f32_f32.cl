@@ -64,6 +64,74 @@ kernel void kernel_mul_mat_f32_f32(
 
     global float * x = (global float *) (src0 + offset_src0);
 
+#ifdef NVIDIA_GPU
+    // NVIDIA: cl_khr_subgroups unavailable; use __local tree-reduction.
+    // Local work size = 32 (one warp); N_F32_F32 rows reduced independently.
+    __local float lm[N_F32_F32 * 32];
+    int lid = get_local_id(0);
+
+    float sumf_rows[N_F32_F32];
+    for (int row = 0; row < N_F32_F32; ++row) {
+        sumf_rows[row] = 0.0f;
+    }
+
+    if (ne00 < 128) {
+        for (int row = 0; row < N_F32_F32; ++row) {
+            int r1 = rb + row;
+            if (r1 >= ne11) break;
+            ulong offset_src1 = r1*nb11 + i12*nb12 + i13*nb13;
+            global float * y = (global float *) (src1 + offset_src1);
+            float sumf = 0;
+            for (int i = lid; i < ne00; i += 32) {
+                sumf += x[i] * y[i];
+            }
+            sumf_rows[row] = sumf;
+        }
+    } else {
+        global float4 * x4 = (global float4 *)x;
+        for (int row = 0; row < N_F32_F32; ++row) {
+            int r1 = rb + row;
+            if (r1 >= ne11) break;
+            ulong offset_src1 = r1*nb11 + i12*nb12 + i13*nb13;
+            global float4 * y4 = (global float4 *) (src1 + offset_src1);
+            float sumf = 0;
+            for (int i = lid; i < ne00/4; i += 32) {
+                float4 xi = x4[i], yi = y4[i];
+                sumf += xi.s0*yi.s0 + xi.s1*yi.s1 + xi.s2*yi.s2 + xi.s3*yi.s3;
+            }
+            sumf_rows[row] = sumf;
+        }
+    }
+
+    for (int row = 0; row < N_F32_F32; ++row) {
+        lm[row * 32 + lid] = sumf_rows[row];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = 16; s > 0; s >>= 1) {
+        if (lid < s) {
+            for (int row = 0; row < N_F32_F32; ++row) {
+                lm[row * 32 + lid] += lm[row * 32 + lid + s];
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid == 0) {
+        for (int row = 0; row < N_F32_F32; ++row) {
+            int r1 = rb + row;
+            if (r1 >= ne11) break;
+            float result = lm[row * 32];
+            // add tail elements for the float4 path
+            if (ne00 >= 128) {
+                ulong offset_src1 = r1*nb11 + i12*nb12 + i13*nb13;
+                global float * y = (global float *) (src1 + offset_src1);
+                for (int i = 4*(ne00/4); i < ne00; ++i) {
+                    result += x[i] * y[i];
+                }
+            }
+            dst[im*ne1*ne0 + r1*ne0 + r0] = result;
+        }
+    }
+#else
     if (ne00 < 128) {
         for (int row = 0; row < N_F32_F32; ++row) {
             int r1 = rb + row;
@@ -115,4 +183,5 @@ kernel void kernel_mul_mat_f32_f32(
             }
         }
     }
+#endif
 }

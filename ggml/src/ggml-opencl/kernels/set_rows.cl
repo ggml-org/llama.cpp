@@ -46,8 +46,13 @@ kernel void kernel_set_rows_f32_i64(
 
     //int i12 = i03%ne12;
     //int i11 = i02%ne11;
+#ifdef NVIDIA_GPU
+    int i12 = i03 % ne12.s2;
+    int i11 = i02 % ne11.s2;
+#else
     int i12 = fastmod(i03, ne12);
     int i11 = fastmod(i02, ne11);
+#endif
 
     int i10 = i01;
     long i1 = ((global long *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -95,8 +100,13 @@ kernel void kernel_set_rows_f16_i64(
 
     //int i12 = i03%ne12;
     //int i11 = i02%ne11;
+#ifdef NVIDIA_GPU
+    int i12 = i03 % ne12.s2;
+    int i11 = i02 % ne11.s2;
+#else
     int i12 = fastmod(i03, ne12);
     int i11 = fastmod(i02, ne11);
+#endif
 
     int i10 = i01;
     long i1 = ((global long *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -144,8 +154,13 @@ kernel void kernel_set_rows_f32_i32(
 
     //int i12 = i03%ne12;
     //int i11 = i02%ne11;
+#ifdef NVIDIA_GPU
+    int i12 = i03 % ne12.s2;
+    int i11 = i02 % ne11.s2;
+#else
     int i12 = fastmod(i03, ne12);
     int i11 = fastmod(i02, ne11);
+#endif
 
     int i10 = i01;
     int i1  = ((global int *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -193,8 +208,13 @@ kernel void kernel_set_rows_f16_i32(
 
     //int i12 = i03%ne12;
     //int i11 = i02%ne11;
+#ifdef NVIDIA_GPU
+    int i12 = i03 % ne12.s2;
+    int i11 = i02 % ne11.s2;
+#else
     int i12 = fastmod(i03, ne12);
     int i11 = fastmod(i02, ne11);
+#endif
 
     int i10 = i01;
     int i1  = ((global int *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];

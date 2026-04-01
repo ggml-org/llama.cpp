@@ -37,8 +37,13 @@ kernel void kernel_softplus_f16(
     src0 = (global half*)((global char*)src0 + offset0);
     dst  = (global half*)((global char*)dst + offsetd);
 
-    const float x = convert_float(src0[get_global_id(0)]);
-    dst[get_global_id(0)] = convert_half_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
+    const half x = src0[get_global_id(0)];
+    dst[get_global_id(0)] = (x > 20.0h) ? x : log(1.0h + exp(x));
+#else
+    const float x = (float) src0[get_global_id(0)];
+    dst[get_global_id(0)] = (half) ((x > 20.0f) ? x : log(1.0f + exp(x)));
+#endif
 }
 
 kernel void kernel_softplus_f16_4(
@@ -50,8 +55,15 @@ kernel void kernel_softplus_f16_4(
     src0 = (global half4*)((global char*)src0 + offset0);
     dst  = (global half4*)((global char*)dst + offsetd);
 
-    const float4 x = convert_float4(src0[get_global_id(0)]);
-    dst[get_global_id(0)] = convert_half4_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
+    half4 x = src0[get_global_id(0)];
+    dst[get_global_id(0)] = (x > 20.0h) ? x : log(1.0h + exp(x));
+#else
+    half4 h = src0[get_global_id(0)];
+    float4 x = (float4)((float)h.s0, (float)h.s1, (float)h.s2, (float)h.s3);
+    float4 y = (x > 20.0f) ? x : log(1.0f + exp(x));
+    dst[get_global_id(0)] = (half4)((half)y.s0, (half)y.s1, (half)y.s2, (half)y.s3);
+#endif
 }
 
 kernel void kernel_softplus_f32_nc(
@@ -110,7 +122,12 @@ kernel void kernel_softplus_f16_nc(
         global const half * hx = (global const half *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
         global       half * hy = (global       half *)(dst  + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-        const float x = convert_float(*hx);
-        *hy = convert_half_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
+        const half x = *hx;
+        *hy = (x > 20.0h) ? x : log(1.0h + exp(x));
+#else
+        const float x = (float) *hx;
+        *hy = (half) ((x > 20.0f) ? x : log(1.0f + exp(x)));
+#endif
     }
 }

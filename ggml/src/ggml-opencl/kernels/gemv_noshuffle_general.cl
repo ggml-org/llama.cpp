@@ -188,6 +188,7 @@
     total_sums.s1 += (((bits4.s7 & 0x0F00) >> 8) - 8) * scale.s1 * shared_y.s6; \
     total_sums.s1 += (((bits4.s7 & 0xF000) >> 12) - 8) * scale.s1 * shared_y.s7; \
 
+#ifndef APPLE_GPU
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -272,3 +273,154 @@ __kernel void kernel_gemv_noshuffle(
     }
 
 }
+#endif // !APPLE_GPU
+
+#ifdef APPLE_GPU
+// Q4_0 GEMV for Apple GPUs.
+// Uses plain __global buffers instead of images: Apple's OpenCL driver does not
+// benefit from the texture cache that justifies image1d_buffer_t on Adreno.
+// src1 is loaded cooperatively into local memory (one float per lane, perfectly
+// coalesced) so no sub_group_broadcast is needed, which also makes the kernel
+// compatible with Apple's OpenCL 1.2 (no cl_khr_subgroups required).
+
+#define dequantizeBlockAccum_apple_hi(total_sums, bits4, scale, ylm) \
+    total_sums.s0 += ((bits4.s0 & 0x000F) - 8) * scale.s0 * ylm[0];  \
+    total_sums.s1 += ((bits4.s1 & 0x000F) - 8) * scale.s1 * ylm[0];  \
+    total_sums.s0 += (((bits4.s0 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[1]; \
+    total_sums.s1 += (((bits4.s1 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[1]; \
+    total_sums.s0 += (((bits4.s0 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[2]; \
+    total_sums.s1 += (((bits4.s1 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[2]; \
+    total_sums.s0 += (((bits4.s0 & 0xF000) >> 12) - 8) * scale.s0 * ylm[3]; \
+    total_sums.s1 += (((bits4.s1 & 0xF000) >> 12) - 8) * scale.s1 * ylm[3]; \
+    total_sums.s0 += ((bits4.s2 & 0x000F) - 8) * scale.s0 * ylm[4];  \
+    total_sums.s1 += ((bits4.s3 & 0x000F) - 8) * scale.s1 * ylm[4];  \
+    total_sums.s0 += (((bits4.s2 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[5]; \
+    total_sums.s1 += (((bits4.s3 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[5]; \
+    total_sums.s0 += (((bits4.s2 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[6]; \
+    total_sums.s1 += (((bits4.s3 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[6]; \
+    total_sums.s0 += (((bits4.s2 & 0xF000) >> 12) - 8) * scale.s0 * ylm[7]; \
+    total_sums.s1 += (((bits4.s3 & 0xF000) >> 12) - 8) * scale.s1 * ylm[7]; \
+    total_sums.s0 += ((bits4.s4 & 0x000F) - 8) * scale.s0 * ylm[8];  \
+    total_sums.s1 += ((bits4.s5 & 0x000F) - 8) * scale.s1 * ylm[8];  \
+    total_sums.s0 += (((bits4.s4 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[9]; \
+    total_sums.s1 += (((bits4.s5 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[9]; \
+    total_sums.s0 += (((bits4.s4 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[10]; \
+    total_sums.s1 += (((bits4.s5 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[10]; \
+    total_sums.s0 += (((bits4.s4 & 0xF000) >> 12) - 8) * scale.s0 * ylm[11]; \
+    total_sums.s1 += (((bits4.s5 & 0xF000) >> 12) - 8) * scale.s1 * ylm[11]; \
+    total_sums.s0 += ((bits4.s6 & 0x000F) - 8) * scale.s0 * ylm[12]; \
+    total_sums.s1 += ((bits4.s7 & 0x000F) - 8) * scale.s1 * ylm[12]; \
+    total_sums.s0 += (((bits4.s6 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[13]; \
+    total_sums.s1 += (((bits4.s7 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[13]; \
+    total_sums.s0 += (((bits4.s6 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[14]; \
+    total_sums.s1 += (((bits4.s7 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[14]; \
+    total_sums.s0 += (((bits4.s6 & 0xF000) >> 12) - 8) * scale.s0 * ylm[15]; \
+    total_sums.s1 += (((bits4.s7 & 0xF000) >> 12) - 8) * scale.s1 * ylm[15];
+
+#define dequantizeBlockAccum_apple_lo(total_sums, bits4, scale, ylm) \
+    total_sums.s0 += ((bits4.s0 & 0x000F) - 8) * scale.s0 * ylm[16]; \
+    total_sums.s1 += ((bits4.s1 & 0x000F) - 8) * scale.s1 * ylm[16]; \
+    total_sums.s0 += (((bits4.s0 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[17]; \
+    total_sums.s1 += (((bits4.s1 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[17]; \
+    total_sums.s0 += (((bits4.s0 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[18]; \
+    total_sums.s1 += (((bits4.s1 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[18]; \
+    total_sums.s0 += (((bits4.s0 & 0xF000) >> 12) - 8) * scale.s0 * ylm[19]; \
+    total_sums.s1 += (((bits4.s1 & 0xF000) >> 12) - 8) * scale.s1 * ylm[19]; \
+    total_sums.s0 += ((bits4.s2 & 0x000F) - 8) * scale.s0 * ylm[20]; \
+    total_sums.s1 += ((bits4.s3 & 0x000F) - 8) * scale.s1 * ylm[20]; \
+    total_sums.s0 += (((bits4.s2 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[21]; \
+    total_sums.s1 += (((bits4.s3 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[21]; \
+    total_sums.s0 += (((bits4.s2 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[22]; \
+    total_sums.s1 += (((bits4.s3 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[22]; \
+    total_sums.s0 += (((bits4.s2 & 0xF000) >> 12) - 8) * scale.s0 * ylm[23]; \
+    total_sums.s1 += (((bits4.s3 & 0xF000) >> 12) - 8) * scale.s1 * ylm[23]; \
+    total_sums.s0 += ((bits4.s4 & 0x000F) - 8) * scale.s0 * ylm[24]; \
+    total_sums.s1 += ((bits4.s5 & 0x000F) - 8) * scale.s1 * ylm[24]; \
+    total_sums.s0 += (((bits4.s4 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[25]; \
+    total_sums.s1 += (((bits4.s5 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[25]; \
+    total_sums.s0 += (((bits4.s4 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[26]; \
+    total_sums.s1 += (((bits4.s5 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[26]; \
+    total_sums.s0 += (((bits4.s4 & 0xF000) >> 12) - 8) * scale.s0 * ylm[27]; \
+    total_sums.s1 += (((bits4.s5 & 0xF000) >> 12) - 8) * scale.s1 * ylm[27]; \
+    total_sums.s0 += ((bits4.s6 & 0x000F) - 8) * scale.s0 * ylm[28]; \
+    total_sums.s1 += ((bits4.s7 & 0x000F) - 8) * scale.s1 * ylm[28]; \
+    total_sums.s0 += (((bits4.s6 & 0x00F0) >> 4) - 8) * scale.s0 * ylm[29]; \
+    total_sums.s1 += (((bits4.s7 & 0x00F0) >> 4) - 8) * scale.s1 * ylm[29]; \
+    total_sums.s0 += (((bits4.s6 & 0x0F00) >> 8) - 8) * scale.s0 * ylm[30]; \
+    total_sums.s1 += (((bits4.s7 & 0x0F00) >> 8) - 8) * scale.s1 * ylm[30]; \
+    total_sums.s0 += (((bits4.s6 & 0xF000) >> 12) - 8) * scale.s0 * ylm[31]; \
+    total_sums.s1 += (((bits4.s7 & 0xF000) >> 12) - 8) * scale.s1 * ylm[31];
+
+__kernel void kernel_gemv_noshuffle_apple(
+        __global const uint  * src0_q,   // quantized weight matrix (same index space as image variant)
+        __global const half2 * src0_d,   // weight scales
+        __global const float * src1,     // input vector
+        ulong offset1,                   // byte offset into src1
+        __global float * dst,
+        ulong offsetd,
+        int ne00,               // K
+        int ne01,               // M
+        int ne02,
+        int ne10,
+        int ne12,
+        int ne0,
+        int ne1,
+        int r2,
+        int r3)
+{
+    uint groupId = get_local_id(1);
+    uint gid     = get_global_id(0);
+    ushort slid  = (ushort)get_local_id(0);  // no cl_khr_subgroups on Apple 1.2
+
+    uint K = ne00;
+    uint M = ne01;
+    uint LINE_STRIDE_A  = M / 2;
+    uint BLOCK_STRIDE_A = N_SIMDGROUP * M;
+
+    __private uint4  regA;
+    __private half2  regS;
+    __private float2 totalSum = (float2)(0.0f);
+
+    // Each subgroup caches its own QK4_0-element slice of src1 in local memory.
+    // With SIMDGROUP_WIDTH == QK4_0 == 32, every lane loads exactly one float —
+    // a perfectly coalesced global read.
+    __local float src1_lm[N_SIMDGROUP * QK4_0];
+    __local float * ylm = src1_lm + groupId * QK4_0;
+
+    const ulong src1_base = offset1 / sizeof(float);
+
+    for (uint k = groupId; k < (K / QK4_0); k += N_SIMDGROUP) {
+        ylm[slid] = src1[src1_base + k * QK4_0 + slid];
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        regS = src0_d[gid + k * LINE_STRIDE_A];
+
+        regA.s0 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0];
+        regA.s1 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1];
+        regA.s2 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2];
+        regA.s3 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3];
+        dequantizeBlockAccum_apple_hi(totalSum, as_ushort8(regA), regS, ylm);
+
+        regA.s0 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4];
+        regA.s1 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5];
+        regA.s2 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6];
+        regA.s3 = src0_q[gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7];
+        dequantizeBlockAccum_apple_lo(totalSum, as_ushort8(regA), regS, ylm);
+    }
+
+    // Cross-subgroup reduction in local memory (N_SIMDGROUP == 4).
+    __local float2 reduceLM[SIMDGROUP_WIDTH * 3];
+    if (groupId == 1) reduceLM[SIMDGROUP_WIDTH * 0 + slid] = totalSum;
+    if (groupId == 2) reduceLM[SIMDGROUP_WIDTH * 1 + slid] = totalSum;
+    if (groupId == 3) reduceLM[SIMDGROUP_WIDTH * 2 + slid] = totalSum;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
+    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
+    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+
+    if (groupId == 0) {
+        dst = (global float*)((global char*)dst + offsetd);
+        vstore2(totalSum, 0, &(dst[gid * 2]));
+    }
+}
+#endif // APPLE_GPU

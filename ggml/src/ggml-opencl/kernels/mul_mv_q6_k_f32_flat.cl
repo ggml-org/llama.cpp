@@ -28,6 +28,7 @@
 
 #define QK_K       256
 
+
 inline float block_q_6_K_dot_y_flat(
     global uchar * blk_ql,
     global uchar * blk_qh,
@@ -50,7 +51,7 @@ inline float block_q_6_K_dot_y_flat(
 
     global float * y = yy + ib * QK_K + y_offset;
 
-    float dall = blk_d[ib];
+    float dall = vload_half(0, blk_d + ib);
 
     float  sumf = 0;
     float4 sums = {0.f, 0.f, 0.f, 0.f};
@@ -80,6 +81,7 @@ inline float block_q_6_K_dot_y_flat(
     return sumf;
 }
 
+
 #undef N_DST
 #undef N_SIMDGROUP
 #undef N_SIMDWIDTH
@@ -92,6 +94,14 @@ inline float block_q_6_K_dot_y_flat(
 #define N_DST 4
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
+#endif
+
+// NVIDIA: warp width = 32; N_SIMDGROUP=1 (one warp per WG, __local reduction)
+#ifdef NVIDIA_GPU
+#undef N_SIMDWIDTH
+#define N_SIMDWIDTH 32
+#undef N_SIMDGROUP
+#define N_SIMDGROUP 1
 #endif
 
 #define BLOCK_STRIDE (N_SIMDWIDTH/16) // number of blocks each subgroup processes
@@ -153,9 +163,76 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     int n   = 4;       // 4 scales at a time (and 4 sums)
     int l0  = n*il;    // offset into half-block, 0..28
     int is  = 8*ip + l0/16; // 0, 1, 8, 9
+    int q_offset_l = 64*ip + l0;
+    int q_offset_h = 32*ip + l0;
+    int y_offset   = 128*ip + l0;
 
     float4 sumf = 0;
 
+#ifdef NVIDIA_GPU
+    // Vectorized path: load y once per block and reuse for all 4 rows.
+    // Uses vload4+dot() instead of 4 separate scalar multiply-adds per element.
+    for (int ib = ix; ib < nb; ib += BLOCK_STRIDE) {
+        global float * yb = yy + (ulong)ib * QK_K + y_offset;
+        float4 y0  = vload4(0, yb +  0);
+        float4 y32 = vload4(0, yb + 32);
+        float4 y64 = vload4(0, yb + 64);
+        float4 y96 = vload4(0, yb + 96);
+
+        if (first_row + 0 < ne01) {
+            uchar4 q1 = vload4(0, blk_ql + (ulong)0*nb*128 + (ulong)ib*128 + q_offset_l);
+            uchar4 q2 = vload4(0, blk_ql + (ulong)0*nb*128 + (ulong)ib*128 + q_offset_l + QK_K/8);
+            uchar4 qh = vload4(0, blk_qh + (ulong)0*nb*64  + (ulong)ib*64  + q_offset_h);
+            float dall = vload_half(0, blk_d + (ulong)0*nb + ib);
+            global char * sc = blk_scales + (ulong)0*nb*16 + (ulong)ib*16 + is;
+            float4 dl  = convert_float4(q1 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x03) << 4) - 32.f;
+            float4 d2l = convert_float4(q2 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x0C) << 2) - 32.f;
+            float4 dh  = convert_float4(q1 >> 4)           + convert_float4( qh & (uchar4)0x30)       - 32.f;
+            float4 d2h = convert_float4(q2 >> 4)           + convert_float4((qh & (uchar4)0xC0) >> 2) - 32.f;
+            sumf.s0 += dall * (dot(y0, dl) *(float)sc[0] + dot(y32, d2l)*(float)sc[2] +
+                               dot(y64, dh)*(float)sc[4] + dot(y96, d2h)*(float)sc[6]);
+        }
+        if (first_row + 1 < ne01) {
+            uchar4 q1 = vload4(0, blk_ql + (ulong)1*nb*128 + (ulong)ib*128 + q_offset_l);
+            uchar4 q2 = vload4(0, blk_ql + (ulong)1*nb*128 + (ulong)ib*128 + q_offset_l + QK_K/8);
+            uchar4 qh = vload4(0, blk_qh + (ulong)1*nb*64  + (ulong)ib*64  + q_offset_h);
+            float dall = vload_half(0, blk_d + (ulong)1*nb + ib);
+            global char * sc = blk_scales + (ulong)1*nb*16 + (ulong)ib*16 + is;
+            float4 dl  = convert_float4(q1 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x03) << 4) - 32.f;
+            float4 d2l = convert_float4(q2 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x0C) << 2) - 32.f;
+            float4 dh  = convert_float4(q1 >> 4)           + convert_float4( qh & (uchar4)0x30)       - 32.f;
+            float4 d2h = convert_float4(q2 >> 4)           + convert_float4((qh & (uchar4)0xC0) >> 2) - 32.f;
+            sumf.s1 += dall * (dot(y0, dl) *(float)sc[0] + dot(y32, d2l)*(float)sc[2] +
+                               dot(y64, dh)*(float)sc[4] + dot(y96, d2h)*(float)sc[6]);
+        }
+        if (first_row + 2 < ne01) {
+            uchar4 q1 = vload4(0, blk_ql + (ulong)2*nb*128 + (ulong)ib*128 + q_offset_l);
+            uchar4 q2 = vload4(0, blk_ql + (ulong)2*nb*128 + (ulong)ib*128 + q_offset_l + QK_K/8);
+            uchar4 qh = vload4(0, blk_qh + (ulong)2*nb*64  + (ulong)ib*64  + q_offset_h);
+            float dall = vload_half(0, blk_d + (ulong)2*nb + ib);
+            global char * sc = blk_scales + (ulong)2*nb*16 + (ulong)ib*16 + is;
+            float4 dl  = convert_float4(q1 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x03) << 4) - 32.f;
+            float4 d2l = convert_float4(q2 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x0C) << 2) - 32.f;
+            float4 dh  = convert_float4(q1 >> 4)           + convert_float4( qh & (uchar4)0x30)       - 32.f;
+            float4 d2h = convert_float4(q2 >> 4)           + convert_float4((qh & (uchar4)0xC0) >> 2) - 32.f;
+            sumf.s2 += dall * (dot(y0, dl) *(float)sc[0] + dot(y32, d2l)*(float)sc[2] +
+                               dot(y64, dh)*(float)sc[4] + dot(y96, d2h)*(float)sc[6]);
+        }
+        if (first_row + 3 < ne01) {
+            uchar4 q1 = vload4(0, blk_ql + (ulong)3*nb*128 + (ulong)ib*128 + q_offset_l);
+            uchar4 q2 = vload4(0, blk_ql + (ulong)3*nb*128 + (ulong)ib*128 + q_offset_l + QK_K/8);
+            uchar4 qh = vload4(0, blk_qh + (ulong)3*nb*64  + (ulong)ib*64  + q_offset_h);
+            float dall = vload_half(0, blk_d + (ulong)3*nb + ib);
+            global char * sc = blk_scales + (ulong)3*nb*16 + (ulong)ib*16 + is;
+            float4 dl  = convert_float4(q1 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x03) << 4) - 32.f;
+            float4 d2l = convert_float4(q2 & (uchar4)0x0F) + convert_float4((qh & (uchar4)0x0C) << 2) - 32.f;
+            float4 dh  = convert_float4(q1 >> 4)           + convert_float4( qh & (uchar4)0x30)       - 32.f;
+            float4 d2h = convert_float4(q2 >> 4)           + convert_float4((qh & (uchar4)0xC0) >> 2) - 32.f;
+            sumf.s3 += dall * (dot(y0, dl) *(float)sc[0] + dot(y32, d2l)*(float)sc[2] +
+                               dot(y64, dh)*(float)sc[4] + dot(y96, d2h)*(float)sc[6]);
+        }
+    }
+#else
     for (int ib = ix; ib < nb; ib += BLOCK_STRIDE) {
         if (first_row + 0 < ne01) {
             sumf.s0 += block_q_6_K_dot_y_flat(blk_ql + 0*nb*128, blk_qh + 0*nb*64, blk_scales + 0*nb*16, blk_d + 0*nb, yy, ib, ip, is, l0);
@@ -170,7 +247,28 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
             sumf.s3 += block_q_6_K_dot_y_flat(blk_ql + 3*nb*128, blk_qh + 3*nb*64, blk_scales + 3*nb*16, blk_d + 3*nb, yy, ib, ip, is, l0);
         }
     }
+#endif
 
+#ifdef NVIDIA_GPU
+    // cl_khr_subgroups unavailable on NVIDIA OpenCL: use __local tree-reduction.
+    // N_SIMDWIDTH==32 (warp), N_SIMDGROUP==1, local size = 32x1.
+    __local float4 lm[N_SIMDWIDTH];
+    int lid = get_local_id(0);
+    lm[lid] = sumf;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = N_SIMDWIDTH / 2; s > 0; s >>= 1) {
+        if (lid < s) {
+            lm[lid] += lm[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid == 0) {
+        if (first_row + 0 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = lm[0].s0; }
+        if (first_row + 1 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = lm[0].s1; }
+        if (first_row + 2 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = lm[0].s2; }
+        if (first_row + 3 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = lm[0].s3; }
+    }
+#else
     float4 tot = (float4)(
         sub_group_reduce_add(sumf.s0),
         sub_group_reduce_add(sumf.s1),
@@ -178,17 +276,10 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
         sub_group_reduce_add(sumf.s3)
     );
     if (get_sub_group_local_id() == 0) {
-        if (first_row + 0 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
-        }
-        if (first_row + 1 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
-        }
-        if (first_row + 2 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
-        }
-        if (first_row + 3 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
-        }
+        if (first_row + 0 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0; }
+        if (first_row + 1 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1; }
+        if (first_row + 2 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2; }
+        if (first_row + 3 < ne01) { dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3; }
     }
+#endif
 }

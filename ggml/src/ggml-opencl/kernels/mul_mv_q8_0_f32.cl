@@ -107,7 +107,7 @@ kernel void kernel_mul_mv_q8_0_f32(
             for (short iq = 0; iq < NB_Q8_0; ++iq) {
                 sumq += qs[iq] * yl[iq];
             }
-            sumf[row] += sumq*ax[row][ib].d;
+            sumf[row] += sumq*vload_half(0, &ax[row][ib].d);
         }
 
         yb += N_SIMDWIDTH*NB_Q8_0;

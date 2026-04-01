@@ -101,6 +101,12 @@ inline float block_q_4_0_dot_y_flat(
 #define N_SIMDWIDTH 64
 #endif
 
+// NVIDIA: warp width = 32; N_SIMDGROUP=1 (one warp per WG)
+#ifdef NVIDIA_GPU
+#undef N_SIMDWIDTH
+#define N_SIMDWIDTH 32
+#endif
+
 inline void mul_vec_q_n_f32_8x_flat(
         global uchar * src0_q,
         global half  * src0_d,
@@ -114,7 +120,8 @@ inline void mul_vec_q_n_f32_8x_flat(
         int ne0,
         int ne1,
         int r2,
-        int r3
+        int r3,
+        local float8 * lm
 ) {
     const ulong nb = ne00/QK4_0;
 
@@ -207,6 +214,26 @@ inline void mul_vec_q_n_f32_8x_flat(
         yb += QK4_0 * (N_SIMDWIDTH/2);
     }
 
+#ifdef NVIDIA_GPU
+    // NVIDIA: cl_khr_subgroups unavailable; use __local tree-reduction.
+    int lid = get_local_id(0);
+    lm[lid] = sumf;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = 16; s > 0; s >>= 1) {
+        if (lid < s) lm[lid] += lm[lid + s];
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lid == 0) {
+        if (first_row + 0 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = lm[0].s0;
+        if (first_row + 1 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = lm[0].s1;
+        if (first_row + 2 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = lm[0].s2;
+        if (first_row + 3 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = lm[0].s3;
+        if (first_row + 4 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 4] = lm[0].s4;
+        if (first_row + 5 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 5] = lm[0].s5;
+        if (first_row + 6 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 6] = lm[0].s6;
+        if (first_row + 7 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 7] = lm[0].s7;
+    }
+#else
     float8 tot = (float8)(
         sub_group_reduce_add(sumf.s0), sub_group_reduce_add(sumf.s1),
         sub_group_reduce_add(sumf.s2), sub_group_reduce_add(sumf.s3),
@@ -215,32 +242,16 @@ inline void mul_vec_q_n_f32_8x_flat(
     );
 
     if (get_sub_group_local_id() == 0) {
-        if (first_row + 0 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
-        }
-        if (first_row + 1 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
-        }
-        if (first_row + 2 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
-        }
-        if (first_row + 3 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
-        }
-
-        if (first_row + 4 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 4] = tot.s4;
-        }
-        if (first_row + 5 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 5] = tot.s5;
-        }
-        if (first_row + 6 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 6] = tot.s6;
-        }
-        if (first_row + 7 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 7] = tot.s7;
-        }
+        if (first_row + 0 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
+        if (first_row + 1 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
+        if (first_row + 2 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
+        if (first_row + 3 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
+        if (first_row + 4 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 4] = tot.s4;
+        if (first_row + 5 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 5] = tot.s5;
+        if (first_row + 6 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 6] = tot.s6;
+        if (first_row + 7 < ne01) dst[r1*ne0 + im*ne0*ne1 + first_row + 7] = tot.s7;
     }
+#endif
 }
 
 #ifdef INTEL_GPU
@@ -268,5 +279,6 @@ kernel void kernel_mul_mat_q4_0_f32_8x_flat(
     src1 = (global float*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    mul_vec_q_n_f32_8x_flat(src0_q, src0_d, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3);
+    local float8 lm[32];
+    mul_vec_q_n_f32_8x_flat(src0_q, src0_d, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3, lm);
 }

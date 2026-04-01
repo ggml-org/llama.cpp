@@ -71,6 +71,7 @@ set(GGML_OPENCL_KERNELS
     get_rows
     glu
     group_norm
+    gated_delta_net
     solve_tri
     im2col_f32
     im2col_f16
@@ -90,6 +91,7 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_1_f32_flat
     mul_mv_q4_k_f32
     mul_mv_q4_k_f32_flat
+    mul_mv_q5_0_f32_flat
     mul_mv_q6_k_f32
     mul_mv_q6_k_f32_flat
     mul_mv_q8_0_f32

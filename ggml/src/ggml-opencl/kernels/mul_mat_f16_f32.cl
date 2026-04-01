@@ -63,7 +63,8 @@ __kernel void mul_mat_f16_f32(
 
         if (global_row_a < M && k_vec_start_a < K) {
             if (k_vec_start_a + 3 < K) {
-                Alocal[load_row_a][load_vec_k_a] = vload4(0, A + global_row_a * K + k_vec_start_a);
+                const int a_idx = global_row_a * K + k_vec_start_a;
+                Alocal[load_row_a][load_vec_k_a] = (half4)(A[a_idx + 0], A[a_idx + 1], A[a_idx + 2], A[a_idx + 3]);
             } else {
                 half4 tempA = (half4)(0.0h);
                 if (k_vec_start_a < K) tempA.s0 = A[global_row_a * K + k_vec_start_a];
@@ -77,7 +78,7 @@ __kernel void mul_mat_f16_f32(
 
         if (global_row_b < N && k_vec_start_b < K) {
             if (k_vec_start_b + 3 < K) {
-                Blocal[load_row_b][load_vec_k_b] = vload4(0, B + global_row_b * K + k_vec_start_b);
+                Blocal[load_row_b][load_vec_k_b] = vload4(0, (__global const float *)(B + global_row_b * K + k_vec_start_b));
             } else {
                 float4 tempB = (float4)(0.0f);
                 if (k_vec_start_b < K) tempB.s0 = B[global_row_b * K + k_vec_start_b];
@@ -96,7 +97,8 @@ __kernel void mul_mat_f16_f32(
             float4 a_fvecs[OPTM];
             int current_row_a = lidm;
             for (int wm = 0; wm < OPTM; wm++) {
-                a_fvecs[wm] = convert_float4(Alocal[current_row_a][k_vec]);
+                half4 a_half = Alocal[current_row_a][k_vec];
+                a_fvecs[wm] = (float4)((float)a_half.s0, (float)a_half.s1, (float)a_half.s2, (float)a_half.s3);
                 current_row_a += WG_M;
             }
 

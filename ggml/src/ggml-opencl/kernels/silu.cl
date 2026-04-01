@@ -13,7 +13,8 @@ kernel void kernel_silu(
     dst = (global float*)((global char*)dst + offsetd);
 
     float x = src0[get_global_id(0)];
-    dst[get_global_id(0)] = x / (1.0f + exp(-x));
+    const float xf = (float)x;
+    dst[get_global_id(0)] = xf / (1.0f + exp(-xf));
 }
 
 kernel void kernel_silu_4(
@@ -26,5 +27,6 @@ kernel void kernel_silu_4(
     dst = (global float4*)((global char*)dst + offsetd);
 
     float4 x = src0[get_global_id(0)];
-    dst[get_global_id(0)] = x / (1.0f + exp(-x));
+    const float4 xf = x;
+    dst[get_global_id(0)] = xf / (1.0f + exp(-xf));
 }

@@ -64,6 +64,29 @@ kernel void kernel_mul_mat_f16_f16(
 
     global half * x = (global half *) (src0 + offset_src0);
 
+#ifdef NVIDIA_GPU
+    if (get_local_id(0) != 0) {
+        return;
+    }
+
+    for (int row = 0; row < N_F16_F16; ++row) {
+        int r1 = rb + row;
+        if (r1 >= ne11) {
+            break;
+        }
+
+        ulong offset_src1 = r1*nb11 + (i12   )*nb12 + (i13   )*nb13;
+        global half * y = (global half *) (src1 + offset_src1);
+
+        float all_sum_nv = 0.0f;
+        for (int i = 0; i < ne00; ++i) {
+            all_sum_nv += (float) x[i] * (float) y[i];
+        }
+        dst[im*ne1*ne0 + r1*ne0 + r0] = all_sum_nv;
+    }
+    return;
+#endif
+
     if (ne00 < 128) {
         for (int row = 0; row < N_F16_F16; ++row) {
             int r1 = rb + row;

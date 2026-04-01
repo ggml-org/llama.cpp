@@ -137,13 +137,13 @@ kernel void kernel_add_f16(
 
         half v0, v1;
         if (type_src0 == 1) {
-            v0 = convert_half(*((global float *)(src0_ptr + i0*nb00)));
+            v0 = (half)(*((global float *)(src0_ptr + i0*nb00)));
         } else {
             v0 = *((global half *)(src0_ptr + i0*nb00));
         }
 
         if (type_src1 == 1) {
-            v1 = convert_half(*((global float *)(src1_ptr + i10*nb10)));
+            v1 = (half)(*((global float *)(src1_ptr + i10*nb10)));
         } else {
             v1 = *((global half *)(src1_ptr + i10*nb10));
         }
@@ -172,7 +172,8 @@ kernel void kernel_add_row_f16(
     half4 v0, v1;
     if (type_src0 == 1) {
         global float4* src0_f32 = (global float4*)((global char*)src0 + offset0);
-        v0 = convert_half4(src0_f32[gid]);
+        float4 tmp0 = src0_f32[gid];
+        v0 = (half4)((half)tmp0.x, (half)tmp0.y, (half)tmp0.z, (half)tmp0.w);
     } else {
         global half4* src0_f16 = (global half4*)((global char*)src0 + offset0);
         v0 = src0_f16[gid];
@@ -180,7 +181,8 @@ kernel void kernel_add_row_f16(
 
     if (type_src1 == 1) {
         global float4* src1_f32 = (global float4*)((global char*)src1 + offset1);
-        v1 = convert_half4(src1_f32[idx1]);
+        float4 tmp1 = src1_f32[idx1];
+        v1 = (half4)((half)tmp1.x, (half)tmp1.y, (half)tmp1.z, (half)tmp1.w);
     } else {
         global half4* src1_f16 = (global half4*)((global char*)src1 + offset1);
         v1 = src1_f16[idx1];

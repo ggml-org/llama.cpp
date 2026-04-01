@@ -13,7 +13,8 @@ kernel void kernel_exp_f32(
     src0 = (global float*)((global char*)src0 + offset0);
     dst  = (global float*)((global char*)dst + offsetd);
 
-    dst[get_global_id(0)] = exp(src0[get_global_id(0)]);
+    const float x = src0[get_global_id(0)];
+    dst[get_global_id(0)] = exp(x);
 }
 
 kernel void kernel_exp_f32_4(
@@ -29,7 +30,8 @@ kernel void kernel_exp_f32_4(
     src0 = (global float4*)((global char*)src0 + offset0);
     dst  = (global float4*)((global char*)dst + offsetd);
 
-    dst[get_global_id(0)] = exp(src0[get_global_id(0)]);
+    float4 x = src0[get_global_id(0)];
+    dst[get_global_id(0)] = exp(x);
 }
 
 kernel void kernel_exp_f16(
@@ -45,7 +47,12 @@ kernel void kernel_exp_f16(
     src0 = (global half*)((global char*)src0 + offset0);
     dst  = (global half*)((global char*)dst + offsetd);
 
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
     dst[get_global_id(0)] = exp(src0[get_global_id(0)]);
+#else
+    const float x = (float) src0[get_global_id(0)];
+    dst[get_global_id(0)] = (half) exp(x);
+#endif
 }
 
 kernel void kernel_exp_f16_4(
@@ -61,7 +68,14 @@ kernel void kernel_exp_f16_4(
     src0 = (global half4*)((global char*)src0 + offset0);
     dst  = (global half4*)((global char*)dst + offsetd);
 
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
     dst[get_global_id(0)] = exp(src0[get_global_id(0)]);
+#else
+    half4 h = src0[get_global_id(0)];
+    float4 x = (float4)((float)h.s0, (float)h.s1, (float)h.s2, (float)h.s3);
+    float4 y = exp(x);
+    dst[get_global_id(0)] = (half4)((half)y.s0, (half)y.s1, (half)y.s2, (half)y.s3);
+#endif
 }
 
 kernel void kernel_exp_f32_nc(
@@ -120,6 +134,10 @@ kernel void kernel_exp_f16_nc(
         global const half * x = (global const half *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
         global       half * y = (global       half *)(dst  + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
         *y = exp(*x);
+#else
+        *y = (half) exp((float) *x);
+#endif
     }
 }

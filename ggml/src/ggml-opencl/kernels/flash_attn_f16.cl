@@ -4,8 +4,8 @@
 #define ACC_TYPE4 float4
 #define DATA_TYPE half
 #define DATA_TYPE4 half4
-#define CONVERT_ACC4(x) convert_float4(x)
-#define CONVERT_DATA4(x) convert_half4(x)
+#define CONVERT_ACC4(x) ((float4)((float)(x).s0, (float)(x).s1, (float)(x).s2, (float)(x).s3))
+#define CONVERT_DATA4(x) ((half4)((half)(x).s0, (half)(x).s1, (half)(x).s2, (half)(x).s3))
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)

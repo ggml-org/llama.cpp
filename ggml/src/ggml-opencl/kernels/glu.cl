@@ -196,7 +196,12 @@ kernel void kernel_swiglu_f16(
         const half x0 = src0_row[i0];
         const half x1 = src1_row[i0];
 
-        const half silu = x0 / (1.0f + exp(-x0));
+#if GGML_OPENCL_USE_NATIVE_FP16_MATH
+        const half silu = x0 / (1.0h + exp(-x0));
+#else
+        const float x0f = (float)x0;
+        const half silu = (half)(x0f / (1.0f + exp(-x0f)));
+#endif
 
         dst_row[i0] = silu*x1;
     }

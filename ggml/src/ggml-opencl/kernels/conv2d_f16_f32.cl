@@ -135,7 +135,7 @@ kernel void kernel_conv_2d(
             for (uint npq_l_vec_reg = 0; npq_l_vec_reg < TS_NPQ_VEC; ++npq_l_vec_reg) {
                 float4 regB = Bsh[crs_l * BS_NPQ_VEC + lid_npq * TS_NPQ_VEC + npq_l_vec_reg];
                 for (uint k_l_reg = 0; k_l_reg < TS_K; ++k_l_reg) {
-                    regC[k_l_reg][npq_l_vec_reg] = mad(convert_float(regA[k_l_reg]), regB, regC[k_l_reg][npq_l_vec_reg]);
+                    regC[k_l_reg][npq_l_vec_reg] = mad((float) regA[k_l_reg], regB, regC[k_l_reg][npq_l_vec_reg]);
                 }
             }
         }

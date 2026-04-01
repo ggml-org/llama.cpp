@@ -54,6 +54,23 @@ static inline float e8m0_to_fp32(uchar x) {
     return as_float(bits);
 }
 
+constant static float kvalues_mxfp4_f[16] = {
+    0, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f
+};
+
+#ifdef NVIDIA_GPU
+static inline float block_mxfp4_dot_y_ref(global uchar * q, uchar e, global float * y) {
+    const float d = 0.5f * e8m0_to_fp32(e);
+    float sum = 0.0f;
+    for (int i = 0; i < QK_MXFP4/2; ++i) {
+        const uchar packed = q[i];
+        sum += kvalues_mxfp4_f[packed & 0x0F] * y[i];
+        sum += kvalues_mxfp4_f[packed >> 4]   * y[i + QK_MXFP4/2];
+    }
+    return sum * d;
+}
+#endif
+
 #ifdef INTEL_GPU
 #define N_R0_MXFP4 2 // number of rows each subgroup works on
 #define N_SG_MXFP4 2 // number of subgroups in a work group
@@ -135,6 +152,36 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
 
     src1 = src1 + offset1 + i11 * nb11 + iid1 * nb12;
     global float * y   = (global float *) (src1 + r1 * nb11);
+
+#ifdef NVIDIA_GPU
+    if (get_local_id(0) != 0 || get_local_id(1) != 0) {
+        return;
+    }
+
+    const int first_row_nv = r0 * N_R0_MXFP4;
+    global float * dst_f32_nv = (global float *)dst + (ulong)r1 * ne0;
+
+    for (int row = 0; row < N_R0_MXFP4; ++row) {
+        if (first_row_nv + row >= ne0) {
+            continue;
+        }
+
+        uint offset_src0_nv = first_row_nv * nb01;
+        offset_src0_nv /= 17;
+
+        global uchar * row_q = src0_q + (src0_off + offset_src0_nv + row * nb) * 16;
+        global uchar * row_e = src0_e +  src0_off + offset_src0_nv + row * nb;
+
+        float total = 0.0f;
+        for (int ib = 0; ib < nb; ++ib) {
+            total += block_mxfp4_dot_y_ref(row_q + ib * 16, row_e[ib], y + ib * QK_MXFP4);
+        }
+
+        dst_f32_nv[first_row_nv + row] = total;
+    }
+    return;
+#endif
+
     global float * yb = y + ix * QK_MXFP4 + it * 8;
 
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH / 2) {

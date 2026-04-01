@@ -7,7 +7,7 @@
 #define O_DATA_TYPE4 float4
 #define MASK_DATA_TYPE half
 #define CONVERT_Q_ACC4(x) (x)
-#define CONVERT_KV_ACC4(x) convert_float4(x)
+#define CONVERT_KV_ACC4(x) ((float4)((float)(x).s0, (float)(x).s1, (float)(x).s2, (float)(x).s3))
 #define CONVERT_O_DATA4(x) (x)
 
 #define DK_VEC (DK/4)
