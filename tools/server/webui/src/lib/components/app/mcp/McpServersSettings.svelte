@@ -84,22 +84,23 @@
 	}
 </script>
 
+<div class="flex items-center gap-2 absolute left-8 top-8">
+	<McpLogo class="h-6 w-6" />
+
+	<h1 class="text-2xl font-semibold">MCP Servers</h1>
+</div>
+
+<div class="flex items-start justify-end gap-4 py-4 sticky top-0 z-10 px-8 mt-4">
+	{#if !isAddingServer}
+		<Button variant="outline" size="sm" class="shrink-0" onclick={showAddServerForm}>
+			<Plus class="h-4 w-4" />
+
+			Add New Server
+		</Button>
+	{/if}
+</div>
+
 <div class="grid gap-5 md:space-y-4 {className}">
-	<div class="flex items-start justify-between gap-4">
-		<div class="flex items-center gap-2">
-			<McpLogo class="h-6 w-6" />
-
-			<h1 class="text-2xl font-semibold">MCP Servers</h1>
-		</div>
-
-		{#if !isAddingServer}
-			<Button variant="outline" size="sm" class="shrink-0" onclick={showAddServerForm}>
-				<Plus class="h-4 w-4" />
-
-				Add New Server
-			</Button>
-		{/if}
-	</div>
 
 	{#if isAddingServer}
 		<Card.Root class="bg-muted/30 p-4">

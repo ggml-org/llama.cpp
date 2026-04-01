@@ -66,7 +66,8 @@
 		<div
 			data-slot="sidebar-gap"
 			class={cn(
-				'relative w-[calc(var(--sidebar-width)+0.75rem)] bg-transparent transition-[width] duration-200 ease-linear',
+				'relative bg-transparent transition-[width] duration-200 ease-linear',
+				variant === 'floating' ? 'w-[calc(var(--sidebar-width)+0.75rem)]' : 'w-(--sidebar-width)',
 				'group-data-[collapsible=offcanvas]:w-0',
 				'group-data-[side=right]:rotate-180',
 				variant === 'floating' || variant === 'inset'
@@ -78,25 +79,36 @@
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-				'fixed inset-y-0 z-999 hidden w-(--sidebar-width) transition-[left,right,width,opacity] duration-200 ease-linear md:z-0 md:flex',
-				side === 'left'
-					? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0'
-					: 'right-1 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0',
-				// Adjust the padding for floating and inset variants.
-				variant === 'floating' || variant === 'inset'
+				'fixed inset-y-0 z-999 hidden w-(--sidebar-width) duration-200 ease-linear md:z-0 md:flex',
+				variant === 'floating'
+					? [
+							'transition-[left,right,width,opacity]',
+							side === 'left'
+								? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0'
+								: 'right-3 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0',
+							'my-3 overflow-hidden rounded-2xl border border-sidebar-border shadow-md',
+					  ]
+					: [
+							'transition-[left,right,width] h-svh',
+							side === 'left'
+								? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
+								: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
+					  ],
+				// Adjust the padding for inset variant.
+				variant === 'inset'
 					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
-					: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
-				// Add margin and rounded corners
-				'my-3 overflow-hidden rounded-2xl border border-sidebar-border shadow-md',
+					: variant === 'floating'
+						? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
+						: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
 				className
 			)}
-			style="height: calc(100dvh - 1.5rem);"
+			style={variant === 'floating' ? 'height: calc(100dvh - 1.5rem);' : undefined}
 			{...restProps}
 		>
 			<div
 				data-sidebar="sidebar"
 				data-slot="sidebar-inner"
-				class="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
+				class="flex h-full w-full flex-col bg-sidebar"
 			>
 				{@render children?.()}
 			</div>

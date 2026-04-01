@@ -108,9 +108,18 @@
 		}
 	}
 
+	let chatSidebarActions: { activateSearch?: () => void } | undefined = $state();
+
 	export function activateSearchMode() {
-		isSearchModeActive = true;
+		chatSidebarActions?.activateSearch?.();
 	}
+
+	$effect(() => {
+		if (!sidebar.open) {
+			isSearchModeActive = false;
+			searchQuery = '';
+		}
+	});
 
 	export function editActiveConversation() {
 		if (currentChatId) {
@@ -148,7 +157,7 @@
 				<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
 			</a>
 
-			<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
+			<ChatSidebarActions bind:this={chatSidebarActions} {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 		</Sidebar.Header>
 
 		<Sidebar.Group class="mt-2 space-y-2 p-0 px-3">

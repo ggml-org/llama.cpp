@@ -7,10 +7,12 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		ListRestart
+		ListRestart,
+
+		Sliders
+
 	} from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
-	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
 		SETTINGS_SECTION_TITLES,
@@ -40,7 +42,7 @@
 	}> = [
 		{
 			title: SETTINGS_SECTION_TITLES.GENERAL,
-			icon: Settings,
+			icon: Sliders,
 			fields: [
 				{
 					key: SETTINGS_KEYS.THEME,
@@ -128,13 +130,18 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
-					label: 'Auto-show sidebar on new chat',
+					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					label: 'Show raw model names',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
-					label: 'Show raw model names',
+					key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
+					label: 'Always show agentic turns in conversation',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					label: 'Show tool call in progress',
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
@@ -261,19 +268,9 @@
 					type: SettingsFieldType.INPUT
 				},
 				{
-					key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
-					label: 'Always show agentic turns in conversation',
-					type: SettingsFieldType.CHECKBOX
-				},
-				{
 					key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
 					label: 'Max lines per tool preview',
 					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
-					label: 'Show tool call in progress',
-					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},
@@ -433,17 +430,15 @@
 </script>
 
 
-<div class="flex h-full flex-col {className} w-full">
-	<div class="flex items-center gap-2 w-full md:absolute md:top-8">
-		<Settings class="h-6 w-6" />
-
-		<h1 class="text-2xl font-semibold">Settings</h1>
-	</div>
-
-	<div class="flex flex-col overflow-hidden md:flex-row gap-4">
+<div class="flex h-full flex-col overflow-y-auto {className} w-full">
+	<div class="flex flex-1 flex-col md:flex-row gap-4">
 		<!-- Desktop Sidebar -->
-		<div class="hidden w-64 pt-8 mt-16 md:block">
-			<nav class="space-y-1 py-2">
+		<div class="hidden w-64 md:flex flex-col sticky top-0 self-start bg-background pt-8 pb-4">
+			<div class="flex items-center gap-2 pb-6">
+				<Settings class="h-6 w-6" />
+				<h1 class="text-2xl font-semibold">Settings</h1>
+			</div>
+			<nav class="space-y-1">
 				{#each settingSections as section (section.title)}
 					<button
 						class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
@@ -461,8 +456,12 @@
 		</div>
 
 		<!-- Mobile Header with Horizontal Scrollable Menu -->
-		<div class="flex flex-col pt-6 md:hidden">
-			<div class="border-b border-border/30 pt-4 md:py-4">
+		<div class="flex flex-col md:hidden sticky top-0 z-10 bg-background">
+			<div class="flex items-center gap-2 px-4 pt-6 pb-2">
+				<Settings class="h-6 w-6" />
+				<h1 class="text-2xl font-semibold">Settings</h1>
+			</div>
+			<div class="border-b border-border/30 py-2">
 				<!-- Horizontal Scrollable Category Menu with Navigation -->
 				<div class="relative flex items-center" style="scroll-padding: 1rem;">
 					<button
@@ -512,8 +511,8 @@
 			</div>
 		</div>
 
-		<ScrollArea class="flex-1 max-w-5xl mx-auto">
-			<div class="space-y-6 p-4 md:p-6 md:mt-20">
+		<div class="flex-1 max-w-5xl mx-auto">
+			<div class="space-y-6 p-4 md:p-6 md:pt-22">
 				<div class="grid">
 					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
@@ -537,7 +536,7 @@
 					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
 				</div>
 			</div>
-		</ScrollArea>
+		</div>
 	</div>
 </div>
 

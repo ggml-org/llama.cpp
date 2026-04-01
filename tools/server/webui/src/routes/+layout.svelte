@@ -11,7 +11,7 @@
 		DialogConversationTitleUpdate,
 		DialogChatSettingsImportExport
 	} from '$lib/components/app';
-	import { Settings } from '@lucide/svelte';
+	import { Settings, Search, SquarePen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
@@ -41,7 +41,6 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
@@ -57,6 +56,8 @@
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
+	let isMcpActive = $derived(page.route.id === '/settings/mcp');
+	let isSettingsActive = $derived(page.route.id === '/settings/chat');
 	// let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
 	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
@@ -141,23 +142,7 @@
 			sidebarOpen = true;
 			return;
 		}
-
-		if (isHomeRoute && !isNewChatMode) {
-			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
-			sidebarOpen = false;
-		} else if (isHomeRoute && isNewChatMode) {
-			// Keep sidebar open in new chat mode
-			sidebarOpen = true;
-		} else if (isChatRoute) {
-			// On chat routes, only auto-show sidebar if setting is enabled
-			if (autoShowSidebarOnNewChat) {
-				sidebarOpen = true;
-			}
-			// If setting is disabled, don't change sidebar state - let user control it manually
-		} else {
-			// Other routes follow default behavior
-			sidebarOpen = showSidebarByDefault;
-		}
+		// Don't auto-open or auto-close sidebar during navigation - user controls it manually
 	});
 
 	// Initialize server properties on app load (run once)
@@ -280,7 +265,7 @@
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
-			<Sidebar.Root class="h-full">
+			<Sidebar.Root variant="floating" class="h-full">
 				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
@@ -293,28 +278,80 @@
 				/>
 			{/if}
 
-			{#if !sidebarOpen}
-				<div class="absolute bottom-3 left-3 z-[900] flex flex-col gap-1 p-2">
+			{#if isDesktop && !alwaysShowSidebarOnDesktop}
+				<!-- Desktop: icon strip, always rendered, transitions width/opacity -->
+				<aside class="hidden md:flex shrink-0 flex-col items-center justify-between overflow-hidden py-3 transition-[width,opacity] duration-200 ease-linear {sidebarOpen ? 'w-0 opacity-0 pointer-events-none' : 'w-[calc(var(--sidebar-width-icon)+1.5rem)] opacity-100'}">
+					<div class="mt-12 flex flex-col items-center gap-1">
+							<Button
+								variant="ghost"
+								size="icon-lg"
+								class="rounded-full"
+								href="?new_chat=true#/"
+							>
+								<SquarePen class="h-4 w-4" />
+								<span class="sr-only">New Chat</span>
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon-lg"
+								class="rounded-full"
+								onclick={() => {
+									if (chatSidebar?.activateSearchMode) {
+										chatSidebar.activateSearchMode();
+									}
+									sidebarOpen = true;
+								}}
+							>
+								<Search class="h-4 w-4" />
+								<span class="sr-only">Search</span>
+							</Button>
+						</div>
+						<div class="flex flex-col items-center gap-1">
+							<Button
+								variant="ghost"
+								size="icon-lg"
+								href="#/settings/mcp"
+								class="rounded-full {isMcpActive ? 'bg-accent text-accent-foreground' : ''}"
+							>
+								<McpLogo class="h-4 w-4" />
+								<span class="sr-only">MCP Servers</span>
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon-lg"
+								href="#/settings/chat"
+								class="rounded-full {isSettingsActive ? 'bg-accent text-accent-foreground' : ''}"
+							>
+								<Settings class="h-4 w-4" />
+								<span class="sr-only">Settings</span>
+							</Button>
+						</div>
+				</aside>
+			{/if}
+
+			{#if !sidebarOpen && !isDesktop}
+				<!-- Mobile quick-access buttons -->
+				<div class="absolute bottom-3 left-3 z-[900] flex flex-col gap-1 p-2 md:hidden">
 					<Button
 						variant="ghost"
-						size="icon"
-						class="h-8 w-8 {activePanel === 'mcp' ? 'bg-accent text-accent-foreground' : ''}"
-						onclick={() => (activePanel = activePanel === 'mcp' ? 'chat' : 'mcp')}
+						size="icon-lg"
+						href="#/settings/mcp"
+						class={isMcpActive ? 'bg-accent text-accent-foreground' : ''}
 					>
 						<McpLogo class="h-4 w-4" />
 					</Button>
 					<Button
 						variant="ghost"
-						size="icon"
-						class="h-8 w-8 {activePanel === 'settings' ? 'bg-accent text-accent-foreground' : ''}"
-						onclick={() => (activePanel = activePanel === 'settings' ? 'chat' : 'settings')}
+						size="icon-lg"
+						href="#/settings/chat"
+						class={isSettingsActive ? 'bg-accent text-accent-foreground' : ''}
 					>
 						<Settings class="h-4 w-4" />
 					</Button>
 				</div>
 			{/if}
 
-			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
+			<Sidebar.Inset class="flex flex-1 flex-col overflow-auto">
 				{@render children?.()}
 			</Sidebar.Inset>
 		</div>

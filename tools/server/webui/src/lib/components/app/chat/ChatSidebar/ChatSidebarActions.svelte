@@ -20,10 +20,17 @@
 	}: Props = $props();
 
 	const importExportDialog = getImportExportDialogContext();
+	let searchInputRef = $state<HTMLInputElement | null>(null);
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
 		searchQuery = '';
+	}
+
+	export function activateSearch() {
+		isSearchModeActive = true;
+		// Focus after Svelte renders the input
+		queueMicrotask(() => searchInputRef?.focus());
 	}
 </script>
 
@@ -31,6 +38,7 @@
 	{#if isSearchModeActive}
 		<SearchInput
 			bind:value={searchQuery}
+			bind:ref={searchInputRef}
 			onClose={handleSearchModeDeactivate}
 			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 			placeholder="Search conversations..."
@@ -54,9 +62,7 @@
 
 		<Button
 			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
-			onclick={() => {
-				isSearchModeActive = true;
-			}}
+			onclick={activateSearch}
 			variant="ghost"
 		>
 			<div class="flex items-center gap-2">
