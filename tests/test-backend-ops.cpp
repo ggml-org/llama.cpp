@@ -7888,6 +7888,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_add1());
     test_cases.emplace_back(new test_add1(GGML_TYPE_F32, {1024, 1024, 1, 1}));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, {1024, 1024, 1, 1}));
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
