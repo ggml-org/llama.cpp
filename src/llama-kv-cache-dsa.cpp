@@ -173,7 +173,7 @@ llama_kv_cache * llama_kv_cache_dsa::get_base() const {
     return kv_base.get();
 }
 
-llama_kv_cache * llama_kv_cache_dsa::get_ik() const {
+llama_kv_cache * llama_kv_cache_dsa::get_dsa() const {
     return kv_ik.get();
 }
 
@@ -186,8 +186,8 @@ llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(llama_memory_status statu
 llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
         llama_kv_cache_dsa * kv) :
     ctx_base(kv->get_base()->init_full()),
-    ctx_ik(kv->get_ik()->init_full()),
-    status(llama_memory_status_combine(ctx_base->get_status(), ctx_ik->get_status())) {
+    ctx_dsa(kv->get_dsa()->init_full()),
+    status(llama_memory_status_combine(ctx_base->get_status(), ctx_dsa->get_status())) {
 }
 
 llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
@@ -195,8 +195,8 @@ llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
         llama_context * lctx,
         bool optimize) :
     ctx_base(kv->get_base()->init_update(lctx, optimize)),
-    ctx_ik(kv->get_ik()->init_update(lctx, optimize)),
-    status(llama_memory_status_combine(ctx_base->get_status(), ctx_ik->get_status())) {
+    ctx_dsa(kv->get_dsa()->init_update(lctx, optimize)),
+    status(llama_memory_status_combine(ctx_base->get_status(), ctx_dsa->get_status())) {
 }
 
 llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
@@ -207,8 +207,8 @@ llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
     ubatches(std::move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
     ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches)),
-    ctx_ik(new llama_kv_cache_context(kv->get_ik(), std::move(sinfos_ik), this->ubatches)),
-    status(llama_memory_status_combine(ctx_base->get_status(), ctx_ik->get_status())) {
+    ctx_dsa(new llama_kv_cache_context(kv->get_dsa(), std::move(sinfos_ik), this->ubatches)),
+    status(llama_memory_status_combine(ctx_base->get_status(), ctx_dsa->get_status())) {
 }
 
 llama_kv_cache_dsa_context:: ~llama_kv_cache_dsa_context() = default;
@@ -217,7 +217,7 @@ bool llama_kv_cache_dsa_context::next() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     ctx_base->next();
-    ctx_ik ->next();
+    ctx_dsa ->next();
 
     if (++i_next >= ubatches.size()) {
         return false;
@@ -232,7 +232,7 @@ bool llama_kv_cache_dsa_context::apply() {
     bool res = true;
 
     res = res & ctx_base->apply();
-    res = res & ctx_ik ->apply();
+    res = res & ctx_dsa ->apply();
 
     return res;
 }
@@ -253,8 +253,8 @@ const llama_kv_cache_context * llama_kv_cache_dsa_context::get_base() const {
     return static_cast<const llama_kv_cache_context *>(ctx_base.get());
 }
 
-const llama_kv_cache_context * llama_kv_cache_dsa_context::get_ik()  const {
+const llama_kv_cache_context * llama_kv_cache_dsa_context::get_dsa()  const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-    return static_cast<const llama_kv_cache_context *>(ctx_ik.get());
+    return static_cast<const llama_kv_cache_context *>(ctx_dsa.get());
 }

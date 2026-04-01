@@ -21,6 +21,7 @@ struct llama_cparams;
 struct llama_memory_context_i;
 
 class llama_kv_cache_context;
+class llama_kv_cache_dsa_context;
 class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
@@ -349,6 +350,43 @@ public:
 
     const llama_kv_cache_context * mctx;
 };
+
+class llm_graph_input_attn_k_dsa : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_k_dsa(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_kv_cache_dsa_context * mctx) :
+        hparams(hparams),
+        cparams(cparams),
+        mctx(mctx) {
+    }
+    ~llm_graph_input_attn_k_dsa() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * get_k_idxs()     const { return self_k_idxs; }
+    ggml_tensor * get_k_idxs_dsa() const { return self_k_idxs_dsa; }
+
+    ggml_tensor * get_kq_mask()     const { return self_kq_mask_cnv; }
+    ggml_tensor * get_kq_mask_dsa() const { return self_kq_mask_dsa; }
+
+    ggml_tensor * self_k_idxs     = nullptr; // I64 [n_batch]
+    ggml_tensor * self_k_idxs_dsa = nullptr; // I64 [n_batch]
+
+    ggml_tensor * self_kq_mask         = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_cnv     = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_dsa     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_dsa_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
+
+    const llama_hparams hparams;
+    const llama_cparams cparams;
+
+    const llama_kv_cache_dsa_context * mctx;
+};
+
 
 class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
 public:
@@ -922,7 +960,7 @@ struct llm_graph_context {
                     int   il) const;
 
     ggml_tensor * build_attn(
-            llm_graph_input_attn_k * inp,
+            llm_graph_input_attn_k_dsa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
@@ -966,7 +1004,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    std::pair<llm_graph_input_attn_k *, llm_graph_input_attn_k *> build_attn_inp_k_dsa() const;
+   llm_graph_input_attn_k_dsa * build_attn_inp_k_dsa() const;
 
     //
     // recurrent

@@ -69,7 +69,7 @@ public:
     //
 
     llama_kv_cache * get_base() const;
-    llama_kv_cache * get_ik () const;
+    llama_kv_cache * get_dsa () const;
 
 private:
     // we keep indexer KV cache hparams instance here as llama_kv_cache stores only reference to it
@@ -121,7 +121,7 @@ public:
     //
 
     const llama_kv_cache_context * get_base() const;
-    const llama_kv_cache_context * get_ik()  const;
+    const llama_kv_cache_context * get_dsa()  const;
 
 private:
     //llama_kv_cache_dsa * kv;
@@ -132,7 +132,7 @@ private:
     std::vector<llama_ubatch> ubatches;
 
     const llama_memory_context_ptr ctx_base;
-    const llama_memory_context_ptr ctx_ik;
+    const llama_memory_context_ptr ctx_dsa;
 
     const llama_memory_status status;
 };

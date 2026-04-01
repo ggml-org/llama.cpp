@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-dsa.h"
 
 llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
@@ -44,9 +45,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    std::pair<llm_graph_input_attn_k*, llm_graph_input_attn_k*> inp_attn_dsa = build_attn_inp_k_dsa();
-    auto * inp_attn_k = inp_attn_dsa.first;
-    auto * inp_attn_ik = inp_attn_dsa.second;
+    llm_graph_input_attn_k_dsa * inp_attn_dsa = build_attn_inp_k_dsa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -134,9 +133,9 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
-                const auto * mctx_cur = inp_attn_ik->mctx;
-                const auto & k_idxs = inp_attn_ik->get_k_idxs();
-                ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, indexer_k, k_idxs, il));
+                const auto * mctx_dsa = inp_attn_dsa->mctx->get_dsa();
+                const auto & k_idxs = inp_attn_dsa->get_k_idxs_dsa();
+                ggml_build_forward_expand(gf, mctx_dsa->cpy_k(ctx0, indexer_k, k_idxs, il));
 
                 // prepare indexer weights
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
@@ -146,7 +145,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_weights, "indexer_weights", il);
 
                 // get cached indexer keys
-                indexer_k = mctx_cur->get_k(ctx0, il);
+                indexer_k = mctx_dsa->get_k(ctx0, il);
 
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];
@@ -189,7 +188,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_score, "indexer_score", il);
 
                 // mask indexer scores
-                ggml_tensor * indexer_kq_mask = inp_attn_ik->self_kq_mask;
+                ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_dsa();
                 indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                 cb(indexer_score, "indexer_score", il);
 
@@ -272,7 +271,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(Vcur, "Vcur", il);
 
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
-                cur = build_attn(inp_attn_k,
+                cur = build_attn(inp_attn_dsa,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
             }
