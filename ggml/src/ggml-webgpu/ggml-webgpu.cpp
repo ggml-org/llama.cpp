@@ -83,7 +83,7 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 #define WEBGPU_NUM_PARAM_BUFS                96u
 #define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE     32u
-#define WEBGPU_WAIT_ANY_TIMEOUT_MS           0
+#define WEBGPU_WAIT_ANY_TIMEOUT_MS           100
 // Maximum number of in-flight submissions per-thread, to avoid exhausting the
 // parameter buffer pool
 #define WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD  (WEBGPU_NUM_PARAM_BUFS / WEBGPU_COMMAND_SUBMIT_BATCH_SIZE)
@@ -171,6 +171,7 @@ struct webgpu_buf_pool {
         // Try growing the pool if no free buffers
         if (free.empty() && cur_pool_size < max_pool_size && should_grow) {
             cur_pool_size++;
+            lock.unlock();  // avoid deadlock between this lock and Dawn's internal locks when buffers are freed in callbacks
             wgpu::Buffer dev_buf;
             ggml_webgpu_create_buffer(device, dev_buf, buf_size, dev_buf_usage, "ggml_webgpu_dev_pool_buf");
 
@@ -507,7 +508,7 @@ static void ggml_backend_webgpu_wait(webgpu_global_context &          ctx,
 
     bool blocking_wait = block || subs.size() >= WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD;
     while (blocking_wait) {
-        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, 0);
+        auto waitStatus = ctx->instance.WaitAny(1, &subs[0].submit_done, WEBGPU_WAIT_ANY_TIMEOUT_MS * 1e6);
         if (ggml_backend_webgpu_handle_wait_status(waitStatus, true)) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
             ggml_backend_webgpu_wait_profile_futures(ctx, subs[0].profile_futures, true);
@@ -728,7 +729,6 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
         ggml_backend_webgpu_build(ctx, ctx->memset_buf_pool, ctx->memset_pipelines[0], params, entries, wg_x);
     std::vector<webgpu_command>    commands = { command };
     std::vector<webgpu_submission> sub      = { ggml_backend_webgpu_submit(ctx, commands, ctx->memset_buf_pool) };
-    ggml_backend_webgpu_wait(ctx, sub);
 }
 
 /** End WebGPU Actions */
@@ -2694,17 +2694,6 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
         // memset the remaining bytes
         ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, val32,
                                           total_offset + (size - remaining_size), remaining_size);
-    } else {
-        // wait for WriteBuffer to complete
-        buf_ctx->global_ctx->instance.WaitAny(buf_ctx->global_ctx->queue.OnSubmittedWorkDone(
-                                                  wgpu::CallbackMode::AllowSpontaneous,
-                                                  [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-                                                      if (status != wgpu::QueueWorkDoneStatus::Success) {
-                                                          GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n",
-                                                                         std::string(message).c_str());
-                                                      }
-                                                  }),
-                                              UINT64_MAX);
     }
     WEBGPU_CPU_PROFILE_TOTAL_END(set_tensor, buf_ctx->global_ctx);
 }
