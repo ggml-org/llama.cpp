@@ -85,6 +85,7 @@ enum htp_op_code {
 
 struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
+    uint32_t size;                 // Data size in bytes
     uint16_t type;                 // Data type
     uint16_t bi;                   // Buffer index
     uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
@@ -92,18 +93,16 @@ struct htp_tensor {
 };
 
 enum htp_op_buf_flags {
-    HTP_OP_BUF_INPUT  = (1U << 0),
-    HTP_OP_BUF_OUTPUT = (1U << 1)
+    HTP_OP_BUF_WEIGHT  = (1U << 0),
+    HTP_OP_BUF_COMPUTE = (1U << 1)
 };
 
 struct htp_op_buf {
     uint64_t base;     // base address
     uint64_t size;     // total size
-    uint64_t begin;    // start offset (used for cache maint.)
-    uint64_t end;      // end offset   (used for cache maint.)
-    uint32_t fd;       // file desc
     uint32_t flags;    // buffer flags
-}; // sizeof() must be multiple of 8
+    uint32_t fd;       // file descriptor
+};
 
 enum htp_op_flags {
     HTP_OPFLAGS_SKIP_QUANTIZE = (1U << 0),  // Skip dynamic quantization (reuse quantized tensors)

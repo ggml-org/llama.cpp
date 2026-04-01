@@ -459,7 +459,7 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
         // New buffer, add to mappings
         struct htp_mmap *m = o_mm;
         if (m->size) {
-            // Replacing and older entry, unmap first
+            // Replacing an older entry, unmap first
             FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
             HAP_munmap2((void *) m->base, m->size);
         }
@@ -474,31 +474,45 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
         m->fd   = b->fd;
         m->size = b->size;
         m->age  = 0;
-    } else {
-        // Alredy mapped, just need to invalidate the L2 for input bufs
-        if (b->flags & HTP_OP_BUF_INPUT) {
-            uint8_t* l2_start = (uint8_t*) b->base + b->begin;
-            uint32_t l2_size  = b->end  - b->begin;
-            hex_l2flush(l2_start, l2_size);
-        }
     }
 }
 
-static void post_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf *b) {
-    FARF(HIGH, "post-buf: idx %u fd %u size %u flags 0x%x range %u:%u", idx, b->fd,
-            (uint32_t) b->size, b->flags, (uint32_t) b->begin, (uint32_t) b->end);
+static void prep_src_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
+    *t = *r_t;
 
-    if (b->flags & HTP_OP_BUF_OUTPUT) {
-        uint8_t* l2_start = (uint8_t*) b->base + b->begin;
-        uint32_t l2_size  = b->end  - b->begin;
-        hex_l2clear(l2_start, l2_size);
+    uint32_t offset = t->data;
+    uint32_t size   = t->size;
+    uint32_t bi     = t->bi;
+
+    t->data = bufs[bi].base + offset;
+
+    if (bufs[bi].flags & HTP_OP_BUF_COMPUTE) {
+        // for now always invalidate compute buffers on input
+        hex_l2clear((void *) t->data, size);
     }
+
+    FARF(HIGH, "prep-src-tensor: bi %u offset %u size %u data %p : %u:%u:%u:%u", t->bi, offset, t->size, (void*) t->data,
+        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void prep_op_tensor(struct htp_op_buf *bufs, struct htp_tensor *to, struct htp_tensor *tr) {
-    *to = *tr;
-    to->data = bufs[to->bi].base + to->data; // FIXME: needs to be mapped properly
-    FARF(HIGH, "prep-tensor: bi %u offset %u data %p : %u:%u:%u:%u", to->bi, tr->data, (void*) to->data,
+static void prep_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
+    *t = *r_t;
+
+    uint32_t offset = t->data;
+    uint32_t size   = t->size;
+    uint32_t bi     = t->bi;
+
+    t->data = bufs[bi].base + offset;
+
+    FARF(HIGH, "prep-dst-tensor: bi %u offset %u size %u data %p : %u:%u:%u:%u", t->bi, offset, t->size, (void*) t->data,
+        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
+}
+
+static void post_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t) {
+    // for now always buffers on output
+    hex_l2flush((void *) t->data, t->size);
+
+    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", bi, (void *) t->data, size,
         to->ne[0], to->ne[1], to->ne[3], to->ne[3]);
 }
 
@@ -518,11 +532,13 @@ static void proc_op_req(struct htp_context * ctx, struct htp_op_buf * bufs, stru
 
     struct htp_tensor *src = &octx.src0;
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS && req->src[i].ne[0]; i++) {
-        prep_op_tensor(bufs, &src[i], &req->src[i]);
+        prep_src_tensor(bufs, &src[i], &req->src[i]);
     }
-    prep_op_tensor(bufs, &octx.dst, &req->dst);
+    prep_dst_tensor(bufs, &octx.dst, &req->dst);
 
     execute_op(&octx);
+
+    post_dst_tensor(bufs, &octx.dst);
 
     profile_stop(&prof);
 }
@@ -585,10 +601,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         }
 
         vtcm_release(ctx);
-
-        for (uint32_t i=0; i < n_bufs; i++) {
-             post_op_buf(ctx, i, &bufs[i]);
-        }
 
         // Prep response struct
         struct htp_general_rsp rsp;

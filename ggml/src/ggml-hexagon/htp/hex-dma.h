@@ -125,11 +125,11 @@ static inline dma_ptr dma_make_ptr(void *dst, const void *src)
 }
 
 #if __HVX_ARCH__ < 73
-static const uint32_t dma_src_l2_bypass_on = 0; // FIXME: reenable bypass 
-static const uint32_t dma_dst_l2_bypass_on = 0; // FIXME: reenable bypass
+static const uint32_t dma_src_l2_bypass_on = 1;
+static const uint32_t dma_dst_l2_bypass_on = 0;
 #else
-static const uint32_t dma_src_l2_bypass_on = 0; // FIXME: reenable bypass 
-static const uint32_t dma_dst_l2_bypass_on = 0; // FIXME: reenable bypass
+static const uint32_t dma_src_l2_bypass_on = 1;
+static const uint32_t dma_dst_l2_bypass_on = 1;
 #endif
 
 static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t size) {

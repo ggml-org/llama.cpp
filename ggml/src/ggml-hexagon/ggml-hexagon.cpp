@@ -2371,13 +2371,11 @@ struct op_request_batch {
     void req_buf_init(htp_tensor *h, const ggml_tensor * t, bool input) {
         auto s_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
 
-        // Begining and end of the tensor data within the buffer
-        size_t   t_size  = ggml_nbytes(t);
-        uint64_t t_begin = (uint8_t *) t->data - s_buf->base;
-        uint64_t t_end   = t_begin + t_size;
+        uint64_t t_offset = (uint8_t *) t->data - s_buf->base;
+        size_t   t_size   = ggml_nbytes(t);
 
         HEX_VERBOSE("ggml-hex: buf-init %s : fd %d base %p data %p offset %lu size %zu\n",
-                t->name, s_buf->fd, (void*) s_buf->base, (void*) t->data, (unsigned long) t_begin, t_size);
+                t->name, s_buf->fd, (void*) s_buf->base, (void*) t->data, (unsigned long) t_offset, t_size);
 
         int bi = -1;
 
@@ -2399,34 +2397,25 @@ struct op_request_batch {
             b->base   = (uint64_t) s_buf->base;
             b->fd     = s_buf->fd;
             b->size   = s_buf->size;
-            b->begin  = t_begin;
-            b->end    = t_end;
 
-            HEX_VERBOSE("ggml-hex: opreq new buffer #%u : fd %d base %p size %lu : range %lu:%lu \n", bi, b->fd,
-                                   (void*) s_buf->base, (unsigned long) b->size, (unsigned long) b->begin, (unsigned long) b->end);
-        } else {
-            // Updating existing slot
-            if (t_begin < b->begin) b->begin = t_begin;
-            if (t_end   > b->end)   b->end   = t_end;
-    
-            HEX_VERBOSE("ggml-hex: opreq upd buffer #%u : fd %d base %p size %lu : range %lu:%lu \n", bi, b->fd,
-                                   (void*) s_buf->base, (unsigned long) b->size, (unsigned long) b->begin, (unsigned long) b->end);
+            HEX_VERBOSE("ggml-hex: opreq new buffer #%u : fd %d base %p size %lu\n", bi, b->fd, (void*) s_buf->base, (unsigned long) b->size);
         }
 
         switch (ggml_backend_buffer_get_usage(t->buffer)) {
         case GGML_BACKEND_BUFFER_USAGE_COMPUTE:
-            b->flags |= input ? HTP_OP_BUF_INPUT : HTP_OP_BUF_OUTPUT;
+            b->flags |= HTP_OP_BUF_COMPUTE;
             break;
 
         case GGML_BACKEND_BUFFER_USAGE_WEIGHTS:
         default:
-            b->flags = 0;
+            b->flags |= HTP_OP_BUF_WEIGHT;
             break;
         }
    
         h->bi    = bi;
         h->type  = t->type;
-        h->data  = t_begin;
+        h->data  = t_offset;
+        h->size  = t_size;
         h->ne[0] = t->ne[0]; h->ne[1] = t->ne[1]; h->ne[2] = t->ne[2]; h->ne[3] = t->ne[3];
         h->nb[0] = t->nb[0]; h->nb[1] = t->nb[1]; h->nb[2] = t->nb[2]; h->nb[3] = t->nb[3];
     }
@@ -2496,8 +2485,8 @@ struct op_request_batch {
         if (opt_verbose > 1) {
             htp_op_buf *b = (htp_op_buf*) b_ptr;
             for (unsigned int i=0; i < n_bufs; i++) {
-                GGML_LOG_DEBUG("ggml-hex: %s htp-buf : fd %d base %p size %zu : range %u:%u\n", sess->name.c_str(),
-                            b[i].fd, (void *) b[i].base, b[i].size, (unsigned int) b[i].begin, (unsigned int) b[i].end);
+                GGML_LOG_DEBUG("ggml-hex: %s htp-buf : fd %d base %p size %zu\n", sess->name.c_str(),
+                            b[i].fd, (void *) b[i].base, b[i].size);
             }
         }
 
