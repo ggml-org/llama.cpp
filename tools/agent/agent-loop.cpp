@@ -769,15 +769,17 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
             try_compact();
         }
 
+        // Empty response — don't save to history, just end the turn
+        if (parsed.content.empty() && parsed.tool_calls.empty()) {
+            result.stop_reason = agent_stop_reason::COMPLETED;
+            result.final_response = "";
+            return result;
+        }
+
         // Add assistant message to history
         json assistant_msg = build_assistant_msg(parsed, result.iterations);
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
-
-        // Empty response (no text, no tool calls) — model hiccupped, retry
-        if (parsed.content.empty() && parsed.tool_calls.empty()) {
-            continue;
-        }
 
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
@@ -873,15 +875,18 @@ agent_loop_result agent_loop::run_streaming(
             }
         }
 
+        // Empty response — don't save to history, just end the turn
+        if (parsed.content.empty() && parsed.tool_calls.empty()) {
+            result.stop_reason = agent_stop_reason::COMPLETED;
+            result.final_response = "";
+            on_event(agent_event::completed(result.stop_reason, stats_));
+            return result;
+        }
+
         // Add assistant message to history
         json assistant_msg = build_assistant_msg(parsed, result.iterations);
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
-
-        // Empty response (no text, no tool calls) — model hiccupped, retry
-        if (parsed.content.empty() && parsed.tool_calls.empty()) {
-            continue;
-        }
 
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
