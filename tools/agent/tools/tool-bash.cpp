@@ -56,6 +56,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     }
 
     std::string output;
+    size_t total_bytes_seen = 0;  // Track total output for truncation annotation
     int exit_code = 0;
     bool timed_out = false;
     bool was_interrupted = false;
@@ -122,8 +123,11 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
 
         if (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
             buffer[bytesRead] = '\0';
-            if (output.length() < MAX_COLLECT_LENGTH) {
-                output.append(buffer, std::min((size_t)bytesRead, MAX_COLLECT_LENGTH - output.length()));
+            total_bytes_seen += bytesRead;
+            output.append(buffer, bytesRead);
+            // Rolling tail: keep only the last MAX_COLLECT_LENGTH bytes
+            if (output.size() > MAX_COLLECT_LENGTH) {
+                output.erase(0, output.size() - MAX_OUTPUT_LENGTH);
             }
         }
     }
@@ -194,8 +198,11 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
         ssize_t n = read(pipe_fd[0], buffer, sizeof(buffer) - 1);
         if (n > 0) {
             buffer[n] = '\0';
-            if (output.length() < MAX_COLLECT_LENGTH) {
-                output.append(buffer, std::min((size_t)n, MAX_COLLECT_LENGTH - output.length()));
+            total_bytes_seen += n;
+            output.append(buffer, n);
+            // Rolling tail: keep only the last MAX_COLLECT_LENGTH bytes
+            if (output.size() > MAX_COLLECT_LENGTH) {
+                output.erase(0, output.size() - MAX_OUTPUT_LENGTH);
             }
         } else if (n == 0) {
             // EOF
@@ -208,8 +215,10 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
                 // Process ended, read remaining data
                 while ((n = read(pipe_fd[0], buffer, sizeof(buffer) - 1)) > 0) {
                     buffer[n] = '\0';
-                    if (output.length() < MAX_COLLECT_LENGTH) {
-                        output.append(buffer, std::min((size_t)n, MAX_COLLECT_LENGTH - output.length()));
+                    total_bytes_seen += n;
+                    output.append(buffer, n);
+                    if (output.size() > MAX_COLLECT_LENGTH) {
+                        output.erase(0, output.size() - MAX_OUTPUT_LENGTH);
                     }
                 }
                 exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -233,9 +242,8 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
 #endif
 
     // Tail-truncate raw output to MAX_OUTPUT_LENGTH, snapping to a line boundary
-    bool output_was_truncated = false;
+    bool output_was_truncated = (total_bytes_seen > MAX_OUTPUT_LENGTH);
     if (output.size() > MAX_OUTPUT_LENGTH) {
-        output_was_truncated = true;
         output = output.substr(output.size() - MAX_OUTPUT_LENGTH);
         // Snap to first newline to avoid a partial opening line
         size_t nl = output.find('\n');
