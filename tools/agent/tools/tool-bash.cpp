@@ -20,10 +20,11 @@
 #include <fcntl.h>
 #endif
 
-static const int MAX_OUTPUT_LENGTH = 100000;
+static const size_t MAX_OUTPUT_LENGTH = 100000;
+static const size_t MAX_COLLECT_LENGTH = MAX_OUTPUT_LENGTH * 2;  // Collect 2x, then tail-truncate
 static const int MAX_OUTPUT_LINES = 2000;
 
-// Truncate output to max lines
+// Truncate output to max lines (keeps the TAIL — errors are at the end)
 static std::string truncate_lines(const std::string & text, int max_lines) {
     std::vector<std::string> lines;
     std::istringstream stream(text);
@@ -37,11 +38,12 @@ static std::string truncate_lines(const std::string & text, int max_lines) {
         return text;
     }
 
+    int omitted = (int)lines.size() - max_lines;
     std::ostringstream result;
-    for (int i = 0; i < max_lines; i++) {
+    result << "[First " << omitted << " lines omitted]\n";
+    for (int i = omitted; i < (int)lines.size(); i++) {
         result << lines[i] << "\n";
     }
-    result << "… +" << (lines.size() - max_lines) << " more lines";
     return result.str();
 }
 
@@ -120,8 +122,8 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
 
         if (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
             buffer[bytesRead] = '\0';
-            if (output.length() < MAX_OUTPUT_LENGTH) {
-                output.append(buffer, std::min((size_t)bytesRead, MAX_OUTPUT_LENGTH - output.length()));
+            if (output.length() < MAX_COLLECT_LENGTH) {
+                output.append(buffer, std::min((size_t)bytesRead, MAX_COLLECT_LENGTH - output.length()));
             }
         }
     }
@@ -192,8 +194,8 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
         ssize_t n = read(pipe_fd[0], buffer, sizeof(buffer) - 1);
         if (n > 0) {
             buffer[n] = '\0';
-            if (output.length() < MAX_OUTPUT_LENGTH) {
-                output.append(buffer, std::min((size_t)n, MAX_OUTPUT_LENGTH - output.length()));
+            if (output.length() < MAX_COLLECT_LENGTH) {
+                output.append(buffer, std::min((size_t)n, MAX_COLLECT_LENGTH - output.length()));
             }
         } else if (n == 0) {
             // EOF
@@ -206,8 +208,8 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
                 // Process ended, read remaining data
                 while ((n = read(pipe_fd[0], buffer, sizeof(buffer) - 1)) > 0) {
                     buffer[n] = '\0';
-                    if (output.length() < MAX_OUTPUT_LENGTH) {
-                        output.append(buffer, std::min((size_t)n, MAX_OUTPUT_LENGTH - output.length()));
+                    if (output.length() < MAX_COLLECT_LENGTH) {
+                        output.append(buffer, std::min((size_t)n, MAX_COLLECT_LENGTH - output.length()));
                     }
                 }
                 exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -230,14 +232,26 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     }
 #endif
 
-    // Build result with line truncation
+    // Tail-truncate raw output to MAX_OUTPUT_LENGTH, snapping to a line boundary
+    bool output_was_truncated = false;
+    if (output.size() > MAX_OUTPUT_LENGTH) {
+        output_was_truncated = true;
+        output = output.substr(output.size() - MAX_OUTPUT_LENGTH);
+        // Snap to first newline to avoid a partial opening line
+        size_t nl = output.find('\n');
+        if (nl != std::string::npos && nl < 200) {
+            output = output.substr(nl + 1);
+        }
+    }
+
+    // Then truncate to max lines (also keeps tail)
     std::string truncated_output = truncate_lines(output, MAX_OUTPUT_LINES);
 
     std::ostringstream result_output;
     result_output << truncated_output;
 
-    if (output.length() >= MAX_OUTPUT_LENGTH) {
-        result_output << "\n[Output truncated at " << MAX_OUTPUT_LENGTH << " characters]";
+    if (output_was_truncated) {
+        result_output << "\n[Output truncated to last " << MAX_OUTPUT_LENGTH << " characters]";
     }
 
     if (was_interrupted) {
