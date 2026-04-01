@@ -24,7 +24,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
-#include <chrono>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
@@ -1389,8 +1388,7 @@ struct ggml_backend_cuda_context {
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
         auto it = cuda_graphs.find(first_node_ptr);
         if (it == cuda_graphs.end()) {
-            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
-            cuda_graphs_lru.push_back(first_node_ptr);            
+            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();            
             return cuda_graphs[first_node_ptr].get();
         }        
         return it->second.get();
