@@ -9,7 +9,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -20,12 +19,10 @@ struct common_params;
 
 // Configuration for creating a new session
 struct agent_session_config {
-    std::set<std::string> allowed_tools;  // Empty = all tools
     bool yolo_mode = false;               // Skip permission prompts
     int max_iterations = 50;
     int tool_timeout_ms = 120000;
     std::string working_dir;
-    std::string system_prompt;            // Optional custom system prompt
 
     // Skills configuration (agentskills.io spec)
     bool enable_skills = true;
@@ -39,7 +36,6 @@ struct agent_session_config {
 enum class agent_session_state {
     IDLE,              // Ready for input
     RUNNING,           // Processing a prompt
-    WAITING_PERMISSION,// Waiting for permission response
     COMPLETED,         // Session ended normally
     ERROR              // Session ended with error
 };
@@ -142,7 +138,8 @@ public:
     std::string create_session(const agent_session_config & config = {});
 
     // Get a session by ID (nullptr if not found)
-    agent_session * get_session(const std::string & id);
+    // Returns shared_ptr so the session stays alive for the full request
+    std::shared_ptr<agent_session> get_session(const std::string & id);
 
     // Delete a session
     bool delete_session(const std::string & id);
@@ -161,7 +158,7 @@ private:
     const common_params & params_;
 
     mutable std::mutex mutex_;
-    std::map<std::string, std::unique_ptr<agent_session>> sessions_;
+    std::map<std::string, std::shared_ptr<agent_session>> sessions_;
     std::atomic<uint64_t> session_counter_{0};
 
     std::string generate_session_id();

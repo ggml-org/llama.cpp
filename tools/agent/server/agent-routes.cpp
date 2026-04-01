@@ -109,11 +109,6 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             try {
                 json body = json::parse(req.body);
 
-                if (body.contains("tools") && body["tools"].is_array()) {
-                    for (const auto & tool : body["tools"]) {
-                        config.allowed_tools.insert(tool.get<std::string>());
-                    }
-                }
                 if (body.contains("yolo")) {
                     config.yolo_mode = body["yolo"].get<bool>();
                 }
@@ -152,7 +147,7 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(400, "Missing session ID");
         }
 
-        agent_session * session = session_mgr_.get_session(session_id);
+        auto session = session_mgr_.get_session(session_id);
         if (!session) {
             return make_error(404, "Session not found");
         }
@@ -205,7 +200,7 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(400, "Missing session ID");
         }
 
-        agent_session * session = session_mgr_.get_session(session_id);
+        auto session = session_mgr_.get_session(session_id);
         if (!session) {
             return make_error(404, "Session not found");
         }
@@ -253,9 +248,6 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
                 case agent_event_type::ITERATION_START:
                     event_type = "iteration_start";
                     break;
-                case agent_event_type::COMPACTION_STARTED:
-                    event_type = "compaction_started";
-                    break;
                 case agent_event_type::COMPACTION_COMPLETED:
                     event_type = "compaction_completed";
                     break;
@@ -284,7 +276,7 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(400, "Missing session ID");
         }
 
-        agent_session * session = session_mgr_.get_session(session_id);
+        auto session = session_mgr_.get_session(session_id);
         if (!session) {
             return make_error(404, "Session not found");
         }
@@ -299,7 +291,7 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(400, "Missing session ID");
         }
 
-        agent_session * session = session_mgr_.get_session(session_id);
+        auto session = session_mgr_.get_session(session_id);
         if (!session) {
             return make_error(404, "Session not found");
         }
@@ -344,9 +336,8 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
         }
 
         // Find the session with this permission request
-        // (In a real implementation, you'd want a permission_id -> session_id mapping)
         for (const auto & info : session_mgr_.list_sessions()) {
-            agent_session * session = session_mgr_.get_session(info.id);
+            auto session = session_mgr_.get_session(info.id);
             if (session && session->respond_permission(request_id, allowed, scope)) {
                 return make_json({{"success", true}});
             }
@@ -376,7 +367,7 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(400, "Missing session ID");
         }
 
-        agent_session * session = session_mgr_.get_session(session_id);
+        auto session = session_mgr_.get_session(session_id);
         if (!session) {
             return make_error(404, "Session not found");
         }
@@ -392,22 +383,3 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
     };
 }
 
-// Register all agent routes with HTTP context
-void register_agent_routes(server_http_context & ctx, agent_routes & routes) {
-    ctx.get("/health", routes.get_health);
-    ctx.get("/v1/agent/health", routes.get_health);
-
-    ctx.post("/v1/agent/session", routes.post_session);
-    ctx.get("/v1/agent/session/:id", routes.get_session);
-    ctx.post("/v1/agent/session/:id", routes.delete_session);  // DELETE via POST for compatibility
-    ctx.get("/v1/agent/sessions", routes.get_sessions);
-
-    ctx.post("/v1/agent/session/:id/chat", routes.post_chat);
-    ctx.get("/v1/agent/session/:id/messages", routes.get_messages);
-
-    ctx.get("/v1/agent/session/:id/permissions", routes.get_permissions);
-    ctx.post("/v1/agent/permission/:id", routes.post_permission);
-
-    ctx.get("/v1/agent/tools", routes.get_tools);
-    ctx.get("/v1/agent/session/:id/stats", routes.get_stats);
-}

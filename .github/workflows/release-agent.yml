@@ -11,7 +11,7 @@ on:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
 jobs:
   macOS-arm64:
@@ -38,6 +38,9 @@ jobs:
         run: |
           ./build/bin/llama-agent --help 2>&1 | head -5
           otool -L ./build/bin/llama-agent
+
+      - name: Run agent tests
+        run: ctest --test-dir build --output-on-failure -R agent
 
       - name: Pack
         run: |
@@ -83,6 +86,9 @@ jobs:
           ./build/bin/llama-agent --help 2>&1 | head -5
           ldd ./build/bin/llama-agent
 
+      - name: Run agent tests
+        run: ctest --test-dir build --output-on-failure -R agent
+
       - name: Pack
         run: |
           BUILD_NUM=$(git rev-list --count HEAD)
@@ -120,7 +126,7 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_OPENMP=ON ^
             -DLLAMA_BUILD_EXAMPLES=OFF ^
-            -DLLAMA_BUILD_TESTS=OFF ^
+            -DLLAMA_BUILD_TESTS=ON ^
             -DLLAMA_BUILD_TOOLS=ON ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_RPC=ON
@@ -130,6 +136,9 @@ jobs:
         run: |
           dir build\bin\Release\llama-agent.exe
           build\bin\Release\llama-agent.exe --help 2>&1 | Select-Object -First 5
+
+      - name: Run agent tests
+        run: ctest --test-dir build --output-on-failure -R agent -C Release
 
       - name: Pack
         run: |

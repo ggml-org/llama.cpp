@@ -73,7 +73,6 @@ enum class agent_event_type {
     PERMISSION_REQUIRED,  // Permission required - waiting for response
     PERMISSION_RESOLVED,  // Permission was granted or denied
     ITERATION_START,      // New iteration starting
-    COMPACTION_STARTED,   // Context compaction starting
     COMPACTION_COMPLETED, // Context compaction finished
     COMPLETED,            // Agent finished successfully
     ERROR,                // Error occurred
@@ -155,10 +154,6 @@ struct agent_event {
         return {agent_event_type::ERROR, {{"message", message}}};
     }
 
-    static agent_event compaction_started(int32_t tokens_before) {
-        return {agent_event_type::COMPACTION_STARTED, {{"tokens_before", tokens_before}}};
-    }
-
     static agent_event compaction_completed(int32_t messages_kept) {
         return {agent_event_type::COMPACTION_COMPLETED, {{"messages_kept", messages_kept}}};
     }
@@ -232,6 +227,12 @@ private:
     void add_tool_result_message(const std::string & tool_name,
                                   const std::string & call_id,
                                   const tool_result & result);
+
+    // Build assistant message JSON from parsed completion
+    json build_assistant_msg(const common_chat_msg & parsed, int iteration);
+
+    // Accumulate timing stats from a completion
+    void accumulate_stats(const result_timings & timings);
 
     // Context compaction: summarize old messages when context gets large
     bool try_compact();

@@ -67,6 +67,16 @@ public:
         const std::string & request_id,
         int timeout_ms = 30000);
 
+    // Wait for a response with a stop predicate (checks every 100ms)
+    // Returns nullopt if timeout expires, request not found, or stop_pred returns true
+    std::optional<permission_response_async> wait_for_response_or_stop(
+        const std::string & request_id,
+        int timeout_ms,
+        std::function<bool()> stop_pred);
+
+    // Cancel all pending requests and wake all waiters
+    void cancel_all();
+
     // Get all pending permission requests
     std::vector<permission_request_async> pending();
 

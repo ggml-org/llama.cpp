@@ -87,3 +87,18 @@ if(LLAMA_HTTPLIB)
         install(TARGETS ${AGENT_SERVER_TARGET} RUNTIME)
     endif()
 endif()
+
+# Agent unit tests
+if(LLAMA_BUILD_TESTS)
+    add_executable(test-agent-compaction test-compaction.cpp compaction.cpp)
+    target_link_libraries(test-agent-compaction PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(test-agent-compaction PRIVATE cxx_std_17)
+    target_include_directories(test-agent-compaction PRIVATE ../server)
+    add_test(NAME agent-compaction COMMAND test-agent-compaction)
+
+    add_executable(test-agent-session-file test-session-file.cpp session-file.cpp)
+    target_link_libraries(test-agent-session-file PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(test-agent-session-file PRIVATE cxx_std_17)
+    target_include_directories(test-agent-session-file PRIVATE ../server)
+    add_test(NAME agent-session-file COMMAND test-agent-session-file)
+endif()

@@ -680,6 +680,42 @@ void agent_loop::add_tool_result_message(const std::string & tool_name,
     if (session_file_) session_file_->append_message(msg);
 }
 
+json agent_loop::build_assistant_msg(const common_chat_msg & parsed, int iteration) {
+    json msg;
+    msg["role"] = "assistant";
+    msg["content"] = parsed.content;
+
+    if (!parsed.tool_calls.empty()) {
+        msg["tool_calls"] = json::array();
+        for (const auto & call : parsed.tool_calls) {
+            json tc;
+            tc["id"] = call.id.empty() ? ("call_" + std::to_string(iteration)) : call.id;
+            tc["type"] = "function";
+            tc["function"] = {
+                {"name", call.name},
+                {"arguments", call.arguments}
+            };
+            msg["tool_calls"].push_back(tc);
+        }
+    }
+
+    return msg;
+}
+
+void agent_loop::accumulate_stats(const result_timings & timings) {
+    if (timings.prompt_n > 0) {
+        stats_.total_input += timings.prompt_n;
+        stats_.total_prompt_ms += timings.prompt_ms;
+    }
+    if (timings.predicted_n > 0) {
+        stats_.total_output += timings.predicted_n;
+        stats_.total_predicted_ms += timings.predicted_ms;
+    }
+    if (timings.cache_n > 0) {
+        stats_.total_cached += timings.cache_n;
+    }
+}
+
 agent_loop_result agent_loop::run(const std::string & user_prompt) {
     agent_loop_result result;
     result.iterations = 0;
@@ -707,25 +743,14 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
         result_timings timings;
         common_chat_msg parsed = generate_completion(timings);
 
-        // Accumulate session statistics
-        if (timings.prompt_n > 0) {
-            stats_.total_input += timings.prompt_n;
-            stats_.total_prompt_ms += timings.prompt_ms;
-        }
-        if (timings.predicted_n > 0) {
-            stats_.total_output += timings.predicted_n;
-            stats_.total_predicted_ms += timings.predicted_ms;
-        }
-        if (timings.cache_n > 0) {
-            stats_.total_cached += timings.cache_n;
-        }
+        accumulate_stats(timings);
 
         // Overflow recovery: compact and retry this iteration
         if (parsed.content.empty() && parsed.tool_calls.empty() && last_completion_overflowed_) {
             last_completion_overflowed_ = false;
             if (config_.compaction.enabled && try_compact()) {
                 console::log("[Context compacted, retrying...]\n");
-                result.iterations--; // don't count the failed attempt
+                result.iterations--;
                 continue;
             }
         }
@@ -741,24 +766,7 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
         }
 
         // Add assistant message to history
-        json assistant_msg;
-        assistant_msg["role"] = "assistant";
-        assistant_msg["content"] = parsed.content;
-
-        if (!parsed.tool_calls.empty()) {
-            assistant_msg["tool_calls"] = json::array();
-            for (const auto & call : parsed.tool_calls) {
-                json tc;
-                tc["id"] = call.id.empty() ? ("call_" + std::to_string(result.iterations)) : call.id;
-                tc["type"] = "function";
-                tc["function"] = {
-                    {"name", call.name},
-                    {"arguments", call.arguments}
-                };
-                assistant_msg["tool_calls"].push_back(tc);
-            }
-        }
-
+        json assistant_msg = build_assistant_msg(parsed, result.iterations);
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
 
@@ -827,28 +835,16 @@ agent_loop_result agent_loop::run_streaming(
         result_timings timings;
         common_chat_msg parsed = generate_completion_streaming(timings, on_event, should_stop);
 
-        // Accumulate session statistics
-        if (timings.prompt_n > 0) {
-            stats_.total_input += timings.prompt_n;
-            stats_.total_prompt_ms += timings.prompt_ms;
-        }
-        if (timings.predicted_n > 0) {
-            stats_.total_output += timings.predicted_n;
-            stats_.total_predicted_ms += timings.predicted_ms;
-        }
-        if (timings.cache_n > 0) {
-            stats_.total_cached += timings.cache_n;
-        }
+        accumulate_stats(timings);
 
         // Overflow recovery: compact and retry this iteration
         if (parsed.content.empty() && parsed.tool_calls.empty() && last_completion_overflowed_) {
             last_completion_overflowed_ = false;
             if (config_.compaction.enabled && try_compact()) {
                 on_event(agent_event::compaction_completed((int32_t) messages_.size()));
-                result.iterations--; // don't count the failed attempt
+                result.iterations--;
                 continue;
             }
-            // Compaction failed or disabled — emit the error now
             on_event(agent_event::error("Context overflow: compaction could not free enough space"));
             result.stop_reason = agent_stop_reason::AGENT_ERROR;
             on_event(agent_event::completed(result.stop_reason, stats_));
@@ -869,24 +865,7 @@ agent_loop_result agent_loop::run_streaming(
         }
 
         // Add assistant message to history
-        json assistant_msg;
-        assistant_msg["role"] = "assistant";
-        assistant_msg["content"] = parsed.content;
-
-        if (!parsed.tool_calls.empty()) {
-            assistant_msg["tool_calls"] = json::array();
-            for (const auto & call : parsed.tool_calls) {
-                json tc;
-                tc["id"] = call.id.empty() ? ("call_" + std::to_string(result.iterations)) : call.id;
-                tc["type"] = "function";
-                tc["function"] = {
-                    {"name", call.name},
-                    {"arguments", call.arguments}
-                };
-                assistant_msg["tool_calls"].push_back(tc);
-            }
-        }
-
+        json assistant_msg = build_assistant_msg(parsed, result.iterations);
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
 
@@ -1110,8 +1089,12 @@ tool_result agent_loop::execute_tool_call_async(
                 std::string req_id = async_perms.request_permission(ext_req);
                 on_event(agent_event::permission_required(req_id, call.name, ext_req.details, true));
 
-                // Wait for response
-                auto response = async_perms.wait_for_response(req_id, 300000); // 5 min timeout
+                // Wait for response (cancellable via should_stop)
+                auto response = async_perms.wait_for_response_or_stop(req_id, 300000, should_stop);
+                if (should_stop()) {
+                    on_event(agent_event::permission_resolved(req_id, false));
+                    return {false, "", "Operation cancelled"};
+                }
                 if (!response || !response->allowed) {
                     on_event(agent_event::permission_resolved(req_id, false));
                     return {false, "", "Blocked: File is outside working directory"};
@@ -1142,7 +1125,11 @@ tool_result agent_loop::execute_tool_call_async(
         std::string req_id = async_perms.request_permission(req);
         on_event(agent_event::permission_required(req_id, call.name, req.details, true));
 
-        auto response = async_perms.wait_for_response(req_id, 300000);
+        auto response = async_perms.wait_for_response_or_stop(req_id, 300000, should_stop);
+        if (should_stop()) {
+            on_event(agent_event::permission_resolved(req_id, false));
+            return {false, "", "Operation cancelled"};
+        }
         if (!response || !response->allowed) {
             on_event(agent_event::permission_resolved(req_id, false));
             return {false, "", "Blocked: Detected repeated identical tool calls"};
@@ -1161,11 +1148,11 @@ tool_result agent_loop::execute_tool_call_async(
         std::string req_id = async_perms.request_permission(req);
         on_event(agent_event::permission_required(req_id, call.name, req.details, req.is_dangerous));
 
-        // Wait for response (with timeout)
-        auto response = async_perms.wait_for_response(req_id, 300000); // 5 min timeout
+        // Wait for response (cancellable via should_stop)
+        auto response = async_perms.wait_for_response_or_stop(req_id, 300000, should_stop);
 
         if (should_stop()) {
-            async_perms.cancel(req_id);
+            on_event(agent_event::permission_resolved(req_id, false));
             return {false, "", "Operation cancelled"};
         }
 

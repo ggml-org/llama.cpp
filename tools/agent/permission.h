@@ -30,6 +30,16 @@ struct permission_request {
     bool is_dangerous = false;
 };
 
+// Generate a session override key for a permission request.
+// MCP tools are keyed by name only (arguments vary per call).
+// Other tools are keyed by name:details for more granular control.
+inline std::string permission_override_key(const std::string & tool_name, const std::string & details) {
+    if (tool_name.rfind("mcp__", 0) == 0) {
+        return tool_name;
+    }
+    return tool_name + ":" + details;
+}
+
 enum class permission_response {
     ALLOW_ONCE,
     DENY_ONCE,

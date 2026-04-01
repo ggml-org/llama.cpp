@@ -56,6 +56,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     std::string output;
     int exit_code = 0;
     bool timed_out = false;
+    bool was_interrupted = false;
 
 #ifdef _WIN32
     // Windows implementation
@@ -105,6 +106,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
 
         if (ctx.is_interrupted && ctx.is_interrupted->load()) {
             TerminateProcess(pi.hProcess, 1);
+            was_interrupted = true;
             break;
         }
 
@@ -183,6 +185,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
 
         if (ctx.is_interrupted && ctx.is_interrupted->load()) {
             kill(pid, SIGKILL);
+            was_interrupted = true;
             break;
         }
 
@@ -220,8 +223,10 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     // Wait for child if not already done
     int status;
     waitpid(pid, &status, 0);
-    if (!timed_out && WIFEXITED(status)) {
+    if (WIFEXITED(status)) {
         exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        exit_code = 128 + WTERMSIG(status);  // Standard shell convention
     }
 #endif
 
@@ -235,6 +240,10 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
         result_output << "\n[Output truncated at " << MAX_OUTPUT_LENGTH << " characters]";
     }
 
+    if (was_interrupted) {
+        result_output << "\n[Interrupted]";
+    }
+
     if (timed_out) {
         result_output << "\n[Timed out after " << timeout_ms << "ms]";
     }
@@ -243,7 +252,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
         result_output << "\n[Exit code: " << exit_code << "]";
     }
 
-    return {exit_code == 0 && !timed_out, result_output.str(), ""};
+    return {exit_code == 0 && !timed_out && !was_interrupted, result_output.str(), ""};
 }
 
 static tool_def bash_tool = {

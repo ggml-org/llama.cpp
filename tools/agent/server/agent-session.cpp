@@ -1,27 +1,10 @@
 #include "agent-session.h"
+#include "../config-dir.h"
 #include "../skills/skills-manager.h"
 #include "../agents-md/agents-md-manager.h"
 
-#include <cstdlib>
 #include <iomanip>
 #include <sstream>
-
-// Get the user config directory for llama-agent
-static std::string get_config_dir() {
-#ifdef _WIN32
-    const char * appdata = std::getenv("APPDATA");
-    if (appdata) {
-        return std::string(appdata) + "\\llama-agent";
-    }
-    return "";
-#else
-    const char * home = std::getenv("HOME");
-    if (home) {
-        return std::string(home) + "/.llama-agent";
-    }
-    return "";
-#endif
-}
 
 // agent_session implementation
 
@@ -174,6 +157,7 @@ std::optional<agent_loop_result> agent_session::get_result() {
 
 void agent_session::cancel() {
     is_interrupted_.store(true);
+    permissions_.cancel_all();
 }
 
 std::vector<permission_request_async> agent_session::pending_permissions() {
@@ -181,11 +165,7 @@ std::vector<permission_request_async> agent_session::pending_permissions() {
 }
 
 bool agent_session::respond_permission(const std::string & request_id, bool allowed, permission_scope scope) {
-    bool result = permissions_.respond(request_id, allowed, scope);
-    if (result && state_.load() == agent_session_state::WAITING_PERMISSION) {
-        state_.store(agent_session_state::RUNNING);
-    }
-    return result;
+    return permissions_.respond(request_id, allowed, scope);
 }
 
 json agent_session::get_messages() const {
@@ -235,7 +215,7 @@ std::string agent_session_manager::generate_session_id() {
 std::string agent_session_manager::create_session(const agent_session_config & config) {
     std::string id = generate_session_id();
 
-    auto session = std::make_unique<agent_session>(id, server_ctx_, params_, config);
+    auto session = std::make_shared<agent_session>(id, server_ctx_, params_, config);
 
     std::lock_guard<std::mutex> lock(mutex_);
     sessions_[id] = std::move(session);
@@ -243,23 +223,31 @@ std::string agent_session_manager::create_session(const agent_session_config & c
     return id;
 }
 
-agent_session * agent_session_manager::get_session(const std::string & id) {
+std::shared_ptr<agent_session> agent_session_manager::get_session(const std::string & id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = sessions_.find(id);
     if (it != sessions_.end()) {
-        return it->second.get();
+        return it->second;
     }
     return nullptr;
 }
 
 bool agent_session_manager::delete_session(const std::string & id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = sessions_.find(id);
-    if (it != sessions_.end()) {
+    std::shared_ptr<agent_session> session;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = sessions_.find(id);
+        if (it == sessions_.end()) {
+            return false;
+        }
+        // Move ownership out so destruction happens outside the lock
+        session = std::move(it->second);
         sessions_.erase(it);
-        return true;
     }
-    return false;
+    // Cancel the session — this unblocks any permission waits
+    session->cancel();
+    // shared_ptr destructs here (or later if other handlers still hold it)
+    return true;
 }
 
 std::vector<agent_session_info> agent_session_manager::list_sessions() const {

@@ -3,6 +3,7 @@
 #include "console.h"
 
 #include "agent-loop.h"
+#include "config-dir.h"
 #include "tool-registry.h"
 #include "permission.h"
 #include "skills/skills-manager.h"
@@ -33,22 +34,6 @@
 
 namespace fs = std::filesystem;
 
-// Get the user config directory for llama-agent
-static std::string get_config_dir() {
-#ifdef _WIN32
-    const char * appdata = std::getenv("APPDATA");
-    if (appdata) {
-        return std::string(appdata) + "\\llama-agent";
-    }
-    return "";
-#else
-    const char * home = std::getenv("HOME");
-    if (home) {
-        return std::string(home) + "/.llama-agent";
-    }
-    return "";
-#endif
-}
 
 const char * LLAMA_AGENT_LOGO = R"(
     ____                                                   __

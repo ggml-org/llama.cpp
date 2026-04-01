@@ -93,7 +93,7 @@ permission_state permission_manager_async::check_permission(const permission_req
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Check session overrides first
-    std::string key = request.tool_name + ":" + request.details;
+    std::string key = permission_override_key(request.tool_name, request.details);
     auto it = session_overrides_.find(key);
     if (it != session_overrides_.end()) {
         return it->second;
@@ -158,7 +158,7 @@ bool permission_manager_async::respond(const std::string & request_id, bool allo
     // Handle session scope
     if (scope == permission_scope::SESSION) {
         const auto & req = it->second.request;
-        std::string key = req.tool_name + ":" + req.details;
+        std::string key = permission_override_key(req.tool_name, req.details);
         session_overrides_[key] = allowed ? permission_state::ALLOW_SESSION : permission_state::DENY_SESSION;
     }
 
@@ -174,31 +174,63 @@ bool permission_manager_async::respond(const std::string & request_id, bool allo
 std::optional<permission_response_async> permission_manager_async::wait_for_response(
     const std::string & request_id,
     int timeout_ms) {
+    return wait_for_response_or_stop(request_id, timeout_ms, nullptr);
+}
+
+std::optional<permission_response_async> permission_manager_async::wait_for_response_or_stop(
+    const std::string & request_id,
+    int timeout_ms,
+    std::function<bool()> stop_pred) {
 
     std::unique_lock<std::mutex> lock(mutex_);
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
-    // Wait for response or timeout
     while (true) {
         // Check if response is available
         auto it = responses_.find(request_id);
         if (it != responses_.end()) {
             permission_response_async result = it->second;
-            responses_.erase(it);  // Consume the response
+            responses_.erase(it);
             return result;
         }
 
-        // Check if request was cancelled (not in pending and not in responses)
+        // Check if request was cancelled
         if (pending_requests_.find(request_id) == pending_requests_.end()) {
-            return std::nullopt;  // Request was cancelled or never existed
+            return std::nullopt;
         }
 
-        // Wait with timeout
-        if (cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
-            return std::nullopt;  // Timeout
+        // Check stop predicate
+        if (stop_pred) {
+            // Temporarily release lock to call stop_pred (it may access atomics)
+            lock.unlock();
+            bool should_stop = stop_pred();
+            lock.lock();
+            if (should_stop) {
+                // Cancel this request and return
+                pending_requests_.erase(request_id);
+                cv_.notify_all();
+                return std::nullopt;
+            }
+        }
+
+        // Wait in short intervals (100ms) so we can check stop_pred frequently
+        auto wait_until = std::min(deadline,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
+
+        if (cv_.wait_until(lock, wait_until) == std::cv_status::timeout) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return std::nullopt;
+            }
+            // Otherwise just a 100ms interval — loop back to check stop_pred
         }
     }
+}
+
+void permission_manager_async::cancel_all() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_requests_.clear();
+    cv_.notify_all();
 }
 
 std::vector<permission_request_async> permission_manager_async::pending() {

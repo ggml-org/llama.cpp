@@ -4,7 +4,6 @@
 #include "server-http.h"
 
 #include <functional>
-#include <memory>
 
 // Agent API routes for HTTP server
 // These handlers implement the /v1/agent/* endpoints
@@ -45,11 +44,4 @@ private:
 
     // Helper to create JSON response
     static server_http_res_ptr make_json(const json & data, int status = 200);
-
-    // Helper to create streaming SSE response
-    static server_http_res_ptr make_sse_stream(
-        std::function<void(std::function<void(const std::string &)>)> generator);
 };
-
-// Register all agent routes with HTTP context
-void register_agent_routes(server_http_context & ctx, agent_routes & routes);
