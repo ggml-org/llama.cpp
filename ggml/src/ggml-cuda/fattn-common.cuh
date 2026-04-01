@@ -1266,6 +1266,119 @@ static __device__ __forceinline__ void dequantize_V_iso3_0(const void * __restri
     }
 }
 
+// ── PlanarQuant4 V dequantize: 4-bit centroid + inverse Givens rotation ──
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_planar4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_planar4_0 * x = (const block_planar4_0 *) vx;
+    const int64_t ib = i0 / QK_PLANAR4;
+    const int     j0 = i0 % QK_PLANAR4;
+    const float   norm = __half2float(x[ib].norm);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    auto unpack4 = [&](int j) -> uint8_t {
+        return (x[ib].qs[j/2] >> ((j%2)*4)) & 0xF;
+    };
+
+    if constexpr (ne == 4) {
+        float q0 = PI_CENTROIDS_4BIT[unpack4(j0)];
+        float q1 = PI_CENTROIDS_4BIT[unpack4(j0+1)];
+        float q2 = PI_CENTROIDS_4BIT[unpack4(j0+2)];
+        float q3 = PI_CENTROIDS_4BIT[unpack4(j0+3)];
+
+        int p0 = j0 / 2;
+        float c0 = PI_COS[p0], s0 = PI_SIN[p0];
+        float r0 = ( c0 * q0 + s0 * q1) * norm;
+        float r1 = (-s0 * q0 + c0 * q1) * norm;
+
+        int p1 = (j0 + 2) / 2;
+        float c1 = PI_COS[p1], s1 = PI_SIN[p1];
+        float r2 = ( c1 * q2 + s1 * q3) * norm;
+        float r3 = (-s1 * q2 + c1 * q3) * norm;
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *)dst)[0] = make_half2(__float2half(r0), __float2half(r1));
+            ((half2 *)dst)[1] = make_half2(__float2half(r2), __float2half(r3));
+        } else
+#endif
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *)dst)[0] = make_float2(r0, r1);
+            ((float2 *)dst)[1] = make_float2(r2, r3);
+        }
+    } else {
+        float q0 = PI_CENTROIDS_4BIT[unpack4(j0)];
+        float q1 = PI_CENTROIDS_4BIT[unpack4(j0+1)];
+
+        int p = j0 / 2;
+        float c = PI_COS[p], s = PI_SIN[p];
+        float r0 = ( c * q0 + s * q1) * norm;
+        float r1 = (-s * q0 + c * q1) * norm;
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *)dst)[0] = make_half2(__float2half(r0), __float2half(r1));
+        } else
+#endif
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *)dst)[0] = r0; ((float *)dst)[1] = r1;
+        }
+    }
+}
+
+// ── IsoQuant4 V dequantize: 4-bit centroid + inverse quaternion rotation ──
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_iso4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_iso4_0 * x = (const block_iso4_0 *) vx;
+    const int64_t ib = i0 / QK_ISO4;
+    const int     j0 = i0 % QK_ISO4;
+    const float   norm = __half2float(x[ib].norm);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    auto unpack4 = [&](int j) -> uint8_t {
+        return (x[ib].qs[j/2] >> ((j%2)*4)) & 0xF;
+    };
+
+    int g = j0 / 4;
+    int offset = j0 % 4;
+
+    float qvals[4];
+    for (int c = 0; c < 4; c++) {
+        qvals[c] = PI_CENTROIDS_4BIT[unpack4(g*4 + c)];
+    }
+
+    float qw = PI_QW[g], qx = -PI_QX[g], qy = -PI_QY[g], qz = -PI_QZ[g];
+    float rw = qw*qvals[0] - qx*qvals[1] - qy*qvals[2] - qz*qvals[3];
+    float rx = qw*qvals[1] + qx*qvals[0] + qy*qvals[3] - qz*qvals[2];
+    float ry = qw*qvals[2] - qx*qvals[3] + qy*qvals[0] + qz*qvals[1];
+    float rz = qw*qvals[3] + qx*qvals[2] - qy*qvals[1] + qz*qvals[0];
+
+    float results[4] = {rw * norm, rx * norm, ry * norm, rz * norm};
+
+    if constexpr (ne == 4) {
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *)dst)[0] = make_half2(__float2half(results[0]), __float2half(results[1]));
+            ((half2 *)dst)[1] = make_half2(__float2half(results[2]), __float2half(results[3]));
+        } else
+#endif
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *)dst)[0] = make_float2(results[0], results[1]);
+            ((float2 *)dst)[1] = make_float2(results[2], results[3]);
+        }
+    } else {
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *)dst)[0] = make_half2(__float2half(results[offset]), __float2half(results[offset+1]));
+        } else
+#endif
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *)dst)[0] = results[offset]; ((float *)dst)[1] = results[offset+1];
+        }
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -1328,8 +1441,10 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_planar3_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_ISO3_0) {
         return dequantize_V_iso3_0<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_PLANAR4_0 || type_V == GGML_TYPE_ISO4_0) {
-        return dequantize_V_turbo4_0<T, ne>;  // same block layout
+    } else if constexpr (type_V == GGML_TYPE_PLANAR4_0) {
+        return dequantize_V_planar4_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_ISO4_0) {
+        return dequantize_V_iso4_0<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
