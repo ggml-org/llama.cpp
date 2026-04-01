@@ -4,8 +4,8 @@
 #define ACC_TYPE4 float4
 #define DATA_TYPE half
 #define DATA_TYPE4 half4
-#define CONVERT_ACC4(x) convert_float4(x)
-#define CONVERT_DATA4(x) convert_half4(x)
+#define CONVERT_ACC4(x) ((float4)((float)(x).s0, (float)(x).s1, (float)(x).s2, (float)(x).s3))
+#define CONVERT_DATA4(x) ((half4)((half)(x).s0, (half)(x).s1, (half)(x).s2, (half)(x).s3))
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
@@ -125,49 +125,72 @@ __kernel void flash_attn_f16(
             continue;
         }
 
-        for (int j = 0; j < BLOCK_N; j += 2) {
+        for (int j = 0; j < BLOCK_N; j += 4) {
             const int k_row0 = k_start + j;
             const int k_row1 = k_start + j + 1;
+            const int k_row2 = k_start + j + 2;
+            const int k_row3 = k_start + j + 3;
 
             ACC_TYPE4 dot_acc0 = (ACC_TYPE4)(0.0f);
             ACC_TYPE4 dot_acc1 = (ACC_TYPE4)(0.0f);
+            ACC_TYPE4 dot_acc2 = (ACC_TYPE4)(0.0f);
+            ACC_TYPE4 dot_acc3 = (ACC_TYPE4)(0.0f);
             #pragma unroll
             for (int k = 0; k < DK_VEC; k++) {
-                dot_acc0 = mad(q_priv[k], CONVERT_ACC4(l_k[j][k]), dot_acc0);
-                dot_acc1 = mad(q_priv[k], CONVERT_ACC4(l_k[j+1][k]), dot_acc1);
+                const ACC_TYPE4 qk = q_priv[k];
+                dot_acc0 = mad(qk, CONVERT_ACC4(l_k[j][k]),   dot_acc0);
+                dot_acc1 = mad(qk, CONVERT_ACC4(l_k[j+1][k]), dot_acc1);
+                dot_acc2 = mad(qk, CONVERT_ACC4(l_k[j+2][k]), dot_acc2);
+                dot_acc3 = mad(qk, CONVERT_ACC4(l_k[j+3][k]), dot_acc3);
             }
-            ACC_TYPE score0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
-            ACC_TYPE score1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
+            ACC_TYPE s0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
+            ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
+            ACC_TYPE s2 = (dot_acc2.s0 + dot_acc2.s1 + dot_acc2.s2 + dot_acc2.s3) * scale;
+            ACC_TYPE s3 = (dot_acc3.s0 + dot_acc3.s1 + dot_acc3.s2 + dot_acc3.s3) * scale;
 
             if (is_causal) {
-                if (k_row0 > (n_kv - n_q + my_query_row)) score0 = -INFINITY;
-                if (k_row1 > (n_kv - n_q + my_query_row)) score1 = -INFINITY;
+                const int causal_limit = n_kv - n_q + my_query_row;
+                if (k_row0 > causal_limit) s0 = -INFINITY;
+                if (k_row1 > causal_limit) s1 = -INFINITY;
+                if (k_row2 > causal_limit) s2 = -INFINITY;
+                if (k_row3 > causal_limit) s3 = -INFINITY;
             }
-
-            if (k_row0 >= n_kv) score0 = -INFINITY;
-            if (k_row1 >= n_kv) score1 = -INFINITY;
+            if (k_row0 >= n_kv) s0 = -INFINITY;
+            if (k_row1 >= n_kv) s1 = -INFINITY;
+            if (k_row2 >= n_kv) s2 = -INFINITY;
+            if (k_row3 >= n_kv) s3 = -INFINITY;
 
             if (mask_base != NULL) {
                 const global DATA_TYPE* mask_ptr = (const global DATA_TYPE*)(mask_base + my_query_row * mask_nb1);
-                if (k_row0 < n_kv) score0 += slope * (ACC_TYPE)mask_ptr[k_row0];
-                if (k_row1 < n_kv) score1 += slope * (ACC_TYPE)mask_ptr[k_row1];
+                if (k_row0 < n_kv) s0 += slope * (ACC_TYPE)mask_ptr[k_row0];
+                if (k_row1 < n_kv) s1 += slope * (ACC_TYPE)mask_ptr[k_row1];
+                if (k_row2 < n_kv) s2 += slope * (ACC_TYPE)mask_ptr[k_row2];
+                if (k_row3 < n_kv) s3 += slope * (ACC_TYPE)mask_ptr[k_row3];
             }
 
             if (logit_softcap > 0.0f) {
-                score0 = logit_softcap * tanh(score0 / logit_softcap);
-                score1 = logit_softcap * tanh(score1 / logit_softcap);
+                s0 = logit_softcap * tanh(s0 / logit_softcap);
+                s1 = logit_softcap * tanh(s1 / logit_softcap);
+                s2 = logit_softcap * tanh(s2 / logit_softcap);
+                s3 = logit_softcap * tanh(s3 / logit_softcap);
             }
 
-            const ACC_TYPE m_new = max(m_i, max(score0, score1));
-            const ACC_TYPE p0 = exp(score0 - m_new);
-            const ACC_TYPE p1 = exp(score1 - m_new);
-            const ACC_TYPE scale_prev = exp(m_i - m_new);
+            const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
+            const ACC_TYPE scale_prev = native_exp(m_i - m_new);
+            const ACC_TYPE p0         = native_exp(s0 - m_new);
+            const ACC_TYPE p1         = native_exp(s1 - m_new);
+            const ACC_TYPE p2         = native_exp(s2 - m_new);
+            const ACC_TYPE p3         = native_exp(s3 - m_new);
 
             #pragma unroll
             for (int i = 0; i < DV_VEC; ++i) {
-                o_acc[i] = o_acc[i] * scale_prev + p0 * CONVERT_ACC4(l_v[j][i]) + p1 * CONVERT_ACC4(l_v[j+1][i]);
+                o_acc[i] = mad(p3, CONVERT_ACC4(l_v[j+3][i]),
+                           mad(p2, CONVERT_ACC4(l_v[j+2][i]),
+                           mad(p1, CONVERT_ACC4(l_v[j+1][i]),
+                           mad(p0, CONVERT_ACC4(l_v[j][i]),
+                           o_acc[i] * scale_prev))));
             }
-            l_i = l_i * scale_prev + p0 + p1;
+            l_i = l_i * scale_prev + p0 + p1 + p2 + p3;
             m_i = m_new;
         }
     }

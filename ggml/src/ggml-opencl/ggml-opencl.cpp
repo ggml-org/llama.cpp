@@ -511,7 +511,16 @@ struct ggml_backend_opencl_context {
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32;
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_q1;
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16;
+    std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16_split; // N_SPLIT>1 variant
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16_q1;
+    std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_kv_pad_f16;
+    std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_mask_pad_f16;
+    std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_blk_f16;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_f32_f16_bm;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_f32_f16_bn;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_f32_f16_wg_size;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_f32_f16_split_wg_size;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_f32_f16_split_nkv_threshold;
     std::map<std::pair<int, int>, int>       kernels_flash_attn_bm;
     std::map<std::pair<int, int>, int>       kernels_flash_attn_bn;
     cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0;
@@ -1795,24 +1804,67 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
                 const std::string kernel_src_f32_f16 {
                     #include "flash_attn_f32_f16.cl.h"
                 };
+                const std::string kernel_src_pre_f16 {
+                    #include "flash_attn_pre_f16.cl.h"
+                };
         #else
                 const std::string kernel_src_f16 = read_file("flash_attn_f16.cl");
                 const std::string kernel_src_f32 = read_file("flash_attn_f32.cl");
                 const std::string kernel_src_f32_f16 = read_file("flash_attn_f32_f16.cl");
+                const std::string kernel_src_pre_f16 = read_file("flash_attn_pre_f16.cl");
         #endif
 
-        if (!kernel_src_f16.empty() && !kernel_src_f32.empty() && !kernel_src_f32_f16.empty()) {
-            const struct { int dk; int dv; int bm; int bn; } fa_dims[] = {
-                { 40,  40, 32, 32}, { 64,  64, 64, 64}, { 80,  80, 64, 32}, { 96,  96, 64, 32},
-                {112, 112, 32, 32}, {128, 128, 32, 32}, {192, 128, 16, 16},
-                {192, 192, 16, 16}, {256, 256, 16, 16},
-            };
+        if (!kernel_src_f16.empty() && !kernel_src_f32.empty() && !kernel_src_f32_f16.empty() && !kernel_src_pre_f16.empty()) {
+            // n_split: number of threads collaborating on each query's dot product.
+            // When n_split > 1 a second "split" variant is compiled; the dispatch
+            // chooses between the two based on n_kv vs nkv_split_threshold.
+            // n_split>1 reduces register pressure for large DK at the cost of extra
+            // barriers — only beneficial when n_kv is large enough to amortise them.
+            struct fa_dim { int dk; int dv; int bm; int bn; int n_split; int nkv_split_threshold; };
 
-            for (size_t i = 0; i < sizeof(fa_dims)/sizeof(fa_dims[0]); ++i) {
-                const int dk = fa_dims[i].dk;
-                const int dv = fa_dims[i].dv;
-                const int bm = fa_dims[i].bm;
-                const int bn = fa_dims[i].bn;
+            const fa_dim fa_dims_default[] = {
+                // BLOCK_M=64 fills one Adreno wavefront (64 threads) for DK <= 128,
+                // vs the previous BLOCK_M=32 which ran at 50% wavefront utilisation.
+                // Register budget per thread is unchanged: q_priv[DK/4] + o_acc[DV/4]
+                // floats — thread count does not affect per-thread register pressure.
+                // Local memory: only l_k[BN][DK/4] + l_v[BN][DV/4] ≈ 8 KB for DK=64.
+                //
+                // DK=64: BLOCK_N=64 — halves serial tile count at PP4096 (128→64).
+                // Local mem: l_k[64][16]+l_v[64][16] half4 = 16KB (f32_f16) — fits 32KB.
+                // N_SPLIT=1: N_SPLIT=2 re-tested with j+=4 shuffle but regressed −9%
+                // at pp4096 (shuffle overhead > register benefit for SPLIT_DK_VEC=8).
+                { 40,  40, 64, 32, 1, 0}, { 64,  64, 64, 64, 1, 0},
+                // DK=80-128: N_SPLIT=2 with shuffle — halves register pressure.
+                // WG_SIZE = BLOCK_M * N_SPLIT = 64 * 2 = 128 (two wavefronts).
+                // DK=96: BLOCK_N=32 — BLOCK_N=64 would require l_k[64][24]+l_v[64][24]
+                // float4 = 48KB for f16/f32 kernels, exceeding the 32KB local mem limit.
+                // Shuffle XOR reduction: 1 step (log2(2)=1), minimal overhead.
+                // Threshold=0: always prefer N_SPLIT=2 for prefill (n_q>1).
+                { 80,  80, 64, 32, 2, 0}, { 96,  96, 64, 32, 2, 0},
+                {112, 112, 64, 32, 2, 0}, {128, 128, 64, 32, 2, 0},
+                // DK=192: BLOCK_M=16/N_SPLIT=1 — N_SPLIT=2+BLOCK_M=64 tested but
+                // regressed −13.7% at pp4096 (WG overhead + BLOCK_N=16 KV load
+                // inefficiency with 128 threads loading only 10 elements each).
+                {192, 128, 16, 16, 1, 0},
+                {192, 192, 16, 16, 1, 0},
+                // DK=256: BLOCK_M=32/N_SPLIT=4 — 2× more queries share each K/V tile
+                // vs BLOCK_M=16/N_SPLIT=8, halving effective K/V bandwidth.
+                // WG_SIZE = BLOCK_M * N_SPLIT = 32 * 4 = 128 (unchanged).
+                // Each thread holds DK/N_SPLIT/4=16 float4 for q+o = 128 floats (fits 256-reg file).
+                // N_SPLIT=4 always preferred (threshold=0): N_SPLIT=1 with BLOCK_M=32
+                // would need q_priv[64]+o_acc[64] = 512 floats → exceeds 256-reg file → spills.
+                {256, 256, 32, 16, 4, 0},
+            };
+            const size_t fa_dims_count = sizeof(fa_dims_default)/sizeof(fa_dims_default[0]);
+
+            for (size_t i = 0; i < fa_dims_count; ++i) {
+                const int dk                  = fa_dims_default[i].dk;
+                const int dv                  = fa_dims_default[i].dv;
+                const int bm                  = fa_dims_default[i].bm;
+                const int bn                  = fa_dims_default[i].bn;
+                const int n_split             = fa_dims_default[i].n_split;
+                const int nkv_split_threshold = fa_dims_default[i].nkv_split_threshold;
+                const int wg_size             = bm; // baseline: N_SPLIT=1
                 std::string OPTS = compile_opts +
                     " -D DK=" + std::to_string(dk) +
                     " -D DV=" + std::to_string(dv) +
@@ -1843,8 +1895,41 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
                 backend_ctx->kernels_flash_attn_f32_f16_q1[{dk, dv}] = k_f32_f16_q1;
                 CL_CHECK(clReleaseProgram(prog_f32_f16));
 
+                cl_program prog_pre_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_pre_f16.c_str(), OPTS);
+                cl_kernel k_kv_pad_f16, k_mask_pad_f16, k_blk_f16;
+                CL_CHECK((k_kv_pad_f16  = clCreateKernel(prog_pre_f16, "flash_attn_kv_pad_f16",   &err), err));
+                CL_CHECK((k_mask_pad_f16 = clCreateKernel(prog_pre_f16, "flash_attn_mask_pad_f16", &err), err));
+                CL_CHECK((k_blk_f16     = clCreateKernel(prog_pre_f16, "flash_attn_blk_f16",      &err), err));
+                backend_ctx->kernels_flash_attn_kv_pad_f16[{dk, dv}]  = k_kv_pad_f16;
+                backend_ctx->kernels_flash_attn_mask_pad_f16[{dk, dv}] = k_mask_pad_f16;
+                backend_ctx->kernels_flash_attn_blk_f16[{dk, dv}]     = k_blk_f16;
+                CL_CHECK(clReleaseProgram(prog_pre_f16));
+
+                backend_ctx->kernels_flash_attn_f32_f16_bm[{dk, dv}]      = bm;
+                backend_ctx->kernels_flash_attn_f32_f16_bn[{dk, dv}]      = bn;
+                backend_ctx->kernels_flash_attn_f32_f16_wg_size[{dk, dv}] = wg_size;
                 backend_ctx->kernels_flash_attn_bm[{dk, dv}] = bm;
                 backend_ctx->kernels_flash_attn_bn[{dk, dv}] = bn;
+
+                // Compile N_SPLIT>1 variant if needed for this dk/dv pair.
+                if (n_split > 1) {
+                    std::string OPTS_SPLIT = compile_opts +
+                        " -D DK=" + std::to_string(dk) +
+                        " -D DV=" + std::to_string(dv) +
+                        " -D BLOCK_M=" + std::to_string(bm) +
+                        " -D BLOCK_N=" + std::to_string(bn) +
+                        " -D N_SPLIT=" + std::to_string(n_split);
+                    const int wg_size_split = bm * n_split;
+                    cl_program prog_f32_f16_split = build_program_from_source(
+                        backend_ctx->context, backend_ctx->device,
+                        kernel_src_f32_f16.c_str(), OPTS_SPLIT);
+                    cl_kernel k_f32_f16_split;
+                    CL_CHECK((k_f32_f16_split = clCreateKernel(prog_f32_f16_split, "flash_attn_f32_f16", &err), err));
+                    backend_ctx->kernels_flash_attn_f32_f16_split[{dk, dv}]               = k_f32_f16_split;
+                    backend_ctx->kernels_flash_attn_f32_f16_split_wg_size[{dk, dv}]       = wg_size_split;
+                    backend_ctx->kernels_flash_attn_f32_f16_split_nkv_threshold[{dk, dv}] = nkv_split_threshold;
+                    CL_CHECK(clReleaseProgram(prog_f32_f16_split));
+                }
             }
             GGML_LOG_CONT(".");
         }
@@ -8983,6 +9068,84 @@ static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, NULL, dst);
 }
 
+struct ggml_cl_flash_attn_temp_buffer {
+    cl_mem data = nullptr;
+
+    ~ggml_cl_flash_attn_temp_buffer() {
+        if (data != nullptr) {
+            CL_CHECK(clReleaseMemObject(data));
+            data = nullptr;
+        }
+    }
+};
+
+static bool ggml_cl_flash_attn_prepare_quantized_tensor(
+        ggml_backend_opencl_context *         backend_ctx,
+        const ggml_tensor *                   tensor,
+        ggml_type                             target_type,
+        ggml_cl_flash_attn_temp_buffer &      temp,
+        cl_mem &                              data_device,
+        cl_ulong &                            offset,
+        cl_ulong &                            nb1,
+        cl_ulong &                            nb2,
+        cl_ulong &                            nb3) {
+    if (!ggml_is_quantized(tensor->type)) {
+        return false;
+    }
+
+    ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
+    GGML_ASSERT(extra);
+    GGML_ASSERT(extra->data_device);
+
+    const int64_t n = ggml_nelements(tensor);
+    std::vector<uint8_t> host_quant(ggml_nbytes(tensor));
+
+    sync_with_other_backends(backend_ctx);
+    CL_CHECK(clEnqueueReadBuffer(
+        backend_ctx->queue,
+        extra->data_device,
+        CL_TRUE,
+        extra->offset + tensor->view_offs,
+        host_quant.size(),
+        host_quant.data(),
+        0,
+        NULL,
+        NULL));
+
+    std::vector<float> host_f32(n);
+    ggml_get_type_traits(tensor->type)->to_float(host_quant.data(), host_f32.data(), n);
+
+    const size_t bytes_per_elem = ggml_type_size(target_type);
+    const size_t buffer_size = (size_t) n * bytes_per_elem;
+
+    std::vector<uint8_t> host_linear(buffer_size);
+    if (target_type == GGML_TYPE_F32) {
+        memcpy(host_linear.data(), host_f32.data(), buffer_size);
+    } else {
+        GGML_ASSERT(target_type == GGML_TYPE_F16);
+        ggml_fp32_to_fp16_row(host_f32.data(), (ggml_fp16_t *) host_linear.data(), n);
+    }
+
+    cl_int err;
+    temp.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, buffer_size, NULL, &err);
+    CL_CHECK(err);
+    CL_CHECK(clEnqueueWriteBuffer(backend_ctx->queue, temp.data, CL_TRUE, 0, buffer_size, host_linear.data(), 0, NULL, NULL));
+
+    data_device = temp.data;
+    offset = 0;
+    nb1 = (cl_ulong) (tensor->ne[0] * bytes_per_elem);
+    nb2 = (cl_ulong) (tensor->ne[1] * nb1);
+    nb3 = (cl_ulong) (tensor->ne[2] * nb2);
+
+    static bool warned = false;
+    if (!warned) {
+        GGML_LOG_WARN("%s: OpenCL flash attention dequantizes GPU-resident quantized KV cache into temporary linear buffers; performance may be poor\n", __func__);
+        warned = true;
+    }
+
+    return true;
+}
+
 static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
     const ggml_tensor * v = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
@@ -9013,25 +9176,23 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const bool is_f16 = q->type == GGML_TYPE_F16;
     const bool is_mixed = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16;
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
-
-    if (n_q == 1) {
-        if (is_mixed) {
-            kernel = backend_ctx->kernels_flash_attn_f32_f16_q1.at(dk_dv);
-        } else if (is_f16) {
-            kernel = backend_ctx->kernels_flash_attn_f16_q1.at(dk_dv);
-        } else {
-            kernel = backend_ctx->kernels_flash_attn_f32_q1.at(dk_dv);
-        }
-    } else {
-        if (is_mixed) {
-            kernel = backend_ctx->kernels_flash_attn_f32_f16.at(dk_dv);
-        } else if (is_f16) {
-            kernel = backend_ctx->kernels_flash_attn_f16.at(dk_dv);
-        } else {
-            kernel = backend_ctx->kernels_flash_attn_f32.at(dk_dv);
-        }
-    }
-    GGML_ASSERT(kernel != NULL);
+    const int block_m = n_q > 1
+        ? (is_mixed ? backend_ctx->kernels_flash_attn_f32_f16_bm.at(dk_dv) : backend_ctx->kernels_flash_attn_bm.at(dk_dv))
+        : 0;
+    const int block_n = is_mixed
+        ? backend_ctx->kernels_flash_attn_f32_f16_bn.at(dk_dv)
+        : backend_ctx->kernels_flash_attn_bn.at(dk_dv);
+    // For DK values that have a split variant (N_SPLIT>1), choose it only when
+    // n_kv is large enough to amortise the extra barrier overhead.
+    const bool use_split_kernel = (n_q > 1 && is_mixed &&
+        backend_ctx->kernels_flash_attn_f32_f16_split.count(dk_dv) > 0 &&
+        n_kv >= backend_ctx->kernels_flash_attn_f32_f16_split_nkv_threshold.at(dk_dv));
+    // wg_size_fa: BLOCK_M for baseline kernel, BLOCK_M*N_SPLIT for split variant.
+    const int wg_size_fa = (n_q > 1 && is_mixed)
+        ? (use_split_kernel
+            ? backend_ctx->kernels_flash_attn_f32_f16_split_wg_size.at(dk_dv)
+            : backend_ctx->kernels_flash_attn_f32_f16_wg_size.at(dk_dv))
+        : block_m;
 
     ggml_tensor_extra_cl * extra_q = (ggml_tensor_extra_cl *)q->extra;
     ggml_tensor_extra_cl * extra_k = (ggml_tensor_extra_cl *)k->extra;
@@ -9050,8 +9211,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     cl_ulong offset_sinks = extra_sinks ? extra_sinks->offset + sinks->view_offs : 0;
 
     const cl_ulong q_nb1 = q->nb[1], q_nb2 = q->nb[2], q_nb3 = q->nb[3];
-    const cl_ulong k_nb1 = k->nb[1], k_nb2 = k->nb[2], k_nb3 = k->nb[3];
-    const cl_ulong v_nb1 = v->nb[1], v_nb2 = v->nb[2], v_nb3 = v->nb[3];
+    cl_ulong k_nb1 = k->nb[1], k_nb2 = k->nb[2], k_nb3 = k->nb[3];
+    cl_ulong v_nb1 = v->nb[1], v_nb2 = v->nb[2], v_nb3 = v->nb[3];
     const cl_ulong o_nb1 = dst->nb[1], o_nb2 = dst->nb[2], o_nb3 = dst->nb[3];
     const cl_ulong mask_nb1 = mask ? mask->nb[1] : 0;
     const cl_ulong mask_nb2 = mask ? mask->nb[2] : 0;
@@ -9065,6 +9226,143 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     max_bias      = params[1];
     logit_softcap = params[2];
 
+    if (n_q == 1) {
+        if (is_mixed) {
+            kernel = backend_ctx->kernels_flash_attn_f32_f16_q1.at(dk_dv);
+        } else if (is_f16) {
+            kernel = backend_ctx->kernels_flash_attn_f16_q1.at(dk_dv);
+        } else {
+            kernel = backend_ctx->kernels_flash_attn_f32_q1.at(dk_dv);
+        }
+    } else {
+        if (is_mixed) {
+            kernel = use_split_kernel
+                ? backend_ctx->kernels_flash_attn_f32_f16_split.at(dk_dv)
+                : backend_ctx->kernels_flash_attn_f32_f16.at(dk_dv);
+        } else if (is_f16) {
+            kernel = backend_ctx->kernels_flash_attn_f16.at(dk_dv);
+        } else {
+            kernel = backend_ctx->kernels_flash_attn_f32.at(dk_dv);
+        }
+    }
+    GGML_ASSERT(kernel != NULL);
+
+    ggml_cl_flash_attn_temp_buffer temp_k;
+    ggml_cl_flash_attn_temp_buffer temp_v;
+    ggml_cl_flash_attn_temp_buffer temp_k_pad;
+    ggml_cl_flash_attn_temp_buffer temp_v_pad;
+    ggml_cl_flash_attn_temp_buffer temp_mask_pad;
+    ggml_cl_flash_attn_temp_buffer temp_blk;
+    const ggml_type kv_target_type = is_f16 ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    cl_mem k_data_device = extra_k->data_device;
+    cl_mem v_data_device = extra_v->data_device;
+    ggml_cl_flash_attn_prepare_quantized_tensor(backend_ctx, k, kv_target_type, temp_k, k_data_device, offset_k, k_nb1, k_nb2, k_nb3);
+    ggml_cl_flash_attn_prepare_quantized_tensor(backend_ctx, v, kv_target_type, temp_v, v_data_device, offset_v, v_nb1, v_nb2, v_nb3);
+
+    cl_mem k_pad_buffer = NULL;
+    cl_mem v_pad_buffer = NULL;
+    cl_mem mask_pad_buffer = NULL;
+    cl_mem blk_buffer = NULL;
+    cl_ulong mask_pad_nb1 = 0;
+    cl_ulong mask_pad_nb2 = 0;
+    cl_ulong mask_pad_nb3 = 0;
+
+    const int n_q_blocks = n_q > 1 ? (n_q + block_m - 1) / block_m : 0;
+    const int n_kv_blocks = n_kv > 0 ? (n_kv + block_n - 1) / block_n : 0;
+    const bool use_mixed_prepass = is_mixed && n_q > 1;
+    const bool use_kv_pad = use_mixed_prepass && (n_kv % block_n != 0);
+    const bool use_blk_mask = use_mixed_prepass && mask_buffer != NULL;
+
+    if (use_kv_pad) {
+        cl_int err;
+
+        const size_t k_pad_size = (size_t) k_nb1 * (size_t) block_n * (size_t) n_head_kv * (size_t) n_batch;
+        temp_k_pad.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, k_pad_size, NULL, &err);
+        CL_CHECK(err);
+        k_pad_buffer = temp_k_pad.data;
+
+        const size_t v_pad_size = (size_t) v_nb1 * (size_t) block_n * (size_t) n_head_kv * (size_t) n_batch;
+        temp_v_pad.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, v_pad_size, NULL, &err);
+        CL_CHECK(err);
+        v_pad_buffer = temp_v_pad.data;
+
+        cl_kernel kernel_kv_pad = backend_ctx->kernels_flash_attn_kv_pad_f16.at(dk_dv);
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 0, sizeof(cl_mem),    &k_data_device));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 1, sizeof(cl_ulong),  &offset_k));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 2, sizeof(cl_mem),    &v_data_device));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 3, sizeof(cl_ulong),  &offset_v));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 4, sizeof(cl_mem),    &k_pad_buffer));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 5, sizeof(cl_mem),    &v_pad_buffer));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 6, sizeof(int),       &n_kv));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 7, sizeof(int),       &n_head_kv));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 8, sizeof(int),       &n_batch));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 9, sizeof(cl_ulong),  &k_nb1));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 10, sizeof(cl_ulong), &k_nb2));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 11, sizeof(cl_ulong), &k_nb3));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 12, sizeof(cl_ulong), &v_nb1));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 13, sizeof(cl_ulong), &v_nb2));
+        CL_CHECK(clSetKernelArg(kernel_kv_pad, 14, sizeof(cl_ulong), &v_nb3));
+
+        size_t global_work_size[] = { (size_t) block_n, (size_t) n_head_kv, (size_t) n_batch };
+        backend_ctx->enqueue_ndrange_kernel(kernel_kv_pad, 3, global_work_size, NULL, dst);
+
+        if (mask_buffer != NULL) {
+            mask_pad_nb1 = (cl_ulong) block_n * (cl_ulong) sizeof(ggml_fp16_t);
+            mask_pad_nb2 = (cl_ulong) n_q * mask_pad_nb1;
+            mask_pad_nb3 = (cl_ulong) mask_ne2 * mask_pad_nb2;
+
+            const size_t mask_pad_size = (size_t) mask_ne3 * (size_t) mask_pad_nb3;
+            temp_mask_pad.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, mask_pad_size, NULL, &err);
+            CL_CHECK(err);
+            mask_pad_buffer = temp_mask_pad.data;
+
+            cl_kernel kernel_mask_pad = backend_ctx->kernels_flash_attn_mask_pad_f16.at(dk_dv);
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 0, sizeof(cl_mem),    &mask_buffer));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 1, sizeof(cl_ulong),  &offset_mask));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 2, sizeof(cl_mem),    &mask_pad_buffer));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 3, sizeof(int),       &n_q));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 4, sizeof(int),       &n_kv));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 5, sizeof(cl_ulong),  &mask_nb1));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 6, sizeof(cl_ulong),  &mask_nb2));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 7, sizeof(cl_ulong),  &mask_nb3));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 8, sizeof(int),       &mask_ne2));
+            CL_CHECK(clSetKernelArg(kernel_mask_pad, 9, sizeof(int),       &mask_ne3));
+
+            size_t global_work_size_mask[] = { (size_t) block_n, (size_t) n_q, (size_t) (mask_ne2 * mask_ne3) };
+            backend_ctx->enqueue_ndrange_kernel(kernel_mask_pad, 3, global_work_size_mask, NULL, dst);
+        }
+    }
+
+    if (use_blk_mask) {
+        cl_int err;
+        const size_t blk_size = (size_t) n_kv_blocks * (size_t) n_q_blocks * (size_t) mask_ne2 * (size_t) mask_ne3;
+        temp_blk.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, blk_size, NULL, &err);
+        if (err != CL_SUCCESS) {
+            // Flush all pending GPU work so the driver can reclaim deferred deallocations,
+            // then retry. This handles intermittent OOM after long benchmark runs.
+            CL_CHECK(clFinish(backend_ctx->queue));
+            temp_blk.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, blk_size, NULL, &err);
+        }
+        CL_CHECK(err);
+        blk_buffer = temp_blk.data;
+
+        cl_kernel kernel_blk = backend_ctx->kernels_flash_attn_blk_f16.at(dk_dv);
+        CL_CHECK(clSetKernelArg(kernel_blk, 0, sizeof(cl_mem),    &mask_buffer));
+        CL_CHECK(clSetKernelArg(kernel_blk, 1, sizeof(cl_ulong),  &offset_mask));
+        CL_CHECK(clSetKernelArg(kernel_blk, 2, sizeof(cl_mem),    &blk_buffer));
+        CL_CHECK(clSetKernelArg(kernel_blk, 3, sizeof(int),       &n_q));
+        CL_CHECK(clSetKernelArg(kernel_blk, 4, sizeof(int),       &n_kv));
+        CL_CHECK(clSetKernelArg(kernel_blk, 5, sizeof(cl_ulong),  &mask_nb1));
+        CL_CHECK(clSetKernelArg(kernel_blk, 6, sizeof(cl_ulong),  &mask_nb2));
+        CL_CHECK(clSetKernelArg(kernel_blk, 7, sizeof(cl_ulong),  &mask_nb3));
+        CL_CHECK(clSetKernelArg(kernel_blk, 8, sizeof(int),       &mask_ne2));
+        CL_CHECK(clSetKernelArg(kernel_blk, 9, sizeof(int),       &mask_ne3));
+
+        size_t global_work_size_blk[] = { (size_t) n_kv_blocks, (size_t) n_q_blocks, (size_t) (mask_ne2 * mask_ne3) };
+        backend_ctx->enqueue_ndrange_kernel(kernel_blk, 3, global_work_size_blk, NULL, dst);
+    }
+
     const int is_causal = (mask == NULL && n_q > 1 && n_q == n_kv);
 
     const int n_head_log2_val = n_head > 0 ? 1u << (int)floorf(log2f((float)n_head)) : 0;
@@ -9072,19 +9370,19 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const float m0 = powf(2.0f, -(max_bias) / n_head_log2_f);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2_f);
 
-    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_q->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset_q));
-    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra_k->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offset_k));
-    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extra_v->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &offset_v));
-    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_mem),   &extra_o->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong), &offset_o));
-    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(float),    &scale));
-    CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),      &n_q));
-    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),     &n_kv));
-    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),     &is_causal));
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),     &n_head));
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra_q->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &offset_q));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),    &k_data_device));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong),  &offset_k));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),    &v_data_device));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong),  &offset_v));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_mem),    &extra_o->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong),  &offset_o));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(float),     &scale));
+    CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &n_q));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &n_kv));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &is_causal));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &n_head));
     CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &q_nb1)); CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &q_nb2)); CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &q_nb3));
     CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &k_nb1)); CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &k_nb2)); CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &k_nb3));
     CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &v_nb1)); CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &v_nb2)); CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &v_nb3));
@@ -9104,6 +9402,16 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     CL_CHECK(clSetKernelArg(kernel, 37, sizeof(int),      &mask_ne3));
     CL_CHECK(clSetKernelArg(kernel, 38, sizeof(cl_mem),   &sinks_buffer));
     CL_CHECK(clSetKernelArg(kernel, 39, sizeof(cl_ulong), &offset_sinks));
+    if (n_q > 1 && is_mixed) {
+        CL_CHECK(clSetKernelArg(kernel, 40, sizeof(cl_mem),    &k_pad_buffer));
+        CL_CHECK(clSetKernelArg(kernel, 41, sizeof(cl_mem),    &v_pad_buffer));
+        CL_CHECK(clSetKernelArg(kernel, 42, sizeof(cl_mem),    &mask_pad_buffer));
+        CL_CHECK(clSetKernelArg(kernel, 43, sizeof(cl_mem),    &blk_buffer));
+        CL_CHECK(clSetKernelArg(kernel, 44, sizeof(int),       &n_kv_blocks));
+        CL_CHECK(clSetKernelArg(kernel, 45, sizeof(cl_ulong),  &mask_pad_nb1));
+        CL_CHECK(clSetKernelArg(kernel, 46, sizeof(cl_ulong),  &mask_pad_nb2));
+        CL_CHECK(clSetKernelArg(kernel, 47, sizeof(cl_ulong),  &mask_pad_nb3));
+    }
 
     if (n_q == 1) {
         const size_t wg_size = 64;
@@ -9111,8 +9419,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         size_t global_work_size[] = { wg_size, (size_t)(n_head * n_batch) };
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
     } else {
-        const int block_m = backend_ctx->kernels_flash_attn_bm.at(dk_dv);
-        const size_t wg_size = block_m;
+        // wg_size_fa = block_m * N_SPLIT for the split variant, block_m otherwise.
+        const size_t wg_size = (size_t) wg_size_fa;
         size_t local_work_size[] = { wg_size, 1 };
         size_t global_work_size[] = { (size_t)((n_q + block_m - 1) / block_m) * wg_size, (size_t)(n_head * n_batch) };
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
