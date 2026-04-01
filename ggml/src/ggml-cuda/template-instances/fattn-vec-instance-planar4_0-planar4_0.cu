@@ -1,0 +1,6 @@
+// planar4_0 K + planar4_0 V flash attention vec kernel instantiation
+#include "../fattn-vec.cuh"
+
+DECL_FATTN_VEC_CASE( 64, GGML_TYPE_PLANAR4_0, GGML_TYPE_PLANAR4_0);
+DECL_FATTN_VEC_CASE(128, GGML_TYPE_PLANAR4_0, GGML_TYPE_PLANAR4_0);
+DECL_FATTN_VEC_CASE(256, GGML_TYPE_PLANAR4_0, GGML_TYPE_PLANAR4_0);

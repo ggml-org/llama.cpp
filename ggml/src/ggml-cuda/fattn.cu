@@ -359,6 +359,8 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_TURBO4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_PLANAR3_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_ISO3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_PLANAR4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_ISO4_0)
 
     // Asymmetric: q8_0 K + iso/planar V (Tom's production config pattern)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,      GGML_TYPE_PLANAR3_0)
@@ -378,9 +380,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO3_0,    GGML_TYPE_TURBO3_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO3_0,    GGML_TYPE_TURBO4_0)
 
-    // Symmetric: same type K and V (V uses norot quantize)
+    // Symmetric: same type K and V (V dequant applies inverse rotation)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_PLANAR3_0, GGML_TYPE_PLANAR3_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO3_0,    GGML_TYPE_ISO3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_PLANAR4_0, GGML_TYPE_PLANAR4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_ISO4_0,    GGML_TYPE_ISO4_0)
 
     GGML_ABORT("fatal error");
 }
