@@ -1,6 +1,7 @@
 #include "../tool-registry.h"
 
 #include <filesystem>
+#include <fstream>
 #include <regex>
 #include <vector>
 #include <algorithm>
@@ -67,6 +68,105 @@ static std::string glob_to_regex(const std::string & pattern) {
     return regex;
 }
 
+// Directories to always skip (before gitignore parsing)
+static bool is_always_skipped_dir(const std::string & name) {
+    static const std::vector<std::string> skip = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv"
+    };
+    for (const auto & s : skip) {
+        if (name == s) return true;
+    }
+    return false;
+}
+
+// Find the git root by walking up from start looking for .git/
+static std::string find_git_root(const fs::path & start) {
+    try {
+        fs::path current = fs::absolute(start);
+        while (true) {
+            if (fs::exists(current / ".git")) {
+                return current.string();
+            }
+            fs::path parent = current.parent_path();
+            if (parent == current) break;
+            current = parent;
+        }
+    } catch (const fs::filesystem_error &) {}
+    return "";
+}
+
+struct gitignore_pattern {
+    std::regex re;
+    bool negation;
+    bool dir_only;
+};
+
+static std::vector<gitignore_pattern> parse_gitignore(const fs::path & gitignore_path) {
+    std::vector<gitignore_pattern> patterns;
+
+    std::ifstream file(gitignore_path);
+    if (!file.is_open()) return patterns;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+
+        std::string pat = line;
+        bool negation = false;
+        bool dir_only = false;
+        bool anchored = false;
+
+        if (pat[0] == '!') {
+            negation = true;
+            pat = pat.substr(1);
+        }
+
+        if (!pat.empty() && pat.back() == '/') {
+            dir_only = true;
+            pat.pop_back();
+        }
+
+        if (pat.empty()) continue;
+
+        if (pat[0] == '/') {
+            anchored = true;
+            pat = pat.substr(1);
+        } else if (pat.find('/') != std::string::npos) {
+            anchored = true;
+        }
+
+        std::string regex_str;
+        if (anchored) {
+            regex_str = "^" + glob_to_regex(pat) + "(/.*)?$";
+        } else {
+            regex_str = "(^|/)" + glob_to_regex(pat) + "(/.*)?$";
+        }
+
+        try {
+            patterns.push_back({
+                std::regex(regex_str, std::regex::ECMAScript),
+                negation,
+                dir_only
+            });
+        } catch (const std::regex_error &) {}
+    }
+
+    return patterns;
+}
+
+static bool is_gitignored(const std::string & rel_path, bool is_dir,
+                           const std::vector<gitignore_pattern> & patterns) {
+    bool ignored = false;
+    for (const auto & p : patterns) {
+        if (p.dir_only && !is_dir) continue;
+        if (std::regex_search(rel_path, p.re)) {
+            ignored = !p.negation;
+        }
+    }
+    return ignored;
+}
+
 static tool_result glob_execute(const json & args, const tool_context & ctx) {
     std::string pattern = args.value("pattern", "");
     std::string search_path = args.value("path", ctx.working_dir);
@@ -98,22 +198,64 @@ static tool_result glob_execute(const json & args, const tool_context & ctx) {
         return {false, "", "Invalid pattern: " + std::string(e.what())};
     }
 
+    // Load gitignore patterns
+    std::string git_root = find_git_root(base_path);
+    std::vector<gitignore_pattern> gi_patterns;
+    fs::path git_root_path;
+    bool have_gi = false;
+
+    if (!git_root.empty()) {
+        git_root_path = fs::path(git_root);
+        fs::path gi_file = git_root_path / ".gitignore";
+        if (fs::exists(gi_file)) {
+            gi_patterns = parse_gitignore(gi_file);
+            have_gi = true;
+        }
+    }
+
     // Collect matching files with modification times
     std::vector<std::pair<fs::path, fs::file_time_type>> matches;
     const int limit = 500;
+    bool match_path = (pattern.find('/') != std::string::npos || pattern.find("**") != std::string::npos);
 
     try {
-        for (const auto & entry : fs::recursive_directory_iterator(
-                base_path, fs::directory_options::skip_permission_denied)) {
+        auto it = fs::recursive_directory_iterator(
+            base_path, fs::directory_options::skip_permission_denied);
+
+        for (; it != fs::recursive_directory_iterator(); ++it) {
+            const auto & entry = *it;
+
+            // Skip always-ignored directories and gitignored directories
+            if (entry.is_directory()) {
+                std::string dirname = entry.path().filename().string();
+                bool skip = is_always_skipped_dir(dirname);
+                if (!skip && have_gi) {
+                    std::string rel = fs::relative(entry.path(), git_root_path).string();
+                    std::replace(rel.begin(), rel.end(), '\\', '/');
+                    skip = is_gitignored(rel, true, gi_patterns);
+                }
+                if (skip) {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+
             if (!entry.is_regular_file()) continue;
+
+            // Check gitignore for files
+            if (have_gi) {
+                std::string rel = fs::relative(entry.path(), git_root_path).string();
+                std::replace(rel.begin(), rel.end(), '\\', '/');
+                if (is_gitignored(rel, false, gi_patterns)) {
+                    continue;
+                }
+            }
 
             // Match against full relative path or just filename depending on pattern
             std::string to_match;
-            if (pattern.find('/') != std::string::npos || pattern.find("**") != std::string::npos) {
-                // Pattern contains path separator, match against relative path
+            if (match_path) {
                 to_match = fs::relative(entry.path(), base_path).string();
             } else {
-                // Pattern is just a filename pattern
                 to_match = entry.path().filename().string();
             }
 
@@ -124,7 +266,7 @@ static tool_result glob_execute(const json & args, const tool_context & ctx) {
                 }
             }
         }
-    } catch (const fs::filesystem_error & e) {
+    } catch (const fs::filesystem_error &) {
         // Continue with what we have
     }
 
