@@ -329,6 +329,92 @@ static void get_rows_cuda_tq3_1s(
         s10, s11, s12);
 }
 
+static __device__ __forceinline__ uint8_t tq3_idx_from_packed_getrows_cuda(const uint8_t * qp, int r);
+
+template<typename dst_t>
+static __global__ void k_get_rows_tq3_4s(
+        const block_tq3_4s * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
+        const int64_t ne00, const int64_t ne11, const int64_t ne12,
+        const size_t s1, const size_t s2, const size_t s3,
+        const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t s10, const size_t s11, const size_t s12) {
+    const int lane = threadIdx.x;
+    const int64_t block = blockIdx.y;
+    const int64_t z = blockIdx.z;
+
+    if (lane >= QK_TQ3_0 || z >= ne11*ne12) {
+        return;
+    }
+
+    const int64_t nblocks_per_row = ne00 / QK_TQ3_0;
+    if (block >= nblocks_per_row) {
+        return;
+    }
+
+    const int i10 = blockIdx.x;
+    const int i11 = z / ne12;
+    const int i12 = z % ne12;
+    const int i01 = src1[i10*s10 + i11*s11 + i12*s12];
+
+    const char * src0_row = (const char *) src0 + i01*nb01 + i11*nb02 + i12*nb03;
+    const block_tq3_4s * x = (const block_tq3_4s *) src0_row + block;
+    dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
+
+    auto ratio4s = [] __device__ (uint8_t byte) -> float {
+        if (byte == 0) return 0.0f;
+        const int exp = (byte >> 5) - 9;
+        const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
+        return ldexpf(mantissa, exp);
+    };
+
+    const float ds[4] = {
+        ratio4s(x->d[0]),
+        ratio4s(x->d[1]),
+        ratio4s(x->d[2]),
+        ratio4s(x->d[3]),
+    };
+
+    const int g = lane / 8;
+    const int r = lane % 8;
+    const uint8_t * qp = x->qs + g * 3;
+    const uint8_t idx = tq3_idx_from_packed_getrows_cuda(qp, r);
+
+    float val = tq3_0_centroids_getrows_cuda[idx] * ds[g];
+    for (int step = 1; step < 32; step <<= 1) {
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        val = (lane & step) ? (other - val) : (other + val);
+    }
+
+    dst_row[block * QK_TQ3_0 + lane] = ggml_cuda_cast<dst_t>(val * (tq3_0_signs_getrows_cuda[lane] / sqrtf(32.0f)));
+}
+
+template<typename dst_t>
+static void get_rows_cuda_tq3_4s(
+        const void * src0_d, const int32_t * src1_d, dst_t * dst_d,
+        const int64_t ne00, const size_t nb01, const size_t nb02, const size_t nb03,
+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const size_t nb10, const size_t nb11, const size_t nb12,
+        const size_t nb1, const size_t nb2, const size_t nb3,
+        cudaStream_t stream) {
+    GGML_ASSERT(ne00 % QK_TQ3_0 == 0);
+
+    const dim3 block_dims(QK_TQ3_0, 1, 1);
+    const dim3 block_nums(ne10, ne00 / QK_TQ3_0, MIN(ne11*ne12, (int64_t) UINT16_MAX));
+
+    const size_t s1 = nb1 / sizeof(dst_t);
+    const size_t s2 = nb2 / sizeof(dst_t);
+    const size_t s3 = nb3 / sizeof(dst_t);
+    const size_t s10 = nb10 / sizeof(int32_t);
+    const size_t s11 = nb11 / sizeof(int32_t);
+    const size_t s12 = nb12 / sizeof(int32_t);
+
+    k_get_rows_tq3_4s<<<block_nums, block_dims, 0, stream>>>(
+        (const block_tq3_4s *) src0_d, src1_d, dst_d,
+        ne00, ne11, ne12,
+        s1, s2, s3,
+        nb01, nb02, nb03,
+        s10, s11, s12);
+}
+
 static __device__ __forceinline__ uint8_t tq3_idx_from_packed_getrows_cuda(const uint8_t * qp, int r) {
     switch (r) {
         case 0: return  qp[0]       & 7;
@@ -489,6 +575,14 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_TQ3_1S:
             get_rows_cuda_tq3_1s(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TQ3_4S:
+            get_rows_cuda_tq3_4s(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TQ3_1S_AP1:
+            get_rows_cuda_tq3_1s_ap1(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         default:

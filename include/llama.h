@@ -156,6 +156,7 @@ extern "C" {
         // 41-42 reserved for removed TurboQuant Q4 prototypes
         LLAMA_FTYPE_MOSTLY_TQ3_1S        = 43, // except 1d tensors
         // 44 reserved for removed TQ3_1S AP1 prototype
+        LLAMA_FTYPE_MOSTLY_TQ3_4S        = 45, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
 

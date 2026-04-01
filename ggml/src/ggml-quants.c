@@ -2660,6 +2660,98 @@ void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_
     }
 }
 
+// TQ3_4S: 4 × E3M5 independent scales + 3-bit centroid payload
+// E3M5: 3-bit exponent (bias 9) + 5-bit mantissa
+// Decode: scale = 2^(byte>>5 - 9) * (1 + (byte&31)/32)
+// Range: ~0.002 to ~0.49, max relative error <1%
+
+static inline float tq3_4s_decode_scale(uint8_t byte) {
+    if (byte == 0) return 0.0f;
+    const int exp = (byte >> 5) - 9;
+    const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
+    return ldexpf(mantissa, exp);
+}
+
+static inline uint8_t tq3_4s_encode_scale(float val) {
+    if (val <= 0.0f) return 0;
+    const int exp_raw = (int)floorf(log2f(val));
+    int exp = exp_raw + 9;
+    if (exp < 0) exp = 0;
+    if (exp > 7) exp = 7;
+    const float mantissa = val / ldexpf(1.0f, exp - 9) - 1.0f;
+    int m = (int)roundf(mantissa * 32.0f);
+    if (m < 0) m = 0;
+    if (m > 31) m = 31;
+    return (uint8_t)((exp << 5) | m);
+}
+
+void quantize_row_tq3_4s_ref(const float * GGML_RESTRICT x, block_tq3_4s * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        tq3_0_rht_forward(x + i * QK_TQ3_0, rotated);
+        uint8_t all_idx[QK_TQ3_0];
+
+        for (int g = 0; g < 4; ++g) {
+            float sum_sq = 0.0f;
+            for (int j = 0; j < 8; ++j) sum_sq += rotated[g*8+j] * rotated[g*8+j];
+            float scale = fmaxf(sqrtf(sum_sq / 8.0f), 1e-10f);
+
+            for (int iter = 0; iter < 4; ++iter) {
+                float inv = 1.0f / fmaxf(scale, 1e-10f);
+                float numer = 0.0f, denom = 0.0f;
+                for (int j = 0; j < 8; ++j) {
+                    uint8_t idx = tq3_0_choose_index(rotated[g*8+j] * inv);
+                    all_idx[g*8+j] = idx;
+                    float c = TQ3_0_CENTROIDS[idx];
+                    numer += rotated[g*8+j] * c;
+                    denom += c * c;
+                }
+                if (denom > 1e-12f) scale = fmaxf(numer / denom, 1e-10f);
+            }
+
+            y[i].d[g] = tq3_4s_encode_scale(scale);
+
+            // Keep indices from fp32 optimization — don't re-quantize
+            uint8_t * idx = all_idx + g * 8;
+            uint8_t * qp = y[i].qs + g * 3;
+            qp[0] = (idx[0]) | (idx[1] << 3) | (idx[2] << 6);
+            qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+void dequantize_row_tq3_4s(const block_tq3_4s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        for (int g = 0; g < 4; ++g) {
+            const float d = tq3_4s_decode_scale(x[i].d[g]);
+            const uint8_t * qp = x[i].qs + g * 3;
+            uint8_t idx[8];
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+            for (int j = 0; j < 8; ++j)
+                rotated[g*8 + j] = TQ3_0_CENTROIDS[idx[j]] * d;
+        }
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+        for (int j = 0; j < QK_TQ3_0; ++j)
+            y[i * QK_TQ3_0 + j] = dequantized[j];
+    }
+}
+
 void quantize_row_tq3_1s_shift_ref(const float * GGML_RESTRICT x, block_tq3_1s_shift * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_TQ3_0 == 0);
     const int64_t nb = k / QK_TQ3_0;
@@ -2707,6 +2799,117 @@ void quantize_row_tq3_1s_shift_ref(const float * GGML_RESTRICT x, block_tq3_1s_s
             qp[0] = (idx[0])      | (idx[1] << 3) | (idx[2] << 6);
             qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
             qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+void quantize_row_tq3_1s_ap1_ref(const float * GGML_RESTRICT x, block_tq3_1s_ap1 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_1S_AP1 == 0);
+    const int64_t nb = k / QK_TQ3_1S_AP1;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float * block_x = x + i * QK_TQ3_1S_AP1;
+        block_tq3_1s base[16];
+        block_tq3_1s_shift promo[16];
+        float base_out[QK_TQ3_0];
+        float promo_out[QK_TQ3_0];
+
+        int best_block = 0;
+        float best_gain = -INFINITY;
+
+        for (int b = 0; b < 16; ++b) {
+            const float * logical = block_x + b * QK_TQ3_0;
+            quantize_row_tq3_1s_ref(logical, &base[b], QK_TQ3_0);
+            quantize_row_tq3_1s_shift_ref(logical, &promo[b], QK_TQ3_0);
+
+            dequantize_row_tq3_1s(&base[b], base_out, QK_TQ3_0);
+            dequantize_row_tq3_1s_shift(&promo[b], promo_out, QK_TQ3_0);
+
+            float err_base = 0.0f;
+            float err_promo = 0.0f;
+            for (int j = 0; j < QK_TQ3_0; ++j) {
+                const float db = logical[j] - base_out[j];
+                const float dp = logical[j] - promo_out[j];
+                err_base += db * db;
+                err_promo += dp * dp;
+            }
+
+            const float gain = err_base - err_promo;
+            if (gain > best_gain) {
+                best_gain = gain;
+                best_block = b;
+            }
+        }
+
+        y[i].mask = (uint16_t) (1u << best_block);
+        uint8_t * base_ptr = y[i].qs;
+        uint8_t * promo_ptr = y[i].qs + 15 * sizeof(block_tq3_1s);
+        for (int b = 0; b < 16; ++b) {
+            if (b == best_block) {
+                memcpy(promo_ptr, &promo[b], sizeof(block_tq3_1s_shift));
+            } else {
+                memcpy(base_ptr, &base[b], sizeof(block_tq3_1s));
+                base_ptr += sizeof(block_tq3_1s);
+            }
+        }
+        GGML_ASSERT(base_ptr == y[i].qs + 15 * sizeof(block_tq3_1s));
+    }
+}
+
+void quantize_row_q4_0_tq_v0_ref(const float * GGML_RESTRICT x, block_q4_0_tq_v0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_Q4_0_TQ_V0 == 0);
+    const int64_t nb = k / QK_Q4_0_TQ_V0;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        memset(&y[i], 0, sizeof(y[i]));
+
+        const float * block_x = x + i * QK_Q4_0_TQ_V0;
+        float amax0 = 0.0f;
+        float amax1 = 0.0f;
+        for (int j = 0; j < 16; ++j) {
+            amax0 = fmaxf(amax0, fabsf(block_x[j]));
+            amax1 = fmaxf(amax1, fabsf(block_x[16 + j]));
+        }
+
+        const float scale0 = amax0 > 0.0f ? amax0 / 7.0f : 1.0f;
+        const float scale1 = amax1 > 0.0f ? amax1 / 7.0f : scale0;
+
+        y[i].s0 = q4_0_tq_v0_encode_scale_u8(scale0);
+        const float scale0_q = q4_0_tq_v0_decode_scale_u8(y[i].s0);
+        y[i].ds1 = q4_0_tq_v0_encode_delta_i8(scale1 / scale0_q);
+
+        const float scale1_q = scale0_q * q4_0_tq_v0_decode_delta_i8(y[i].ds1);
+
+        for (int j = 0; j < QK_Q4_0_TQ_V0; ++j) {
+            const float scale = j < 16 ? scale0_q : scale1_q;
+            const float scaled = scale > 0.0f ? block_x[j] / scale : 0.0f;
+            q4_0_tq_v0_pack_3bit(y[i].qs, j, (uint8_t) best_index_int8(8, Q4_0_TQ_V0_LEVELS, scaled));
+        }
+    }
+}
+
+void quantize_row_q4_0_tq_v1_ref(const float * GGML_RESTRICT x, block_q4_0_tq_v1 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_Q4_0_TQ_V1 == 0);
+    const int64_t nb = k / QK_Q4_0_TQ_V1;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        memset(&y[i], 0, sizeof(y[i]));
+
+        const float * block_x = x + i * QK_Q4_0_TQ_V1;
+        for (int q = 0; q < 4; ++q) {
+            float amax = 0.0f;
+            for (int j = 0; j < 8; ++j) {
+                amax = fmaxf(amax, fabsf(block_x[q * 8 + j]));
+            }
+
+            const float scale = amax > 0.0f ? amax / 7.0f : 1.0f;
+            y[i].scales[q] = q4_0_tq_v0_encode_scale_u8(scale);
+            const float scale_q = q4_0_tq_v0_decode_scale_u8(y[i].scales[q]);
+
+            for (int j = 0; j < 8; ++j) {
+                const float scaled = scale_q > 0.0f ? block_x[q * 8 + j] / scale_q : 0.0f;
+                q4_0_tq_v0_pack_3bit(y[i].qs, q * 8 + j, (uint8_t) best_index_int8(8, Q4_0_TQ_V0_LEVELS, scaled));
+            }
         }
     }
 }
@@ -2828,6 +3031,56 @@ void dequantize_row_tq3_1s_shift(const block_tq3_1s_shift * GGML_RESTRICT x, flo
     }
 }
 
+void dequantize_row_tq3_1s_ap1(const block_tq3_1s_ap1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_1S_AP1 == 0);
+    const int64_t nb = k / QK_TQ3_1S_AP1;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const int promoted_slot = ffs((int) x[i].mask) - 1;
+        GGML_ASSERT(promoted_slot >= 0 && promoted_slot < 16);
+        const uint8_t * base_ptr = x[i].qs;
+        const block_tq3_1s_shift * promo_ptr = (const block_tq3_1s_shift *) (x[i].qs + 15 * sizeof(block_tq3_1s));
+        for (int b = 0; b < 16; ++b) {
+            if (b == promoted_slot) {
+                dequantize_row_tq3_1s_shift(promo_ptr, y + i * QK_TQ3_1S_AP1 + b * QK_TQ3_0, QK_TQ3_0);
+            } else {
+                dequantize_row_tq3_1s((const block_tq3_1s *) base_ptr, y + i * QK_TQ3_1S_AP1 + b * QK_TQ3_0, QK_TQ3_0);
+                base_ptr += sizeof(block_tq3_1s);
+            }
+        }
+    }
+}
+
+void dequantize_row_q4_0_tq_v0(const block_q4_0_tq_v0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_Q4_0_TQ_V0 == 0);
+    const int64_t nb = k / QK_Q4_0_TQ_V0;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float scale0 = q4_0_tq_v0_decode_scale_u8(x[i].s0);
+        const float scale1 = scale0 * q4_0_tq_v0_decode_delta_i8(x[i].ds1);
+
+        for (int j = 0; j < QK_Q4_0_TQ_V0; ++j) {
+            const float scale = j < 16 ? scale0 : scale1;
+            y[i * QK_Q4_0_TQ_V0 + j] = scale * (float) Q4_0_TQ_V0_LEVELS[q4_0_tq_v0_unpack_3bit(x[i].qs, j)];
+        }
+    }
+}
+
+void dequantize_row_q4_0_tq_v1(const block_q4_0_tq_v1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_Q4_0_TQ_V1 == 0);
+    const int64_t nb = k / QK_Q4_0_TQ_V1;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        for (int q = 0; q < 4; ++q) {
+            const float scale = q4_0_tq_v0_decode_scale_u8(x[i].scales[q]);
+            for (int j = 0; j < 8; ++j) {
+                const int idx = q * 8 + j;
+                y[i * QK_Q4_0_TQ_V1 + idx] = scale * (float) Q4_0_TQ_V0_LEVELS[q4_0_tq_v0_unpack_3bit(x[i].qs, idx)];
+            }
+        }
+    }
+}
+
 size_t quantize_tq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void)quant_weights; // not used - codebook is fixed
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_0, n_per_row);
@@ -2839,6 +3092,503 @@ size_t quantize_tq3_1s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
     (void) quant_weights;
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_1S, n_per_row);
     quantize_row_tq3_1s_ref(src, dst, (int64_t) nrow * n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_tq3_4s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4S, n_per_row);
+    if (!quant_weights) {
+        quantize_row_tq3_4s_ref(src, dst, (int64_t) nrow * n_per_row);
+        return nrow * row_size;
+    }
+
+    // imatrix-weighted quantization
+    assert(n_per_row % QK_TQ3_0 == 0);
+    const int64_t nb = n_per_row / QK_TQ3_0;
+    block_tq3_4s * y = (block_tq3_4s *) dst;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * x = src + row * n_per_row;
+        const float * qw = quant_weights + row * n_per_row;
+
+        for (int64_t i = 0; i < nb; ++i) {
+            const float * bx = x + i * QK_TQ3_0;
+            const float * bw = qw + i * QK_TQ3_0;
+
+            tq3_0_rht_forward(bx, rotated);
+
+            // Transform importance weights through WHT (squared weights → use abs of WHT)
+            // Approximation: use original-domain weights mapped to WHT groups
+            // Each WHT coefficient mixes all 32 inputs, so weight by sum of input weights
+            float group_weight[4];
+            for (int g = 0; g < 4; ++g) {
+                float sw = 0.0f;
+                for (int j = 0; j < 8; ++j) {
+                    // WHT coefficient g*8+j depends on all inputs, but primarily on nearby ones
+                    // Use the average imatrix weight for this group's input range
+                    sw += bw[g*8+j];
+                }
+                group_weight[g] = fmaxf(sw, 1e-10f);
+            }
+
+            uint8_t all_idx[QK_TQ3_0];
+            for (int g = 0; g < 4; ++g) {
+                float sum_sq = 0.0f;
+                for (int j = 0; j < 8; ++j) sum_sq += rotated[g*8+j] * rotated[g*8+j];
+                float scale = fmaxf(sqrtf(sum_sq / 8.0f), 1e-10f);
+
+                // Weighted scale optimization
+                float w_per_elem[8];
+                for (int j = 0; j < 8; ++j) {
+                    w_per_elem[j] = bw[g*8+j];
+                }
+
+                for (int iter = 0; iter < 4; ++iter) {
+                    float inv = 1.0f / fmaxf(scale, 1e-10f);
+                    float numer = 0.0f, denom = 0.0f;
+                    for (int j = 0; j < 8; ++j) {
+                        uint8_t idx = tq3_0_choose_index(rotated[g*8+j] * inv);
+                        all_idx[g*8+j] = idx;
+                        float c = TQ3_0_CENTROIDS[idx];
+                        numer += w_per_elem[j] * rotated[g*8+j] * c;
+                        denom += w_per_elem[j] * c * c;
+                    }
+                    if (denom > 1e-12f) scale = fmaxf(numer / denom, 1e-10f);
+                }
+
+                y[row * nb + i].d[g] = tq3_4s_encode_scale(scale);
+
+                uint8_t * idx = all_idx + g * 8;
+                uint8_t * qp = y[row * nb + i].qs + g * 3;
+                qp[0] = (idx[0]) | (idx[1] << 3) | (idx[2] << 6);
+                qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+                qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+            }
+        }
+    }
+    return nrow * row_size;
+}
+
+// TQ3_4SE: same as TQ3_4S but with per-16 shifts
+// Shift encoding: signed, scale = max_group_scale / 8
+// s[h] = round(shift / (max_group_scale / 8) * 127) + 128
+
+void quantize_row_tq3_4se_ref(const float * GGML_RESTRICT x, block_tq3_4se * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        tq3_0_rht_forward(x + i * QK_TQ3_0, rotated);
+        uint8_t all_idx[QK_TQ3_0];
+
+        // First pass: find per-8 scales (same as TQ3_4S)
+        float group_scale[4];
+        for (int g = 0; g < 4; ++g) {
+            float sum_sq = 0.0f;
+            for (int j = 0; j < 8; ++j) sum_sq += rotated[g*8+j] * rotated[g*8+j];
+            float scale = fmaxf(sqrtf(sum_sq / 8.0f), 1e-10f);
+            for (int iter = 0; iter < 4; ++iter) {
+                float inv = 1.0f / fmaxf(scale, 1e-10f);
+                float numer = 0.0f, denom = 0.0f;
+                for (int j = 0; j < 8; ++j) {
+                    uint8_t idx = tq3_0_choose_index(rotated[g*8+j] * inv);
+                    all_idx[g*8+j] = idx;
+                    float c = TQ3_0_CENTROIDS[idx];
+                    numer += rotated[g*8+j] * c;
+                    denom += c * c;
+                }
+                if (denom > 1e-12f) scale = fmaxf(numer / denom, 1e-10f);
+            }
+            group_scale[g] = scale;
+            y[i].d[g] = tq3_4s_encode_scale(scale);
+        }
+
+        // Second pass: compute per-16 shifts from residual
+        for (int h = 0; h < 2; ++h) {
+            float shift_sum = 0.0f;
+            for (int j = 0; j < 16; ++j) {
+                int g = (h * 16 + j) / 8;
+                shift_sum += rotated[h*16+j] - TQ3_0_CENTROIDS[all_idx[h*16+j]] * group_scale[g];
+            }
+            float shift = shift_sum / 16.0f;
+
+            // Encode shift as signed u8 relative to max scale
+            float max_s = fmaxf(fmaxf(group_scale[0], group_scale[1]),
+                                fmaxf(group_scale[2], group_scale[3]));
+            float quantum = max_s / 8.0f;
+            int sq = (int)roundf(shift / fmaxf(quantum, 1e-10f) * 127.0f) + 128;
+            y[i].s[h] = (uint8_t)(sq < 0 ? 0 : (sq > 255 ? 255 : sq));
+        }
+
+        // Pack indices (from first pass, not re-quantized)
+        for (int g = 0; g < 4; ++g) {
+            uint8_t * idx = all_idx + g * 8;
+            uint8_t * qp = y[i].qs + g * 3;
+            qp[0] = (idx[0]) | (idx[1] << 3) | (idx[2] << 6);
+            qp[1] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            qp[2] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+    }
+}
+
+void dequantize_row_tq3_4se(const block_tq3_4se * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; ++i) {
+        float ds[4];
+        float max_s = 0.0f;
+        for (int g = 0; g < 4; ++g) {
+            ds[g] = tq3_4s_decode_scale(x[i].d[g]);
+            if (ds[g] > max_s) max_s = ds[g];
+        }
+        float quantum = max_s / 8.0f;
+        float shifts[2];
+        for (int h = 0; h < 2; ++h) {
+            shifts[h] = ((int)x[i].s[h] - 128) / 127.0f * quantum;
+        }
+
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * qp = x[i].qs + g * 3;
+            uint8_t idx[8];
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+            int h = g / 2;
+            for (int j = 0; j < 8; ++j)
+                rotated[g*8 + j] = TQ3_0_CENTROIDS[idx[j]] * ds[g] + shifts[h];
+        }
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+        for (int j = 0; j < QK_TQ3_0; ++j)
+            y[i * QK_TQ3_0 + j] = dequantized[j];
+    }
+}
+
+size_t quantize_tq3_4se(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void) quant_weights;
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4SE, n_per_row);
+    quantize_row_tq3_4se_ref(src, dst, (int64_t) nrow * n_per_row);
+    return nrow * row_size;
+}
+
+// 2-bit centroids (Lloyd-Max for normalized Gaussian)
+static const float TQ3_V_C2[4] = { -1.5104f, -0.4528f, 0.4528f, 1.5104f };
+// 4-bit centroids (Lloyd-Max for normalized Gaussian, 16 levels)
+static const float TQ3_V_C4[16] = {
+    -2.733f, -2.069f, -1.618f, -1.256f, -0.942f, -0.656f, -0.386f, -0.126f,
+     0.126f,  0.386f,  0.656f,  0.942f,  1.256f,  1.618f,  2.069f,  2.733f,
+};
+
+static inline uint8_t tq3_v_choose_c2(float x) {
+    // 4 levels: pick nearest
+    int best = 0;
+    float best_d = fabsf(x - TQ3_V_C2[0]);
+    for (int i = 1; i < 4; i++) {
+        float d = fabsf(x - TQ3_V_C2[i]);
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    return (uint8_t)best;
+}
+
+static inline uint8_t tq3_v_choose_c4(float x) {
+    int best = 0;
+    float best_d = fabsf(x - TQ3_V_C4[0]);
+    for (int i = 1; i < 16; i++) {
+        float d = fabsf(x - TQ3_V_C4[i]);
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    return (uint8_t)best;
+}
+
+static float tq3_v_quant_group(const float * vals, int n, const float * centroids, int nc,
+                                uint8_t (* choose)(float), float * out_scale, uint8_t * out_idx) {
+    float sum_sq = 0.0f;
+    for (int j = 0; j < n; j++) sum_sq += vals[j] * vals[j];
+    float scale = fmaxf(sqrtf(sum_sq / n), 1e-10f);
+    for (int iter = 0; iter < 4; iter++) {
+        float inv = 1.0f / fmaxf(scale, 1e-10f);
+        float numer = 0.0f, denom = 0.0f;
+        for (int j = 0; j < n; j++) {
+            uint8_t idx = choose(vals[j] * inv);
+            out_idx[j] = idx;
+            float c = centroids[idx];
+            numer += vals[j] * c;
+            denom += c * c;
+        }
+        if (denom > 1e-12f) scale = fmaxf(numer / denom, 1e-10f);
+    }
+    *out_scale = scale;
+    float err = 0.0f;
+    for (int j = 0; j < n; j++) {
+        float r = vals[j] - centroids[out_idx[j]] * scale;
+        err += r * r;
+    }
+    return err;
+}
+
+// Block layout:
+//   Byte 0: [promoted:2][demoted:2][demoted_scale_e3m1:4]
+//   Bytes 1-3: E3M5 scales for promoted, normalA, normalB (in group index order)
+//   Bytes 4-7: slot 0 (promoted) 8×4-bit
+//   Bytes 8-10: slot 1 (normalA) 8×3-bit
+//   Bytes 11-13: slot 2 (normalB) 8×3-bit
+//   Bytes 14-15: slot 3 (demoted) 8×2-bit
+
+// 16-entry log-spaced scale table for 4-bit demoted group scale
+static const float TQ3_V_SCALE_TABLE[16] = {
+    0.002000f, 0.002890f, 0.004176f, 0.006034f, 0.008719f, 0.012599f, 0.018206f, 0.026307f,
+    0.038013f, 0.054928f, 0.079370f, 0.114688f, 0.165723f, 0.239466f, 0.346025f, 0.500000f,
+};
+
+static inline uint8_t tq3_v_encode_scale_4bit(float val) {
+    if (val <= 0.0f) return 0;
+    int best = 0;
+    float best_d = fabsf(val - TQ3_V_SCALE_TABLE[0]);
+    for (int i = 1; i < 16; i++) {
+        float d = fabsf(val - TQ3_V_SCALE_TABLE[i]);
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    return (uint8_t)best;
+}
+
+static inline float tq3_v_decode_scale_4bit(uint8_t nibble) {
+    return TQ3_V_SCALE_TABLE[nibble & 0xF];
+}
+
+void quantize_row_tq3_4sv_ref(const float * GGML_RESTRICT x, block_tq3_4sv * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; i++) {
+        tq3_0_rht_forward(x + i * QK_TQ3_0, rotated);
+
+        // Try all 12 [4,3,3,2] permutations with 1 iteration, then refine winner
+        float best_err = 1e30f;
+        int best_p = 0, best_d = 1;
+
+        for (int p = 0; p < 4; p++) {
+            for (int d = 0; d < 4; d++) {
+                if (p == d) continue;
+                float total_err = 0.0f;
+                for (int g = 0; g < 4; g++) {
+                    float * grp = rotated + g * 8;
+                    float sum_sq = 0.0f;
+                    for (int j = 0; j < 8; j++) sum_sq += grp[j] * grp[j];
+                    float scale = fmaxf(sqrtf(sum_sq / 8.0f), 1e-10f);
+                    float inv = 1.0f / scale;
+                    float err = 0.0f;
+                    const float * c; int nc;
+                    if (g == p) { c = TQ3_V_C4; nc = 16; }
+                    else if (g == d) { c = TQ3_V_C2; nc = 4; }
+                    else { c = TQ3_0_CENTROIDS; nc = 8; }
+                    for (int j = 0; j < 8; j++) {
+                        float v = grp[j] * inv;
+                        float best_d2 = 1e30f;
+                        for (int ci = 0; ci < nc; ci++) {
+                            float dd = (v - c[ci]) * (v - c[ci]);
+                            if (dd < best_d2) best_d2 = dd;
+                        }
+                        err += best_d2;
+                    }
+                    total_err += err * scale * scale;
+                }
+                if (total_err < best_err) {
+                    best_err = total_err;
+                    best_p = p; best_d = d;
+                }
+            }
+        }
+
+        // Full optimization for the winning permutation
+        float best_scales[4];
+        uint8_t best_idx[QK_TQ3_0];
+        for (int g = 0; g < 4; g++) {
+            float * grp = rotated + g * 8;
+            if (g == best_p) {
+                tq3_v_quant_group(grp, 8, TQ3_V_C4, 16, tq3_v_choose_c4, &best_scales[g], best_idx + g*8);
+            } else if (g == best_d) {
+                tq3_v_quant_group(grp, 8, TQ3_V_C2, 4, tq3_v_choose_c2, &best_scales[g], best_idx + g*8);
+            } else {
+                tq3_v_quant_group(grp, 8, TQ3_0_CENTROIDS, 8, tq3_0_choose_index, &best_scales[g], best_idx + g*8);
+            }
+        }
+
+        // Pack byte 0: [promoted:2][demoted:2][demoted_scale_4bit:4]
+        y[i].d[0] = (uint8_t)((best_p << 6) | (best_d << 4) | (tq3_v_encode_scale_4bit(best_scales[best_d]) & 0xF));
+
+        // Pack bytes 1-3: E3M5 scales for the 3 non-demoted groups (in group order)
+        int si = 1;
+        for (int g = 0; g < 4; g++) {
+            if (g == best_d) continue;
+            y[i].d[si++] = tq3_4s_encode_scale(best_scales[g]);
+        }
+
+        // Pack qs[12]: fixed layout [4-bit:4B][3-bit:3B][3-bit:3B][2-bit:2B]
+        // Map: slot 0=promoted, slot 3=demoted, slots 1,2=normals in order
+        int slot_to_group[4];
+        slot_to_group[0] = best_p;
+        slot_to_group[3] = best_d;
+        int si2 = 1;
+        for (int g = 0; g < 4; g++) {
+            if (g != best_p && g != best_d) slot_to_group[si2++] = g;
+        }
+
+        // Slot 0: 8×4-bit in bytes 0-3 of qs
+        {
+            int g = slot_to_group[0];
+            uint8_t * idx = best_idx + g * 8;
+            y[i].qs[0] = (idx[0] & 0xF) | ((idx[1] & 0xF) << 4);
+            y[i].qs[1] = (idx[2] & 0xF) | ((idx[3] & 0xF) << 4);
+            y[i].qs[2] = (idx[4] & 0xF) | ((idx[5] & 0xF) << 4);
+            y[i].qs[3] = (idx[6] & 0xF) | ((idx[7] & 0xF) << 4);
+        }
+        // Slot 1: 8×3-bit in bytes 4-6 of qs
+        {
+            int g = slot_to_group[1];
+            uint8_t * idx = best_idx + g * 8;
+            y[i].qs[4] = (idx[0]) | (idx[1] << 3) | (idx[2] << 6);
+            y[i].qs[5] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            y[i].qs[6] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+        // Slot 2: 8×3-bit in bytes 7-9 of qs
+        {
+            int g = slot_to_group[2];
+            uint8_t * idx = best_idx + g * 8;
+            y[i].qs[7] = (idx[0]) | (idx[1] << 3) | (idx[2] << 6);
+            y[i].qs[8] = (idx[2] >> 2) | (idx[3] << 1) | (idx[4] << 4) | (idx[5] << 7);
+            y[i].qs[9] = (idx[5] >> 1) | (idx[6] << 2) | (idx[7] << 5);
+        }
+        // Slot 3: 8×2-bit in bytes 10-11 of qs
+        {
+            int g = slot_to_group[3];
+            uint8_t * idx = best_idx + g * 8;
+            y[i].qs[10] = (idx[0]) | (idx[1] << 2) | (idx[2] << 4) | (idx[3] << 6);
+            y[i].qs[11] = (idx[4]) | (idx[5] << 2) | (idx[6] << 4) | (idx[7] << 6);
+        }
+
+    }
+}
+
+void dequantize_row_tq3_4sv(const block_tq3_4sv * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+    float rotated[QK_TQ3_0];
+
+    for (int64_t i = 0; i < nb; i++) {
+        // Decode pattern
+        int promoted = (x[i].d[0] >> 6) & 3;
+        int demoted  = (x[i].d[0] >> 4) & 3;
+        float demoted_scale = tq3_v_decode_scale_4bit(x[i].d[0] & 0xF);
+
+        // Decode 3 E3M5 scales
+        float scales[4];
+        int si = 1;
+        for (int g = 0; g < 4; g++) {
+            if (g == demoted) { scales[g] = demoted_scale; continue; }
+            scales[g] = tq3_4s_decode_scale(x[i].d[si++]);
+        }
+
+        // Slot-to-group mapping
+        int slot_to_group[4];
+        slot_to_group[0] = promoted;
+        slot_to_group[3] = demoted;
+        int si2 = 1;
+        for (int g = 0; g < 4; g++) {
+            if (g != promoted && g != demoted) slot_to_group[si2++] = g;
+        }
+
+        // Unpack slot 0: 8×4-bit from qs[0-3]
+        {
+            int g = slot_to_group[0];
+            float s = scales[g];
+            rotated[g*8+0] = TQ3_V_C4[(x[i].qs[0])      & 0xF] * s;
+            rotated[g*8+1] = TQ3_V_C4[(x[i].qs[0] >> 4) & 0xF] * s;
+            rotated[g*8+2] = TQ3_V_C4[(x[i].qs[1])      & 0xF] * s;
+            rotated[g*8+3] = TQ3_V_C4[(x[i].qs[1] >> 4) & 0xF] * s;
+            rotated[g*8+4] = TQ3_V_C4[(x[i].qs[2])      & 0xF] * s;
+            rotated[g*8+5] = TQ3_V_C4[(x[i].qs[2] >> 4) & 0xF] * s;
+            rotated[g*8+6] = TQ3_V_C4[(x[i].qs[3])      & 0xF] * s;
+            rotated[g*8+7] = TQ3_V_C4[(x[i].qs[3] >> 4) & 0xF] * s;
+        }
+        // Unpack slots 1,2: 8×3-bit from qs[4-6], qs[7-9]
+        for (int slot = 1; slot <= 2; slot++) {
+            int g = slot_to_group[slot];
+            float s = scales[g];
+            const uint8_t * qp = x[i].qs + 4 + (slot - 1) * 3;
+            rotated[g*8+0] = TQ3_0_CENTROIDS[ qp[0]       & 7] * s;
+            rotated[g*8+1] = TQ3_0_CENTROIDS[(qp[0] >> 3) & 7] * s;
+            rotated[g*8+2] = TQ3_0_CENTROIDS[((qp[0] >> 6) | (qp[1] << 2)) & 7] * s;
+            rotated[g*8+3] = TQ3_0_CENTROIDS[(qp[1] >> 1) & 7] * s;
+            rotated[g*8+4] = TQ3_0_CENTROIDS[(qp[1] >> 4) & 7] * s;
+            rotated[g*8+5] = TQ3_0_CENTROIDS[((qp[1] >> 7) | (qp[2] << 1)) & 7] * s;
+            rotated[g*8+6] = TQ3_0_CENTROIDS[(qp[2] >> 2) & 7] * s;
+            rotated[g*8+7] = TQ3_0_CENTROIDS[(qp[2] >> 5) & 7] * s;
+        }
+        // Unpack slot 3: 8×2-bit from qs[10-11]
+        {
+            int g = slot_to_group[3];
+            float s = scales[g];
+            rotated[g*8+0] = TQ3_V_C2[(x[i].qs[10])      & 3] * s;
+            rotated[g*8+1] = TQ3_V_C2[(x[i].qs[10] >> 2) & 3] * s;
+            rotated[g*8+2] = TQ3_V_C2[(x[i].qs[10] >> 4) & 3] * s;
+            rotated[g*8+3] = TQ3_V_C2[(x[i].qs[10] >> 6) & 3] * s;
+            rotated[g*8+4] = TQ3_V_C2[(x[i].qs[11])      & 3] * s;
+            rotated[g*8+5] = TQ3_V_C2[(x[i].qs[11] >> 2) & 3] * s;
+            rotated[g*8+6] = TQ3_V_C2[(x[i].qs[11] >> 4) & 3] * s;
+            rotated[g*8+7] = TQ3_V_C2[(x[i].qs[11] >> 6) & 3] * s;
+        }
+
+        float dequantized[QK_TQ3_0];
+        tq3_0_rht_inverse(rotated, dequantized);
+        for (int j = 0; j < QK_TQ3_0; j++)
+            y[i * QK_TQ3_0 + j] = dequantized[j];
+    }
+}
+
+size_t quantize_tq3_4sv(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void) quant_weights;
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4SV, n_per_row);
+    quantize_row_tq3_4sv_ref(src, dst, (int64_t) nrow * n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_tq3_1s_ap1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void) quant_weights;
+    assert(n_per_row % QK_TQ3_1S_AP1 == 0);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_1S_AP1, n_per_row);
+    quantize_row_tq3_1s_ap1_ref(src, dst, (int64_t) nrow * n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_q4_0_tq_v0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_0_TQ, n_per_row);
+    if (!quant_weights) {
+        quantize_row_q4_0_tq_v0_ref(src, dst, (int64_t) nrow * n_per_row);
+        return nrow * row_size;
+    }
+
+    quantize_row_q4_0_tq_v0_ref(src, dst, (int64_t) nrow * n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_q4_1_tq_v1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_1_TQ, n_per_row);
+    if (!quant_weights) {
+        quantize_row_q4_0_tq_v1_ref(src, dst, (int64_t) nrow * n_per_row);
+        return nrow * row_size;
+    }
+
+    quantize_row_q4_0_tq_v1_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
 
@@ -5929,6 +6679,30 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                         return false;
                     }
                 }
+            } break;
+        case GGML_TYPE_TQ3_1S_AP1:
+            {
+                const block_tq3_1s_ap1 * q = (const block_tq3_1s_ap1 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (__builtin_popcount((unsigned) q[i].mask) != 1) {
+                        return false;
+                    }
+                }
+            } break;
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_TQ3_4SE:
+        case GGML_TYPE_TQ3_4SV:
+            // u8 scales can't be NaN/Inf — nothing to validate
+            break;
+        case GGML_TYPE_Q4_0_TQ:
+            {
+                GGML_UNUSED(data);
+                GGML_UNUSED(nb);
+            } break;
+        case GGML_TYPE_Q4_1_TQ:
+            {
+                GGML_UNUSED(data);
+                GGML_UNUSED(nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {
