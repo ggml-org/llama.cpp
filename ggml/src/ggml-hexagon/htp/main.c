@@ -432,8 +432,7 @@ static void execute_op(struct htp_ops_context * octx) {
 }
 
 static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf *b) {
-    FARF(HIGH, "prep-buf: idx %u fd %u size %u flags 0x%x range %u:%u", idx, b->fd,
-            (uint32_t) b->size, b->flags, (uint32_t) b->begin, (uint32_t) b->end);
+    FARF(HIGH, "prep-buf: idx %u fd %u size %u flags 0x%x", idx, b->fd, (uint32_t) b->size, b->flags);
 
     b->base = NULL;
 
@@ -513,7 +512,7 @@ static void post_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t) {
     hex_l2flush((void *) t->data, t->size);
     t->flags |= HTP_TENSOR_FLUSHED;
 
-    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", t->bi, (void *) t->data, size,
+    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", t->bi, (void *) t->data, t->size,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
@@ -591,15 +590,10 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         vtcm_acquire(ctx);
 
         for (uint32_t i=0; i < n_ops; i++) {
-             struct htp_op_req *r = reqs + i;
- 
-             // if (r->flags & HTP_OPFLAGS_EARLY_WAKEUP) {
-             //     // Host wants early notification
-             //     dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
-             // }
-
-             proc_op_req(ctx, bufs, r);
+             proc_op_req(ctx, bufs, &reqs[i]);
         }
+
+        // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         vtcm_release(ctx);
 
