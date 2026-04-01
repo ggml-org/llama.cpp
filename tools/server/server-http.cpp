@@ -151,9 +151,20 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or is static file, skip validation
+        // If path is public, skip validation
         if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/") {
             return true;
+        }
+
+        // Skip validation for web UI static assets (they don't require API key)
+        {
+            static const std::unordered_set<std::string> static_assets = {
+                "/bundle.js", "/bundle.css", "/index.html",
+            };
+
+            if (static_assets.find(req.path) != static_assets.end()) {
+                return true;
+            }
         }
 
         // Check for API key in the Authorization header

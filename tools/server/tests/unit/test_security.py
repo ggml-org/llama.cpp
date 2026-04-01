@@ -22,6 +22,16 @@ def test_access_public_endpoint(endpoint: str):
     assert "error" not in res.body
 
 
+@pytest.mark.parametrize("endpoint", ["/", "/bundle.js", "/bundle.css"])
+def test_access_static_assets_without_api_key(endpoint: str):
+    """Static web UI assets should not require API key authentication (issue #21229)"""
+    global server
+    server.start()
+    res = server.make_request("GET", endpoint)
+    assert res.status_code == 200
+    assert "error" not in res.body
+
+
 @pytest.mark.parametrize("api_key", [None, "invalid-key"])
 def test_incorrect_api_key(api_key: str):
     global server
