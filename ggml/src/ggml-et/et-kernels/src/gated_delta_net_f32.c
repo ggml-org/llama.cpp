@@ -145,34 +145,47 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
     unsigned long default_mask;
     __asm__ volatile("mova.x.m %[ms]\n" : [ms] "=r"(default_mask));
 
-    const int32_t total_work = H * n_seqs;
+    // Parallelize over (j_block, head, seq). Block j by cachgeline size
+    // to avoid incoherency problems
+    const int32_t J_BLK = ET_CACHE_LINE_SIZE_BYTES / (int32_t)sizeof(float);
+    const int32_t n_j_blocks = (S_v + J_BLK - 1) / J_BLK;
+    const int32_t total_work = n_j_blocks * H * n_seqs;
 
     for (int32_t ir = thread_id; ir < total_work; ir += num_threads) {
-        const int32_t head = ir % H;
-        const int32_t seq  = ir / H;
+        const int32_t jb   = ir % n_j_blocks;
+        const int32_t head = (ir / n_j_blocks) % H;
+        const int32_t seq  = ir / (n_j_blocks * H);
+
+        const int32_t j_start = jb * J_BLK;
+        const int32_t j_end   = (j_start + J_BLK < S_v) ? j_start + J_BLK : S_v;
 
         const int32_t h_q = head % H_q;
         const int32_t h_k = head % H_k;
         const int32_t seq_q = (n_seqs_q == n_seqs) ? seq : (seq * n_seqs_q / n_seqs);
         const int32_t seq_k = (n_seqs_k == n_seqs) ? seq : (seq * n_seqs_k / n_seqs);
 
-        const int32_t state_offset = (seq * H + head) * S_v * S_v;
-        float* s_out = state_out_base + state_offset;
-        const float* s_in = state_in + state_offset;
+        const int32_t state_base = (seq * H + head) * S_v * S_v;
+        float* s_out = state_out_base + state_base;
+        const float* s_in = state_in + state_base;
 
         __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-        for (int32_t idx = 0; idx < S_v * S_v; idx += 8) {
-            __asm__ volatile(
-                "flw.ps f10, %[src]\n"
-                "fsw.ps f10, %[dst]\n"
-                : [dst] "=m"(*(float(*)[8])&s_out[idx])
-                : [src] "m"(*(const float(*)[8])&s_in[idx])
-                : "f10"
-            );
+        for (int32_t j = j_start; j < j_end; j++) {
+            float* row_out = &s_out[j * S_v];
+            const float* row_in = &s_in[j * S_v];
+            for (int32_t i = 0; i < S_v; i += 8) {
+                __asm__ volatile(
+                    "flw.ps f10, %[src]\n"
+                    "fsw.ps f10, %[dst]\n"
+                    : [dst] "=m"(*(float(*)[8])&row_out[i])
+                    : [src] "m"(*(const float(*)[8])&row_in[i])
+                    : "f10"
+                );
+            }
         }
         __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
 
-        float* attn_data = attn_out_base + (seq * n_tokens * H + head) * S_v;
+        const int32_t attn_stride_t = S_v * H;
+        float* attn_ptr = attn_out_base + (seq * n_tokens * H + head) * S_v;
 
         for (int32_t t = 0; t < n_tokens; t++) {
             const float* q_t = (const float *)((const char *)q + seq_q * q_nb3 + t * q_nb2 + h_q * q_nb1);
@@ -182,16 +195,10 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
             const float  beta_val = beta[seq * b_stride_s + t * b_stride_t + head];
 
             if (kda) {
-                // -- SIMD block B: vectorized exp + decay multiply --
                 const float log2e = 1.4426950408889634f;
-                const int32_t tail = S_v & 7;
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
                 __asm__ volatile("fbc.ps f20, %[l2e]\n" : : [l2e] "m"(log2e) : "f20");
                 for (int32_t i = 0; i < S_v; i += 8) {
-                    if (tail && i + 8 > S_v) {
-                        const uint32_t tail_mask = (1u << tail) - 1;
-                        __asm__ volatile("mov.m.x m0, %[tm], 0\n" : : [tm] "r"(tail_mask) :);
-                    }
                     __asm__ volatile(
                         "flw.ps f10, %[g_vec]\n"
                         "fmul.ps f10, f10, f20, rne\n"
@@ -202,10 +209,7 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                         : "f10"
                     );
                 }
-                if (tail) {
-                    __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-                }
-                for (int32_t j = 0; j < S_v; j++) {
+                for (int32_t j = j_start; j < j_end; j++) {
                     float* row = &s_out[j * S_v];
                     for (int32_t i = 0; i < S_v; i += 8) {
                         __asm__ volatile(
@@ -222,27 +226,28 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 }
                 __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
             } else {
-                // et_expf handles its own mask internally (scalar)
                 float decay = et_expf(g_t[0]);
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
                 __asm__ volatile("fbc.ps f20, %[d]\n" : : [d] "m"(decay) : "f20");
-                for (int32_t idx = 0; idx < S_v * S_v; idx += 8) {
-                    __asm__ volatile(
-                        "flw.ps f10, %[s_vec]\n"
-                        "fmul.ps f10, f10, f20, rne\n"
-                        "fsw.ps f10, %[s_out]\n"
-                        : [s_out] "=m"(*(float(*)[8])&s_out[idx])
-                        : [s_vec] "m"(*(const float(*)[8])&s_out[idx])
-                        : "f10"
-                    );
+                for (int32_t j = j_start; j < j_end; j++) {
+                    float* row = &s_out[j * S_v];
+                    for (int32_t i = 0; i < S_v; i += 8) {
+                        __asm__ volatile(
+                            "flw.ps f10, %[s_vec]\n"
+                            "fmul.ps f10, f10, f20, rne\n"
+                            "fsw.ps f10, %[s_out]\n"
+                            : [s_out] "=m"(*(float(*)[8])&row[i])
+                            : [s_vec] "m"(*(const float(*)[8])&row[i])
+                            : "f10"
+                        );
+                    }
                 }
                 __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
             }
 
-            for (int32_t j = 0; j < S_v; j++) {
+            for (int32_t j = j_start; j < j_end; j++) {
                 float* row = &s_out[j * S_v];
 
-                // dot(S_row, k) + hsum
                 float zero = 0.0f;
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
                 __asm__ volatile("fbc.ps f10, %[z]\n" : : [z] "m"(zero) : "f10");
@@ -264,7 +269,6 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
 
                 float delta_j = (v_t[j] - dot_sk) * beta_val;
 
-                // state update + attention dot + hsum
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
                 __asm__ volatile(
                     "fbc.ps f20, %[dj]\n"
@@ -293,10 +297,10 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 float attn_val = hsum_f10();
                 __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
 
-                attn_data[j] = attn_val * scale;
+                attn_ptr[j] = attn_val * scale;
             }
 
-            attn_data += S_v * H;
+            attn_ptr += attn_stride_t;
         }
     }
 
