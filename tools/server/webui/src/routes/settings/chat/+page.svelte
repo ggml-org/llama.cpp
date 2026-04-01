@@ -10,5 +10,5 @@
 <ChatSettings
 	onSave={() => goto('#/')}
 	initialSection={sectionParam ?? undefined}
-	class="mx-auto h-full md:pl-8"
+	class="mx-auto max-h-[100dvh] md:pl-8"
 />

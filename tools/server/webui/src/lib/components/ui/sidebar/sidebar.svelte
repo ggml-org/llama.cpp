@@ -86,7 +86,7 @@
 							side === 'left'
 								? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0'
 								: 'right-3 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0',
-							'my-3 overflow-hidden rounded-2xl border border-sidebar-border shadow-md'
+							'my-3 overflow-hidden rounded-3xl border border-sidebar-border shadow-md'
 						]
 					: [
 							'h-svh transition-[left,right,width]',

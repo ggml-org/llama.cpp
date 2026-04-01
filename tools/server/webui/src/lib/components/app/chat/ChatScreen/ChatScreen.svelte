@@ -66,6 +66,17 @@
 
 	let emptyFileNames = $state<string[]>([]);
 
+	// Incremented each time isEmpty transitions false→true, forcing welcome screen remount with transitions
+	let introKey = $state(0);
+	let wasEmpty = false;
+
+	$effect(() => {
+		if (isEmpty && !wasEmpty) {
+			introKey++;
+		}
+		wasEmpty = isEmpty;
+	});
+
 	let initialMessage = $state('');
 
 	let isEmpty = $derived(
@@ -363,10 +374,7 @@
 				}}
 			/>
 
-			<div
-				class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto"
-				in:slide={{ duration: 150, axis: 'y' }}
-			>
+			<div class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto">
 				<ChatScreenProcessingInfo />
 
 				{#if hasPropsError}
@@ -422,6 +430,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
+		{#key introKey}
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
@@ -471,6 +480,7 @@
 				/>
 			</div>
 		</div>
+		{/key}
 	</div>
 {/if}
 

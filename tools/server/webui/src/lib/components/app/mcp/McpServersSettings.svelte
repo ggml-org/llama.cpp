@@ -84,10 +84,10 @@
 	}
 </script>
 
-<div class="p-4 md:p-0 md:absolute md:top-8 md:left-8 flex items-center gap-2">
+<div class="flex items-center gap-2 p-4 md:absolute md:top-8 md:left-8 md:p-0">
 	<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
-	<h1 class="text-xl md:text-2xl font-semibold">MCP Servers</h1>
+	<h1 class="text-xl font-semibold md:text-2xl">MCP Servers</h1>
 </div>
 
 <div class="sticky top-0 z-10 mt-4 flex items-start justify-end gap-4 px-8 py-4">

@@ -178,7 +178,7 @@
 	<div class="flex items-center gap-2 pb-4">
 		<Database class="h-5 w-5 md:h-6 md:w-6" />
 
-		<h1 class="text-xl md:text-2xl font-semibold">Import / Export</h1>
+		<h1 class="text-xl font-semibold md:text-2xl">Import / Export</h1>
 	</div>
 
 	<div class="space-y-4">

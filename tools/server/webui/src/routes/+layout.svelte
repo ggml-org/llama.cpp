@@ -204,7 +204,7 @@
 		const apiKey = config().apiKey;
 
 		if (
-			(page.route.id === '/' || page.route.id === '/chat/[id]') &&
+			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
 			page.status !== 401 &&
 			page.status !== 403
 		) {
@@ -334,8 +334,6 @@
 					</div>
 				</aside>
 			{/if}
-
-
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-auto">
 				{@render children?.()}

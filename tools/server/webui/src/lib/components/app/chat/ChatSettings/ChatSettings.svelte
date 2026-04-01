@@ -454,10 +454,10 @@
 
 		<!-- Mobile Header with Horizontal Scrollable Menu -->
 		<div class="sticky top-0 z-10 flex flex-col bg-background md:hidden">
-			<div class="flex items-center gap-2 px-4 pt-4 md:pt-6 pb-2">
+			<div class="flex items-center gap-2 px-4 pt-4 pb-2 md:pt-6">
 				<Settings class="h-5 w-5 md:h-6 md:w-6" />
 
-				<h1 class="text-xl md:text-2xl font-semibold">Settings</h1>
+				<h1 class="text-xl font-semibold md:text-2xl">Settings</h1>
 			</div>
 
 			<div class="border-b border-border/30 py-2">
@@ -510,7 +510,7 @@
 			</div>
 		</div>
 
-		<div class="mx-auto max-w-3xl flex-1">
+		<div class="mx-auto max-w-2xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
 					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
