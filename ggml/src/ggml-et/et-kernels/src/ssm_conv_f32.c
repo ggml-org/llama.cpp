@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
+#include "math_fp.h"
 
 struct ggml_et_ssm_conv_params {
     struct ggml_tensor src0;  // conv_x: [d_conv - 1 + n_t, d_inner, n_seqs]
@@ -64,8 +65,14 @@ int entry_point(struct ggml_et_ssm_conv_params * params, void * env) {
         return -1;
     }
 
+    // Parallelize over d_inner in cache-line-aligned chunks (16 floats = 64B)
     const int64_t chunk = 16;
     const int64_t n_chunks = (nr + chunk - 1) / chunk;
+
+    // Save and set vector mask to all 8 lanes
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
 
     for (int64_t i3 = 0; i3 < n_s; ++i3) {
         for (int64_t i2 = 0; i2 < n_t; ++i2) {
@@ -76,8 +83,47 @@ int entry_point(struct ggml_et_ssm_conv_params * params, void * env) {
                 const int64_t i1_start = ci * chunk;
                 const int64_t i1_end = i1_start + chunk < nr ? i1_start + chunk : nr;
 
-                for (int64_t i1 = i1_start; i1 < i1_end; ++i1) {
-                    const float * c = (const float *) ((const char *) src1_data + i1 * src1->nb[1]);
+                // Process 8 channels at a time with SIMD
+                int64_t i1 = i1_start;
+                for (; i1 + 8 <= i1_end; i1 += 8) {
+                    // Gather 8 channels' data into contiguous buffers for each tap
+                    float tmp_s[8], tmp_c[8];
+                    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+                    for (int64_t i0 = 0; i0 < nc; ++i0) {
+                        // TODO: Some way to get rid of this gather
+                        for (int j = 0; j < 8; ++j) {
+                            tmp_s[j] = s[(i1 + j) * ncs + i0];
+                            tmp_c[j] = src1_data[(i1 + j) * nc + i0];
+                        }
+
+                        __asm__ volatile(
+                            "flw.ps f10, %[acc]\n"
+                            "flw.ps f11, %[sv]\n"
+                            "flw.ps f12, %[cv]\n"
+                            "fmadd.ps f10, f11, f12, f10\n"
+                            "fsw.ps f10, %[out]\n"
+                            : [out] "=m"(*(float(*)[8])acc)
+                            : [acc] "m"(*(const float(*)[8])acc),
+                              [sv]  "m"(*(const float(*)[8])tmp_s),
+                              [cv]  "m"(*(const float(*)[8])tmp_c)
+                            : "f10", "f11", "f12"
+                        );
+                    }
+
+                    // Store 8 results — dst is contiguous along d_inner
+                    __asm__ volatile(
+                        "flw.ps f10, %[acc]\n"
+                        "fsw.ps f10, %[dst]\n"
+                        :  [dst] "=m"(*(float(*)[8])(x + i1))
+                        : [acc] "m"(*(const float(*)[8])acc)
+                        : "f10"
+                    );
+                }
+
+                // Scalar tail for remaining channels
+                for (; i1 < i1_end; ++i1) {
+                    const float * c = src1_data + i1 * nc;
                     const float * s_row = s + i1 * ncs;
                     float sumf = 0.0f;
                     for (int64_t i0 = 0; i0 < nc; ++i0) {
@@ -88,6 +134,9 @@ int entry_point(struct ggml_et_ssm_conv_params * params, void * env) {
             }
         }
     }
+
+    // Restore mask
+    __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
 
     return 0;
 }

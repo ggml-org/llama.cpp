@@ -74,18 +74,16 @@ int entry_point(struct ggml_et_scale_params* params, void* env) {
     unsigned long temp_mask;
     __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
     __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    __asm__ volatile("fbc.ps f20, %[scale_ptr]\n" : : [scale_ptr] "m"(scale) : "f20");
+    __asm__ volatile("fbc.ps f21, %[bias_ptr]\n" : : [bias_ptr] "m"(bias) : "f21");
 
     for (int64_t i = start_elem; i < end_elem; i += 8) {
         __asm__ volatile(
             "flw.ps f10, %[src]\n"
-            "fbc.ps f20, %[scale_ptr]\n"
-            "fbc.ps f21, %[bias_ptr]\n"
             "fmadd.ps f10, f10, f20, f21\n"     // dst = src*scale + bias
             "fsw.ps f10, %[dst_out]\n"
             : [dst_out] "=m"(*(float(*)[8])&dst_data[i])
-            : [src] "m"(*(const float(*)[8])&src0_data[i]),
-                [scale_ptr] "m"(scale),
-                [bias_ptr] "m"(bias)
+            : [src] "m"(*(const float(*)[8])&src0_data[i])
             : "f10", "f20", "f21"
         );
     }
