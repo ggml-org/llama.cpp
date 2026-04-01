@@ -1,3 +1,4 @@
+diagnostic(off, subgroup_uniformity);
 enable f16;
 enable subgroups;
 

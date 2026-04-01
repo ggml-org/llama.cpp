@@ -1,3 +1,4 @@
+diagnostic(off, subgroup_uniformity);
 enable f16;
 
 #define Q_TILE 1

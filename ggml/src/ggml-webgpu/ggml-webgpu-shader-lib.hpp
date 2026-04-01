@@ -99,7 +99,8 @@ struct ggml_webgpu_processed_shader {
     std::string           wgsl;
     std::string           variant;
     std::shared_ptr<void> decisions;
-}
+};
+
 struct ggml_webgpu_ssm_conv_shader_decisions {
     uint32_t block_size;
     uint32_t tokens_per_wg;
