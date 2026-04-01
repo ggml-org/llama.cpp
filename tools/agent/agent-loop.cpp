@@ -48,7 +48,9 @@ static bool check_escape_key() {
 agent_loop::agent_loop(server_context & server_ctx,
                        const common_params & params,
                        const agent_config & config,
-                       std::atomic<bool> & is_interrupted)
+                       std::atomic<bool> & is_interrupted,
+                       session_file * sf,
+                       const loaded_session * resume)
     : server_ctx_(server_ctx)
     , params_(&params)
     , config_(config)
@@ -222,6 +224,25 @@ If a skill has `<allowed_tools>`, it declares which tools it needs. This helps y
         {"role", "system"},
         {"content", system_prompt}
     });
+
+    // Session persistence
+    session_file_ = sf;
+
+    if (resume && !resume->messages.empty()) {
+        // Reinsert compaction summary so the LLM has pre-compaction context
+        if (!resume->previous_summary.empty()) {
+            messages_.push_back({
+                {"role", "user"},
+                {"content", "<context-summary>\n" + resume->previous_summary + "\n</context-summary>"}
+            });
+        }
+        for (const auto & m : resume->messages) {
+            messages_.push_back(m);
+        }
+        previous_summary_ = resume->previous_summary;
+    } else if (session_file_) {
+        session_file_->write_header(config_.working_dir);
+    }
 }
 
 void agent_loop::clear() {
@@ -237,6 +258,12 @@ void agent_loop::clear() {
     previous_summary_.clear();
     last_prompt_tokens_ = 0;
     last_completion_overflowed_ = false;
+
+    // Reset session file
+    if (session_file_) {
+        session_file_->reopen();
+        session_file_->write_header(config_.working_dir);
+    }
 
     // Reset stats when conversation is cleared
     stats_ = session_stats{};
@@ -596,6 +623,7 @@ void agent_loop::add_tool_result_message(const std::string & tool_name,
     }
 
     messages_.push_back(msg);
+    if (session_file_) session_file_->append_message(msg);
 }
 
 agent_loop_result agent_loop::run(const std::string & user_prompt) {
@@ -607,6 +635,7 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
         {"role", "user"},
         {"content", user_prompt}
     });
+    if (session_file_) session_file_->append_message(messages_.back());
 
     while (result.iterations < config_.max_iterations) {
         if (is_interrupted_.load()) {
@@ -677,6 +706,7 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
         }
 
         messages_.push_back(assistant_msg);
+        if (session_file_) session_file_->append_message(assistant_msg);
 
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
@@ -725,6 +755,7 @@ agent_loop_result agent_loop::run_streaming(
         {"role", "user"},
         {"content", user_prompt}
     });
+    if (session_file_) session_file_->append_message(messages_.back());
 
     while (result.iterations < config_.max_iterations) {
         if (should_stop()) {
@@ -803,6 +834,7 @@ agent_loop_result agent_loop::run_streaming(
         }
 
         messages_.push_back(assistant_msg);
+        if (session_file_) session_file_->append_message(assistant_msg);
 
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
@@ -1228,6 +1260,13 @@ bool agent_loop::try_compact() {
     }
 
     previous_summary_ = summary;
+
+    // Write compaction entry to session file before rebuilding messages
+    if (session_file_) {
+        size_t kept_count = messages_.size() - cut_idx;
+        size_t kept_from = session_file_->message_count() - kept_count;
+        session_file_->append_compaction(previous_summary_, kept_from);
+    }
 
     // Rebuild messages: system + summary + recent messages
     json new_messages = json::array();

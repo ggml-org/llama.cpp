@@ -107,6 +107,9 @@ int main(int argc, char ** argv) {
     bool enable_skills = true;
     bool enable_agents_md = true;
     bool enable_compaction = true;
+    bool enable_session = true;
+    bool resume_session = false;
+    std::string session_path;  // explicit path, or auto-generated
     std::vector<std::string> extra_skills_paths;
 
     for (int i = 1; i < argc; i++) {
@@ -143,6 +146,32 @@ int main(int argc, char ** argv) {
             }
             argc--;
             i--;  // Re-check this position
+        } else if (arg == "--session") {
+            if (i + 1 < argc) {
+                session_path = argv[i + 1];
+                for (int j = i; j < argc - 2; j++) {
+                    argv[j] = argv[j + 2];
+                }
+                argc -= 2;
+                i--;
+            } else {
+                fprintf(stderr, "--session requires a file path\n");
+                return 1;
+            }
+        } else if (arg == "--resume") {
+            resume_session = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (arg == "--no-session") {
+            enable_session = false;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         } else if (arg == "--skills-path") {
             if (i + 1 < argc) {
                 extra_skills_paths.push_back(argv[i + 1]);
@@ -323,8 +352,47 @@ int main(int argc, char ** argv) {
     config.agents_md_prompt_section = agents_md_mgr.generate_prompt_section();
     config.compaction.enabled = enable_compaction;
 
+    // Session persistence
+    session_file sf;
+    session_file * sf_ptr = nullptr;
+    loaded_session loaded;
+    const loaded_session * resume_ptr = nullptr;
+
+    if (enable_session && session_path.empty()) {
+        // Auto-generate session path based on config dir + working directory
+        std::string config_dir = get_config_dir();
+        if (!config_dir.empty()) {
+            std::string session_dir = session_file::get_session_dir(config_dir, working_dir);
+            if (resume_session) {
+                session_path = session_file::find_latest_session(session_dir);
+                if (session_path.empty()) {
+                    console::log("No previous session found, starting new.\n");
+                    session_path = session_file::new_session_path(session_dir);
+                }
+            } else {
+                session_path = session_file::new_session_path(session_dir);
+            }
+        }
+    }
+
+    if (!session_path.empty()) {
+        if (resume_session || std::filesystem::exists(session_path)) {
+            auto maybe = session_file::load(session_path);
+            if (maybe) {
+                loaded = std::move(*maybe);
+                resume_ptr = &loaded;
+            }
+        }
+        if (sf.open(session_path)) {
+            sf_ptr = &sf;
+            if (resume_ptr) {
+                sf.set_message_count(resume_ptr->total_messages_in_file);
+            }
+        }
+    }
+
     // Create agent loop
-    agent_loop agent(ctx_server, params, config, g_is_interrupted);
+    agent_loop agent(ctx_server, params, config, g_is_interrupted, sf_ptr, resume_ptr);
 
     // Display startup info
     console::log("\n");
@@ -346,7 +414,43 @@ int main(int argc, char ** argv) {
     if (agents_md_count > 0) {
         console::log("agents.md  : %d file(s)\n", agents_md_count);
     }
+    if (!session_path.empty()) {
+        console::log("session    : %s%s\n", session_path.c_str(),
+                      resume_ptr ? " (resumed)" : " (new)");
+    }
     console::log("\n");
+
+    // Display resumed conversation history
+    if (resume_ptr && !resume_ptr->messages.empty()) {
+        for (const auto & m : resume_ptr->messages) {
+            std::string role = m.value("role", "");
+            if (role == "user") {
+                console::set_display(DISPLAY_TYPE_USER_INPUT);
+                console::log("› %s\n", m.value("content", "").c_str());
+                console::set_display(DISPLAY_TYPE_RESET);
+            } else if (role == "assistant") {
+                std::string content = m.value("content", "");
+                if (!content.empty()) {
+                    console::log("%s\n", content.c_str());
+                }
+                if (m.contains("tool_calls") && m["tool_calls"].is_array()) {
+                    for (const auto & tc : m["tool_calls"]) {
+                        if (tc.contains("function")) {
+                            std::string name = tc["function"].value("name", "");
+                            console::log("› %s\n", name.c_str());
+                        }
+                    }
+                }
+            } else if (role == "tool") {
+                std::string output = m.value("content", "");
+                if (output.length() > 500) {
+                    output = output.substr(0, 500) + "\n... (truncated)";
+                }
+                console::log("%s\n", output.c_str());
+            }
+        }
+        console::log("--- session resumed ---\n");
+    }
 
     // Resolve initial prompt from -p/--prompt flag or stdin
     std::string initial_prompt;

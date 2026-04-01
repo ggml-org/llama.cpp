@@ -4,6 +4,7 @@ set(AGENT_SOURCES
     agent.cpp
     agent-loop.cpp
     compaction.cpp
+    session-file.cpp
     tool-registry.cpp
     permission.cpp
     permission-async.cpp
@@ -45,6 +46,7 @@ if(LLAMA_HTTPLIB)
         server/agent-routes.cpp
         agent-loop.cpp
         compaction.cpp
+        session-file.cpp
         tool-registry.cpp
         permission.cpp
         permission-async.cpp

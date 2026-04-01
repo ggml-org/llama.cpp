@@ -4,6 +4,7 @@
 #include "permission.h"
 #include "permission-async.h"
 #include "compaction.h"
+#include "session-file.h"
 #include "chat.h"
 
 #include "server-context.h"
@@ -173,7 +174,9 @@ public:
     agent_loop(server_context & server_ctx,
                const common_params & params,
                const agent_config & config,
-               std::atomic<bool> & is_interrupted);
+               std::atomic<bool> & is_interrupted,
+               session_file * sf = nullptr,
+               const loaded_session * resume = nullptr);
 
     // Run the agent loop with an initial user prompt
     agent_loop_result run(const std::string & user_prompt);
@@ -247,4 +250,7 @@ private:
     int32_t     last_prompt_tokens_ = 0;
     bool        last_completion_overflowed_ = false;
     std::string previous_summary_;
+
+    // Session persistence
+    session_file * session_file_ = nullptr;
 };

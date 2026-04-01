@@ -13,6 +13,7 @@ A coding agent that runs entirely inside [llama.cpp](https://github.com/ggml-org
 - [AGENTS.md Support](#agentsmd-support)
 - [MCP Server Support](#mcp-server-support)
 - [Permission System](#permission-system)
+- [Session Persistence](#session-persistence)
 - [Context Compaction](#context-compaction)
 - [HTTP API Server](#http-api-server)
 
@@ -349,6 +350,35 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 
 > [!CAUTION]
 > **YOLO mode is extremely dangerous.** The agent will execute any command without confirmation, including destructive operations like `rm -rf`. This is especially risky with smaller models that have weaker instruction-following and may hallucinate unsafe commands. Only use this flag if you fully trust the model and understand the risks.
+
+## Session Persistence
+
+Conversations are automatically saved to disk as append-only JSONL files, so you can resume where you left off.
+
+Sessions are stored at `~/.llama-agent/sessions/` organized by working directory. Each run creates a new session file.
+
+| Flag | Description |
+|------|-------------|
+| `--resume` | Resume the most recent session for the current directory |
+| `--session <path>` | Use a specific session file (creates or resumes) |
+| `--no-session` | Disable session persistence |
+
+```bash
+# Start a session (auto-saved)
+llama-agent -hf model
+
+# Resume where you left off
+llama-agent -hf model --resume
+
+# Works with piped input too
+echo "hello" | llama-agent -hf model
+echo "what did I say?" | llama-agent -hf model --resume
+
+# Explicit session file
+llama-agent -hf model --session ~/my-session.jsonl
+```
+
+The `/clear` command resets both the conversation and the session file.
 
 ## Context Compaction
 
