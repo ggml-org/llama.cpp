@@ -131,7 +131,7 @@ struct webgpu_param_arena {
     uint32_t     next_slot   = 0;
 
     void init(wgpu::Device device, size_t slot_size, uint32_t slot_count, size_t alignment) {
-        this->slot_stride = alignment;
+        this->slot_stride = ROUNDUP_POW2(slot_size, alignment);
         this->slot_size   = slot_size;
         this->slot_count  = slot_count;
         this->next_slot   = 0;
