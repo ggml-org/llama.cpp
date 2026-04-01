@@ -605,7 +605,7 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
 
         if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
             // invalidate compute buffers on input
-            hex_l2clear((void *) src->data, src->size);
+            hex_l2flush((void *) src->data, src->size);
         }
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
