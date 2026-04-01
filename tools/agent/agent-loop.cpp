@@ -467,6 +467,9 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         }
     }
 
+    // Ensure spinner is stopped before returning (may have been started during tool call arg generation)
+    console::spinner::stop();
+
     // Reset interrupted flag for next interaction
     is_interrupted_.store(false);
 
