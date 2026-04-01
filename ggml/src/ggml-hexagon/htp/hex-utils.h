@@ -75,11 +75,9 @@ static inline void hex_l2clear(void * addr, size_t size)
 {
     const uint32_t s = (uint32_t) addr;
     const uint32_t e = s + size;
-    for (uint32_t i = s; i <= e; i += HEX_L2_LINE_SIZE * 4) {
+    for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE * 2) {
         Q6_dcinva_A((void *) i + 00);
         Q6_dcinva_A((void *) i + 64);
-        Q6_dcinva_A((void *) i + 128);
-        Q6_dcinva_A((void *) i + 192);
     }
 }
 
@@ -87,11 +85,9 @@ static inline void hex_l2flush(void * addr, size_t size)
 {
     const uint32_t s = (uint32_t) addr;
     const uint32_t e = s + size;
-    for (uint32_t i = s; i <= e; i += HEX_L2_LINE_SIZE * 4) {
+    for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE * 2) {
         Q6_dccleana_A((void *) i + 00);
         Q6_dccleana_A((void *) i + 64);
-        Q6_dccleana_A((void *) i + 128);
-        Q6_dccleana_A((void *) i + 192);
     }
 }
 
