@@ -107,8 +107,8 @@ The agent can use these tools to interact with your codebase and system.
 
 | Tool | Description |
 |------|-------------|
-| `bash` | Execute shell commands |
-| `read` | Read file contents with line numbers |
+| `bash` | Execute shell commands (output keeps the tail — errors at the end are preserved) |
+| `read` | Read file contents with line numbers (supports images with vision models) |
 | `write` | Create or overwrite files |
 | `edit` | Search and replace in files |
 | `glob` | Find files matching a pattern |
@@ -124,6 +124,7 @@ Interactive commands available during a session. Type these directly in the chat
 | `/tools` | List available tools |
 | `/skills` | List available skills |
 | `/agents` | List discovered AGENTS.md files |
+| `/stats` | Show token usage and timing statistics |
 
 ## Usage Examples
 
@@ -456,7 +457,6 @@ curl -N http://localhost:8081/v1/agent/session/sess_00000001/chat \
 | `tool_result` | Tool execution completed |
 | `permission_required` | Permission needed (non-yolo mode) |
 | `permission_resolved` | Permission granted/denied |
-| `compaction_started` | Context compaction triggered |
 | `compaction_completed` | Context compaction finished |
 | `completed` | Agent finished with stats |
 | `error` | Error occurred |
