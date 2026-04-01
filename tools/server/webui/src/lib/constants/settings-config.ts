@@ -1,8 +1,8 @@
 import { ColorMode } from '$lib/enums/ui';
 import { Monitor, Moon, Sun } from '@lucide/svelte';
 
-export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
-	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
+export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | undefined> = {
+	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
@@ -10,6 +10,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
 	disableReasoningParsing: false,
+	excludeReasoningFromContext: false,
 	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
@@ -30,27 +31,30 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	agenticMaxToolPreviewLines: 25,
 	showToolCallInProgress: false,
 	alwaysShowAgenticTurns: false,
-	// make sure these default values are in sync with `common.h`
-	samplers: 'top_k;typ_p;top_p;min_p;temperature',
+	// sampling params: empty means "use server default"
+	// the server / preset is the source of truth
+	// empty values are shown as placeholders from /props in the UI
+	// and are NOT sent in API requests, letting the server decide
+	samplers: '',
 	backend_sampling: false,
-	temperature: 0.8,
-	dynatemp_range: 0.0,
-	dynatemp_exponent: 1.0,
-	top_k: 40,
-	top_p: 0.95,
-	min_p: 0.05,
-	xtc_probability: 0.0,
-	xtc_threshold: 0.1,
-	typ_p: 1.0,
-	repeat_last_n: 64,
-	repeat_penalty: 1.0,
-	presence_penalty: 0.0,
-	frequency_penalty: 0.0,
-	dry_multiplier: 0.0,
-	dry_base: 1.75,
-	dry_allowed_length: 2,
-	dry_penalty_last_n: -1,
-	max_tokens: -1,
+	temperature: undefined,
+	dynatemp_range: undefined,
+	dynatemp_exponent: undefined,
+	top_k: undefined,
+	top_p: undefined,
+	min_p: undefined,
+	xtc_probability: undefined,
+	xtc_threshold: undefined,
+	typ_p: undefined,
+	repeat_last_n: undefined,
+	repeat_penalty: undefined,
+	presence_penalty: undefined,
+	frequency_penalty: undefined,
+	dry_multiplier: undefined,
+	dry_base: undefined,
+	dry_allowed_length: undefined,
+	dry_penalty_last_n: undefined,
+	max_tokens: undefined,
 	custom: '', // custom json-stringified object
 	// experimental features
 	pyInterpreterEnabled: false,
@@ -103,6 +107,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	disableReasoningParsing:
 		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	excludeReasoningFromContext:
+		'Strip reasoning content from previous messages before sending to the model. When unchecked, reasoning is sent back via the reasoning_content field so the model can see its own chain-of-thought across turns.',
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
@@ -124,7 +130,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
-		'Display full raw model identifiers (e.g. "unsloth/Qwen3.5-27B-GGUF:BF16") instead of parsed names with badges.',
+		'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 	mcpServerUsageStats:

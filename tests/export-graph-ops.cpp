@@ -118,11 +118,11 @@ int main(int argc, char ** argv) {
     common_params params;
     params.out_file = "tests.txt";
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS)) {
         return 1;
     }
-
-    common_init();
 
     // Load CPU-only
     ggml_backend_dev_t cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);

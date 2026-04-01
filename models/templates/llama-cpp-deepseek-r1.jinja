@@ -49,7 +49,7 @@ Example function tool call syntax:
             {%- endif -%}
             {%- set tool_name = tc['function']['name'] -%}
             {%- set tool_args = tc['function']['arguments'] -%}
-            {{- '<｜tool▁call▁begin｜>' + tc['type'] + '<｜tool▁sep｜>' + tool_name + '\n' + '```json' + '\n' + tool_args + '\n' + '```' + '<｜tool▁call▁end｜>' -}}
+            {{- '<｜tool▁call▁begin｜>' + tc['type'] + '<｜tool▁sep｜>' + tool_name + '\n' + '```json' + '\n' + tool_args | tojson + '\n' + '```' + '<｜tool▁call▁end｜>' -}}
         {%- endfor -%}
         {{- '<｜tool▁calls▁end｜><｜end▁of▁sentence｜>' -}}
     {%- endif -%}

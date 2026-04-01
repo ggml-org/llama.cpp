@@ -28,8 +28,8 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
     cb(inpL, "inp_embd", -1);
 
     // embed layer norm
-    inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
-    cb(inpL, "inp_norm", -1);
+    inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
+    cb(inpL, "inp_norm", 0);
 
     auto * inp_attn = build_attn_inp_no_cache();
 

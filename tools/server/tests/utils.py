@@ -116,7 +116,7 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
-    def start(self, timeout_seconds: int | None = DEFAULT_HTTP_TIMEOUT) -> None:
+    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -288,7 +288,15 @@ class ServerProcess:
             server_instances.remove(self)
         if self.process:
             print(f"Stopping server with pid={self.process.pid}")
-            self.process.kill()
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print(f"Server pid={self.process.pid} did not terminate in time, killing")
+                self.process.kill()
+                self.process.wait(timeout=5)
+            except Exception as e:
+                print(f"Error waiting for server: {e}")
             self.process = None
 
     def make_request(

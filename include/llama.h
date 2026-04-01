@@ -465,6 +465,11 @@ extern "C" {
                              const char * path_model,
               struct llama_model_params   params);
 
+    // Load a model from an open FILE pointer
+    LLAMA_API struct llama_model * llama_model_load_from_file_ptr(
+                                   FILE * file,
+              struct llama_model_params   params);
+
     // Load a model from multiple splits (support custom naming scheme)
     // The paths must be in the correct order
     LLAMA_API struct llama_model * llama_model_load_from_splits(
@@ -636,7 +641,6 @@ extern "C" {
 
     // Load a LoRA adapter from file
     // The adapter is valid as long as the associated model is not freed
-    // All adapters must be loaded before context creation
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
             const char * path_lora);
@@ -660,9 +664,8 @@ extern "C" {
     LLAMA_API int32_t llama_adapter_meta_val_str_by_index(const struct llama_adapter_lora * adapter, int32_t i, char * buf, size_t buf_size);
 
     // Manually free a LoRA adapter
-    // NOTE: loaded adapters will be free when the associated model is deleted
-    LLAMA_API DEPRECATED(void llama_adapter_lora_free(struct llama_adapter_lora * adapter),
-            "adapters are now freed together with the associated model");
+    // NOTE: loaded adapters that are not manually freed will be freed when the associated model is deleted
+    LLAMA_API void llama_adapter_lora_free(struct llama_adapter_lora * adapter);
 
     // Get the invocation tokens if the current lora is an alora
     LLAMA_API uint64_t            llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter);
