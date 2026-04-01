@@ -774,6 +774,11 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
 
+        // Empty response (no text, no tool calls) — model hiccupped, retry
+        if (parsed.content.empty() && parsed.tool_calls.empty()) {
+            continue;
+        }
+
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
             result.stop_reason = agent_stop_reason::COMPLETED;
@@ -872,6 +877,11 @@ agent_loop_result agent_loop::run_streaming(
         json assistant_msg = build_assistant_msg(parsed, result.iterations);
         messages_.push_back(assistant_msg);
         if (session_file_) session_file_->append_message(assistant_msg);
+
+        // Empty response (no text, no tool calls) — model hiccupped, retry
+        if (parsed.content.empty() && parsed.tool_calls.empty()) {
+            continue;
+        }
 
         // If no tool calls, we're done
         if (parsed.tool_calls.empty()) {
