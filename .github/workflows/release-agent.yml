@@ -201,3 +201,23 @@ jobs:
             ./llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
             ```
           files: artifacts/*
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          REVISION=$(git rev-parse HEAD)
+
+          git clone https://x-access-token:${GH_TOKEN}@github.com/gary149/homebrew-llama-agent.git tap
+          cd tap
+
+          # Update tag and revision in formula
+          sed -i "s/tag:      \"b[0-9]*\"/tag:      \"${TAG}\"/" Formula/llama-agent.rb
+          sed -i "s/revision: \"[a-f0-9]*\"/revision: \"${REVISION}\"/" Formula/llama-agent.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/llama-agent.rb
+          git diff --cached --quiet || git commit -m "llama-agent ${TAG}"
+          git push
