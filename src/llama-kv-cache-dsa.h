@@ -1,7 +1,6 @@
 #pragma once
 
 #include "llama-kv-cache.h"
-#include "llama-ik-cache.h"
 
 #include <vector>
 
@@ -9,7 +8,7 @@
 // llama_kv_cache_dsa
 //
 
-// utilizes two KV cache instances: llama_kv_cache and llama_ik_cache
+// utilizes two KV cache instances: llama_kv_cache and llama_kv_cache
 //   the first instance is for caching key tensors of the model,
 //   the second instance is for caching lightning indexer key tensors
 
@@ -70,13 +69,15 @@ public:
     //
 
     llama_kv_cache * get_base() const;
-    llama_ik_cache * get_ik () const;
+    llama_kv_cache * get_ik () const;
 
 private:
+    // we keep indexer KV cache hparams instance here as llama_kv_cache stores only reference to it
+    llama_hparams hparams_ik;
     const uint32_t n_stream  = 1;
 
     std::unique_ptr<llama_kv_cache> kv_base;
-    std::unique_ptr<llama_ik_cache> kv_ik;
+    std::unique_ptr<llama_kv_cache> kv_ik;
 };
 
 class llama_kv_cache_dsa_context : public llama_memory_context_i {
@@ -120,7 +121,7 @@ public:
     //
 
     const llama_kv_cache_context * get_base() const;
-    const llama_ik_cache_context * get_ik()  const;
+    const llama_kv_cache_context * get_ik()  const;
 
 private:
     //llama_kv_cache_dsa * kv;

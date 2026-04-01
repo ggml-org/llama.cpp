@@ -25,19 +25,28 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
-    n_stream(unified ? 1 : n_seq_max) {
+    hparams_ik(model.hparams), n_stream(unified ? 1 : n_seq_max) {
 
     LLAMA_LOG_INFO("%s: creating main KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_base = std::make_unique<llama_kv_cache>(
-            model, type_k, type_v,
+            model, model.hparams, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, filter, reuse);
 
+    // we use llama_kv_cache for caching indexer keys
+    // by hand-tweaking some hparams we fool it to create
+    // indexer key cache tensors with correct dimensions
+    // https://github.com/ggml-org/llama.cpp/pull/21149#discussion_r3015940823
+
+    // DSA lightning indexer uses MQA with single key head
+    std::fill(hparams_ik.n_head_kv_arr.begin(), hparams_ik.n_head_kv_arr.end(), 1);
+    hparams_ik.n_embd_head_k_full = model.hparams.indexer_head_size;
+
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
-    kv_ik = std::make_unique<llama_ik_cache>(
-            model, type_k, type_v,
+    kv_ik = std::make_unique<llama_kv_cache>(
+            model, hparams_ik, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, filter, reuse);
 }
@@ -164,7 +173,7 @@ llama_kv_cache * llama_kv_cache_dsa::get_base() const {
     return kv_base.get();
 }
 
-llama_ik_cache * llama_kv_cache_dsa::get_ik() const {
+llama_kv_cache * llama_kv_cache_dsa::get_ik() const {
     return kv_ik.get();
 }
 
@@ -198,7 +207,7 @@ llama_kv_cache_dsa_context::llama_kv_cache_dsa_context(
     ubatches(std::move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
     ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches)),
-    ctx_ik(new llama_ik_cache_context(kv->get_ik(), std::move(sinfos_ik), this->ubatches)),
+    ctx_ik(new llama_kv_cache_context(kv->get_ik(), std::move(sinfos_ik), this->ubatches)),
     status(llama_memory_status_combine(ctx_base->get_status(), ctx_ik->get_status())) {
 }
 
@@ -244,8 +253,8 @@ const llama_kv_cache_context * llama_kv_cache_dsa_context::get_base() const {
     return static_cast<const llama_kv_cache_context *>(ctx_base.get());
 }
 
-const llama_ik_cache_context * llama_kv_cache_dsa_context::get_ik()  const {
+const llama_kv_cache_context * llama_kv_cache_dsa_context::get_ik()  const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-    return static_cast<const llama_ik_cache_context *>(ctx_ik.get());
+    return static_cast<const llama_kv_cache_context *>(ctx_ik.get());
 }

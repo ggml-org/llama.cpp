@@ -1,7 +1,6 @@
 #include "models.h"
 
 #include "llama-kv-cache.h"
-#include "llama-ik-cache.h"
 
 llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
@@ -45,7 +44,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    std::pair<llm_graph_input_attn_k*, llm_graph_input_attn_ik*> inp_attn_dsa = build_attn_inp_k_dsa();
+    std::pair<llm_graph_input_attn_k*, llm_graph_input_attn_k*> inp_attn_dsa = build_attn_inp_k_dsa();
     auto * inp_attn_k = inp_attn_dsa.first;
     auto * inp_attn_ik = inp_attn_dsa.second;
 
@@ -190,7 +189,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_score, "indexer_score", il);
 
                 // mask indexer scores
-                ggml_tensor * indexer_kq_mask = inp_attn_ik->get_kq_mask();
+                ggml_tensor * indexer_kq_mask = inp_attn_ik->self_kq_mask;
                 indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                 cb(indexer_score, "indexer_score", il);
 
