@@ -994,6 +994,10 @@ kernel void kernel_unary_impl(
             dst_ptr[i0] = (T) (args.scale * x + args.bias);
         }
 
+        if (FC_OP == OP_UNARY_NUM_ADD1) {
+            dst_ptr[i0] = (T) (x + args.val);
+        }
+
         if (FC_OP == OP_UNARY_NUM_FILL) {
             dst_ptr[i0] = (T) args.val;
         }

@@ -1015,6 +1015,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_FILL:
         case GGML_OP_CLAMP:
         case GGML_OP_SQR:
+        case GGML_OP_ADD1:
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:

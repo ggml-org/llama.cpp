@@ -468,6 +468,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_count_equal(ctx, idx);
             } break;
+        case GGML_OP_ADD1:
+            {
+                n_fuse = ggml_metal_op_unary(ctx, idx);
+            } break;
         default:
             {
                 GGML_LOG_ERROR("%s: error: node %3d, op = %8s not implemented\n", __func__, idx, ggml_op_name(node->op));
@@ -776,6 +780,10 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     if (op->op == GGML_OP_SCALE) {
         args.scale = ggml_get_op_params_f32(op, 0);
         args.bias  = ggml_get_op_params_f32(op, 1);
+    }
+
+    if (op->op == GGML_OP_ADD1) {
+    args.val = *(float *) op->src[1]->data;
     }
 
     if (op->op == GGML_OP_FILL) {
