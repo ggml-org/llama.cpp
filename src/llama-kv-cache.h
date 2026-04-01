@@ -239,6 +239,9 @@ private:
     bool attn_rot_k = false;
     bool attn_rot_v = false;
 
+    // pre-computed hadamard martrices
+    std::unordered_map<int64_t, std::vector<float>> attn_rot_hadamard;
+
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 
