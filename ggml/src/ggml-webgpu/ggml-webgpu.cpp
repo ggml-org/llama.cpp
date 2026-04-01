@@ -341,7 +341,6 @@ struct webgpu_global_context_struct {
             this->debug_dev_buf = nullptr;
         }
 #endif
-      
     }
 };
 
@@ -364,13 +363,6 @@ struct webgpu_context_struct {
     webgpu_buf_pool param_buf_pool;
     wgpu::Buffer    set_rows_dev_error_buf;
     wgpu::Buffer    set_rows_host_error_buf;
-
-    std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;  // src_type, dst_type
-
-    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> rope_pipelines;      // type, ff, inplace
-    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> glu_pipelines;       // glu_op, type, split
-
-    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> soft_max_pipelines;  // mask_type, has_sink, inplace
 
     size_t memset_bytes_per_thread;
 };
@@ -665,6 +657,7 @@ static webgpu_command ggml_backend_webgpu_build_multi(
     for (size_t i = 0; i < params_bufs_list.size(); i++) {
         ctx->queue.WriteBuffer(params_bufs_list[i], 0, params_list[i].data(), params_list[i].size() * sizeof(uint32_t));
     }
+    
 #ifdef GGML_WEBGPU_GPU_PROFILE
     webgpu_gpu_profile_bufs ts_bufs = ctx->timestamp_query_buf_pool.alloc_bufs();
     if (ts_bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
