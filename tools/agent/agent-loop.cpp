@@ -611,6 +611,7 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     console::spinner::stop();
+    console::log("\n");
 
     // Display result summary
     if (result.success) {
