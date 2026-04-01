@@ -1316,6 +1316,100 @@ struct ggml_cuda_stream_context {
     }
 };
 
+#ifdef USE_CUDA_GRAPH 
+struct ggml_backend_cuda_graphs_cache {
+
+    // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
+    // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+    
+    // Add vector that holds keys to valid graphs, its a LRU (Least recent use concept) to prevent unbounded VRAM growth
+    std::vector<const void *> least_used_graph_keys;
+
+    // scan cache and remove uninitialized graphs to free up space, also update LRU position for the valid-existing graph only once based on the query_graph_key
+    void update_graphs(const void * query_graph_key) 
+    {
+        size_t estimated_graph_size = 0;            
+        //scan cache and remove uninitialized graphs to free up space 
+        for(auto it_cache = cuda_graphs.begin(); it_cache != cuda_graphs.end();) 
+        {
+            auto& cached_graph_key = it_cache->first;
+            auto& ggml_cuda_graph = it_cache->second;
+            
+            if(ggml_cuda_graph) 
+            {                    
+                if(ggml_cuda_graph->graph == nullptr)
+                {                                                                                                    
+                    it_cache = cuda_graphs.erase(it_cache);
+                }
+                else //if(ggml_cuda_graph->graph != nullptr)
+                {                                            
+                    
+                    // store the estimated memory usage for this graph based on the number of nodes it has, this is used to make eviction decisions more informed
+                    ggml_cuda_graph->memory_usage = ggml_cuda_graph->num_nodes * 256; 
+                    estimated_graph_size += ggml_cuda_graph->memory_usage;                        
+                    ++it_cache;
+
+                    // check if the current graph key is the same as the query graph key, 
+                    // update its position in the LRU vector, but only if its not already in the LRU vector to prevent duplicates
+                    const bool is_unique_key = std::find(least_used_graph_keys.begin(), least_used_graph_keys.end(), query_graph_key) == least_used_graph_keys.end();                    
+                    
+                    // Update LRU position for the valid-existing graph only once
+                    if(query_graph_key == cached_graph_key && is_unique_key)
+                    {                                                                                            
+                        least_used_graph_keys.push_back(query_graph_key);    
+                    }
+                }
+            }
+        } 
+        
+        // add upperbound eviction to prevent unbounded VRAM growth - evict least recently used graph(s) if we exceed the threshold when adding a new graph
+        static constexpr size_t upper_bound =  10*1024*1024; // threshold for eviction, this is a heuristic and can be tuned based on typical graph sizes and available VRAM
+        if (estimated_graph_size >= upper_bound)         
+        {       
+            const void * oldest_key = least_used_graph_keys.front();                            
+            // Evict the least recently used graph if we hit the memory limit
+            if (cuda_graphs.find(oldest_key) != cuda_graphs.end()) 
+            {                   
+                cuda_graphs.erase(oldest_key);
+                least_used_graph_keys.erase(least_used_graph_keys.begin());                                       
+            }
+        }  
+    }
+
+    // Read graph from cache or create new graph if not found
+    ggml_cuda_graph * get_graph(const void * first_node_ptr) {
+        auto it = cuda_graphs.find(first_node_ptr);
+        if (it == cuda_graphs.end()) {
+            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();            
+            return cuda_graphs[first_node_ptr].get();
+        }        
+        return it->second.get();
+    }
+
+    // Check if any CUDA graph is enabled for this context (used by kernels that need to know
+    // if graphs are in use without having access to the specific graph key)
+    bool any_graph_enabled() const {
+        for (const auto & [key, graph] : cuda_graphs) {
+            if (graph && graph->is_enabled()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Check if any CUDA graph has an instance for this context
+    bool any_graph_has_instance() const {
+        for (const auto & [key, graph] : cuda_graphs) {
+            if (graph && graph->instance != nullptr) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+#endif
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1327,93 +1421,30 @@ struct ggml_backend_cuda_context {
     int curr_stream_no = 0;
 
 #ifdef USE_CUDA_GRAPH  
-    // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
-    // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
-    
-    // Add vector that holds only predefined number of graphs, its a LRU (Least recent use concept) to prevent unbounded VRAM growth (Issue #19639)
-    std::vector<const void *> cuda_graphs_lru;
+    ggml_backend_cuda_graphs_cache cuda_graphs;
+
+    // Evict if necessary the oldest cached graph
     void update_graphs(const void * query_graph_key) 
     {
-        size_t estimated_graph_size = 0;            
-        //scan cache and remove uninitialized graphs to free up space 
-        for(auto it_cache = cuda_graphs.begin(); it_cache != cuda_graphs.end();) 
-        {
-            auto& key_graph = it_cache->first;
-            auto& ggml_cuda_graph = it_cache->second;
-            
-            if(ggml_cuda_graph) 
-            {                    
-                if(ggml_cuda_graph->graph == nullptr)
-                {                                                                                                    
-                    it_cache = cuda_graphs.erase(it_cache);
-                }
-                else
-                {                                            
-                    if(ggml_cuda_graph->num_nodes == 0) {                
-                        cudaGraphGetNodes(ggml_cuda_graph->graph, NULL, &ggml_cuda_graph->num_nodes);                                            
-                    }
-                    
-                    // store the estimated memory usage for this graph based on the number of nodes it has, this is used to make eviction decisions more informed
-                    ggml_cuda_graph->memory_usage = ggml_cuda_graph->num_nodes * 256; 
-                    estimated_graph_size += ggml_cuda_graph->memory_usage;                        
-                    ++it_cache;
-
-                    // check if already in cuda_graphs_lru and update LRU position
-                    const bool isUniqueGraphKey = std::find(cuda_graphs_lru.begin(), cuda_graphs_lru.end(), query_graph_key) == cuda_graphs_lru.end();                    
-                    
-                    // Update LRU position for the valid-existing graph only once
-                    if(query_graph_key == key_graph && isUniqueGraphKey)
-                    {                                                                                            
-                        cuda_graphs_lru.push_back(query_graph_key);    
-                    }
-                }
-            }
-        }                           
-
-        // add upperbound eviction to prevent unbounded VRAM growth - evict least recently used graph(s) if we exceed the threshold when adding a new graph
-        static constexpr auto MByte_50 =  50*1024*1024; // 50 MB threshold for eviction, this is a heuristic and can be tuned based on typical graph sizes and available VRAM
-        if (estimated_graph_size >= MByte_50)         
-        {       
-            const void * oldest_key = cuda_graphs_lru.front();                            
-            // Evict the least recently used graph if we hit the memory limit
-            if (cuda_graphs.find(oldest_key) != cuda_graphs.end()) 
-            {                   
-                cuda_graphs.erase(oldest_key);
-                cuda_graphs_lru.erase(cuda_graphs_lru.begin());                                       
-            }
-        }        
+        cuda_graphs.update_graphs(query_graph_key);
     }
-
+    
+    // Read graph from cache or create new graph if not found
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
-        auto it = cuda_graphs.find(first_node_ptr);
-        if (it == cuda_graphs.end()) {
-            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();            
-            return cuda_graphs[first_node_ptr].get();
-        }        
-        return it->second.get();
+        return cuda_graphs.get_graph(first_node_ptr);
     }
 
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->is_enabled()) {
-                return true;
-            }
-        }
-        return false;
+        return cuda_graphs.any_graph_enabled();      
     }
 
     // Check if any CUDA graph has an instance for this context
     bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->instance != nullptr) {
-                return true;
-            }
-        }
-        return false;
+        return cuda_graphs.any_graph_has_instance();
     }
+
 #endif // USE_CUDA_GRAPH
 
     explicit ggml_backend_cuda_context(int device) :

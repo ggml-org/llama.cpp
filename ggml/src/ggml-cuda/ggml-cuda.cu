@@ -4047,7 +4047,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             }
 
             CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
-            graph_evaluated_or_captured = true; // CUDA graph has been captured
+            graph_evaluated_or_captured = true; // CUDA graph has been captured           
+            CUDA_CHECK(cudaGraphGetNodes(graph->graph, NULL, &graph->num_nodes));                                          
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
             if (ggml_cuda_lock_counter.fetch_sub(1, std::memory_order_relaxed) == 1) {
