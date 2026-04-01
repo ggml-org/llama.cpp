@@ -26,7 +26,7 @@
 	import type { Component } from 'svelte';
 
 	interface Props {
-		class: string;
+		class?: string;
 		onSave?: () => void;
 		initialSection?: SettingsSectionTitle;
 	}

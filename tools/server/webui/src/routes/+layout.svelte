@@ -8,9 +8,12 @@
 		ChatSidebar,
 		ChatSettings,
 		McpServersSettings,
+		McpLogo,
 		DialogConversationTitleUpdate,
 		DialogChatSettingsImportExport
 	} from '$lib/components/app';
+	import { Settings } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -291,16 +294,37 @@
 				/>
 			{/if}
 
+			{#if !sidebarOpen}
+				<div class="absolute bottom-0 left-0 z-[900] flex flex-col gap-1 p-2">
+					<Button
+						variant="ghost"
+						size="icon"
+						class="h-8 w-8 {activePanel === 'mcp' ? 'bg-accent text-accent-foreground' : ''}"
+						onclick={() => (activePanel = activePanel === 'mcp' ? 'chat' : 'mcp')}
+					>
+						<McpLogo class="h-4 w-4" />
+					</Button>
+					<Button
+						variant="ghost"
+						size="icon"
+						class="h-8 w-8 {activePanel === 'settings' ? 'bg-accent text-accent-foreground' : ''}"
+						onclick={() => (activePanel = activePanel === 'settings' ? 'chat' : 'settings')}
+					>
+						<Settings class="h-4 w-4" />
+					</Button>
+				</div>
+			{/if}
+
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
 				{#if activePanel === 'settings'}
 					<ChatSettings
 						bind:this={chatSettingsRef}
 						onSave={() => (activePanel = 'chat')}
 						initialSection={chatSettingsInitialSection}
-						class="p-8! mx-auto h-full"
+						class="mx-auto h-full p-8!"
 					/>
 				{:else if activePanel === 'mcp'}
-					<McpServersSettings class="w-full mx-auto p-8! md:translate-x-1.5" />
+					<McpServersSettings class="mx-auto w-full p-8! md:translate-x-1.5" />
 				{:else}
 					{@render children?.()}
 				{/if}

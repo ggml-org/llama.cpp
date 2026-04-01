@@ -4,12 +4,13 @@
 	import type { SettingsSectionTitle } from '$lib/constants';
 
 	interface Props {
+		class?: string;
 		onOpenChange?: (open: boolean) => void;
 		open?: boolean;
 		initialSection?: SettingsSectionTitle;
 	}
 
-	let { onOpenChange, open = false, initialSection }: Props = $props();
+	let { class: className = '', onOpenChange, open = false, initialSection }: Props = $props();
 
 	let chatSettingsRef: ChatSettings | undefined = $state();
 
@@ -31,7 +32,7 @@
 <Dialog.Root {open} onOpenChange={handleClose}>
 	<Dialog.Content
 		class="z-999999 flex h-[100dvh] max-h-[100dvh] min-h-[100dvh] max-w-4xl! flex-col gap-0 rounded-none
-			p-0 md:h-[64vh] md:max-h-[64vh] md:min-h-0 md:rounded-lg"
+			p-0 md:h-[64vh] md:max-h-[64vh] md:min-h-0 md:rounded-lg {className}"
 	>
 		<ChatSettings bind:this={chatSettingsRef} onSave={handleSave} {initialSection} />
 	</Dialog.Content>

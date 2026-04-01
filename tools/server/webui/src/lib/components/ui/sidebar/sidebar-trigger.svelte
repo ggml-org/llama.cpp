@@ -22,7 +22,9 @@
 	data-slot="sidebar-trigger"
 	variant="ghost"
 	size="icon-lg"
-	class="rounded-full backdrop-blur-lg {className} {sidebar.open ? 'top-1.5' : 'top-0'} md:left-[14.5rem]"
+	class="rounded-full backdrop-blur-lg {className} {sidebar.open
+		? 'top-1.5'
+		: 'top-0'} md:left-[14.5rem]"
 	type="button"
 	onclick={(e) => {
 		onclick?.(e);
@@ -31,9 +33,9 @@
 	{...restProps}
 >
 	{#if sidebar.open}
-		 <PanelLeftClose />
+		<PanelLeftClose />
 	{:else}
-		 <PanelLeftIcon />
+		<PanelLeftIcon />
 	{/if}
 	<span class="sr-only">Toggle Sidebar</span>
 </Button>

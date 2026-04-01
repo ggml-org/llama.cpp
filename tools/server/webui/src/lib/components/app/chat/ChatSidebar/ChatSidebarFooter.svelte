@@ -13,7 +13,9 @@
 
 <div class="space-y-1 pt-0">
 	<Button
-		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isMcpActive ? 'bg-accent text-accent-foreground' : ''}"
+		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isMcpActive
+			? 'bg-accent text-accent-foreground'
+			: ''}"
 		onclick={() => {
 			mcpServersDialog.open();
 		}}
@@ -27,7 +29,9 @@
 	</Button>
 
 	<Button
-		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive ? 'bg-accent text-accent-foreground' : ''}"
+		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive
+			? 'bg-accent text-accent-foreground'
+			: ''}"
 		onclick={() => {
 			chatSettingsDialog.open();
 		}}

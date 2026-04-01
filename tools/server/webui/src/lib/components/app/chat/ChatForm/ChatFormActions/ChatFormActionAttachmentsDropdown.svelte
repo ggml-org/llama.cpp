@@ -247,6 +247,8 @@
 				</Tooltip.Root>
 			{/if}
 
+			<DropdownMenu.Separator />
+
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger class="w-full">
 					<DropdownMenu.Item
@@ -263,8 +265,6 @@
 					<p>{systemMessageTooltip}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
-
-			<DropdownMenu.Separator />
 
 			<DropdownMenu.Sub onOpenChange={handleToolsSubMenuOpen}>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">

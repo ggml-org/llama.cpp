@@ -8,11 +8,12 @@
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
 	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
+	import McpLogo from './McpLogo.svelte';
 
 	interface Props {
 		class?: string;
 	}
-	
+
 	let { class: className }: Props = $props();
 
 	let servers = $derived(mcpStore.getServersSorted());
@@ -83,10 +84,12 @@
 	}
 </script>
 
-<div class="gap-5 grid md:space-y-4 {className}">
+<div class="grid gap-5 md:space-y-4 {className}">
 	<div class="flex items-start justify-between gap-4">
-		<div>
-			<h4 class="text-base font-semibold">Manage Servers</h4>
+		<div class="flex items-center gap-2">
+			<McpLogo class="h-6 w-6" />
+
+			<h2 class="text-2xl font-semibold">MCP Servers</h2>
 		</div>
 
 		{#if !isAddingServer}

@@ -140,64 +140,66 @@
 </script>
 
 <div class="flex h-full flex-col">
-<ScrollArea class="flex-1">
-	<Sidebar.Header class=" top-0 z-10 gap-4 bg-sidebar/50 p-3 pt-4 pb-2 backdrop-blur-lg md:sticky">
-		<a href="#/" onclick={handleMobileSidebarItemClick}>
-			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
-		</a>
+	<ScrollArea class="flex-1">
+		<Sidebar.Header
+			class=" top-0 z-10 gap-4 bg-sidebar/50 p-3 pt-4 pb-2 backdrop-blur-lg md:sticky"
+		>
+			<a href="#/" onclick={handleMobileSidebarItemClick}>
+				<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
+			</a>
 
-		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
-	</Sidebar.Header>
+			<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
+		</Sidebar.Header>
 
-	<Sidebar.Group class="mt-2 space-y-2 p-0 px-3">
-		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
-			<Sidebar.GroupLabel>
-				{isSearchModeActive ? 'Search results' : 'Conversations'}
-			</Sidebar.GroupLabel>
-		{/if}
+		<Sidebar.Group class="mt-2 space-y-2 p-0 px-3">
+			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
+				<Sidebar.GroupLabel>
+					{isSearchModeActive ? 'Search results' : 'Conversations'}
+				</Sidebar.GroupLabel>
+			{/if}
 
-		<Sidebar.GroupContent>
-			<Sidebar.Menu>
-				{#each conversationTree as { conversation, depth } (conversation.id)}
-					<Sidebar.MenuItem class="mb-1 p-0">
-						<ChatSidebarConversationItem
-							conversation={{
-								id: conversation.id,
-								name: conversation.name,
-								lastModified: conversation.lastModified,
-								currNode: conversation.currNode,
-								forkedFromConversationId: conversation.forkedFromConversationId
-							}}
-							{depth}
-							{handleMobileSidebarItemClick}
-							isActive={currentChatId === conversation.id}
-							onSelect={selectConversation}
-							onEdit={handleEditConversation}
-							onDelete={handleDeleteConversation}
-							onStop={handleStopGeneration}
-						/>
-					</Sidebar.MenuItem>
-				{/each}
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					{#each conversationTree as { conversation, depth } (conversation.id)}
+						<Sidebar.MenuItem class="mb-1 p-0">
+							<ChatSidebarConversationItem
+								conversation={{
+									id: conversation.id,
+									name: conversation.name,
+									lastModified: conversation.lastModified,
+									currNode: conversation.currNode,
+									forkedFromConversationId: conversation.forkedFromConversationId
+								}}
+								{depth}
+								{handleMobileSidebarItemClick}
+								isActive={currentChatId === conversation.id}
+								onSelect={selectConversation}
+								onEdit={handleEditConversation}
+								onDelete={handleDeleteConversation}
+								onStop={handleStopGeneration}
+							/>
+						</Sidebar.MenuItem>
+					{/each}
 
-				{#if conversationTree.length === 0}
-					<div class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-sm text-muted-foreground">
-							{searchQuery.length > 0
-								? 'No results found'
-								: isSearchModeActive
-									? 'Start typing to see results'
-									: 'No conversations yet'}
-						</p>
-					</div>
-				{/if}
-			</Sidebar.Menu>
-		</Sidebar.GroupContent>
-	</Sidebar.Group>
-</ScrollArea>
+					{#if conversationTree.length === 0}
+						<div class="px-2 py-4 text-center">
+							<p class="mb-4 p-4 text-sm text-muted-foreground">
+								{searchQuery.length > 0
+									? 'No results found'
+									: isSearchModeActive
+										? 'Start typing to see results'
+										: 'No conversations yet'}
+							</p>
+						</div>
+					{/if}
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+	</ScrollArea>
 
-<Sidebar.Footer>
-	<ChatSidebarFooter />
-</Sidebar.Footer>
+	<Sidebar.Footer>
+		<ChatSidebarFooter />
+	</Sidebar.Footer>
 </div>
 
 <DialogConfirmation
