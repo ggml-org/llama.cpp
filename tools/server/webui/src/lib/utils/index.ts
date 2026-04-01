@@ -149,8 +149,17 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Favicon utilities
 export { getFaviconUrl } from './favicon';
 
-// Agentic content parsing utilities
-export { parseAgenticContent, type AgenticSection } from './agentic';
+// Agentic content utilities (structured section derivation)
+export {
+	deriveAgenticSections,
+	parseToolResultWithImages,
+	hasAgenticContent,
+	type AgenticSection,
+	type ToolResultLine
+} from './agentic';
+
+// Legacy migration utilities
+export { runLegacyMigration, isMigrationNeeded } from './legacy-migration';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';

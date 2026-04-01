@@ -151,35 +151,7 @@ fi
 
 if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     echo ">>===== Enabling KleidiAI support"
-
-    CANDIDATES=(
-        "armv9-a+dotprod+i8mm+sve2"
-        "armv9-a+dotprod+i8mm"
-        "armv8.6-a+dotprod+i8mm"
-        "armv8.2-a+dotprod"
-    )
-    CPU=""
-
-    for cpu in "${CANDIDATES[@]}"; do
-        if echo 'int main(){}' | ${CXX:-c++} -march="$cpu" -x c++ - -c -o /dev/null >/dev/null 2>&1; then
-            CPU="$cpu"
-            break
-        fi
-    done
-
-    if [ -z "$CPU" ]; then
-        echo "ERROR: None of the required ARM baselines (armv9/armv8.6/armv8.2 + dotprod) are supported by this compiler."
-        exit 1
-    fi
-
-    echo ">>===== Using ARM baseline: ${CPU}"
-
-    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } \
-        -DGGML_NATIVE=OFF \
-        -DGGML_CPU_KLEIDIAI=ON \
-        -DGGML_CPU_AARCH64=ON \
-        -DGGML_CPU_ARM_ARCH=${CPU} \
-        -DBUILD_SHARED_LIBS=OFF"
+    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON"
 fi
 
 if [ ! -z ${GG_BUILD_BLAS} ]; then

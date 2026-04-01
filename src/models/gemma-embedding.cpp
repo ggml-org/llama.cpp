@@ -9,7 +9,7 @@ llm_build_gemma_embedding::llm_build_gemma_embedding(const llama_model & model, 
 
     inpL = build_inp_embd(model.tok_embd);
 
-    // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
+    // important: do not normalize weights for raw embeddings input (i.e. encoded image embeddings)
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
