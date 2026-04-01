@@ -235,8 +235,9 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
-    // env: LLAMA_KV_CACHE_ATTN_ROT_DISABLE
-    bool attn_rot_disable = false;
+    // env: LLAMA_ATTN_ROT_DISABLE
+    bool attn_rot_k = false;
+    bool attn_rot_v = false;
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;

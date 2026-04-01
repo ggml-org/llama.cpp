@@ -268,11 +268,26 @@ llama_kv_cache::llama_kv_cache(
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
 
-    const char * LLAMA_KV_CACHE_ATTN_ROT_DISABLE = getenv("LLAMA_KV_CACHE_ATTN_ROT_DISABLE");
-    attn_rot_disable = LLAMA_KV_CACHE_ATTN_ROT_DISABLE ? atoi(LLAMA_KV_CACHE_ATTN_ROT_DISABLE) : false;
+    const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
+    const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? atoi(LLAMA_ATTN_ROT_DISABLE) : false;
     if (attn_rot_disable) {
-        LLAMA_LOG_WARN("%s: attention rotation disabled\n", __func__);
+        LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
     }
+
+    attn_rot_k =
+        !attn_rot_disable &&
+        ggml_is_quantized(type_k) &&
+        !hparams.is_n_embd_k_gqa_variable() &&
+        hparams.n_embd_head_k() % 64 == 0;
+
+    attn_rot_v =
+        !attn_rot_disable &&
+        ggml_is_quantized(type_v) &&
+        !hparams.is_n_embd_v_gqa_variable() &&
+        hparams.n_embd_head_v() % 64 == 0;
+
+    LLAMA_LOG_INFO("%s: attn_rot_k = %d\n", __func__, attn_rot_k);
+    LLAMA_LOG_INFO("%s: attn_rot_v = %d\n", __func__, attn_rot_v);
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
@@ -1265,13 +1280,7 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
 ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
     ggml_tensor * res = nullptr;
 
-    const bool can_k_rot =
-        !attn_rot_disable &&
-        ggml_is_quantized(type_k()) &&
-        !hparams.is_n_embd_k_gqa_variable() &&
-        hparams.n_embd_head_k() % 64 == 0;
-
-    if (can_k_rot) {
+    if (attn_rot_k) {
         int nrot = 64;
 
         // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
@@ -1292,13 +1301,7 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
 ggml_tensor * llama_kv_cache::build_input_v_rot(ggml_context * ctx) const {
     ggml_tensor * res = nullptr;
 
-    const bool can_v_rot =
-        !attn_rot_disable &&
-        ggml_is_quantized(type_v()) &&
-        !hparams.is_n_embd_v_gqa_variable() &&
-        hparams.n_embd_head_v() % 64 == 0;
-
-    if (can_v_rot) {
+    if (attn_rot_v) {
         int nrot = 64;
         // using smaller rotation matrices for V seems beneficial
         // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
