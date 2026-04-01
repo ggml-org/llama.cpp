@@ -39,7 +39,14 @@ import type {
 	MCPResourceContent,
 	MCPReadResourceResult
 } from '$lib/types';
-import { buildProxiedUrl, throwIfAborted, isAbortError, createBase64DataUrl } from '$lib/utils';
+import {
+	buildProxiedUrl,
+	buildProxiedHeaders,
+	getAuthHeaders,
+	throwIfAborted,
+	isAbortError,
+	createBase64DataUrl
+} from '$lib/utils';
 
 interface ToolResultContentItem {
 	type: string;
@@ -118,7 +125,14 @@ export class MCPService {
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
-			requestInit.headers = config.headers;
+			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
+		}
+
+		if (useProxy) {
+			requestInit.headers = {
+				...getAuthHeaders(),
+				...(requestInit.headers as Record<string, string>)
+			};
 		}
 
 		if (config.credentials) {

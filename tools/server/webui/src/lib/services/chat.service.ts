@@ -1,6 +1,7 @@
-import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { formatAttachmentText } from '$lib/utils/formatters';
+import { isAbortError } from '$lib/utils/abort';
 import {
-	AGENTIC_REGEX,
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE
@@ -17,38 +18,6 @@ import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } f
 import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
-	private static stripReasoningContent(
-		content: ApiChatMessageData['content'] | null | undefined
-	): ApiChatMessageData['content'] | null | undefined {
-		if (!content) {
-			return content;
-		}
-
-		if (typeof content === 'string') {
-			return content
-				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
-				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
-				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '');
-		}
-
-		if (!Array.isArray(content)) {
-			return content;
-		}
-
-		return content.map((part: ApiChatMessageContentPart) => {
-			if (part.type !== ContentPartType.TEXT || !part.text) return part;
-			return {
-				...part,
-				text: part.text
-					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
-					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
-					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
-			};
-		});
-	}
-
 	/**
 	 *
 	 *
@@ -111,7 +80,8 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			disableReasoningParsing,
+			excludeReasoningFromContext
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -159,14 +129,19 @@ export class ChatService {
 		}
 
 		const requestBody: ApiChatCompletionRequest = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
-				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
-				content: ChatService.stripReasoningContent(msg.content),
-				tool_calls: msg.tool_calls,
-				tool_call_id: msg.tool_call_id
-			})),
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: ApiChatCompletionRequest['messages'][0] = {
+					role: msg.role,
+					content: msg.content,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+				// Include reasoning_content from the dedicated field
+				if (!excludeReasoningFromContext && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+				return mapped;
+			}),
 			stream,
 			return_progress: stream ? true : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined
@@ -675,6 +650,10 @@ export class ChatService {
 				content: message.content
 			};
 
+			if (message.reasoningContent) {
+				result.reasoning_content = message.reasoningContent;
+			}
+
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
@@ -803,6 +782,9 @@ export class ChatService {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
+		if (message.reasoningContent) {
+			result.reasoning_content = message.reasoningContent;
+		}
 		if (toolCalls && toolCalls.length > 0) {
 			result.tool_calls = toolCalls;
 		}

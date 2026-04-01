@@ -93,7 +93,7 @@ llm_build_wavtokenizer_dec::llm_build_wavtokenizer_dec(const llama_model & model
     cur = build_norm(cur,
             model.tok_norm,
             model.tok_norm_b,
-            LLM_NORM, -1);
+            LLM_NORM, 0);
 
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
