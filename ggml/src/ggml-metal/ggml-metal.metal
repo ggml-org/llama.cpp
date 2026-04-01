@@ -1287,7 +1287,7 @@ typedef decltype(kernel_bin_fuse_impl<float, float, float>) kernel_bin_fuse_t;
 template [[host_name("kernel_bin_fuse_f32_f32_f32")]]   kernel kernel_bin_fuse_t kernel_bin_fuse_impl<float,  float,  float>;
 template [[host_name("kernel_bin_fuse_f32_f32_f32_4")]] kernel kernel_bin_fuse_t kernel_bin_fuse_impl<float4, float4, float4>;
 
-template<typename T>
+template<typename T0, typename T1>
 kernel void kernel_add1(
         constant ggml_metal_kargs_add1 & args,
         device const char * src0,
@@ -1304,16 +1304,17 @@ kernel void kernel_add1(
     const int64_t i2 = (gid / (args.ne0 * args.ne1)) % args.ne2;
     const int64_t i3 = gid / (args.ne0 * args.ne1 * args.ne2);
 
-    const T val0 = *(device const T *)(src0 + i0*args.nb00 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
-    const T val1 = *(device const T *)(src1);
+    const float val0 = (float) *(device const T0 *)(src0 + i0*args.nb00 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    const float val1 = (float) *(device const T1 *)(src1);
 
-    *(device T *)(dst + i0*args.nb0 + i1*args.nb1 + i2*args.nb2 + i3*args.nb3) = val0 + val1;
+    *(device T0 *)(dst + i0*args.nb0 + i1*args.nb1 + i2*args.nb2 + i3*args.nb3) = (T0)(val0 + val1);
 }
 
-typedef decltype(kernel_add1<float>) kernel_add1_t;
+typedef decltype(kernel_add1<float, float>) kernel_add1_t;
 
-template [[host_name("kernel_add1_f32")]] kernel kernel_add1_t kernel_add1<float>;
-template [[host_name("kernel_add1_f16")]] kernel kernel_add1_t kernel_add1<half>;
+template [[host_name("kernel_add1_f32_f32")]] kernel kernel_add1_t kernel_add1<float, float>;
+template [[host_name("kernel_add1_f16_f32")]] kernel kernel_add1_t kernel_add1<half,  float>;
+template [[host_name("kernel_add1_f16_f16")]] kernel kernel_add1_t kernel_add1<half,  half>;
 
 kernel void kernel_add_id(
         constant ggml_metal_kargs_add_id & args,

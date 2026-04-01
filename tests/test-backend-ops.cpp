@@ -3132,22 +3132,23 @@ struct test_add_id : public test_case {
 // GGML_OP_ADD1
 struct test_add1 : public test_case {
     const ggml_type type;
+    const ggml_type type_b;
     const std::array<int64_t, 4> ne;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, type_b, ne);
     }
 
-    test_add1(ggml_type type = GGML_TYPE_F32,
+    test_add1(ggml_type type = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+        : type(type), type_b(type_b), ne(ne) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * b = ggml_new_tensor_1d(ctx, type, 1);
+        ggml_tensor * b = ggml_new_tensor_1d(ctx, type_b, 1);
         // ggml_set_param(b); // TODO: implement
         ggml_set_name(b, "b");
 
@@ -7887,9 +7888,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 1, 1, 1}, 16));
 
     test_cases.emplace_back(new test_add1());
-    test_cases.emplace_back(new test_add1(GGML_TYPE_F32, {1024, 1024, 1, 1}));
-    test_cases.emplace_back(new test_add1(GGML_TYPE_F16));
-    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, {1024, 1024, 1, 1}));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1024, 1, 1}));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, GGML_TYPE_F16, {1024, 1024, 1, 1}));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F16, GGML_TYPE_F32, {1024, 1024, 1, 1}));
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
