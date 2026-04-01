@@ -64,23 +64,28 @@ int entry_point(struct ggml_et_ssm_conv_params * params, void * env) {
         return -1;
     }
 
-    const int64_t total_rows = n_t * n_s;
+    const int64_t chunk = 16;
+    const int64_t n_chunks = (nr + chunk - 1) / chunk;
 
-    for (int64_t row = thread_id; row < total_rows; row += num_threads) {
-        const int64_t i2 = row % n_t;
-        const int64_t i3 = row / n_t;
+    for (int64_t i3 = 0; i3 < n_s; ++i3) {
+        for (int64_t i2 = 0; i2 < n_t; ++i2) {
+            const float * s = (const float *) ((const char *) src0_data + i2 * src0->nb[0] + i3 * src0->nb[2]);
+            float * x = (float *) ((char *) dst_data + i2 * dst->nb[1] + i3 * dst->nb[2]);
 
-        const float * s = (const float *) ((const char *) src0_data + i2 * src0->nb[0] + i3 * src0->nb[2]);
-        float * x = (float *) ((char *) dst_data + i2 * dst->nb[1] + i3 * dst->nb[2]);
+            for (int64_t ci = thread_id; ci < n_chunks; ci += num_threads) {
+                const int64_t i1_start = ci * chunk;
+                const int64_t i1_end = i1_start + chunk < nr ? i1_start + chunk : nr;
 
-        for (int64_t i1 = 0; i1 < nr; ++i1) {
-            const float * c = (const float *) ((const char *) src1_data + i1 * src1->nb[1]);
-            const float * s_row = s + i1 * ncs;
-                float sumf = 0.0f;
-                for (int64_t i0 = 0; i0 < nc; ++i0) {
-                    sumf += s_row[i0] * c[i0];
+                for (int64_t i1 = i1_start; i1 < i1_end; ++i1) {
+                    const float * c = (const float *) ((const char *) src1_data + i1 * src1->nb[1]);
+                    const float * s_row = s + i1 * ncs;
+                    float sumf = 0.0f;
+                    for (int64_t i0 = 0; i0 < nc; ++i0) {
+                        sumf += s_row[i0] * c[i0];
+                    }
+                    x[i1] = sumf;
                 }
-            x[i1] = sumf;
+            }
         }
     }
 
