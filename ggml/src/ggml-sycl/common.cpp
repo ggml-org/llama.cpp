@@ -116,16 +116,12 @@ int get_current_device_id() {
     return dpct::dev_mgr::instance().current_device_id();
 }
 
-// Cached shared context and queues for TP mode
-static sycl::context * g_tp_shared_context                       = nullptr;
+// Cached queues for TP mode (use platform default context — all L0 GPUs share it)
 static sycl::queue *   g_tp_shared_queues[GGML_SYCL_MAX_DEVICES] = { nullptr };
 static std::mutex      g_tp_context_mutex;
 
-// Initialize shared context and queues for TP mode
-static void ggml_sycl_init_tp_shared_context() {
-    if (g_tp_shared_context != nullptr) {
-        return;  // Already initialized
-    }
+// Initialize queues for TP mode using the platform default context
+static void ggml_sycl_init_tp_shared_queues() {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return;
     }
@@ -133,28 +129,22 @@ static void ggml_sycl_init_tp_shared_context() {
     // In multi-process mode: only 1 device is locally visible per process
     int num_local_devices = g_sycl_tp_config.is_multiprocess ? 1 : g_sycl_tp_config.world_size;
 
-    std::vector<sycl::device> tp_devices;
-    for (int i = 0; i < num_local_devices; i++) {
-        int          dev_id = g_sycl_tp_config.devices[i];
-        sycl::device dev    = ggml_sycl_get_device(dev_id);
-        tp_devices.push_back(dev);
-    }
-    g_tp_shared_context = new sycl::context(tp_devices);
-    GGML_SYCL_DEBUG("SYCL TP: Created shared context for %d local devices (world_size=%d)\n", num_local_devices,
-                    g_sycl_tp_config.world_size);
-
-    // Create shared-context queues for each local TP device
+    // Create queues for each local TP device using the platform default context
     for (int i = 0; i < num_local_devices; i++) {
         int          dev_id        = g_sycl_tp_config.devices[i];
         sycl::device dev           = ggml_sycl_get_device(dev_id);
-        g_tp_shared_queues[dev_id] = new sycl::queue(*g_tp_shared_context, dev, sycl::property::queue::in_order());
-        GGML_SYCL_DEBUG("SYCL TP: Created shared-context queue for device %d at %p\n", dev_id,
-                        (void *) g_tp_shared_queues[dev_id]);
+        if (g_tp_shared_queues[dev_id] == nullptr) {
+            g_tp_shared_queues[dev_id] = new sycl::queue(dev, sycl::property::queue::in_order{});
+            GGML_SYCL_DEBUG("SYCL TP: Created queue for device %d at %p (platform default context)\n", dev_id,
+                            (void *) g_tp_shared_queues[dev_id]);
+        }
     }
+    GGML_SYCL_DEBUG("SYCL TP: Initialized queues for %d local devices (world_size=%d, platform default context)\n",
+                    num_local_devices, g_sycl_tp_config.world_size);
 }
 
-// Get shared context for TP mode
-// Returns nullptr if not 
+// Get the platform default context for TP mode
+// Returns nullptr if not in TP mode or no queues initialized
 sycl::context * ggml_sycl_get_tp_context() {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return nullptr;
@@ -162,12 +152,19 @@ sycl::context * ggml_sycl_get_tp_context() {
 
     std::lock_guard<std::mutex> lock(g_tp_context_mutex);
 
-    // Initialize shared context if needed
-    if (g_tp_shared_context == nullptr) {
-        ggml_sycl_init_tp_shared_context();
-    }
+    // Initialize queues if needed
+    ggml_sycl_init_tp_shared_queues();
 
-    return g_tp_shared_context;
+    // Return the platform default context from the first initialized queue
+    int num_local_devices = g_sycl_tp_config.is_multiprocess ? 1 : g_sycl_tp_config.world_size;
+    for (int i = 0; i < num_local_devices; i++) {
+        int dev_id = g_sycl_tp_config.devices[i];
+        if (g_tp_shared_queues[dev_id] != nullptr) {
+            static sycl::context ctx = g_tp_shared_queues[dev_id]->get_context();
+            return &ctx;
+        }
+    }
+    return nullptr;
 }
 
 // Get shared-context queue for a device 
@@ -179,10 +176,8 @@ sycl::queue * ggml_sycl_get_tp_queue(int device) {
 
     std::lock_guard<std::mutex> lock(g_tp_context_mutex);
 
-    // Initialize shared context if needed
-    if (g_tp_shared_context == nullptr) {
-        ggml_sycl_init_tp_shared_context();
-    }
+    // Initialize queues if needed
+    ggml_sycl_init_tp_shared_queues();
 
     // Check if device is part of local TP devices
     // In multi-process mode: only 1 device is locally visible
@@ -324,12 +319,10 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
         }
     }
 
-    // Ensure shared context is initialized
+    // Ensure TP queues are initialized
     {
         std::lock_guard<std::mutex> ctx_lock(g_tp_context_mutex);
-        if (g_tp_shared_context == nullptr) {
-            ggml_sycl_init_tp_shared_context();
-        }
+        ggml_sycl_init_tp_shared_queues();
     }
 
     // Get or create staging entry
@@ -576,14 +569,16 @@ void * ggml_sycl_host_malloc(size_t size) try {
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         std::lock_guard<std::mutex> lock(g_tp_context_mutex);
 
-        // Initialize shared context and queues if needed
-        if (g_tp_shared_context == nullptr) {
-            ggml_sycl_init_tp_shared_context();
-        }
+        // Initialize queues if needed
+        ggml_sycl_init_tp_shared_queues();
 
-        // Allocate host memory accessible from all TP devices
+        // Use the platform default context from the first TP queue
+        int first_dev_id = g_sycl_tp_config.devices[0];
+        const sycl::context & tp_ctx = g_tp_shared_queues[first_dev_id]->get_context();
+
+        // Allocate host memory accessible from all TP devices (platform default context)
         ggml_sycl::unified_cache_add_runtime_host_bytes(size);
-        dpct::err0 err = CHECK_TRY_ERROR(ptr = sycl::malloc_host(size, *g_tp_shared_context));
+        dpct::err0 err = CHECK_TRY_ERROR(ptr = sycl::malloc_host(size, tp_ctx));
 
         if (err != 0 || !ptr) {
             ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
@@ -692,9 +687,13 @@ void ggml_sycl_host_free(void * ptr) try {
         std::free(ptr);
         return;
     }
-    if (g_tp_shared_context != nullptr) {
-        sycl::free(ptr, *g_tp_shared_context);
-        return;
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+        // TP mode: free using the platform default context from a TP queue
+        int first_dev_id = g_sycl_tp_config.devices[0];
+        if (g_tp_shared_queues[first_dev_id] != nullptr) {
+            sycl::free(ptr, g_tp_shared_queues[first_dev_id]->get_context());
+            return;
+        }
     }
     // Fallback to default queue context.
     SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, dpct::get_in_order_queue())));
@@ -1853,81 +1852,41 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
 // 2. Two buffers for double-buffering (overlap src->host with host->dst)
 // 3. Event tracking to know when each buffer is safe to reuse
 //
-// CRITICAL: For cross-device transfers to work, host memory must be allocated
-// in a shared context that includes ALL devices. Otherwise, a queue from one
-// device's context cannot access host memory allocated in another context.
+// DPC++ 2024.2+ provides a platform default context containing all L0 GPUs.
+// sycl::queue(device) automatically uses this context, so host memory allocated
+// via any queue's context is accessible from all devices on the same platform.
 
 static void *                     g_pp_transfer_buf[2]   = { nullptr, nullptr };  // Double buffers
 static size_t                     g_pp_transfer_buf_size = 0;
 static std::mutex                 g_pp_transfer_mutex;
 static int                        g_pp_current_buf  = 0;  // Which buffer to use next (0 or 1)
 static std::optional<sycl::event> g_pp_pending_event[2];  // Pending events for each buffer
-static sycl::context *            g_pp_shared_context    = nullptr;  // Shared context for multi-device PP
 
 // Forward declaration (defined in ggml-sycl.cpp)
 int ggml_backend_sycl_get_device_count();
 
-// Internal: Initialize PP shared context for multi-device transfers
-// Creates a context containing devices from the SAME platform so host memory
-// allocated in this context can be accessed from any device's queue on that platform.
-// NOTE: SYCL requires all devices in a context to be from the same platform.
-static void ggml_sycl_init_pp_shared_context() {
-    if (g_pp_shared_context != nullptr) {
-        return;  // Already initialized
-    }
-
-    // Get all SYCL devices and group them by platform
-    int num_devices = ggml_backend_sycl_get_device_count();
-    if (num_devices <= 1) {
-        // Single device: no need for shared context, default context works
-        return;
-    }
-
-    // Group devices by platform
-    std::unordered_map<std::string, std::vector<sycl::device>> platform_devices;
-    for (int i = 0; i < num_devices; i++) {
-        sycl::device dev = ggml_sycl_get_device(i);
-        std::string platform_name = dev.get_platform().get_info<sycl::info::platform::name>();
-        platform_devices[platform_name].push_back(dev);
-    }
-
-    // Find the platform with the most devices
-    std::string best_platform;
-    size_t max_devices = 0;
-    for (const auto & [platform, devices] : platform_devices) {
-        if (devices.size() > max_devices) {
-            max_devices = devices.size();
-            best_platform = platform;
-        }
-    }
-
-    if (max_devices <= 1) {
-        // No platform has multiple devices, shared context not needed
-        GGML_SYCL_DEBUG("SYCL PP: Devices are on different platforms, shared context not possible\n");
-        return;
-    }
-
-    // Create shared context with all devices from the best platform
-    const auto & devices = platform_devices[best_platform];
-    try {
-        g_pp_shared_context = new sycl::context(devices);
-        GGML_LOG_INFO("SYCL PP: Created shared context for %zu devices on platform '%s'\n",
-                      devices.size(), best_platform.c_str());
-    } catch (const sycl::exception & e) {
-        GGML_LOG_WARN("SYCL PP: Failed to create shared context: %s (falling back to per-transfer staging)\n", e.what());
-        g_pp_shared_context = nullptr;
-    }
+// Helper: get the platform default context for PP transfers
+// DPC++ 2024.2+ provides a platform default context containing all L0 GPUs.
+// sycl::queue(device) automatically uses this context, so no explicit context needed.
+static sycl::context ggml_sycl_get_pp_default_context() {
+    sycl::queue & q = ggml_sycl_get_device(0).default_queue();
+    return q.get_context();
 }
 
-// Internal: allocate double buffers using PP shared context if available
+// Internal: allocate double buffers using platform default context
 static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
+    int num_devices = ggml_backend_sycl_get_device_count();
+    bool multi_device = (num_devices > 1);
+
+    // Get platform default context for multi-device transfers
+    sycl::context pp_ctx = ggml_sycl_get_pp_default_context();
+
     // Free old buffers if they exist
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            // Free in the context where it was allocated
-            if (g_pp_shared_context != nullptr) {
+            if (multi_device) {
                 ggml_sycl::unified_cache_sub_runtime_host_bytes(g_pp_transfer_buf_size);
-                sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
+                sycl::free(g_pp_transfer_buf[i], pp_ctx);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[i]);
             }
@@ -1937,17 +1896,14 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     }
     g_pp_transfer_buf_size = 0;
 
-    // Initialize shared context for multi-device transfers
-    ggml_sycl_init_pp_shared_context();
-
     // Allocate with 25% headroom to reduce reallocations
     size_t alloc_size = bytes + (bytes / 4);
 
-    // Allocate pinned host memory in the shared context if available
-    if (g_pp_shared_context != nullptr) {
+    // Multi-device: allocate pinned host memory in the platform default context
+    if (multi_device) {
         try {
-            g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
-            g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
+            g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, pp_ctx);
+            g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, pp_ctx);
             if (g_pp_transfer_buf[0]) {
                 ggml_sycl::offload_stats_note_host_alloc("pp_shared_transfer", alloc_size);
             }
@@ -1955,33 +1911,33 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
                 ggml_sycl::offload_stats_note_host_alloc("pp_shared_transfer", alloc_size);
             }
         } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("SYCL PP: Failed to allocate host buffers in shared context: %s\n", e.what());
+            GGML_LOG_ERROR("SYCL PP: Failed to allocate host buffers: %s\n", e.what());
             if (g_pp_transfer_buf[0]) {
-                sycl::free(g_pp_transfer_buf[0], *g_pp_shared_context);
+                sycl::free(g_pp_transfer_buf[0], pp_ctx);
             }
             if (g_pp_transfer_buf[1]) {
-                sycl::free(g_pp_transfer_buf[1], *g_pp_shared_context);
+                sycl::free(g_pp_transfer_buf[1], pp_ctx);
             }
             g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
             return false;
         }
     } else {
-        // Fallback to ggml_sycl_host_malloc (single-device or context creation failed)
+        // Single device: use ggml_sycl_host_malloc
         g_pp_transfer_buf[0] = ggml_sycl_host_malloc(alloc_size);
         g_pp_transfer_buf[1] = ggml_sycl_host_malloc(alloc_size);
     }
 
     if (g_pp_transfer_buf[0] == nullptr || g_pp_transfer_buf[1] == nullptr) {
         if (g_pp_transfer_buf[0]) {
-            if (g_pp_shared_context) {
-                sycl::free(g_pp_transfer_buf[0], *g_pp_shared_context);
+            if (multi_device) {
+                sycl::free(g_pp_transfer_buf[0], pp_ctx);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[0]);
             }
         }
         if (g_pp_transfer_buf[1]) {
-            if (g_pp_shared_context) {
-                sycl::free(g_pp_transfer_buf[1], *g_pp_shared_context);
+            if (multi_device) {
+                sycl::free(g_pp_transfer_buf[1], pp_ctx);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[1]);
             }
@@ -1992,14 +1948,13 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     }
 
     g_pp_transfer_buf_size = alloc_size;
-    // Track shared-context buffers in host budget (non-shared path uses ggml_sycl_host_malloc which already tracks)
-    if (g_pp_shared_context != nullptr) {
+    // Track multi-device buffers in host budget (single-device path uses ggml_sycl_host_malloc which already tracks)
+    if (multi_device) {
         ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
         ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
     }
-    GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory%s\n",
-                  alloc_size / 1024.0,
-                  g_pp_shared_context ? " (shared context)" : " (default context)");
+    GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory (platform default context)\n",
+                  alloc_size / 1024.0);
     return true;
 }
 
@@ -2065,6 +2020,9 @@ void ggml_sycl_wait_dev2dev_transfers() {
 void ggml_sycl_free_dev2dev_transfer_buffer() {
     std::lock_guard<std::mutex> lock(g_pp_transfer_mutex);
 
+    int  num_devices  = ggml_backend_sycl_get_device_count();
+    bool multi_device = (num_devices > 1);
+
     // Wait for any pending transfers
     for (int i = 0; i < 2; i++) {
         if (g_pp_pending_event[i].has_value()) {
@@ -2073,12 +2031,14 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
         }
     }
 
-    // Free buffers (use shared context if it was used for allocation)
+    // Free buffers using the platform default context for multi-device,
+    // or ggml_sycl_host_free for single-device
+    sycl::context pp_ctx = ggml_sycl_get_pp_default_context();
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            if (g_pp_shared_context != nullptr) {
+            if (multi_device) {
                 ggml_sycl::unified_cache_sub_runtime_host_bytes(g_pp_transfer_buf_size);
-                sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
+                sycl::free(g_pp_transfer_buf[i], pp_ctx);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[i]);
             }
@@ -2088,11 +2048,6 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
     g_pp_transfer_buf_size = 0;
     g_pp_current_buf       = 0;
 
-    // Clean up shared context
-    if (g_pp_shared_context != nullptr) {
-        delete g_pp_shared_context;
-        g_pp_shared_context = nullptr;
-    }
     GGML_SYCL_DEBUG("SYCL PP: Freed double-buffered transfer buffers\n");
 }
 

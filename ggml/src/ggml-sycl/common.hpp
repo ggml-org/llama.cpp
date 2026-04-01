@@ -106,7 +106,7 @@ void   ggml_sycl_host_free(void * ptr);
 // Get shared-context queue for TP mode (returns nullptr if not in TP mode)
 sycl::queue * ggml_sycl_get_tp_queue(int device);
 
-// Get shared context for TP mode (returns nullptr if not in TP mode)
+// Get platform default context for TP mode (returns nullptr if not in TP mode)
 sycl::context * ggml_sycl_get_tp_context();
 
 // TP staging cache: stages mmap'd data to USM memory for shared-context access

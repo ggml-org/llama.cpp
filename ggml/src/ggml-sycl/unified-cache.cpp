@@ -2066,7 +2066,13 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
     }
 
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    process_deferred_frees();
+    // Only process deferred frees when no GPU kernels are in-flight.
+    // During graph_compute (MoE inference), freed VRAM pages may still be
+    // referenced by earlier MUL_MAT_ID kernels — processing frees here
+    // causes GPU page faults (DEVICE_LOST).
+    if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+        process_deferred_frees();
+    }
 
     // Create key for lookup (identity-only, no layout)
     unified_cache_key key{ type, key_id, layer_id, expert_id };
@@ -2372,7 +2378,9 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
     }
 
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    process_deferred_frees();
+    if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+        process_deferred_frees();
+    }
 
     unified_cache_key key{ type, key_id, layer_id, expert_id };
     const uint64_t    new_hash = compute_content_hash(src_ptr, src_size);
@@ -2795,7 +2803,9 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
     {
         std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-        process_deferred_frees();
+        if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+            process_deferred_frees();
+        }
 
         auto it = entries_.find(key);
         if (it != entries_.end()) {
@@ -3730,7 +3740,9 @@ void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
     const unified_cache_key cache_key{ type, key, layer_id, expert_id };
 
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    process_deferred_frees();
+    if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+        process_deferred_frees();
+    }
 
     // Check if entry already exists with matching layout and size
     auto it = entries_.find(cache_key);
@@ -4431,7 +4443,9 @@ void unified_cache::remove(const ggml_sycl_cache_id & key_id,
         return;
     }
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    process_deferred_frees();
+    if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+        process_deferred_frees();
+    }
     unified_cache_key key{ type, key_id, layer_id, expert_id };
 
     auto it = entries_.find(key);
@@ -4833,7 +4847,9 @@ void unified_cache::stop_prefetch_worker() {
 
 size_t unified_cache::evict(size_t bytes_needed) {
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    process_deferred_frees();
+    if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+        process_deferred_frees();
+    }
 
     size_t freed = 0;
     while (freed < bytes_needed && !entries_.empty()) {
@@ -4867,7 +4883,9 @@ size_t unified_cache::evict_and_flush(size_t bytes_needed) {
     //          saturating_sub_used, so used_ reflects the freed memory.
     {
         std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-        process_deferred_frees();
+        if (!g_graph_compute_active.load(std::memory_order_acquire)) {
+            process_deferred_frees();
+        }
     }
 
     return evicted;
@@ -5458,6 +5476,10 @@ void unified_cache::process_deferred_frees() {
         }
         pin_it = inflight_unpins_.erase(pin_it);
     }
+}
+
+bool unified_cache::has_pending_deferred_frees() const {
+    return !deferred_frees_.empty() || !deferred_host_frees_.empty();
 }
 
 size_t unified_cache::dense_count() const {
@@ -6906,6 +6928,18 @@ bool unified_cache_is_graph_compute_active() {
     return g_graph_compute_active.load(std::memory_order_acquire);
 }
 
+bool unified_cache_has_pending_deferred_frees(int device) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
+        return false;
+    }
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
+        return false;
+    }
+    return cache->has_pending_deferred_frees();
+}
+
 void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat) {
     if (bytes == 0) {
         return;
@@ -7516,8 +7550,10 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
             try { staging_queue->wait(); } catch (...) {}
         }
         try { cache->get_bcs_queue().wait(); } catch (...) {}
-        // Process any pending deferred frees NOW while all queues are idle
-        cache->process_deferred_frees_public();
+        // Deferred frees are processed by process_deferred_frees_public()
+        // which checks g_graph_compute_active.  During inference it will
+        // correctly skip the free — deferred frees drain later in
+        // ggml_backend_sycl_synchronize() after all GPU work completes.
     }
 
     // Yield every 4 experts to drain all queues (CCS + BCS + staging) and
@@ -7526,7 +7562,10 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     // malloc_device + fill_fn + H2D memcpy per expert -- without periodic
     // draining, a layer with many cache-miss experts (e.g. 120B model cold
     // start) can accumulate >10s of non-preemptible work.
-    constexpr int PRESTAGE_YIELD_BATCH = 4;
+    // Yield every 2 experts to stay well under the xe driver's 10s job timeout.
+    // Previous value of 4 could accumulate >10s of non-preemptible work on cold
+    // start (all experts miss → eviction cascades + H2D + CCS reorder per expert).
+    constexpr int PRESTAGE_YIELD_BATCH = 2;
     int           experts_staged_count = 0;
     for (int32_t expert_id : experts_to_stage) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
@@ -7568,6 +7607,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
                     staging_queue->wait();        // caller's staging queue
                 }
                 cache->finalize_pending_fills();
+                cache->process_deferred_frees_public();
             } catch (...) {
             }
         }

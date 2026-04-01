@@ -35,6 +35,9 @@
 
 namespace ggml_sycl {
 
+// Forward declaration — needed by unified_cache::process_deferred_frees_public()
+bool unified_cache_is_graph_compute_active();
+
 namespace detail {
 
 static constexpr uint64_t k_cache_guard_magic = 0xC0DECA5EC0DECA5EULL;
@@ -866,8 +869,20 @@ class unified_cache {
         return budget_ > 0 ? static_cast<float>(used_.load(std::memory_order_relaxed)) / static_cast<float>(budget_) : 0.0f;
     }
 
-    // Drain pending deferred frees (public accessor for prestage drain)
-    void process_deferred_frees_public() { process_deferred_frees(); }
+    // Drain pending deferred frees at safe sync points (public accessor).
+    // NEVER call during graph_compute — sycl::free() unmaps GPU page table
+    // entries while in-flight kernels may still reference those addresses.
+    // The ONLY safe time is after queue.wait() in ggml_backend_sycl_synchronize()
+    // or during prestage yield loops (outside graph_compute_impl).
+    void process_deferred_frees_public() {
+        if (unified_cache_is_graph_compute_active()) {
+            return;  // Kernels in-flight — defer until synchronize()
+        }
+        process_deferred_frees();
+    }
+
+    // Check if there are any pending deferred frees (device or host)
+    bool has_pending_deferred_frees() const;
 
     // Raw VRAM budget before runtime reservations
     size_t base_budget() const { return base_budget_; }
@@ -1635,6 +1650,9 @@ class scoped_unified_alloc {
 // Graph compute eviction guard — prevents expert cache eviction during inference
 void unified_cache_set_graph_compute_active(bool active);
 bool unified_cache_is_graph_compute_active();
+
+// Check if any device has pending deferred frees (cheap pre-flight for flush)
+bool unified_cache_has_pending_deferred_frees(int device);
 
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
 void   unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);

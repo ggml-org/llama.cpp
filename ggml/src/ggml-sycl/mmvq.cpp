@@ -3696,7 +3696,20 @@ bool mmvq_moe_batched_dispatch(
     // expert_id as sentinel (output is overwritten by CPU memcpy).
     const int32_t sentinel_id = gpu_expert_ids[0];
 
-    std::vector<int32_t> batch_ids(total_batches, sentinel_id);
+    // Use thread-local storage for batch_ids to prevent use-after-free.
+    // The H2D memcpy is async on the in-order queue — the DMA may be deferred
+    // behind prior commands (Q8_1 quantization kernel).  If batch_ids is a local
+    // std::vector, it's destroyed when this function returns.  But the function
+    // returns BEFORE the DMA completes (the kernel and DMA are in-flight on the
+    // GPU).  The DMA then reads freed heap memory → stale expert IDs → GPU page
+    // fault → DEVICE_LOST.
+    //
+    // Thread-local storage persists until the next call to this function, which
+    // can only happen after the in-order queue has completed all prior commands
+    // (including the DMA and kernel from this call).  This guarantees the source
+    // buffer is alive for the entire DMA duration without any explicit wait.
+    static thread_local std::vector<int32_t> batch_ids;
+    batch_ids.assign(total_batches, sentinel_id);
     for (int i = 0; i < n_gpu_entries; i++) {
         const int64_t slot_idx = gpu_ids[i] * num_tokens + gpu_iid1s[i];
         if (slot_idx >= 0 && slot_idx < total_batches) {
