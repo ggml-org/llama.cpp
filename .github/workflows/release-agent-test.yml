@@ -1,0 +1,135 @@
+name: Test Release llama-agent
+
+on:
+  workflow_dispatch:
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+jobs:
+  macOS-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test binary
+        run: |
+          ./build/bin/llama-agent --help 2>&1 | head -5
+          otool -L ./build/bin/llama-agent
+
+      - name: Pack
+        run: |
+          BUILD_NUM=$(git rev-list --count HEAD)
+          TAG="b${BUILD_NUM}"
+          mkdir -p dist
+          cp build/bin/llama-agent dist/
+          cp build/bin/lib*.dylib dist/ 2>/dev/null || true
+          cp LICENSE dist/
+          cd dist && tar -czvf ../llama-agent-${TAG}-bin-macos-arm64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-agent-macos-arm64
+          path: llama-agent-*.tar.gz
+
+  ubuntu-x64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_BACKEND_DL=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test binary
+        run: |
+          ./build/bin/llama-agent --help 2>&1 | head -5
+          ldd ./build/bin/llama-agent
+
+      - name: Pack
+        run: |
+          BUILD_NUM=$(git rev-list --count HEAD)
+          TAG="b${BUILD_NUM}"
+          mkdir -p dist
+          cp build/bin/llama-agent dist/
+          cp build/bin/lib*.so* dist/ 2>/dev/null || true
+          cp LICENSE dist/
+          cd dist && tar -czvf ../llama-agent-${TAG}-bin-ubuntu-x64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-agent-ubuntu-x64
+          path: llama-agent-*.tar.gz
+
+  windows-x64:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_OPENMP=ON ^
+            -DLLAMA_CURL=OFF ^
+            %CMAKE_ARGS:-DGGML_RPC=ON=%
+            -DLLAMA_BUILD_EXAMPLES=OFF ^
+            -DLLAMA_BUILD_TESTS=OFF ^
+            -DLLAMA_BUILD_TOOLS=ON ^
+            -DLLAMA_BUILD_SERVER=ON
+          cmake --build build --config Release
+
+      - name: Test binary
+        run: |
+          dir build\bin\Release\llama-agent.exe
+          build\bin\Release\llama-agent.exe --help 2>&1 | Select-Object -First 5
+
+      - name: Pack
+        run: |
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\build\bin\Release\
+          7z a llama-agent-bin-win-x64.zip .\build\bin\Release\*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-agent-win-x64
+          path: llama-agent-bin-win-x64.zip
