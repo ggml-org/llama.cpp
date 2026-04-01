@@ -20,8 +20,8 @@
 #include <fcntl.h>
 #endif
 
-static const int MAX_OUTPUT_LENGTH = 30000;
-static const int MAX_OUTPUT_LINES = 50;
+static const int MAX_OUTPUT_LENGTH = 100000;
+static const int MAX_OUTPUT_LINES = 2000;
 
 // Truncate output to max lines
 static std::string truncate_lines(const std::string & text, int max_lines) {

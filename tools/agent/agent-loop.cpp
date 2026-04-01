@@ -233,6 +233,11 @@ void agent_loop::clear() {
     }
     permission_mgr_.clear_session();
 
+    // Reset compaction state
+    previous_summary_.clear();
+    last_prompt_tokens_ = 0;
+    last_completion_overflowed_ = false;
+
     // Reset stats when conversation is cleared
     stats_ = session_stats{};
 }
@@ -300,7 +305,16 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
 
     // Wait for first result
     console::spinner::start();
-    server_task_result_ptr result = rd.next(should_stop);
+    server_task_result_ptr result;
+    try {
+        result = rd.next(should_stop);
+    } catch (const std::exception & e) {
+        console::spinner::stop();
+        LOG_WRN("Failed to parse model output: %s\n", e.what());
+        common_chat_msg msg;
+        msg.role = "assistant";
+        return msg;
+    }
     console::spinner::stop();
     std::string full_content;
     bool is_thinking = false;
@@ -312,6 +326,10 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
             break;
         }
         if (result->is_error()) {
+            auto * err = dynamic_cast<server_task_result_error *>(result.get());
+            if (err && err->err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+                last_completion_overflowed_ = true;
+            }
             json err_data = result->to_json();
             if (err_data.contains("message")) {
                 console::error("Error: %s\n", err_data["message"].get<std::string>().c_str());
@@ -351,6 +369,7 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
         if (res_final) {
             out_timings = std::move(res_final->timings);
+            last_prompt_tokens_ = res_final->n_prompt_tokens;
             // Use the server-parsed message which handles all chat template formats
             // (Hermes 2 Pro, Qwen3-Coder, Llama 3.x, DeepSeek, etc.)
             if (!res_final->oaicompat_msg.empty()) {
@@ -363,7 +382,12 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
             break;
         }
 
-        result = rd.next(should_stop);
+        try {
+            result = rd.next(should_stop);
+        } catch (const std::exception & e) {
+            LOG_WRN("Failed to parse model output: %s\n", e.what());
+            break;
+        }
     }
 
     // Reset interrupted flag for next interaction
@@ -613,9 +637,24 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
             stats_.total_cached += timings.cache_n;
         }
 
+        // Overflow recovery: compact and retry this iteration
+        if (parsed.content.empty() && parsed.tool_calls.empty() && last_completion_overflowed_) {
+            last_completion_overflowed_ = false;
+            if (config_.compaction.enabled && try_compact()) {
+                console::log("[Context compacted, retrying...]\n");
+                result.iterations--; // don't count the failed attempt
+                continue;
+            }
+        }
+
         if (parsed.content.empty() && parsed.tool_calls.empty() && is_interrupted_.load()) {
             result.stop_reason = agent_stop_reason::USER_CANCELLED;
             return result;
+        }
+
+        // Threshold compaction after successful completion
+        if (config_.compaction.enabled) {
+            try_compact();
         }
 
         // Add assistant message to history
@@ -716,10 +755,32 @@ agent_loop_result agent_loop::run_streaming(
             stats_.total_cached += timings.cache_n;
         }
 
+        // Overflow recovery: compact and retry this iteration
+        if (parsed.content.empty() && parsed.tool_calls.empty() && last_completion_overflowed_) {
+            last_completion_overflowed_ = false;
+            if (config_.compaction.enabled && try_compact()) {
+                on_event(agent_event::compaction_completed((int32_t) messages_.size()));
+                result.iterations--; // don't count the failed attempt
+                continue;
+            }
+            // Compaction failed or disabled — emit the error now
+            on_event(agent_event::error("Context overflow: compaction could not free enough space"));
+            result.stop_reason = agent_stop_reason::AGENT_ERROR;
+            on_event(agent_event::completed(result.stop_reason, stats_));
+            return result;
+        }
+
         if (parsed.content.empty() && parsed.tool_calls.empty() && should_stop()) {
             result.stop_reason = agent_stop_reason::USER_CANCELLED;
             on_event(agent_event::completed(result.stop_reason, stats_));
             return result;
+        }
+
+        // Threshold compaction after successful completion
+        if (config_.compaction.enabled) {
+            if (try_compact()) {
+                on_event(agent_event::compaction_completed((int32_t) messages_.size()));
+            }
         }
 
         // Add assistant message to history
@@ -818,7 +879,15 @@ common_chat_msg agent_loop::generate_completion_streaming(
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(should_stop);
+    server_task_result_ptr result;
+    try {
+        result = rd.next(should_stop);
+    } catch (const std::exception & e) {
+        LOG_WRN("Failed to parse model output: %s\n", e.what());
+        common_chat_msg msg;
+        msg.role = "assistant";
+        return msg;
+    }
 
     std::string full_content;
     bool was_aborted = false;
@@ -829,6 +898,13 @@ common_chat_msg agent_loop::generate_completion_streaming(
             break;
         }
         if (result->is_error()) {
+            auto * err = dynamic_cast<server_task_result_error *>(result.get());
+            if (err && err->err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+                last_completion_overflowed_ = true;
+                // Don't emit error event — overflow may be recovered via compaction
+                common_chat_msg empty_msg;
+                return empty_msg;
+            }
             json err_data = result->to_json();
             std::string err_msg = err_data.value("message", "Unknown error");
             on_event(agent_event::error(err_msg));
@@ -853,6 +929,7 @@ common_chat_msg agent_loop::generate_completion_streaming(
         auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
         if (res_final) {
             out_timings = std::move(res_final->timings);
+            last_prompt_tokens_ = res_final->n_prompt_tokens;
             if (!res_final->oaicompat_msg.empty()) {
                 return res_final->oaicompat_msg;
             }
@@ -862,7 +939,12 @@ common_chat_msg agent_loop::generate_completion_streaming(
             break;
         }
 
-        result = rd.next(should_stop);
+        try {
+            result = rd.next(should_stop);
+        } catch (const std::exception & e) {
+            LOG_WRN("Failed to parse model output: %s\n", e.what());
+            break;
+        }
     }
 
     if (was_aborted) {
@@ -1016,4 +1098,152 @@ tool_result agent_loop::execute_tool_call_async(
 
     // Execute the tool
     return registry.execute(call.name, args, tool_ctx_);
+}
+
+std::string agent_loop::generate_summary(const json & messages_to_summarize,
+                                          const std::string & previous_summary) {
+    std::string conv_text = compaction_serialize_conversation(messages_to_summarize, 0, messages_to_summarize.size());
+
+    // Build the user prompt
+    std::string prompt_text = "<conversation>\n" + conv_text + "</conversation>\n\n";
+    if (!previous_summary.empty()) {
+        prompt_text += "<previous-summary>\n" + previous_summary + "\n</previous-summary>\n\n";
+        prompt_text += UPDATE_SUMMARIZATION_PROMPT;
+    } else {
+        prompt_text += SUMMARIZATION_PROMPT;
+    }
+
+    // Build temporary messages for the summarization call
+    json summary_messages = json::array();
+    summary_messages.push_back({{"role", "system"}, {"content", SUMMARIZATION_SYSTEM_PROMPT}});
+    summary_messages.push_back({{"role", "user"}, {"content", prompt_text}});
+
+    // Render through chat template
+    auto meta = server_ctx_.get_meta();
+    common_chat_templates_inputs inputs;
+    inputs.messages              = common_chat_msgs_parse_oaicompat(summary_messages);
+    inputs.tools                 = {};
+    inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+    inputs.use_jinja             = meta.chat_params.use_jinja;
+    inputs.parallel_tool_calls   = false;
+    inputs.add_generation_prompt = true;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_NONE;
+    inputs.enable_thinking       = false;
+    auto chat_params = common_chat_templates_apply(meta.chat_params.tmpls.get(), inputs);
+
+    // Post summarization task
+    server_response_reader rd = server_ctx_.get_response_reader();
+    {
+        std::lock_guard<std::mutex> lock(g_completion_mutex);
+
+        server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
+        task.id     = rd.get_new_id();
+        task.index  = 0;
+        task.params = task_defaults_;
+        int32_t ctx_size = server_ctx_.get_meta().slot_n_ctx;
+        int32_t effective_reserve = std::min(config_.compaction.reserve_tokens, ctx_size / 4);
+        task.params.n_predict = (int32_t)(0.8f * effective_reserve);
+        task.params.chat_parser_params.parse_tool_calls = false;
+
+        task.cli        = true;
+        task.cli_prompt = std::move(chat_params.prompt);
+
+        rd.post_task(std::move(task));
+    }
+
+    // Collect full response
+    std::string summary_text;
+    auto should_stop_fn = [this]() { return is_interrupted_.load(); };
+
+    try {
+        server_task_result_ptr result = rd.next(should_stop_fn);
+        while (result) {
+            if (result->is_error()) {
+                LOG_WRN("Compaction summary generation failed\n");
+                break;
+            }
+
+            auto * partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
+            if (partial) {
+                for (const auto & diff : partial->oaicompat_msg_diffs) {
+                    summary_text += diff.content_delta;
+                }
+            }
+
+            auto * final_result = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+            if (final_result) {
+                if (!final_result->oaicompat_msg.content.empty()) {
+                    summary_text = final_result->oaicompat_msg.content;
+                }
+                break;
+            }
+
+            result = rd.next(should_stop_fn);
+        }
+    } catch (const std::exception & e) {
+        LOG_WRN("Compaction summary generation error: %s\n", e.what());
+    }
+
+    return summary_text;
+}
+
+bool agent_loop::try_compact() {
+    int32_t ctx_size = server_ctx_.get_meta().slot_n_ctx;
+    if (ctx_size <= 0) {
+        return false;
+    }
+
+    // Clamp settings proportionally to context size for small contexts
+    int32_t effective_reserve = std::min(config_.compaction.reserve_tokens, ctx_size / 4);
+    int32_t effective_keep    = std::min(config_.compaction.keep_recent_tokens, ctx_size / 3);
+
+    // Check if compaction is needed
+    bool threshold_hit = last_prompt_tokens_ > ctx_size - effective_reserve;
+    if (!threshold_hit && !last_completion_overflowed_) {
+        return false;
+    }
+
+    size_t cut_idx = compaction_find_cut_point(messages_, effective_keep);
+    if (cut_idx <= 1) {
+        return false; // nothing to summarize (only system prompt before cut)
+    }
+
+    // Extract messages to summarize: [1 .. cut_idx)
+    json to_summarize = json::array();
+    for (size_t i = 1; i < cut_idx; i++) {
+        to_summarize.push_back(messages_[i]);
+    }
+
+    if (to_summarize.empty()) {
+        return false;
+    }
+
+    LOG_INF("Compacting context: %d prompt tokens, summarizing %zu messages, keeping %zu\n",
+            last_prompt_tokens_, to_summarize.size(), messages_.size() - cut_idx);
+
+    std::string summary = generate_summary(to_summarize, previous_summary_);
+    if (summary.empty()) {
+        LOG_WRN("Compaction failed: empty summary\n");
+        return false;
+    }
+
+    previous_summary_ = summary;
+
+    // Rebuild messages: system + summary + recent messages
+    json new_messages = json::array();
+    new_messages.push_back(messages_[0]); // system prompt
+
+    new_messages.push_back({
+        {"role", "user"},
+        {"content", "<context-summary>\n" + summary + "\n</context-summary>"}
+    });
+
+    for (size_t i = cut_idx; i < messages_.size(); i++) {
+        new_messages.push_back(messages_[i]);
+    }
+
+    messages_ = std::move(new_messages);
+
+    LOG_INF("Compaction complete: %zu messages in context\n", messages_.size());
+    return true;
 }

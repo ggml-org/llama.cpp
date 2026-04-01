@@ -3,6 +3,7 @@
 #include "tool-registry.h"
 #include "permission.h"
 #include "permission-async.h"
+#include "compaction.h"
 #include "chat.h"
 
 #include "server-context.h"
@@ -41,6 +42,9 @@ struct agent_config {
     // AGENTS.md configuration (agents.md spec)
     bool enable_agents_md = true;
     std::string agents_md_prompt_section;          // Pre-generated XML for prompt injection
+
+    // Context compaction
+    compaction_settings compaction;
 };
 
 // Result from running the agent loop
@@ -68,6 +72,8 @@ enum class agent_event_type {
     PERMISSION_REQUIRED,  // Permission required - waiting for response
     PERMISSION_RESOLVED,  // Permission was granted or denied
     ITERATION_START,      // New iteration starting
+    COMPACTION_STARTED,   // Context compaction starting
+    COMPACTION_COMPLETED, // Context compaction finished
     COMPLETED,            // Agent finished successfully
     ERROR,                // Error occurred
 };
@@ -147,6 +153,14 @@ struct agent_event {
     static agent_event error(const std::string & message) {
         return {agent_event_type::ERROR, {{"message", message}}};
     }
+
+    static agent_event compaction_started(int32_t tokens_before) {
+        return {agent_event_type::COMPACTION_STARTED, {{"tokens_before", tokens_before}}};
+    }
+
+    static agent_event compaction_completed(int32_t messages_kept) {
+        return {agent_event_type::COMPACTION_COMPLETED, {{"messages_kept", messages_kept}}};
+    }
 };
 
 // Callback type for streaming events
@@ -213,6 +227,11 @@ private:
                                   const std::string & call_id,
                                   const tool_result & result);
 
+    // Context compaction: summarize old messages when context gets large
+    bool try_compact();
+    std::string generate_summary(const json & messages_to_summarize,
+                                  const std::string & previous_summary);
+
     server_context & server_ctx_;
     const common_params * params_;
     agent_config config_;
@@ -223,4 +242,9 @@ private:
     permission_manager permission_mgr_;
     tool_context tool_ctx_;
     session_stats stats_;
+
+    // Compaction state
+    int32_t     last_prompt_tokens_ = 0;
+    bool        last_completion_overflowed_ = false;
+    std::string previous_summary_;
 };

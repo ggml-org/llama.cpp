@@ -3,6 +3,7 @@ set(TARGET llama-agent)
 set(AGENT_SOURCES
     agent.cpp
     agent-loop.cpp
+    compaction.cpp
     tool-registry.cpp
     permission.cpp
     permission-async.cpp
@@ -43,6 +44,7 @@ if(LLAMA_HTTPLIB)
         server/agent-session.cpp
         server/agent-routes.cpp
         agent-loop.cpp
+        compaction.cpp
         tool-registry.cpp
         permission.cpp
         permission-async.cpp

@@ -106,6 +106,7 @@ int main(int argc, char ** argv) {
     int max_iterations = 50;  // Default value
     bool enable_skills = true;
     bool enable_agents_md = true;
+    bool enable_compaction = true;
     std::vector<std::string> extra_skills_paths;
 
     for (int i = 1; i < argc; i++) {
@@ -128,6 +129,14 @@ int main(int argc, char ** argv) {
             i--;  // Re-check this position
         } else if (arg == "--no-agents-md") {
             enable_agents_md = false;
+            // Remove from argv
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (arg == "--no-compaction") {
+            enable_compaction = false;
             // Remove from argv
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
@@ -312,6 +321,7 @@ int main(int argc, char ** argv) {
     config.skills_prompt_section = skills_mgr.generate_prompt_section();
     config.enable_agents_md = enable_agents_md;
     config.agents_md_prompt_section = agents_md_mgr.generate_prompt_section();
+    config.compaction.enabled = enable_compaction;
 
     // Create agent loop
     agent_loop agent(ctx_server, params, config, g_is_interrupted);

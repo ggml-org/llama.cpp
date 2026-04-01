@@ -253,6 +253,12 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
                 case agent_event_type::ITERATION_START:
                     event_type = "iteration_start";
                     break;
+                case agent_event_type::COMPACTION_STARTED:
+                    event_type = "compaction_started";
+                    break;
+                case agent_event_type::COMPACTION_COMPLETED:
+                    event_type = "compaction_completed";
+                    break;
                 case agent_event_type::COMPLETED:
                     event_type = "completed";
                     sse_shared->send(event_type, event.data);

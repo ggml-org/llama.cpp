@@ -100,7 +100,7 @@ static tool_result glob_execute(const json & args, const tool_context & ctx) {
 
     // Collect matching files with modification times
     std::vector<std::pair<fs::path, fs::file_time_type>> matches;
-    const int limit = 100;
+    const int limit = 500;
 
     try {
         for (const auto & entry : fs::recursive_directory_iterator(

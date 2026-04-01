@@ -13,6 +13,7 @@ A coding agent that runs entirely inside [llama.cpp](https://github.com/ggml-org
 - [AGENTS.md Support](#agentsmd-support)
 - [MCP Server Support](#mcp-server-support)
 - [Permission System](#permission-system)
+- [Context Compaction](#context-compaction)
 - [HTTP API Server](#http-api-server)
 
 ## What is it?
@@ -349,6 +350,19 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 > [!CAUTION]
 > **YOLO mode is extremely dangerous.** The agent will execute any command without confirmation, including destructive operations like `rm -rf`. This is especially risky with smaller models that have weaker instruction-following and may hallucinate unsafe commands. Only use this flag if you fully trust the model and understand the risks.
 
+## Context Compaction
+
+Long conversations automatically trigger context compaction to stay within the model's context window. When the prompt approaches the context limit, the agent summarizes older messages using the model itself and replaces them with a structured summary. This allows arbitrarily long sessions without losing important context.
+
+**How it works:**
+1. After each completion, the agent checks whether prompt tokens exceed ~75% of the context window
+2. If so, it finds a safe cut point at a turn boundary (never splitting a tool call from its result)
+3. Older messages are serialized and sent to the model with a summarization prompt
+4. The summary replaces the old messages, preserving goals, progress, key decisions, and next steps
+5. If the context overflows entirely, the agent compacts and retries automatically
+
+Compaction is enabled by default. The summary is iteratively updated on subsequent compactions, so context accumulates rather than being lost.
+
 ## HTTP API Server
 
 `llama-agent-server` exposes the agent via HTTP API with Server-Sent Events (SSE) streaming.
@@ -411,6 +425,8 @@ curl -N http://localhost:8081/v1/agent/session/sess_00000001/chat \
 | `tool_result` | Tool execution completed |
 | `permission_required` | Permission needed (non-yolo mode) |
 | `permission_resolved` | Permission granted/denied |
+| `compaction_started` | Context compaction triggered |
+| `compaction_completed` | Context compaction finished |
 | `completed` | Agent finished with stats |
 | `error` | Error occurred |
 
