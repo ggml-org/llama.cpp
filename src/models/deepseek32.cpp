@@ -133,9 +133,9 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
-                const auto * mctx_dsa = inp_attn_dsa->mctx->get_dsa();
-                const auto & k_idxs = inp_attn_dsa->get_k_idxs_dsa();
-                ggml_build_forward_expand(gf, mctx_dsa->cpy_k(ctx0, indexer_k, k_idxs, il));
+                const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();
+                const auto & k_idxs_lid = inp_attn_dsa->get_k_idxs_lid();
+                ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, indexer_k, k_idxs_lid, il));
 
                 // prepare indexer weights
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
@@ -145,7 +145,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_weights, "indexer_weights", il);
 
                 // get cached indexer keys
-                indexer_k = mctx_dsa->get_k(ctx0, il);
+                indexer_k = mctx_lid->get_k(ctx0, il);
 
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];
@@ -188,7 +188,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_score, "indexer_score", il);
 
                 // mask indexer scores
-                ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_dsa();
+                ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
                 indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                 cb(indexer_score, "indexer_score", il);
 

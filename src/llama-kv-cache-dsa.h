@@ -68,16 +68,16 @@ public:
     // llama_kv_cache_dsa specific API
     //
 
-    llama_kv_cache * get_base() const;
-    llama_kv_cache * get_dsa () const;
+    llama_kv_cache * get_mla() const;
+    llama_kv_cache * get_lid() const;
 
 private:
     // we keep indexer KV cache hparams instance here as llama_kv_cache stores only reference to it
-    llama_hparams hparams_ik;
+    llama_hparams hparams_lid;
     const uint32_t n_stream  = 1;
 
-    std::unique_ptr<llama_kv_cache> kv_base;
-    std::unique_ptr<llama_kv_cache> kv_ik;
+    std::unique_ptr<llama_kv_cache> kv_mla;
+    std::unique_ptr<llama_kv_cache> kv_lid;
 };
 
 class llama_kv_cache_dsa_context : public llama_memory_context_i {
@@ -120,8 +120,8 @@ public:
     // llama_kv_cache_dsa_context specific API
     //
 
-    const llama_kv_cache_context * get_base() const;
-    const llama_kv_cache_context * get_dsa()  const;
+    const llama_kv_cache_context * get_mla() const;
+    const llama_kv_cache_context * get_lid()  const;
 
 private:
     //llama_kv_cache_dsa * kv;
@@ -131,8 +131,8 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    const llama_memory_context_ptr ctx_base;
-    const llama_memory_context_ptr ctx_dsa;
+    const llama_memory_context_ptr ctx_mla;
+    const llama_memory_context_ptr ctx_lid;
 
     const llama_memory_status status;
 };
