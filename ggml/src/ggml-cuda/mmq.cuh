@@ -495,7 +495,9 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
                 int u[2*VDR_Q4_1_Q8_1_MMQ];
 
                 constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
-                constexpr int mcpy_int = max_cpy / sizeof(int);  
+                constexpr int mcpy_int = max_cpy / sizeof(int);
+                static_assert(VDR_Q4_0_Q8_1_MMQ == 4, "bad VDR_Q4_0_Q8_1_MMQ");
+
 
                 int tmp0[4], tmp1[4];  
 
