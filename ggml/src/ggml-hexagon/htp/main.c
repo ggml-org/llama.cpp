@@ -440,7 +440,7 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
     // Age mapings and find the oldest as we go
     struct htp_mmap *o_mm = ctx->mmap;
     uint32_t        o_age = 0;
- 
+
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (m->fd == b->fd) {
@@ -533,7 +533,7 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_op_buf * bufs,
     octx->flags = req->flags;
     octx->op    = req->opcode;
 
-    FARF(HIGH, "proc-op %u: flags 0x%x", octx.op, octx.flags);
+    FARF(HIGH, "proc-op %u: flags 0x%x", octx->op, octx->flags);
 
     struct htp_tensor *src = &octx->src0;
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
@@ -589,7 +589,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         FARF(HIGH, "processing opreq batch: n-bufs %u n-ops %u m-size %u h-size %u b-size %u r-size %u", n_bufs, n_ops, m_size, h_size, b_size, r_size);
 
         for (uint32_t i=0; i < n_bufs; i++) {
-             prep_op_buf(ctx, i, &bufs[i]);
+            prep_op_buf(ctx, i, &bufs[i]);
         }
 
         vtcm_acquire(ctx);
@@ -600,7 +600,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         octx.ctx       = ctx;
 
         for (uint32_t i=0; i < n_ops; i++) {
-             proc_op_req(&octx, bufs, &reqs[i]);
+            proc_op_req(&octx, bufs, &reqs[i]);
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
