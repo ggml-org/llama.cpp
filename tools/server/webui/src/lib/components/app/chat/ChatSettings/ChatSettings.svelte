@@ -26,11 +26,12 @@
 	import type { Component } from 'svelte';
 
 	interface Props {
+		class: string;
 		onSave?: () => void;
 		initialSection?: SettingsSectionTitle;
 	}
 
-	let { onSave, initialSection }: Props = $props();
+	let { class: className, onSave, initialSection }: Props = $props();
 
 	const settingSections: Array<{
 		fields: SettingsFieldConfig[];
@@ -431,7 +432,7 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden md:flex-row">
+<div class="flex h-full flex-col overflow-hidden md:flex-row {className}">
 	<!-- Desktop Sidebar -->
 	<div class="hidden w-64 border-r border-border/30 p-6 md:block">
 		<nav class="space-y-1 py-2">

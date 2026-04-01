@@ -4,6 +4,7 @@ import { CONTEXT_KEY_CHAT_SETTINGS_DIALOG } from '$lib/constants';
 
 export interface ChatSettingsDialogContext {
 	open: (initialSection?: SettingsSectionTitle) => void;
+	isActive: () => boolean;
 }
 
 const CHAT_SETTINGS_DIALOG_KEY = Symbol.for(CONTEXT_KEY_CHAT_SETTINGS_DIALOG);

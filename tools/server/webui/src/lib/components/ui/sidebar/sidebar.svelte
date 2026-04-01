@@ -78,10 +78,10 @@
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-				'fixed inset-y-0 z-999 hidden w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:z-0 md:flex',
+				'fixed inset-y-0 z-999 hidden w-(--sidebar-width) transition-[left,right,width,opacity] duration-200 ease-linear md:z-0 md:flex',
 				side === 'left'
-					? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
-					: 'right-1 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
+					? 'left-3 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0'
+					: 'right-1 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-0.775)] group-data-[collapsible=offcanvas]:opacity-0',
 				// Adjust the padding for floating and inset variants.
 				variant === 'floating' || variant === 'inset'
 					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'

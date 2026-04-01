@@ -87,7 +87,7 @@
 </script>
 
 <svelte:head>
-	<title>llama.cpp - AI Chat Interface</title>
+	<title>llama.cpp</title>
 </svelte:head>
 
 <ChatScreen showCenteredEmpty />

@@ -9,6 +9,12 @@
 	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
 
+	interface Props {
+		class?: string;
+	}
+	
+	let { class: className }: Props = $props();
+
 	let servers = $derived(mcpStore.getServersSorted());
 
 	let initialLoadComplete = $state(false);
@@ -77,7 +83,7 @@
 	}
 </script>
 
-<div class="space-y-5 md:space-y-4">
+<div class="gap-5 grid md:space-y-4 {className}">
 	<div class="flex items-start justify-between gap-4">
 		<div>
 			<h4 class="text-base font-semibold">Manage Servers</h4>
@@ -130,7 +136,7 @@
 	{/if}
 
 	{#if servers.length > 0}
-		<div class="space-y-3">
+		<div class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(28rem, 1fr));">
 			{#each servers as server (server.id)}
 				{#if !initialLoadComplete}
 					<McpServerCardSkeleton />

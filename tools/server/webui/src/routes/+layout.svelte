@@ -6,9 +6,9 @@
 	import { untrack } from 'svelte';
 	import {
 		ChatSidebar,
+		ChatSettings,
+		McpServersSettings,
 		DialogConversationTitleUpdate,
-		DialogChatSettings,
-		DialogMcpServersSettings,
 		DialogChatSettingsImportExport
 	} from '$lib/components/app';
 	import { isLoading } from '$lib/stores/chat.svelte';
@@ -54,28 +54,42 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
-	let chatSettingsDialogOpen = $state(false);
-	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
-	let mcpServersDialogOpen = $state(false);
+	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
+	let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
+	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
 
 	setChatSettingsDialogContext({
 		open: (initialSection?: SettingsSectionTitle) => {
-			chatSettingsDialogInitialSection = initialSection;
-			chatSettingsDialogOpen = true;
-		}
+			chatSettingsInitialSection = initialSection;
+			activePanel = 'settings';
+		},
+		isActive: () => activePanel === 'settings'
 	});
 
 	setMcpServersDialogContext({
 		open: () => {
-			mcpServersDialogOpen = true;
-		}
+			activePanel = 'mcp';
+		},
+		isActive: () => activePanel === 'mcp'
 	});
 
 	setImportExportDialogContext({
 		open: () => {
 			importExportDialogOpen = true;
 		}
+	});
+
+	$effect(() => {
+		if (activePanel === 'settings' && chatSettingsRef) {
+			chatSettingsRef.reset();
+		}
+	});
+
+	// Return to chat when navigating to a new route
+	$effect(() => {
+		void page.url;
+		activePanel = 'chat';
 	});
 
 	// Global keyboard shortcuts
@@ -249,16 +263,6 @@
 
 	<Toaster richColors />
 
-	<DialogChatSettings
-		open={chatSettingsDialogOpen}
-		onOpenChange={(open) => (chatSettingsDialogOpen = open)}
-		initialSection={chatSettingsDialogInitialSection}
-	/>
-
-	<DialogMcpServersSettings
-		open={mcpServersDialogOpen}
-		onOpenChange={(open) => (mcpServersDialogOpen = open)}
-	/>
 	<DialogChatSettingsImportExport
 		open={importExportDialogOpen}
 		onOpenChange={(open) => (importExportDialogOpen = open)}
@@ -288,7 +292,18 @@
 			{/if}
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
-				{@render children?.()}
+				{#if activePanel === 'settings'}
+					<ChatSettings
+						bind:this={chatSettingsRef}
+						onSave={() => (activePanel = 'chat')}
+						initialSection={chatSettingsInitialSection}
+						class="p-8! mx-auto h-full"
+					/>
+				{:else if activePanel === 'mcp'}
+					<McpServersSettings class="w-full mx-auto p-8! md:translate-x-1.5" />
+				{:else}
+					{@render children?.()}
+				{/if}
 			</Sidebar.Inset>
 		</div>
 	</Sidebar.Provider>

@@ -16,6 +16,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
+	import ChatSidebarFooter from './ChatSidebarFooter.svelte';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -138,7 +139,8 @@
 	}
 </script>
 
-<ScrollArea>
+<div class="flex h-full flex-col">
+<ScrollArea class="flex-1">
 	<Sidebar.Header class=" top-0 z-10 gap-4 bg-sidebar/50 p-3 pt-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
@@ -192,6 +194,11 @@
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
 </ScrollArea>
+
+<Sidebar.Footer>
+	<ChatSidebarFooter />
+</Sidebar.Footer>
+</div>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
