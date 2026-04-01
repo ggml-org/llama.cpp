@@ -4068,6 +4068,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+        cuda_ctx->update_graphs(graph_key);
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
