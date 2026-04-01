@@ -70,9 +70,12 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
 }
 
 #define HEX_L2_LINE_SIZE 64
+#define HEX_L2_MAX_SIZE  (1 * 1024 * 1024)
 
 static inline void hex_l2clear(void * addr, size_t size)
 {
+    if (size > HEX_L2_MAX_SIZE) size = HEX_L2_MAX_SIZE;
+
     const uint32_t s = (uint32_t) addr;
     const uint32_t e = s + size;
     for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE * 4) {
@@ -85,6 +88,8 @@ static inline void hex_l2clear(void * addr, size_t size)
 
 static inline void hex_l2flush(void * addr, size_t size)
 {
+    if (size > HEX_L2_MAX_SIZE) size = HEX_L2_MAX_SIZE;
+
     const uint32_t s = (uint32_t) addr;
     const uint32_t e = s + size;
     for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE * 4) {
