@@ -89,7 +89,7 @@
 		<div class="flex items-center gap-2">
 			<McpLogo class="h-6 w-6" />
 
-			<h2 class="text-2xl font-semibold">MCP Servers</h2>
+			<h1 class="text-2xl font-semibold">MCP Servers</h1>
 		</div>
 
 		{#if !isAddingServer}

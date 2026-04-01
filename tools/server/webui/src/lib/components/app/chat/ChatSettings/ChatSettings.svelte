@@ -432,104 +432,113 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden md:flex-row {className}">
-	<!-- Desktop Sidebar -->
-	<div class="hidden w-64 border-r border-border/30 p-6 md:block">
-		<nav class="space-y-1 py-2">
-			{#each settingSections as section (section.title)}
-				<button
-					class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
-					section.title
-						? 'bg-accent text-accent-foreground'
-						: 'text-muted-foreground'}"
-					onclick={() => (activeSection = section.title)}
-				>
-					<section.icon class="h-4 w-4" />
 
-					<span class="ml-2">{section.title}</span>
-				</button>
-			{/each}
-		</nav>
+<div class="flex h-full flex-col {className} w-full">
+	<div class="flex items-center gap-2 w-full md:absolute md:top-8">
+		<Settings class="h-6 w-6" />
+
+		<h1 class="text-2xl font-semibold">Settings</h1>
 	</div>
 
-	<!-- Mobile Header with Horizontal Scrollable Menu -->
-	<div class="flex flex-col pt-6 md:hidden">
-		<div class="border-b border-border/30 pt-4 md:py-4">
-			<!-- Horizontal Scrollable Category Menu with Navigation -->
-			<div class="relative flex items-center" style="scroll-padding: 1rem;">
-				<button
-					class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
-						? 'opacity-100'
-						: 'pointer-events-none opacity-0'}"
-					onclick={scrollLeft}
-					aria-label="Scroll left"
-				>
-					<ChevronLeft class="h-4 w-4" />
-				</button>
+	<div class="flex flex-col overflow-hidden md:flex-row gap-4">
+		<!-- Desktop Sidebar -->
+		<div class="hidden w-64 pt-8 mt-16 md:block">
+			<nav class="space-y-1 py-2">
+				{#each settingSections as section (section.title)}
+					<button
+						class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
+						section.title
+							? 'bg-accent text-accent-foreground'
+							: 'text-muted-foreground'}"
+						onclick={() => (activeSection = section.title)}
+					>
+						<section.icon class="h-4 w-4" />
 
-				<div
-					class="scrollbar-hide overflow-x-auto py-2"
-					bind:this={scrollContainer}
-					onscroll={updateScrollButtons}
-				>
-					<div class="flex min-w-max gap-2">
-						{#each settingSections as section (section.title)}
-							<button
-								class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
-								section.title
-									? 'bg-accent text-accent-foreground'
-									: 'text-muted-foreground'}"
-								onclick={(e: MouseEvent) => {
-									activeSection = section.title;
-									scrollToCenter(e.currentTarget as HTMLElement);
-								}}
-							>
-								<section.icon class="h-4 w-4 flex-shrink-0" />
-								<span>{section.title}</span>
-							</button>
-						{/each}
+						<span class="ml-2">{section.title}</span>
+					</button>
+				{/each}
+			</nav>
+		</div>
+
+		<!-- Mobile Header with Horizontal Scrollable Menu -->
+		<div class="flex flex-col pt-6 md:hidden">
+			<div class="border-b border-border/30 pt-4 md:py-4">
+				<!-- Horizontal Scrollable Category Menu with Navigation -->
+				<div class="relative flex items-center" style="scroll-padding: 1rem;">
+					<button
+						class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
+							? 'opacity-100'
+							: 'pointer-events-none opacity-0'}"
+						onclick={scrollLeft}
+						aria-label="Scroll left"
+					>
+						<ChevronLeft class="h-4 w-4" />
+					</button>
+
+					<div
+						class="scrollbar-hide overflow-x-auto py-2"
+						bind:this={scrollContainer}
+						onscroll={updateScrollButtons}
+					>
+						<div class="flex min-w-max gap-2">
+							{#each settingSections as section (section.title)}
+								<button
+									class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
+									section.title
+										? 'bg-accent text-accent-foreground'
+										: 'text-muted-foreground'}"
+									onclick={(e: MouseEvent) => {
+										activeSection = section.title;
+										scrollToCenter(e.currentTarget as HTMLElement);
+									}}
+								>
+									<section.icon class="h-4 w-4 flex-shrink-0" />
+									<span>{section.title}</span>
+								</button>
+							{/each}
+						</div>
 					</div>
-				</div>
 
-				<button
-					class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
-						? 'opacity-100'
-						: 'pointer-events-none opacity-0'}"
-					onclick={scrollRight}
-					aria-label="Scroll right"
-				>
-					<ChevronRight class="h-4 w-4" />
-				</button>
+					<button
+						class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
+							? 'opacity-100'
+							: 'pointer-events-none opacity-0'}"
+						onclick={scrollRight}
+						aria-label="Scroll right"
+					>
+						<ChevronRight class="h-4 w-4" />
+					</button>
+				</div>
 			</div>
 		</div>
+
+		<ScrollArea class="flex-1 max-w-5xl mx-auto">
+			<div class="space-y-6 p-4 md:p-6 md:mt-20">
+				<div class="grid">
+					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
+						<currentSection.icon class="h-5 w-5" />
+
+						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
+					</div>
+
+					{#if currentSection.fields}
+						<div class="space-y-6">
+							<ChatSettingsFields
+								fields={currentSection.fields}
+								{localConfig}
+								onConfigChange={handleConfigChange}
+								onThemeChange={handleThemeChange}
+							/>
+						</div>
+					{/if}
+				</div>
+
+				<div class="mt-8 border-t border-border/30 pt-6">
+					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+				</div>
+			</div>
+		</ScrollArea>
 	</div>
-
-	<ScrollArea class="max-h-[calc(100dvh-13.5rem)] flex-1 md:max-h-[calc(100vh-13.5rem)]">
-		<div class="space-y-6 p-4 md:p-6">
-			<div class="grid">
-				<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
-					<currentSection.icon class="h-5 w-5" />
-
-					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-				</div>
-
-				{#if currentSection.fields}
-					<div class="space-y-6">
-						<ChatSettingsFields
-							fields={currentSection.fields}
-							{localConfig}
-							onConfigChange={handleConfigChange}
-							onThemeChange={handleThemeChange}
-						/>
-					</div>
-				{/if}
-			</div>
-
-			<div class="mt-8 border-t border-border/30 pt-6">
-				<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
-			</div>
-		</div>
-	</ScrollArea>
 </div>
 
 <ChatSettingsFooter onReset={handleReset} onSave={handleSave} />

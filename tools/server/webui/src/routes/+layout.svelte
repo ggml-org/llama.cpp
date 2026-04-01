@@ -7,7 +7,6 @@
 	import {
 		ChatSidebar,
 		ChatSettings,
-		McpServersSettings,
 		McpLogo,
 		DialogConversationTitleUpdate,
 		DialogChatSettingsImportExport
@@ -26,12 +25,12 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import type { SettingsSectionTitle } from '$lib/constants';
+	// import type { SettingsSectionTitle } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import {
-		setChatSettingsDialogContext,
-		setMcpServersDialogContext,
+		// setChatSettingsDialogContext,
+		// setMcpServersDialogContext,
 		setImportExportDialogContext
 	} from '$lib/contexts';
 
@@ -58,24 +57,24 @@
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
-	let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
+	// let chatSettingsInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
 	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
 
-	setChatSettingsDialogContext({
-		open: (initialSection?: SettingsSectionTitle) => {
-			chatSettingsInitialSection = initialSection;
-			activePanel = 'settings';
-		},
-		isActive: () => activePanel === 'settings'
-	});
+	// setChatSettingsDialogContext({
+	// 	open: (initialSection?: SettingsSectionTitle) => {
+	// 		chatSettingsInitialSection = initialSection;
+	// 		activePanel = 'settings';
+	// 	},
+	// 	isActive: () => activePanel === 'settings'
+	// });
 
-	setMcpServersDialogContext({
-		open: () => {
-			activePanel = 'mcp';
-		},
-		isActive: () => activePanel === 'mcp'
-	});
+	// setMcpServersDialogContext({
+	// 	open: () => {
+	// 		activePanel = 'mcp';
+	// 	},
+	// 	isActive: () => activePanel === 'mcp'
+	// });
 
 	setImportExportDialogContext({
 		open: () => {
@@ -288,14 +287,14 @@
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
 				<Sidebar.Trigger
 					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-						? 'md:left-[var(--sidebar-width)]'
+						? 'md:left-[calc(var(--sidebar-width)+0.75rem)]'
 						: 'md:left-0!'}"
 					style="translate: 1rem 1rem;"
 				/>
 			{/if}
 
 			{#if !sidebarOpen}
-				<div class="absolute bottom-0 left-0 z-[900] flex flex-col gap-1 p-2">
+				<div class="absolute bottom-3 left-3 z-[900] flex flex-col gap-1 p-2">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -316,18 +315,7 @@
 			{/if}
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
-				{#if activePanel === 'settings'}
-					<ChatSettings
-						bind:this={chatSettingsRef}
-						onSave={() => (activePanel = 'chat')}
-						initialSection={chatSettingsInitialSection}
-						class="mx-auto h-full p-8!"
-					/>
-				{:else if activePanel === 'mcp'}
-					<McpServersSettings class="mx-auto w-full p-8! md:translate-x-1.5" />
-				{:else}
-					{@render children?.()}
-				{/if}
+				{@render children?.()}
 			</Sidebar.Inset>
 		</div>
 	</Sidebar.Provider>

@@ -2,13 +2,14 @@
 	import { Settings } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { McpLogo } from '$lib/components/app';
-	import { getChatSettingsDialogContext, getMcpServersDialogContext } from '$lib/contexts';
+	// import { getChatSettingsDialogContext, getMcpServersDialogContext } from '$lib/contexts';
+	import { page } from '$app/state';
 
-	const chatSettingsDialog = getChatSettingsDialogContext();
-	const mcpServersDialog = getMcpServersDialogContext();
+	// const chatSettingsDialog = getChatSettingsDialogContext();
+	// const mcpServersDialog = getMcpServersDialogContext();
 
-	let isMcpActive = $derived(mcpServersDialog.isActive());
-	let isSettingsActive = $derived(chatSettingsDialog.isActive());
+	let isMcpActive = $derived(page.route.id === '/settings/mcp');
+	let isSettingsActive = $derived(page.route.id === '/settings/chat');
 </script>
 
 <div class="space-y-1 pt-0">
@@ -16,9 +17,7 @@
 		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isMcpActive
 			? 'bg-accent text-accent-foreground'
 			: ''}"
-		onclick={() => {
-			mcpServersDialog.open();
-		}}
+		href="#/settings/mcp"
 		variant="ghost"
 	>
 		<div class="flex items-center gap-2">
@@ -32,9 +31,7 @@
 		class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive
 			? 'bg-accent text-accent-foreground'
 			: ''}"
-		onclick={() => {
-			chatSettingsDialog.open();
-		}}
+		href="#/settings/chat"
 		variant="ghost"
 	>
 		<div class="flex items-center gap-2">

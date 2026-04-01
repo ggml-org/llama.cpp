@@ -29,7 +29,7 @@
 	}
 </script>
 
-<div class="flex justify-between border-t border-border/30 p-6">
+<div class="flex justify-between p-6">
 	<div class="flex gap-2">
 		<Button variant="outline" onclick={handleResetClick}>
 			<RotateCcw class="h-3 w-3" />

@@ -1,23 +1,23 @@
 <script lang="ts">
-	import { Database, Search, SquarePen, X } from '@lucide/svelte';
+	import { Database, Search, SquarePen } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import { SearchInput } from '$lib/components/app';
 	import { getImportExportDialogContext } from '$lib/contexts';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
 		isSearchModeActive: boolean;
 		searchQuery: string;
+		isCancelAlwaysVisible?: boolean;
 	}
 
 	let {
 		handleMobileSidebarItemClick,
 		isSearchModeActive = $bindable(),
-		searchQuery = $bindable()
+		searchQuery = $bindable(),
+		isCancelAlwaysVisible = false
 	}: Props = $props();
-
-	let searchInput: HTMLInputElement | null = $state(null);
 
 	const importExportDialog = getImportExportDialogContext();
 
@@ -25,32 +25,17 @@
 		isSearchModeActive = false;
 		searchQuery = '';
 	}
-
-	$effect(() => {
-		if (isSearchModeActive) {
-			searchInput?.focus();
-		}
-	});
 </script>
 
 <div class="my-1 space-y-1">
 	{#if isSearchModeActive}
-		<div class="relative">
-			<Search class="absolute top-2.5 left-2 h-4 w-4 text-muted-foreground" />
-
-			<Input
-				bind:ref={searchInput}
-				bind:value={searchQuery}
-				onkeydown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
-				placeholder="Search conversations..."
-				class="pl-8"
-			/>
-
-			<X
-				class="cursor-pointertext-muted-foreground absolute top-2.5 right-2 h-4 w-4"
-				onclick={handleSearchModeDeactivate}
-			/>
-		</div>
+		<SearchInput
+			bind:value={searchQuery}
+			onClose={handleSearchModeDeactivate}
+			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
+			placeholder="Search conversations..."
+			isCancelAlwaysVisible={isCancelAlwaysVisible}
+		/>
 	{:else}
 		<Button
 			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
