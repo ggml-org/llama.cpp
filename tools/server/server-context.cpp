@@ -860,9 +860,14 @@ private:
 
         slots.clear();
 
-        const bool can_spec = common_speculative_is_compat(ctx);
-        if (!can_spec) {
-            SRV_WRN("%s", "speculative decoding not supported by this context without checkpoints\n");
+        const auto spec_type = common_speculative_is_compat(ctx);
+        if (spec_type == COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
+        if (spec_type == COMMON_SPECULATIVE_COMPAT_TYPE_CKPT) {
+            SRV_WRN("%s", "speculative decoding will use checkpoints\n");
+            params_base.speculative.use_checkpoints = true;
         }
 
         // initialize slots
@@ -881,7 +886,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            if (can_spec || params_base.speculative.use_checkpoints) {
+            if (spec_type != COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
                 if (mctx) {
                     SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                     return false;

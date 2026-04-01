@@ -326,7 +326,6 @@ struct common_params_speculative {
     uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
     bool     use_checkpoints  =  false; // use checkpoints to rewind in token history of recurrent models
 
-
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
     std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT

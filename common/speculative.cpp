@@ -910,13 +910,13 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
     return it->second;
 }
 
-bool common_speculative_is_compat(llama_context * ctx_tgt) {
+common_speculative_compat_type common_speculative_is_compat(llama_context * ctx_tgt) {
     auto * mem = llama_get_memory(ctx_tgt);
     if (mem == nullptr) {
-        return false;
+        return COMMON_SPECULATIVE_COMPAT_TYPE_NO;
     }
 
-    bool res = true;
+    common_speculative_compat_type res = COMMON_SPECULATIVE_COMPAT_TYPE_FULL;
 
     llama_memory_clear(mem, true);
 
@@ -928,14 +928,14 @@ bool common_speculative_is_compat(llama_context * ctx_tgt) {
     int ret = llama_decode(ctx_tgt, llama_batch_get_one(tmp.data(), tmp.size()));
     if (ret != 0) {
         LOG_ERR("%s: llama_decode() failed: %d\n", __func__, ret);
-        res = false;
+        res = COMMON_SPECULATIVE_COMPAT_TYPE_NO;
         goto done;
     }
 
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
-        res = false;
+        res = COMMON_SPECULATIVE_COMPAT_TYPE_CKPT;
         goto done;
     }
 
@@ -1262,7 +1262,6 @@ struct common_speculative_session::impl {
             if (draft.empty()) {
                 // switch to non-draft inference
                 LOG_DBG("%s: draft of length 0 after denied checkpoint\n", __func__);
-                clear_draft();
                 return draft;
             }
             // we use the shortened draft of previous speculation
