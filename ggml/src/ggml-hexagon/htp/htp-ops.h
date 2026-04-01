@@ -23,7 +23,7 @@ struct htp_ops_context {
     struct htp_context * ctx;
 
     enum htp_op_code op; // FIXME: rename to opcode
-    int32_t          op_params[HTP_OP_MAX_PARAMS / sizeof(int32_t)];
+    int32_t          op_params[HTP_OP_MAX_PARAMS];
 
     // FIXME: redo these as an array
     struct htp_tensor src0;

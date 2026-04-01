@@ -2338,13 +2338,16 @@ struct op_request_batch {
     struct {   // staging buffer
         htp_general_req req;
         htp_op_buf      op_bufs[HTP_OP_MAX_BUFS];
+        htp_tensor      op_tens[HTP_OP_MAX_TENSORS];
         htp_op_req      op_reqs[HTP_OP_MAX_REQS];
     } op_stage;
 
     htp_op_buf *op_bufs;
     htp_op_req *op_reqs;
+    htp_tensor *op_tens;
 
     unsigned int n_bufs;
+    unsigned int n_tens;
     unsigned int n_ops;
 
     unsigned int n_reqs_max;
@@ -2355,11 +2358,13 @@ struct op_request_batch {
         memset((void *) &op_stage, 0, sizeof(op_stage));
 
         op_bufs = op_stage.op_bufs;
+        op_tens = op_stage.op_tens;
         op_reqs = op_stage.op_reqs;
 
         prev_op = nullptr;
 
         n_bufs = 0;
+        n_tens = 0;
         n_ops  = 0;
     }
 

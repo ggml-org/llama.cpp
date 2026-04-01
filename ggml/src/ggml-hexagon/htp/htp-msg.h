@@ -79,9 +79,10 @@ enum htp_op_code {
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
-#define HTP_OP_MAX_PARAMS  64   // ala GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS 
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    128
+#define HTP_OP_MAX_REQS    (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
 
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
@@ -112,18 +113,20 @@ enum htp_op_flags {
 };
 
 struct htp_op_req {
-    struct htp_tensor src[HTP_OP_MAX_INPUTS]; // Input tensors
-    struct htp_tensor dst;                    // Output tensor
-    uint32_t          opcode; // GGML/HTP Op
-    uint32_t          flags;  // OPFLAGS
-    int32_t           params[HTP_OP_MAX_PARAMS / sizeof(int32_t)]; // Params for the op, e.g. epsilon of RMS norm
+    uint32_t opcode; // GGML/HTP Op
+    uint32_t flags;  // OPFLAGS
+    int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
+    uint16_t dst;                       // Output tensor index
 };
 
 struct htp_general_req {
-    uint32_t n_bufs;       // Number of buffers
-    uint32_t n_ops;        // Number of ops
-    // struct htp_op_buf  bufs[0];
-    // struct htp_op_req  ops[0];
+    uint16_t n_bufs;     // Number of buffers
+    uint16_t n_tensors;  // Number of tensors
+    uint16_t n_ops;      // Number of ops
+    // struct htp_op_buf bufs[0];
+    // struct htp_tensor tensors[0];
+    // struct htp_op_req ops[0];
 };
 
 struct htp_general_rsp {
