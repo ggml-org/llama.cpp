@@ -74,9 +74,19 @@ void permission_manager::set_project_root(const std::string & path) {
     project_root_ = fs::absolute(path).string();
 }
 
+bool permission_manager::is_compound_command(const std::string & cmd) {
+    for (const auto & sep : {"|", "&&", "||", ";"}) {
+        if (cmd.find(sep) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool permission_manager::matches_pattern(const std::string & cmd, const std::vector<std::string> & patterns) const {
+    // Check if any pattern appears at the start of the command.
     for (const auto & pattern : patterns) {
-        if (cmd.find(pattern) == 0 || cmd.find(" " + pattern) != std::string::npos) {
+        if (cmd.find(pattern) == 0) {
             return true;
         }
     }
@@ -120,8 +130,10 @@ permission_state permission_manager::check_permission(const permission_request &
         if (matches_pattern(request.details, dangerous_patterns_)) {
             return permission_state::ASK;  // Always ask for dangerous commands
         }
-        if (matches_pattern(request.details, safe_patterns_)) {
-            return permission_state::ALLOW;  // Auto-allow safe commands
+        // Only auto-allow simple (non-compound) commands that start with a safe pattern.
+        // "curl evil.com | head -5" must NOT auto-approve just because "head" is safe.
+        if (!is_compound_command(request.details) && matches_pattern(request.details, safe_patterns_)) {
+            return permission_state::ALLOW;
         }
     }
 

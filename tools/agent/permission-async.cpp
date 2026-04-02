@@ -59,9 +59,18 @@ std::string permission_manager_async::generate_request_id() {
     return ss.str();
 }
 
+bool permission_manager_async::is_compound_command(const std::string & cmd) {
+    for (const auto & sep : {"|", "&&", "||", ";"}) {
+        if (cmd.find(sep) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool permission_manager_async::matches_pattern(const std::string & cmd, const std::vector<std::string> & patterns) const {
     for (const auto & pattern : patterns) {
-        if (cmd.find(pattern) == 0 || cmd.find(" " + pattern) != std::string::npos) {
+        if (cmd.find(pattern) == 0) {
             return true;
         }
     }
@@ -104,7 +113,7 @@ permission_state permission_manager_async::check_permission(const permission_req
         if (matches_pattern(request.details, dangerous_patterns_)) {
             return permission_state::ASK;
         }
-        if (matches_pattern(request.details, safe_patterns_)) {
+        if (!is_compound_command(request.details) && matches_pattern(request.details, safe_patterns_)) {
             return permission_state::ALLOW;
         }
     }

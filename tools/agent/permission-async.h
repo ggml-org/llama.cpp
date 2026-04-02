@@ -141,6 +141,7 @@ private:
     permission_callback callback_;
 
     // Helper functions
+    bool is_compound_command(const std::string & cmd);
     bool matches_pattern(const std::string & cmd, const std::vector<std::string> & patterns) const;
     bool is_path_in_project(const std::string & path) const;
     std::string generate_request_id();
