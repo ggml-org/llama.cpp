@@ -179,7 +179,7 @@
 			/>
 		</Sidebar.Header>
 
-		<Sidebar.Group class="mt-2 space-y-2 p-0 px-3">
+		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
 			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 				<Sidebar.GroupLabel>
 					{isSearchModeActive ? 'Search results' : 'Conversations'}

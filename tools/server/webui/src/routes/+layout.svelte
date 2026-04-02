@@ -7,12 +7,10 @@
 	import {
 		ChatSidebar,
 		ChatSettings,
-		McpLogo,
+		DesktopIconStrip,
 		DialogConversationTitleUpdate,
 		DialogChatSettingsImportExport
 	} from '$lib/components/app';
-	import { Database, Settings, Search, SquarePen } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -46,9 +44,6 @@
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
-	let isMcpActive = $derived(page.route.id === '/settings/mcp');
-	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
-	let isSettingsActive = $derived(page.route.id === '/settings/chat');
 	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 	let chatSettingsRef: ChatSettings | undefined = $state();
 	let importExportDialogOpen = $state(false);
@@ -255,62 +250,15 @@
 			{/if}
 
 			{#if isDesktop && !alwaysShowSidebarOnDesktop}
-				<!-- Desktop: icon strip, always rendered, transitions width/opacity -->
-				<aside
-					class="hidden shrink-0 flex-col items-center justify-between overflow-hidden py-3 transition-[width,opacity] duration-200 ease-linear md:flex {sidebarOpen
-						? 'pointer-events-none w-0 opacity-0'
-						: 'w-[calc(var(--sidebar-width-icon)+1.5rem)] opacity-100'}"
-				>
-					<div class="mt-12 flex flex-col items-center gap-1">
-						<Button variant="ghost" size="icon-lg" class="rounded-full" href="?new_chat=true#/">
-							<SquarePen class="h-4 w-4" />
-							<span class="sr-only">New Chat</span>
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon-lg"
-							class="rounded-full"
-							onclick={() => {
-								if (chatSidebar?.activateSearchMode) {
-									chatSidebar.activateSearchMode();
-								}
-								sidebarOpen = true;
-							}}
-						>
-							<Search class="h-4 w-4" />
-							<span class="sr-only">Search</span>
-						</Button>
-					</div>
-					<div class="flex flex-col items-center gap-1">
-						<Button
-							variant="ghost"
-							size="icon-lg"
-							href="#/settings/mcp"
-							class="rounded-full {isMcpActive ? 'bg-accent text-accent-foreground' : ''}"
-						>
-							<McpLogo class="h-4 w-4" />
-							<span class="sr-only">MCP Servers</span>
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon-lg"
-							href="#/settings/import-export"
-							class="rounded-full {isImportExportActive ? 'bg-accent text-accent-foreground' : ''}"
-						>
-							<Database class="h-4 w-4" />
-							<span class="sr-only">Import / Export</span>
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon-lg"
-							href="#/settings/chat"
-							class="rounded-full {isSettingsActive ? 'bg-accent text-accent-foreground' : ''}"
-						>
-							<Settings class="h-4 w-4" />
-							<span class="sr-only">Settings</span>
-						</Button>
-					</div>
-				</aside>
+				<DesktopIconStrip
+					{sidebarOpen}
+					onSearchClick={() => {
+						if (chatSidebar?.activateSearchMode) {
+							chatSidebar.activateSearchMode();
+						}
+						sidebarOpen = true;
+					}}
+				/>
 			{/if}
 
 			<Sidebar.Inset class="flex flex-1 flex-col overflow-auto">
