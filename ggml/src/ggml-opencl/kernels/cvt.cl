@@ -660,7 +660,7 @@ kernel void kernel_convert_block_q6_K(
 #define K_SCALE_SIZE_4K     12
 #define QK_K_HALF           128  // QK_K/2
 
-kernel void kernel_convert_block_q4_K(
+kernel void kernel_convert_block_q4_K_flat(
     global uchar * src0,
     global half  * dst_d,
     global half  * dst_dmin,
@@ -689,7 +689,7 @@ kernel void kernel_convert_block_q4_K(
 // Convert block_q4_K SOA -> AOS (reconstruct original struct layout).
 // Each thread processes one super block.
 //------------------------------------------------------------------------------
-kernel void kernel_restore_block_q4_K(
+kernel void kernel_restore_block_q4_K_flat(
     global half  * src_d,
     global half  * src_dmin,
     global uchar * src_scales,
