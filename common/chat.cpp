@@ -1709,7 +1709,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
         data.generation_prompt         = params.generation_prompt;
         auto parser                    = build_chat_peg_parser([&params](common_chat_peg_builder &p) {
-            return p.prefix(params.generation_prompt) + p.content(p.rest());
+            return p.prefix(params.generation_prompt) << p.content(p.rest());
         });
         data.parser                    = parser.save();
         return data;

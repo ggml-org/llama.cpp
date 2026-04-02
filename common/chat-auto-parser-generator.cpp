@@ -100,6 +100,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
 
         bool has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+        bool pure_content        = reasoning.mode == reasoning_mode::NONE;
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
@@ -107,12 +108,14 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
             }) + p.end();
+            pure_content = false;
         } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
             parser = tools.build_parser(ctx);
+            pure_content = false;
         } else {
             parser = content.build_parser(ctx);
         }
-        return p.prefix(inputs.generation_prompt, reasoning.start) + parser;
+        return pure_content ? p.prefix(inputs.generation_prompt, reasoning.start) + parser : p.prefix(inputs.generation_prompt, reasoning.start) << parser;
     });
 }
 
