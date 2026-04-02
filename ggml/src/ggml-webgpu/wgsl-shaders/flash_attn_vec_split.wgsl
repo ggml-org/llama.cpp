@@ -371,7 +371,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   let kv_idx = kv_base + ty;
                   var partial_sum: f32 = 0.0;
                   let kv_valid = kv_idx < KV_TILE && (kv_tile + kv_idx) < params.seq_len_kv;
-                  
                   if (kv_valid) {
                     for (var i = tx; i < (HEAD_DIM_QK / 4u); i += num_of_threads) {
                         let q_off = local_q_row_offset + i * 4u;
