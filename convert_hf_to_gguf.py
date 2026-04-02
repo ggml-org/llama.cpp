@@ -2630,6 +2630,130 @@ class FalconModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("FalconOCRForCausalLM")
+class FalconOCRModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.FALCON_OCR
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        self.gguf_writer.add_context_length(hparams["max_seq_len"])
+        self.gguf_writer.add_feed_forward_length(hparams["ffn_dim"])
+
+        # head_dim (64) differs from n_embd/n_heads (768/16=48)
+        self.gguf_writer.add_key_length(hparams["head_dim"])
+        self.gguf_writer.add_value_length(hparams["head_dim"])
+
+        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("norm_eps", 1e-5))
+        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10000))
+        self.gguf_writer.add_rope_dimension_count(hparams["head_dim"] // 2)
+        self.gguf_writer.add_add_bos_token(False)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "img_projector" in name:
+            return
+
+        if name == "freqs_cis_golden":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS_GOLDEN), data_torch)
+            return
+
+        # Split fused QKV into separate Q, K, V
+        if "attention.wqkv" in name:
+            n_heads = self.hparams["n_heads"]
+            n_kv_heads = self.hparams["n_kv_heads"]
+            head_dim = self.hparams["head_dim"]
+            q_dim = n_heads * head_dim      # 16 * 64 = 1024
+            kv_dim = n_kv_heads * head_dim  # 8 * 64 = 512
+            q, k, v = data_torch.split([q_dim, kv_dim, kv_dim], dim=0)
+            yield from super().modify_tensors(q, name.replace("wqkv", "wq"), bid)
+            yield from super().modify_tensors(k, name.replace("wqkv", "wk"), bid)
+            yield from super().modify_tensors(v, name.replace("wqkv", "wv"), bid)
+            return
+
+        # Deinterleave fused w13 into separate gate (even rows) and up (odd rows)
+        if "feed_forward.w13" in name:
+            gate = data_torch[0::2, :]
+            up = data_torch[1::2, :]
+            yield from super().modify_tensors(gate, name.replace("w13", "w1"), bid)
+            yield from super().modify_tensors(up, name.replace("w13", "w3"), bid)
+            return
+
+        # Unfused w1 needs sqrt(2) scaling to match reference numerics
+        if "feed_forward.w1" in name:
+            data_torch = data_torch * math.sqrt(2.0)
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("FalconOCRForCausalLM")
+class FalconOCRMmprojModel(MmprojModel):
+    has_vision_encoder = True
+
+    def __init__(self, dir_model: Path, *args, **kwargs):
+        # Inject synthetic vision_config / text_config for MmprojModel base class
+        hparams = ModelBase.load_hparams(dir_model, False)
+        hparams["text_config"] = {"hidden_size": hparams["dim"]}
+        hparams["vision_config"] = {
+            "hidden_size": hparams["dim"],
+            "patch_size": hparams["spatial_patch_size"],
+            "image_size": 1024,
+            "intermediate_size": hparams["dim"],
+            "num_attention_heads": 1,
+            "num_hidden_layers": 0,
+        }
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+    def set_gguf_parameters(self):
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_clip_has_vision_encoder(True)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.FALCON_OCR)
+        self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
+        self.gguf_writer.add_vision_patch_size(self.global_config["spatial_patch_size"])
+        self.gguf_writer.add_vision_image_size(1024)
+        self.gguf_writer.add_vision_embedding_length(self.global_config["dim"])
+        self.gguf_writer.add_vision_image_mean([0.5, 0.5, 0.5])
+        self.gguf_writer.add_vision_image_std([0.5, 0.5, 0.5])
+        self.gguf_writer.add_vision_min_pixels(64 * 64)
+        self.gguf_writer.add_vision_max_pixels(1024 * 1024)
+        self.gguf_writer.add_vision_head_count(1)
+        self.gguf_writer.add_vision_feed_forward_length(1)
+        self.gguf_writer.add_vision_block_count(0)
+        self.gguf_writer.add_vision_attention_layernorm_eps(1e-5)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "img_projector.weight":
+            # The HF linear weight [n_embd, patch_dim] has patch_dim = H*W*C with C
+            # fastest (from einops rearrange). Rearrange to PyTorch conv2d format
+            # [C_out, C_in, kH, kW] so ggml_conv_2d can use it directly.  The planar
+            # image data fed to ggml matches this convention.
+            ps = self.global_config["spatial_patch_size"]   # 16
+            ch = self.global_config["channel_size"]         # 3
+            n_embd = data_torch.shape[0]
+            w = data_torch.reshape(n_embd, ps, ps, ch)     # [n_embd, H, W, C]
+            w = w.permute(0, 3, 1, 2).contiguous()         # [n_embd, C, H, W]
+            w = w.reshape(data_torch.shape)                 # flatten back to 2-D
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, bid=0), w)
+            return
+
+        if name == "tok_embeddings.weight":
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+            prefix_str = "<|image_cls|><|image_reg_1|><|image_reg_2|><|image_reg_3|><|image_reg_4|>"
+            ids = tokenizer.encode(prefix_str, add_special_tokens=False)
+            prefix_embd = data_torch[ids].contiguous()
+            logger.info(f"Extracted {len(ids)} prefix embeddings (token IDs: {ids})")
+            yield ("v.prefix_embd", prefix_embd)
+            return
+
+        return
+
+
 @ModelBase.register("GPTBigCodeForCausalLM")
 class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER

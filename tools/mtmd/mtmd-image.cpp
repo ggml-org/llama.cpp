@@ -1115,6 +1115,71 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
 }
 
 //
+// mtmd_image_preprocessor_falcon_ocr
+//
+
+bool mtmd_image_preprocessor_falcon_ocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+    // Two-step resize: fit dims into [min_dim, max_dim], then align to patch multiples
+    const int max_dim = hparams.image_size;
+    const int min_dim = (int)std::sqrt((float)hparams.image_min_pixels);
+    const int ps      = hparams.patch_size;
+
+    // Step 1: resize_image_if_necessary(img, min_dim, max_dim)
+    const float aspect = (float)img.nx / (float)img.ny;
+    int new_w = img.nx;
+    int new_h = img.ny;
+
+    if (min_dim <= new_w && new_w <= max_dim &&
+        min_dim <= new_h && new_h <= max_dim) {
+        // fits, no resize needed
+    } else {
+        const bool is_vertical = new_w < new_h;
+        if (new_w < min_dim || new_h < min_dim) {
+            if (is_vertical) {
+                new_w = min_dim;
+                new_h = (int)(new_w / aspect);
+            } else {
+                new_h = min_dim;
+                new_w = (int)(new_h * aspect);
+            }
+        } else {
+            if (is_vertical) {
+                new_w = max_dim;
+                new_h = (int)(new_w / aspect);
+            } else {
+                new_h = max_dim;
+                new_w = (int)(new_h * aspect);
+            }
+        }
+        if (new_w > max_dim) {
+            new_w = max_dim;
+            new_h = (int)(new_w / aspect);
+        }
+        if (new_h > max_dim) {
+            new_h = max_dim;
+            new_w = (int)(new_h * aspect);
+        }
+    }
+    clip_image_u8 intermediate;
+    const clip_image_size intermediate_size = {new_w, new_h};
+    img_tool::resize(img, intermediate, intermediate_size, RESIZE_ALGO_BICUBIC, false);
+
+    // Step 2: align to patch multiples, enforce pixel budget
+    GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
+    const clip_image_size final_size = img_tool::calc_size_preserved_ratio(
+        intermediate_size, ps,
+        hparams.image_min_pixels, hparams.image_max_pixels);
+
+    clip_image_u8 resized;
+    img_tool::resize(intermediate, resized, final_size, RESIZE_ALGO_BICUBIC, false);
+
+    clip_image_f32_ptr img_f32(clip_image_f32_init());
+    img_u8_to_f32(resized, *img_f32, hparams.image_mean, hparams.image_std);
+    output.entries.push_back(std::move(img_f32));
+    return true;
+}
+
+//
 // mtmd_image_preprocessor_youtuvl
 //
 

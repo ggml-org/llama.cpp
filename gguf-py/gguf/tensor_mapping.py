@@ -118,6 +118,10 @@ class TensorNameMap:
             "rotary_pos_emb.inv_freq",  # chatglm
         ),
 
+        MODEL_TENSOR.ROPE_FREQS_GOLDEN: (
+            "freqs_cis_golden",  # falcon-ocr: learned 2D golden-ratio RoPE freqs [H, F, P=2]
+        ),
+
         MODEL_TENSOR.ROPE_FACTORS_LONG: (),
         MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
 
@@ -354,9 +358,14 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.rotary_emb.inv_freq",            # codeshell
         ),
 
+        # Per-head attention sink bias — used for post-attention output gating.
+        # In Falcon OCR, each layer has a learned sinks vector [n_heads] that
+        # gates the attention output: out = sigmoid(LSE - sinks) * attn_out,
+        # where LSE is the log-sum-exp of attention logits.
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.sinks", # openai-moe
             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
+            "layers.{bid}.attention.sinks", # falcon_ocr
         ),
 
         MODEL_TENSOR.ATTN_GATE: (

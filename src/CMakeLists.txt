@@ -68,6 +68,7 @@ add_library(llama
             models/exaone4.cpp
             models/falcon-h1.cpp
             models/falcon.cpp
+            models/falcon_ocr.cpp
             models/gemma-embedding.cpp
             models/gemma.cpp
             models/gemma2-iswa.cpp

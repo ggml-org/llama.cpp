@@ -176,6 +176,49 @@ struct decode_embd_batch {
         }
     }
 
+    // Spatial 3D RoPE: constant temporal position, 2D golden-ratio spatial positions
+    // stored as fixed-point int32 with scale factor 1e6.
+    static constexpr int32_t SPATIAL_3D_POS_SCALE = 1000000;
+
+    // Packed into 4D M-RoPE layout: [temporal, h, w, 0].
+    // n_prefix leading tokens get non-spatial positions (e.g. cls+regs).
+    void set_position_spatial_3d(llama_pos pos_0, int nx, int ny, llama_seq_id seq_id, int n_prefix = 0) {
+        GGML_ASSERT(n_pos_per_embd == 4);
+        seq_id_0[0] = seq_id;
+
+        const int n_total = batch.n_tokens;
+        const float xlim = sqrtf((float)nx / (float)ny);
+        const float ylim = sqrtf((float)ny / (float)nx);
+
+        for (int i = 0; i < n_prefix; i++) {
+            pos[i            ] = pos_0;
+            pos[i + n_total  ] = 0;
+            pos[i + n_total*2] = 0;
+            pos[i + n_total*3] = 0;
+        }
+
+        for (int y = 0; y < ny; y++) {
+            const float h_pos = (ny > 1)
+                ? -ylim + y * (2.0f * ylim) / (ny - 1)
+                : 0.0f;
+            for (int x = 0; x < nx; x++) {
+                const float w_pos = (nx > 1)
+                    ? -xlim + x * (2.0f * xlim) / (nx - 1)
+                    : 0.0f;
+                int i = n_prefix + y * nx + x;
+                pos[i            ] = pos_0;
+                pos[i + n_total  ] = (llama_pos)(h_pos * SPATIAL_3D_POS_SCALE);
+                pos[i + n_total*2] = (llama_pos)(w_pos * SPATIAL_3D_POS_SCALE);
+                pos[i + n_total*3] = 0;
+            }
+        }
+        for (int i = 0; i < n_total; i++) {
+            batch.n_seq_id[i] = 1;
+            batch.seq_id  [i] = seq_id_0.data();
+            batch.logits  [i] = false;
+        }
+    }
+
     // M-RoPE for audio
     void set_position_mrope_1d(llama_pos pos_0, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
@@ -248,7 +291,9 @@ int32_t mtmd_helper_decode_image_chunk(
 
     const llama_model * model = llama_get_model(lctx);
     int n_mmproj_embd = llama_model_n_embd_inp(model);
-    int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
+
+    int n_pos_per_embd = (mtmd_decode_use_mrope(ctx) || mtmd_decode_use_spatial_3d_rope(ctx)) ? 4
+                       : 1;
 
     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
     int32_t i_batch = 0;
@@ -269,6 +314,20 @@ int32_t mtmd_helper_decode_image_chunk(
             batch_embd.set_position_mrope_1d(n_past, seq_id);
         } else {
             GGML_ABORT("invalid chunk type for M-RoPE");
+        }
+    } else if (mtmd_decode_use_spatial_3d_rope(ctx)) {
+        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+            if (!image_tokens) {
+                LOG_ERR("failed to decode chunk: image tokens are null\n");
+                return -1;
+            }
+            const int nx = mtmd_image_tokens_get_nx(image_tokens);
+            const int ny = mtmd_image_tokens_get_ny(image_tokens);
+            const int n_prefix = (int)mtmd_image_tokens_get_n_prefix(image_tokens);
+            batch_embd.set_position_spatial_3d(n_past, nx, ny, seq_id, n_prefix);
+        } else {
+            GGML_ABORT("invalid chunk type for Falcon 3D RoPE");
         }
     } else {
         batch_embd.set_position_normal(n_past, seq_id);
