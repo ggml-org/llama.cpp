@@ -321,6 +321,42 @@ public:
     const llama_kv_cache_context * mctx;
 };
 
+// KV cache input with additional per-head sparse attention mask (ruGPT3XL)
+class llm_graph_input_attn_kv_sparse : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_kv_sparse(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_kv_cache_context * mctx) :
+        hparams(hparams),
+        cparams(cparams),
+        mctx(mctx) {
+    }
+    ~llm_graph_input_attn_kv_sparse() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * get_k_idxs() const { return self_k_idxs; }
+    ggml_tensor * get_v_idxs() const { return self_v_idxs; }
+
+    ggml_tensor * get_kq_mask()        const { return self_kq_mask_cnv; }
+    ggml_tensor * get_kq_mask_sparse() const { return self_kq_mask_sparse; }
+
+    ggml_tensor * self_k_idxs = nullptr;
+    ggml_tensor * self_v_idxs = nullptr;
+
+    ggml_tensor * self_kq_mask         = nullptr; // F32 [n_kv, n_batch/n_stream, 1,      n_stream]
+    ggml_tensor * self_kq_mask_cnv     = nullptr;
+    ggml_tensor * self_kq_mask_sparse  = nullptr; // F32 [n_kv, n_batch/n_stream, n_head, n_stream]
+
+    const llama_hparams hparams;
+    const llama_cparams cparams;
+
+    const llama_kv_cache_context * mctx;
+};
+
 // V-less input for the KV cache
 // ref: https://github.com/ggml-org/llama.cpp/pull/19067
 class llm_graph_input_attn_k : public llm_graph_input_i {
@@ -911,6 +947,28 @@ struct llm_graph_context {
             ggml_tensor * kq_b,
             ggml_tensor * sinks, // [n_head_q]
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v] // TODO: remove
+                  float   kq_scale,
+                    int   il) const;
+
+    llm_graph_input_attn_kv_sparse * build_attn_inp_kv_sparse() const;
+
+    ggml_tensor * build_attn_sparse(
+            llm_graph_input_attn_kv_sparse * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur,
+            ggml_tensor * k_cur,
+            ggml_tensor * v_cur,
+                  float   kq_scale,
+                    int   il) const;
+
+    ggml_tensor * build_attn_dense(
+            llm_graph_input_attn_kv_sparse * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur,
+            ggml_tensor * k_cur,
+            ggml_tensor * v_cur,
                   float   kq_scale,
                     int   il) const;
 

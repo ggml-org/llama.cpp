@@ -1632,6 +1632,106 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     //LLAMA_LOG_ERROR("%s: kq mask time: %0.3f ms\n", __func__, (t_end - t_start)/1000.0);
 }
 
+void llama_kv_cache::set_input_kq_mask_sparse(ggml_tensor * dst, const llama_ubatch * ubatch, const llama_hparams & hp) const {
+    const uint32_t block_size          = hp.sparse_block_size;
+    const uint32_t num_local_blocks    = hp.sparse_num_local_blocks;
+    const uint32_t num_global_blocks   = hp.sparse_num_global_blocks;
+    const uint32_t num_global_patterns = hp.sparse_num_global_patterns;
+    const uint32_t n_head_val          = hp.n_head();
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+
+    float * data = (float *) dst->data;
+
+    if (block_size == 0 || num_local_blocks == 0) {
+        memset(data, 0, ggml_nbytes(dst));
+        return;
+    }
+
+    // dst shape: [n_kv, n_tokens_per_stream, n_head, n_stream]
+    const int64_t n_kv_t   = dst->ne[0];
+    const int64_t n_tps    = dst->ne[1];
+    const int64_t n_head_t = dst->ne[2];
+    const int64_t n_strm   = dst->ne[3];
+
+    GGML_ASSERT(n_head_t == (int64_t) n_head_val);
+    GGML_ASSERT(n_strm == (int64_t) n_stream);
+
+    const uint32_t total_blocks     = hp.n_ctx_train / block_size;
+    const uint32_t regular_end      = total_blocks - (total_blocks % num_local_blocks);
+
+    for (int64_t s = 0; s < n_strm; ++s) {
+        const auto & cells = v_cells[seq_to_stream.empty() ? 0 : s];
+
+        for (int64_t it = 0; it < n_tps; ++it) {
+            const uint32_t i_token = (uint32_t)(s * n_tps + it);
+            if (i_token >= ubatch->n_tokens) break;
+
+            const llama_pos    p1     = ubatch->pos[i_token];
+            const llama_seq_id seq_id = ubatch->seq_id[i_token][0];
+            const uint32_t     q_blk  = (uint32_t) p1 / block_size;
+            const uint32_t     q_win  = q_blk / num_local_blocks;
+
+            for (int64_t h = 0; h < n_head_t; ++h) {
+                const int32_t first_global = (int32_t) num_local_blocks
+                    - (int32_t)(1 + h % num_global_patterns) * (int32_t) num_global_blocks;
+
+                // offset in the flat data array
+                // layout: [n_kv, n_tps, n_head, n_stream]
+                // idx = s*(n_head*n_tps*n_kv) + h*(n_tps*n_kv) + it*n_kv + j
+                const int64_t base = s * (n_head_t * n_tps * n_kv_t)
+                                   + h * (n_tps * n_kv_t)
+                                   + it * n_kv_t;
+
+                for (int64_t j = 0; j < n_kv_t; ++j) {
+                    if (cells.is_empty(j) || !cells.seq_has(j, seq_id)) {
+                        data[base + j] = -INFINITY;
+                        continue;
+                    }
+
+                    const llama_pos p0  = cells.pos_get(j);
+                    if (p0 > p1) {
+                        data[base + j] = -INFINITY;
+                        continue;
+                    }
+
+                    const uint32_t k_blk = (uint32_t) p0 / block_size;
+                    const uint32_t k_win = k_blk / num_local_blocks;
+
+                    // local window check
+                    if (q_win == k_win && k_blk <= q_blk) {
+                        data[base + j] = 0.0f;
+                        continue;
+                    }
+
+                    // global block check
+                    bool global = false;
+                    for (int32_t gi = first_global; gi < (int32_t) regular_end; gi += (int32_t) num_local_blocks) {
+                        if (gi < 0) continue;
+                        if (k_blk >= (uint32_t) gi && k_blk < (uint32_t) gi + num_global_blocks && q_blk >= k_blk) {
+                            global = true;
+                            break;
+                        }
+                    }
+                    if (!global && regular_end < total_blocks) {
+                        int32_t tail = (int32_t)(regular_end + first_global);
+                        if (tail > (int32_t)(total_blocks - num_global_blocks)) {
+                            tail = (int32_t)(total_blocks - num_global_blocks);
+                        }
+                        if (tail >= 0 && k_blk >= (uint32_t) tail
+                            && k_blk < (uint32_t) tail + num_global_blocks
+                            && q_blk >= k_blk) {
+                            global = true;
+                        }
+                    }
+
+                    data[base + j] = global ? 0.0f : -INFINITY;
+                }
+            }
+        }
+    }
+}
+
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -2477,6 +2577,11 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 
 void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     kv->set_input_kq_mask(dst, ubatch, causal_attn);
+}
+
+void llama_kv_cache_context::set_input_kq_mask_sparse(
+        ggml_tensor * dst, const llama_ubatch * ubatch, const llama_hparams & hp) const {
+    kv->set_input_kq_mask_sparse(dst, ubatch, hp);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

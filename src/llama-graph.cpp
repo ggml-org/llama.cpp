@@ -473,6 +473,24 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_attn_kv_sparse::set_input(const llama_ubatch * ubatch) {
+    mctx->set_input_k_idxs(self_k_idxs, ubatch);
+    mctx->set_input_v_idxs(self_v_idxs, ubatch);
+
+    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    mctx->set_input_kq_mask_sparse(self_kq_mask_sparse, ubatch, hparams);
+}
+
+bool llm_graph_input_attn_kv_sparse::can_reuse(const llm_graph_params & params) {
+    const auto * mctx_new = static_cast<const llama_kv_cache_context *>(params.mctx);
+    this->mctx = mctx_new;
+
+    bool good = true;
+    good &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    good &= can_reuse_kq_mask(self_kq_mask, mctx_new, params.ubatch, params.cparams);
+    return good;
+}
+
 void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
 
@@ -2137,6 +2155,146 @@ ggml_tensor * llm_graph_context::build_attn(
         cur = ggml_add(ctx0, cur, wo_b);
     }
 
+    return cur;
+}
+
+llm_graph_input_attn_kv_sparse * llm_graph_context::build_attn_inp_kv_sparse() const {
+    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+
+    auto inp = std::make_unique<llm_graph_input_attn_kv_sparse>(hparams, cparams, mctx_cur);
+
+    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE);
+
+    inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
+    inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
+
+    // standard causal mask [n_kv, n_tokens, 1, n_stream]
+    inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+    ggml_set_input(inp->self_kq_mask);
+    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+    // per-head sparse mask [n_kv, n_tokens, n_head, n_stream]
+    const auto n_kv     = mctx_cur->get_n_kv();
+    const auto n_tokens = ubatch.n_tokens;
+    const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const auto n_head_q = hparams.n_head();
+
+    inp->self_kq_mask_sparse = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_kv, n_tokens/n_stream, n_head_q, n_stream);
+    ggml_set_input(inp->self_kq_mask_sparse);
+    ggml_set_name(inp->self_kq_mask_sparse, "kq_mask_sparse");
+
+    return (llm_graph_input_attn_kv_sparse *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn_dense(
+        llm_graph_input_attn_kv_sparse * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+              float   kq_scale,
+              int     il) const {
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    const auto * mctx_cur = inp->mctx;
+
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, kq_mask, nullptr, nullptr, kq_scale, il);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_attn_sparse(
+        llm_graph_input_attn_kv_sparse * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+              float   kq_scale,
+              int     il) const {
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    const auto * mctx_cur = inp->mctx;
+
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    const auto & kq_mask        = inp->get_kq_mask();
+    const auto & kq_mask_sparse = inp->get_kq_mask_sparse();
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    const bool v_trans = v->nb[1] > v->nb[2];
+    const auto n_stream_val = k->ne[3];
+
+    q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream_val, n_stream_val,
+                     q->nb[1], q->nb[2], q->nb[3]/n_stream_val, 0);
+    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+    k = ggml_permute(ctx0, k, 0, 2, 1, 3);
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3);
+
+    // QK^T: [n_kv, n_tokens, n_head, n_stream]
+    ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+    cb(kq, "kq", il);
+
+    // add per-head sparse mask (0 or -INF), same shape as kq
+    kq = ggml_add(ctx0, kq, kq_mask_sparse);
+    cb(kq, "kq_sparse_masked", il);
+
+    // apply scale + causal mask + softmax via standard path
+    kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
+    cb(kq, "kq_soft_max_ext", il);
+
+    ggml_tensor * kqv;
+    if (v_trans) {
+        kqv = ggml_mul_mat(ctx0, v, kq);
+    } else {
+        kqv = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v)), kq);
+    }
+    cb(kqv, "kqv", il);
+
+    ggml_tensor * cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+    cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
     return cur;
 }
 

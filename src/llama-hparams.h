@@ -206,6 +206,12 @@ struct llama_hparams {
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
 
+    // ruGPT3XL block-sparse attention (DeepSpeed FixedSparsityConfig)
+    uint32_t sparse_block_size          = 0;
+    uint32_t sparse_num_local_blocks    = 0;
+    uint32_t sparse_num_global_blocks   = 0;
+    uint32_t sparse_num_global_patterns = 0;
+
     // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 

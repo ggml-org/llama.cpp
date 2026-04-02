@@ -5223,9 +5223,30 @@ class GPT2Model(TextModel):
 
 @ModelBase.register("RuGPT3XLForCausalLM")
 class RuGPT3XLModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.GPT2
+    model_arch = gguf.MODEL_ARCH.RUGPT3XL
 
     _qkv_parts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        sparse_mode = self.hparams.get("sparse_mode", "none")
+        if sparse_mode == "alternating":
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Attention.SPARSE_BLOCK_SIZE.format(arch=self.gguf_writer.arch),
+                self.hparams.get("sparse_block_size", 16),
+            )
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Attention.SPARSE_NUM_LOCAL_BLOCKS.format(arch=self.gguf_writer.arch),
+                self.hparams.get("sparse_num_local_blocks", 8),
+            )
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Attention.SPARSE_NUM_GLOBAL_BLOCKS.format(arch=self.gguf_writer.arch),
+                self.hparams.get("sparse_num_global_blocks", 1),
+            )
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Attention.SPARSE_NUM_GLOBAL_PATTERNS.format(arch=self.gguf_writer.arch),
+                self.hparams.get("sparse_num_different_global_patterns", 8),
+            )
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Fuse separate Q, K, V projections into a single QKV tensor

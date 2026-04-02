@@ -131,6 +131,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_RUGPT3XL,         "rugpt3xl"         },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -238,6 +239,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,           "%s.attention.indexer.head_count"           },
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,           "%s.attention.indexer.key_length"           },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,                "%s.attention.indexer.top_k"                },
+    { LLM_KV_ATTENTION_SPARSE_BLOCK_SIZE,            "%s.attention.sparse_block_size"            },
+    { LLM_KV_ATTENTION_SPARSE_NUM_LOCAL_BLOCKS,      "%s.attention.sparse_num_local_blocks"      },
+    { LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_BLOCKS,     "%s.attention.sparse_num_global_blocks"     },
+    { LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_PATTERNS,   "%s.attention.sparse_num_global_patterns"   },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,           "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,       "%s.rope.dimension_count_swa"             },
@@ -711,6 +716,19 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
             };
         case LLM_ARCH_GPT2:
         case LLM_ARCH_STARCODER:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_POS_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_FFN_DOWN,
+            };
+        case LLM_ARCH_RUGPT3XL:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_POS_EMBD,

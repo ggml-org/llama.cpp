@@ -1143,6 +1143,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_RUGPT3XL:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+                ml.get_key(LLM_KV_ATTENTION_SPARSE_BLOCK_SIZE,          hparams.sparse_block_size,          false);
+                ml.get_key(LLM_KV_ATTENTION_SPARSE_NUM_LOCAL_BLOCKS,    hparams.sparse_num_local_blocks,    false);
+                ml.get_key(LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_BLOCKS,   hparams.sparse_num_global_blocks,   false);
+                ml.get_key(LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_PATTERNS, hparams.sparse_num_global_patterns, false);
+                switch (hparams.n_layer) {
+                    case 24: type = LLM_TYPE_XL; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_CODESHELL:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
@@ -3960,6 +3972,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 } break;
             case LLM_ARCH_GPT2:
+            case LLM_ARCH_RUGPT3XL:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
                     pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train}, 0);
@@ -8450,6 +8463,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_gpt2>(*this, params);
             } break;
+        case LLM_ARCH_RUGPT3XL:
+            {
+                llm = std::make_unique<llm_build_rugpt3xl>(*this, params);
+            } break;
         case LLM_ARCH_CODESHELL:
             {
                 llm = std::make_unique<llm_build_codeshell>(*this, params);
@@ -8916,6 +8933,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // these models do not use RoPE
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
+        case LLM_ARCH_RUGPT3XL:
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_MPT:
         case LLM_ARCH_REFACT:
