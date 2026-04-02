@@ -1196,6 +1196,10 @@ server_http_proxy::server_http_proxy(
                 // disable Accept-Encoding to avoid compressed responses
                 continue;
             }
+            if (key == "Transfer-Encoding") {
+                // the body is already decoded
+                continue;
+            }
             if (key == "Host" || key == "host") {
                 bool is_default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
                 req.set_header(key, is_default_port ? host : host + ":" + std::to_string(port));
