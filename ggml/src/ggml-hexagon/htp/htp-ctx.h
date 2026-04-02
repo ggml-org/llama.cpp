@@ -55,8 +55,9 @@ struct htp_context {
 
     struct {
         struct htp_general_req req;
-        struct htp_op_buf      op_bufs[HTP_OP_MAX_BUFS];
-        struct htp_op_req      op_reqs[HTP_OP_MAX_REQS];
+        struct htp_op_buf      bufs[HTP_OP_MAX_BUFS];
+        struct htp_tensor      tens[HTP_OP_MAX_TENSORS];
+        struct htp_op_req       ops[HTP_OP_MAX_REQS];
     } op_stage;
 };
 

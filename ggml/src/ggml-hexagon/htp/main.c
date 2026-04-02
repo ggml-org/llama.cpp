@@ -432,11 +432,11 @@ static void execute_op(struct htp_ops_context * octx) {
 }
 
 static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf *b) {
-    FARF(HIGH, "prep-buf: idx %u fd %u size %u flags 0x%x", idx, b->fd, (uint32_t) b->size, b->flags);
+    FARF(HIGH, "prep-buf #%u : fd %u size %u flags 0x%x", idx, b->fd, (uint32_t) b->size, b->flags);
 
     b->base = NULL;
 
-    // See if the buffer is already mmaped
+    // See if the buffer is already mapped
     // Age mapings and find the oldest as we go
     struct htp_mmap *o_mm = ctx->mmap;
     uint32_t        o_age = 0;
@@ -476,74 +476,74 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
     }
 }
 
-static void prep_src_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
-    if (!r_t->ne[0]) {
-        // empty input
-        t->ne[0] = 0; t->data = NULL;
-        return;
-    }
+static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32_t idx, struct htp_tensor *t) {
+    uint32_t offset = t->data;
+    uint32_t size   = t->size;
+    uint32_t bi     = t->bi;
 
-    uint32_t offset = r_t->data;
-    uint32_t size   = r_t->size;
-    uint32_t bi     = r_t->bi;
-    uint32_t data   = bufs[bi].base + offset;
+    t->data = bufs[bi].base + offset; // update data to the actual pointer
 
-    bool same = (t->data == data && t->size == size);
+    FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
+        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
+}
 
-    *t = *r_t;
-    t->data = data;
+static void prep_src_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
+    if (idx == 0xffff) { t->ne[0] = 0; t->data = NULL; return; } // empty
 
-    if (!same && (t->flags & HTP_TENSOR_COMPUTE)) {
+    struct htp_tensor *src = tens + idx;
+
+    // TODO: use pointers in the ops_context instead of copying tensors
+    *t = *src;
+
+    if (!(t->flags & HTP_TENSOR_FLUSHED) && (t->flags & HTP_TENSOR_COMPUTE)) {
         // invalidate compute buffers on input
-        hex_l2clear((void *) t->data, size);
+        hex_l2clear((void *) t->data, t->size);
     }
 
-    FARF(HIGH, "prep-src-tensor: bi %u offset %u size %u data %p : %u:%u:%u:%u", t->bi, offset, t->size, (void*) t->data,
+    FARF(HIGH, "prep-src-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void prep_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t, struct htp_tensor *r_t) {
+static void prep_dst_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
+    struct htp_tensor *dst = tens + idx;
 
-    uint32_t offset = r_t->data;
-    uint32_t size   = r_t->size;
-    uint32_t bi     = r_t->bi;
-    uint32_t data   = bufs[bi].base + offset;
+    // TODO: use pointers in the ops_context instead of copying tensors
+    *t = *dst;
 
-    *t = *r_t;
-    t->data = data;
-
-    FARF(HIGH, "prep-dst-tensor: bi %u offset %u size %u data %p : %u:%u:%u:%u", t->bi, offset, t->size, (void*) t->data,
+    FARF(HIGH, "prep-dst-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void post_dst_tensor(struct htp_op_buf *bufs, struct htp_tensor *t) {
+static void post_dst_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
+    struct htp_tensor *dst = tens + idx;
+
     // flush buffers on output
-    hex_l2flush((void *) t->data, t->size);
-    t->flags |= HTP_TENSOR_FLUSHED;
+    hex_l2flush((void *) dst->data, dst->size);
+    dst->flags |= HTP_TENSOR_FLUSHED;
 
-    FARF(HIGH, "post-dst-tensor: bi %u data %p size %u : %u:%u:%u:%u", t->bi, (void *) t->data, t->size,
+    FARF(HIGH, "post-dst-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void proc_op_req(struct htp_ops_context * octx, struct htp_op_buf * bufs, struct htp_op_req * req) {
+static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_req * op) {
     struct profile_data prof;
     profile_start(&prof);
 
-    memcpy(octx->op_params, req->params, sizeof(octx->op_params));
-    octx->flags = req->flags;
-    octx->op    = req->opcode;
+    memcpy(octx->op_params, op->params, sizeof(octx->op_params));
+    octx->flags = op->flags;
+    octx->op    = op->opcode;
 
-    FARF(HIGH, "proc-op %u: flags 0x%x", octx->op, octx->flags);
+    FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
     struct htp_tensor *src = &octx->src0;
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
-        prep_src_tensor(bufs, &src[i], &req->src[i]);
+        prep_src_tensor(&src[i], tens, op->src[i]);
     }
-    prep_dst_tensor(bufs, &octx->dst, &req->dst);
+    prep_dst_tensor(&octx->dst, tens, op->dst);
 
     execute_op(octx);
 
-    post_dst_tensor(bufs, &octx->dst);
+    post_dst_tensor(&octx->dst, tens, op->dst);
 
     profile_stop(&prof);
 }
@@ -570,26 +570,35 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             return;
         }
 
-        if (m_size < sizeof(struct htp_general_req)) {
-            FARF(ERROR, "invalid opreq batch size");
+        const uint32_t h_size = sizeof(struct htp_general_req);
+
+        struct htp_general_req* h = (struct htp_general_req*) m_ptr; m_ptr += h_size;
+        const uint32_t n_bufs = h->n_bufs;
+        const uint32_t n_tens = h->n_tensors;
+        const uint32_t n_ops  = h->n_ops;
+
+        const uint32_t b_size = sizeof(struct htp_op_buf) * n_bufs;
+        const uint32_t t_size = sizeof(struct htp_tensor) * n_tens;
+        const uint32_t o_size = sizeof(struct htp_op_req) * n_ops;
+
+        if (m_size < h_size + b_size + t_size + o_size) {
+            FARF(ERROR, "invalid opreq batch size %u", m_size);
             continue;
         }
 
-        struct htp_general_req* hdr = (struct htp_general_req*) m_ptr; m_ptr += sizeof(struct htp_general_req);
-        const uint32_t n_bufs = hdr->n_bufs;
-        const uint32_t n_ops  = hdr->n_ops;
-
-        const uint32_t h_size = sizeof(struct htp_general_req);
-        const uint32_t b_size = sizeof(struct htp_op_buf) * n_bufs;
-        const uint32_t r_size = sizeof(struct htp_op_req) * n_ops;
-
         struct htp_op_buf* bufs = (struct htp_op_buf*) m_ptr; m_ptr += b_size;
-        struct htp_op_req* reqs = (struct htp_op_req*) m_ptr;
+        struct htp_tensor* tens = (struct htp_tensor*) m_ptr; m_ptr += t_size;
+        struct htp_op_req*  ops = (struct htp_op_req*) m_ptr;
 
-        FARF(HIGH, "processing opreq batch: n-bufs %u n-ops %u m-size %u h-size %u b-size %u r-size %u", n_bufs, n_ops, m_size, h_size, b_size, r_size);
+        FARF(HIGH, "processing opreq batch: n-bufs %u n-tensors %u n-ops %u : m-size %u h-size %u b-size %u t-size %u o-size %u",
+                n_bufs, n_tens, n_ops, m_size, h_size, b_size, t_size, o_size);
 
         for (uint32_t i=0; i < n_bufs; i++) {
             prep_op_buf(ctx, i, &bufs[i]);
+        }
+
+        for (uint32_t i=0; i < n_tens; i++) {
+            prep_tensor(ctx, bufs, i, &tens[i]);
         }
 
         vtcm_acquire(ctx);
@@ -600,7 +609,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         octx.ctx       = ctx;
 
         for (uint32_t i=0; i < n_ops; i++) {
-            proc_op_req(&octx, bufs, &reqs[i]);
+            proc_op_req(&octx, tens, i, &ops[i]);
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);

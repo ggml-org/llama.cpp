@@ -82,7 +82,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS 
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    128
-#define HTP_OP_MAX_REQS    (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+#define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
 
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
@@ -124,6 +124,7 @@ struct htp_general_req {
     uint16_t n_bufs;     // Number of buffers
     uint16_t n_tensors;  // Number of tensors
     uint16_t n_ops;      // Number of ops
+    uint16_t flags;      // unused
     // struct htp_op_buf bufs[0];
     // struct htp_tensor tensors[0];
     // struct htp_op_req ops[0];
