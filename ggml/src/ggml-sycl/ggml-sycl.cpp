@@ -39146,14 +39146,6 @@ gpu_dispatch:
                                node->name ? node->name : "(null)", e.what());
                 std::abort();
             }
-        } else if (!ggml_sycl_graph_recording_active() && (i & 31) == 31) {
-            // Drain queue every 32 nodes to prevent L0 command list overflow
-            // that causes GPU hang with large KV caches (32K+ context).
-            try {
-                sycl_ctx->stream(sycl_ctx->device, 0)->wait_and_throw();
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[SYCL] queue drain failed at node %d: %s\n", i, e.what());
-            }
         }
         if (do_nan_check && (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16)) {
             queue_ptr     stream    = sycl_ctx->stream(sycl_ctx->device, 0);
