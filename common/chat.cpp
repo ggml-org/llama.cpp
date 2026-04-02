@@ -981,8 +981,8 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
 
         // Occasionally, gpt-oss-20b will prefix channels with this commentary
-        auto commentary_to_assistant = p.optional(p.literal("<|channel|>commentary to=assistant"));
-        auto start_analysis = commentary_to_assistant + p.literal("<|channel|>analysis<|message|>");
+        auto stray_commentary = p.optional(p.literal("<|channel|>commentary") + p.optional(p.literal(" to=assistant")));
+        auto start_analysis = stray_commentary + p.literal("<|channel|>analysis<|message|>");
 
         if (extract_reasoning) {
             p.rule("analysis", start_analysis + p.reasoning(content) + end);
@@ -992,7 +992,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         auto analysis = p.ref("analysis");
         auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
-        auto final_msg = p.rule("final", commentary_to_assistant + p.literal("<|channel|>final<|message|>") + p.content(content));
+        auto final_msg = p.rule("final", stray_commentary + p.literal("<|channel|>final<|message|>") + p.content(content));
 
         // Consume any unsolicited tool calls, e.g. builtin functions
         auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
@@ -1000,7 +1000,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto any = p.rule("any", preamble | analysis);
 
         if (has_response_format) {
-            auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + constrain_type);
+            auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
             auto response_format = p.rule("response-format",
                 p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
@@ -1017,7 +1017,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 const auto & params   = function.at("parameters");
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-                auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + constrain_type);
+                auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
                 // recipient in role header
