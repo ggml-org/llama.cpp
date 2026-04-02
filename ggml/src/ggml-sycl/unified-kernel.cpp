@@ -8406,8 +8406,9 @@ void UnifiedKernel::benchmark_graph_overhead() {
     fprintf(stderr, "[GRAPH-OVERHEAD] Device: %s\n",
             queue_.get_device().get_info<sycl::info::device::name>().c_str());
 
-    // Allocate scratch for kernels
-    int * dummy = sycl::malloc_device<int>(4096, queue_);
+    // Allocate scratch for kernels (tracked via unified cache)
+    const int bench_device = ggml_sycl_get_device_id_from_queue(queue_);
+    int * dummy = static_cast<int *>(ggml_sycl_malloc_device(4096 * sizeof(int), queue_, "graph_bench:dummy"));
     if (!dummy) {
         fprintf(stderr, "[GRAPH-OVERHEAD] ERROR: failed to allocate device memory\n");
         return;
@@ -8655,7 +8656,7 @@ void UnifiedKernel::benchmark_graph_overhead() {
         }
     }
 
-    sycl::free(dummy, queue_);
+    ggml_sycl::unified_cache_deallocate(dummy, bench_device);
 
     fprintf(stderr, "[GRAPH-OVERHEAD] === Benchmark Complete ===\n");
     fprintf(stderr, "[GRAPH-OVERHEAD] Decision: < 3us/node -> proceed, 3-10us -> grouped nodes, > 30us -> abandon\n\n");

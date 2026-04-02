@@ -2753,7 +2753,7 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                                      {sycl::aspect::fp16});
 
         if (do_debug) {
-            sycl::event debug_event = stream->submit([&](sycl::handler &cgh) {
+            stream->submit([&](sycl::handler &cgh) {
                 cgh.parallel_for<class dmmv_q8_0_aos_debug_kernel>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -2761,17 +2761,7 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                             vx, y, dst, ncols, nrows, item_ct1, debug_buf);
                     });
             });
-            if (ggml_sycl_host_task_stable_for_queue(*stream)) {
-                stream->submit([&](sycl::handler & cgh) {
-                    cgh.depends_on(debug_event);
-                    cgh.host_task([debug_buf, stream]() {
-                        ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
-                    });
-                });
-            } else {
-                debug_event.wait();
-                ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
-            }
+            // Buffer freed after readback below (line ~2789)
         } else {
             stream->parallel_for(
                 sycl::nd_range<3>(block_nums * block_dims, block_dims),
@@ -2786,7 +2776,7 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
         aos_kernel_debug_count++;
         std::vector<float> h(256);
         stream->memcpy(h.data(), debug_buf, 256 * sizeof(float)).wait();
-        sycl::free(debug_buf, *stream);
+        ggml_sycl_free_device_tracked_t(debug_buf, (size_t) 256, *stream);
 
         fprintf(stderr, "\n========== GPU KERNEL AoS DEBUG #%d ==========\n", aos_kernel_debug_count);
         fprintf(stderr, "ncols=%d nrows=%d iter_stride=%d vals_per_iter=%d\n",

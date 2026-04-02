@@ -766,8 +766,8 @@ static void launch_persistent_moe_mxfp4_impl(const void *    expert_weights,
     const int64_t total_src1_rows = ne11 * num_tokens;
     const size_t  q8_buf_size     = total_src1_rows * q8_1_row_size;
 
-    // Allocate device buffer for Q8_1 quantized input
-    void * q8_buffer = sycl::malloc_device(q8_buf_size, stream);
+    // Allocate device buffer for Q8_1 quantized input (tracked via unified cache)
+    void * q8_buffer = ggml_sycl_malloc_device(q8_buf_size, stream, "fused_moe_esimd:q8_persistent");
 
     // Quantize F32 input to Q8_1 (AoS layout)
     quantize_row_q8_1_sycl<quantize_q8_1>(input, (char *) q8_buffer, ncols, total_src1_rows, ncols_padded, &stream);
@@ -793,8 +793,9 @@ static void launch_persistent_moe_mxfp4_impl(const void *    expert_weights,
     });
 
     // Free Q8_1 buffer after kernel completes (host_task runs after all prior submissions)
+    const int q8_device_id = ggml_sycl_get_device_id_from_queue(stream);
     stream.submit([&](sycl::handler & cgh) {
-        cgh.host_task([=, &stream]() { sycl::free(q8_buffer, stream); });
+        cgh.host_task([=]() { ggml_sycl::unified_cache_deallocate(q8_buffer, q8_device_id); });
     });
 }
 
@@ -945,8 +946,8 @@ static void launch_fused_moe_mxfp4_impl(const void *    expert_weights,
     const int64_t total_src1_rows = ne11 * num_tokens;
     const size_t  q8_buf_size     = total_src1_rows * q8_1_row_size;
 
-    // Allocate device buffer for Q8_1 quantized input
-    void * q8_buffer = sycl::malloc_device(q8_buf_size, stream);
+    // Allocate device buffer for Q8_1 quantized input (tracked via unified cache)
+    void * q8_buffer = ggml_sycl_malloc_device(q8_buf_size, stream, "fused_moe_esimd:q8_fused");
 
     // Quantize F32 input to Q8_1 (AoS layout)
     quantize_row_q8_1_sycl<quantize_q8_1>(input, (char *) q8_buffer, ncols, total_src1_rows, ncols_padded, &stream);
@@ -966,8 +967,9 @@ static void launch_fused_moe_mxfp4_impl(const void *    expert_weights,
     });
 
     // Free Q8_1 buffer after kernel completes (host_task runs after all prior submissions)
+    const int q8_device_id = ggml_sycl_get_device_id_from_queue(stream);
     stream.submit([&](sycl::handler & cgh) {
-        cgh.host_task([=, &stream]() { sycl::free(q8_buffer, stream); });
+        cgh.host_task([=]() { ggml_sycl::unified_cache_deallocate(q8_buffer, q8_device_id); });
     });
 }
 
