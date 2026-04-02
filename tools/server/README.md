@@ -1014,6 +1014,25 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 </details>
 
+### GET `/monitor`: SSE stream of real-time slot activity
+
+This endpoint requires `--slots` to be enabled (same flag as `/slots`). It streams Server-Sent Events (SSE) with the current state of all slots whenever a change is detected.
+
+Events are only emitted when slot state changes. A keepalive comment (`: keepalive`) is sent every ~15 seconds to prevent proxy timeouts.
+
+**Event format**
+
+```
+event: status
+data: {"timestamp_ms":1234567890,"uptime_seconds":3600,"idle_slots":1,"processing_slots":1,"slots":[...],"metrics":{...}}
+```
+
+Each slot object contains: `id`, `is_processing`, `n_ctx`, and when a task is active: `id_task`, `n_decoded`, `n_remain`, `has_next_token`, `prompt` (first 256 chars), `generated` (last 256 chars).
+
+The `metrics` object contains: `prompt_tokens_per_second`, `predicted_tokens_per_second`, `prompt_tokens_total`, `predicted_tokens_total`, `n_decode_total`.
+
+> **Note:** This endpoint exposes a subset of `/slots` data, including truncated prompt text. It is subject to API key authentication when `--api-key` is set. Do not expose the server to untrusted networks without `--api-key`.
+
 ### GET `/metrics`: Prometheus compatible metrics exporter
 
 This endpoint is only accessible if `--metrics` is set.

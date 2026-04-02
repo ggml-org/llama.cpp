@@ -13,6 +13,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -160,6 +161,9 @@ struct server_slot {
 
     std::function<void(int /* id_slot */)> callback_on_release;
 
+    // cached detokenized prompt for monitor (avoids re-detokenizing on every poll)
+    mutable std::string prompt_text_cache;
+
     // Speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
@@ -187,6 +191,7 @@ struct server_slot {
         n_draft_total = 0;
         n_draft_accepted = 0;
 
+        prompt_text_cache.clear();
         task_prev = std::move(task);
         task.reset();
 
@@ -427,7 +432,11 @@ struct server_slot {
             };
 
             if (!only_metrics) {
-                res["prompt"] = ptask->tokens.detokenize(ctx, true);
+                // use cached prompt text if available (avoids costly re-detokenize)
+                if (prompt_text_cache.empty()) {
+                    prompt_text_cache = ptask->tokens.detokenize(ctx, true);
+                }
+                res["prompt"] = prompt_text_cache;
                 res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
             }
         }
@@ -1463,10 +1472,8 @@ private:
 
         res->index = slot.task->index;
 
-        // keep copy of last generated text for debugging purposes
-        if (slots_debug) {
-            slot.debug_generated_text = slot.generated_text;
-        }
+        // keep copy of last generated text (used by /monitor and slots debug)
+        slot.debug_generated_text = slot.generated_text;
 
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
@@ -1754,7 +1761,8 @@ private:
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
-                        json slot_data = slot.to_json(slots_debug == 0);
+                        bool only_metrics = (slots_debug == 0) && !task.metrics_include_slot_text;
+                        json slot_data = slot.to_json(only_metrics);
 
                         if (slot.is_processing()) {
                             n_processing_slots++;
@@ -3436,6 +3444,176 @@ void server_routes::init_routes() {
         }
 
         res->ok(res_task->slots_data);
+        return res;
+    };
+
+    // [M2] client counter as shared_ptr so it survives server_context reconstruction
+    auto n_monitor_clients = std::make_shared<std::atomic<int>>(0);
+
+    this->get_monitor = [this, n_monitor_clients](const server_http_req & req) -> server_http_res_ptr {
+        constexpr int max_monitor_clients = 4;
+
+        auto res = create_response();
+        if (!params.endpoint_slots) {
+            res->error(format_error_response(
+                "This server does not support monitor endpoint. "
+                "Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        // increment first, then check - avoids TOCTOU race
+        int prev = n_monitor_clients->fetch_add(1);
+        if (prev >= max_monitor_clients) {
+            n_monitor_clients->fetch_sub(1);
+            res->error(format_error_response(
+                "Too many monitor clients connected",
+                ERROR_TYPE_UNAVAILABLE));
+            return res;
+        }
+
+        // RAII guard: shared_ptr custom deleter decrements the client
+        // counter when the streaming lambda is destroyed (on disconnect)
+        auto client_guard = std::shared_ptr<void>(nullptr,
+            [n_monitor_clients](void *) {
+                n_monitor_clients->fetch_sub(1);
+            });
+
+        res->status       = 200;
+        res->content_type = "text/event-stream";
+        res->headers.emplace("Cache-Control", "no-cache");
+        res->headers.emplace("X-Accel-Buffering", "no"); // prevent nginx buffering
+
+        auto prev_slots = std::make_shared<json>(json::array());
+        auto last_ev    = std::make_shared<std::chrono::steady_clock::time_point>(
+            std::chrono::steady_clock::now());
+
+        auto & qt = this->queue_tasks;
+        auto & qr = this->queue_results;
+
+        res->next = [&qt, &qr, &req, prev_slots, last_ev, client_guard](
+                std::string & output) -> bool {
+            // [m1] UTF-8 safe truncation helpers - defined once outside loop
+            auto utf8_head = [](const std::string & s, size_t n) -> std::string {
+                if (s.size() <= n) return s;
+                size_t pos = n;
+                while (pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) {
+                    pos--;
+                }
+                return s.substr(0, pos) + "...";
+            };
+            auto utf8_tail = [](const std::string & s, size_t n) -> std::string {
+                if (s.size() <= n) return s;
+                size_t pos = s.size() - n;
+                while (pos < s.size() && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) {
+                    pos++;
+                }
+                return s.substr(pos);
+            };
+
+            while (!req.should_stop()) {
+                server_response_reader rd(qt, qr, HTTP_POLLING_SECONDS);
+
+                {
+                    server_task task(SERVER_TASK_TYPE_METRICS);
+                    task.id = rd.get_new_id();
+                    // [C3] request prompt/generated text in slot data
+                    task.metrics_include_slot_text = true;
+                    rd.post_task(std::move(task), true);
+                }
+
+                auto result = rd.next(req.should_stop);
+                if (!result) {
+                    return false;
+                }
+
+                if (result->is_error()) {
+                    output = "event: error\ndata: "
+                           + safe_json_to_str(result->to_json()) + "\n\n";
+                    return false;
+                }
+
+                // [M1] graceful error instead of GGML_ASSERT abort
+                auto * mt = dynamic_cast<server_task_result_metrics *>(result.get());
+                if (!mt) {
+                    output = "event: error\ndata: "
+                           "{\"error\":\"unexpected result type\"}\n\n";
+                    return false;
+                }
+
+                json slots = json::array();
+                for (const auto & slot : mt->slots_data) {
+                    json s = {
+                        {"id",            slot.at("id")},
+                        {"is_processing", slot.at("is_processing")},
+                        {"n_ctx",         slot.at("n_ctx")},
+                    };
+                    if (slot.contains("id_task")) {
+                        s["id_task"] = slot.at("id_task");
+                    }
+                    // [C1] bounds check on next_token array
+                    if (slot.contains("next_token") && slot.at("next_token").size() > 0) {
+                        const auto & nt = slot.at("next_token")[0];
+                        s["n_decoded"]      = nt.value("n_decoded", 0);
+                        s["n_remain"]       = nt.value("n_remain", 0);
+                        s["has_next_token"] = nt.value("has_next_token", false);
+                    }
+                    // [C2] type guard: only extract if value is a string
+                    if (slot.contains("prompt") && slot.at("prompt").is_string()) {
+                        s["prompt"] = utf8_head(slot.at("prompt").get<std::string>(), 256);
+                    }
+                    if (slot.contains("generated") && slot.at("generated").is_string()) {
+                        s["generated"] = utf8_tail(slot.at("generated").get<std::string>(), 256);
+                    }
+                    slots.push_back(std::move(s));
+                }
+
+                auto now = std::chrono::steady_clock::now();
+
+                if (slots != *prev_slots) {
+                    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    const int64_t uptime_s = (ggml_time_us() - mt->t_start) / 1000000;
+
+                    const double pp = mt->t_prompt_processing > 0
+                        ? 1.e3 / mt->t_prompt_processing * mt->n_prompt_tokens_processed
+                        : 0.0;
+                    const double tg = mt->t_tokens_generation > 0
+                        ? 1.e3 / mt->t_tokens_generation * mt->n_tokens_predicted
+                        : 0.0;
+
+                    json ev = {
+                        {"timestamp_ms",     ts},
+                        {"uptime_seconds",   uptime_s},
+                        {"idle_slots",       mt->n_idle_slots},
+                        {"processing_slots", mt->n_processing_slots},
+                        {"slots",            std::move(slots)},
+                        {"metrics", {
+                            {"prompt_tokens_per_second",    pp},
+                            {"predicted_tokens_per_second", tg},
+                            {"prompt_tokens_total",         mt->n_prompt_tokens_processed_total},
+                            {"predicted_tokens_total",      mt->n_tokens_predicted_total},
+                            {"n_decode_total",              mt->n_decode_total},
+                        }},
+                    };
+
+                    output = "event: status\ndata: " + safe_json_to_str(ev) + "\n\n";
+                    *prev_slots = std::move(ev.at("slots"));
+                    *last_ev    = now;
+                    return true;
+                }
+
+                const auto idle_s = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - *last_ev).count();
+                if (idle_s >= 15) {
+                    output   = ": keepalive\n\n";
+                    *last_ev = now;
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
         return res;
     };
 

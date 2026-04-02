@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { Activity, Search, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { McpLogo } from '$lib/components/app';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { serverProps } from '$lib/stores/server.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -98,5 +99,20 @@
 				MCP Servers
 			</div>
 		</Button>
+
+		{#if serverProps()?.endpoint_slots}
+			<Button
+				class="w-full justify-between backdrop-blur-none! hover:[&>kbd]:opacity-100"
+				href="#/monitor"
+				onclick={handleMobileSidebarItemClick}
+				variant="ghost"
+			>
+				<div class="flex items-center gap-2">
+					<Activity class="h-4 w-4" />
+
+					Monitor
+				</div>
+			</Button>
+		{/if}
 	{/if}
 </div>
