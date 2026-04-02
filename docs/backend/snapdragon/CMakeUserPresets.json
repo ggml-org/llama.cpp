@@ -59,8 +59,8 @@
         "toolset":      { "value": "host=x86_64", "strategy": "external" },
         "cacheVariables": {
             "CMAKE_TOOLCHAIN_FILE": "cmake/arm64-linux-clang.cmake",
-            "CMAKE_C_FLAGS":   "-march=armv8.7-a+fp16 -fno-finite-math-only -flto -D_GNU_SOURCE",
-            "CMAKE_CXX_FLAGS": "-march=armv8.7-a+fp16 -fno-finite-math-only -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS":   "-march=armv8.7-a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
+            "CMAKE_CXX_FLAGS": "-march=armv8.7-a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
             "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
             "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
             "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
