@@ -694,6 +694,8 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE:
             return "peg-native";
+        case COMMON_CHAT_FORMAT_PEG_GEMMA4:
+            return "peg-gemma4";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1905,8 +1907,13 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             // Try to extract any partial results from what was successfully parsed
             common_chat_msg msg;
             msg.role = "assistant";
-            auto mapper = common_chat_peg_mapper(msg);
-            mapper.from_ast(ctx.ast, result);
+            std::unique_ptr<common_chat_peg_mapper> mapper;
+            if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+                mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            } else {
+                mapper = std::make_unique<common_chat_peg_mapper>(msg);
+            }
+            mapper->from_ast(ctx.ast, result);
 
             if (ctx.is_debug()) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
@@ -1921,8 +1928,13 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     common_chat_msg msg;
     msg.role = "assistant";
 
-    auto mapper = common_chat_peg_mapper(msg);
-    mapper.from_ast(ctx.ast, result);
+    std::unique_ptr<common_chat_peg_mapper> mapper;
+    if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+        mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+    } else {
+        mapper = std::make_unique<common_chat_peg_mapper>(msg);
+    }
+    mapper->from_ast(ctx.ast, result);
 
     if (ctx.is_debug()) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
