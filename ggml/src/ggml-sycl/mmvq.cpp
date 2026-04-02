@@ -2236,7 +2236,7 @@ static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const i
     // Allocate temp buffer for in-place conversion
     const int runtime_device = ggml_sycl_get_device_id_from_queue(*stream);
     ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, total_quant_bytes);
-    uint8_t * temp = (uint8_t *) ggml_sycl_malloc_device(total_quant_bytes, *stream, "mmvq_quant_temp");
+    uint8_t * temp = (uint8_t *) ggml_sycl_malloc_device_raw(total_quant_bytes, *stream, "mmvq_quant_temp");
     if (!temp) {
         ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
     }
@@ -3391,7 +3391,7 @@ static bool ggml_sycl_moe_ensure_compact_storage(ggml_backend_sycl_context & ctx
             extra->moe_expert_ptrs_compact_size[ctx.device]     = 0;
         }
         ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, bytes);
-        void * compact = ggml_sycl_malloc_device(bytes, *stream, "mmvq_compact");
+        void * compact = ggml_sycl_malloc_device_raw(bytes, *stream, "mmvq_compact");
         if (!compact) {
             ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, bytes);
             GGML_LOG_ERROR("[MOE] Failed to allocate compact pointer list (%zu bytes)\n", bytes);
@@ -3575,7 +3575,7 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
 
     for (int i = 0; i < moe_count; i++) {
         ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, buffer_size);
-        ctx.moe_buffers.q8_1_buffers[i] = ggml_sycl_malloc_device(buffer_size, *stream, "mmvq_moe_q8");
+        ctx.moe_buffers.q8_1_buffers[i] = ggml_sycl_malloc_device_raw(buffer_size, *stream, "mmvq_moe_q8");
         ctx.moe_buffers.q8_1_sizes[i]   = buffer_size;
 
         if (!ctx.moe_buffers.q8_1_buffers[i]) {

@@ -1527,6 +1527,41 @@ alloc_tier unified_select_tier(const alloc_request & req);
 bool       unified_alloc_validate_registry(int device = -1, const char * where = nullptr);
 bool       unified_alloc_strict_mode();
 
+// ============================================================================
+// Simplified allocation API — the ONE function all subsystems should call.
+//
+// Maps alloc_category to the underlying alloc_role / runtime_category / constraints,
+// then delegates to unified_alloc().  Provides host fallback for eligible categories.
+// ============================================================================
+
+enum class alloc_category : uint8_t {
+    WEIGHT          = 0,  // Permanent model weights, highest VRAM priority
+    KV_CACHE        = 1,  // Permanent KV cache, high priority
+    COMPUTE_SCRATCH = 2,  // Ephemeral per-op scratch, can fall back to host
+    STAGING         = 3,  // Small transfer staging buffers, can fall back to host
+    CONTROL         = 4,  // Tiny kernel control buffers, must be on device
+    EXPERT_CACHE    = 5,  // MoE expert data, evictable from device
+};
+
+struct unified_alloc_result {
+    void *     ptr  = nullptr;
+    alloc_tier tier = alloc_tier::DEVICE_VRAM;
+    size_t     size = 0;
+};
+
+// Allocate memory through the unified cache budget system.
+// Returns {nullptr} on failure.  Host fallback is attempted for
+// COMPUTE_SCRATCH and STAGING categories when VRAM is insufficient.
+unified_alloc_result unified_cache_allocate(
+    int             device,
+    size_t          size,
+    alloc_category  category,
+    sycl::queue &   queue);
+
+// Free memory previously obtained from unified_cache_allocate().
+// Updates budget counters and removes from alloc_registry.
+void unified_cache_deallocate(void * ptr, int device);
+
 bool acquire_offload_buffer(const offload_buffer_request & req, offload_buffer_lease * out);
 bool release_offload_buffer(const offload_buffer_lease & lease);
 void offload_buffer_pool_trim(int device = -1);

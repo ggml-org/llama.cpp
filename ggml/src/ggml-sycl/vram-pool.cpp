@@ -83,7 +83,7 @@ void * vram_pool::allocate(size_t size, uint64_t tensor_id, size_t alignment) {
     void * ptr = nullptr;
     try {
         ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size);
-        ptr = ggml_sycl_malloc_device(size, queue_, "vram_pool");
+        ptr = ggml_sycl_malloc_device_raw(size, queue_, "vram_pool");
     } catch (const sycl::exception & e) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
         GGML_LOG_ERROR("[SYCL] VRAM allocation failed: %s\n", e.what());

@@ -29,6 +29,7 @@
 
 // Forward-declare to avoid circular include with common.hpp
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
+void * ggml_sycl_malloc_device_raw(size_t size, const sycl::queue & queue, const char * tag);
 
 namespace ggml_sycl {
 
@@ -91,7 +92,9 @@ class sycl_device_pool {
             chunk_size = padded;
         }
 
-        void * base = ggml_sycl_malloc_device(chunk_size, queue_, "layout_pool:chunk");
+        // Use _raw to bypass unified_cache_allocate routing — the layout pool
+        // is managed by the cache itself and tracked through used_, not runtime_bytes.
+        void * base = ggml_sycl_malloc_device_raw(chunk_size, queue_, "layout_pool:chunk");
         if (!base) {
             GGML_LOG_ERROR("[DEVICE-POOL] chunk alloc failed (%zu bytes)\n", chunk_size);
             return {};

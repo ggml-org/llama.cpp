@@ -1507,6 +1507,9 @@ bool  ggml_sycl_alloc_trace_enabled();
 void  ggml_sycl_alloc_trace_dump(const char * reason);
 void  ggml_sycl_alloc_trace_record(const char * kind, size_t size, const char * tag);
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
+// Bypass unified cache budget routing — use when the caller manages its own
+// budget tracking (e.g., _tracked_ variants, cache internals).
+void * ggml_sycl_malloc_device_raw(size_t size, const sycl::queue & queue, const char * tag);
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag);
 void * ggml_sycl_malloc_host(size_t size, const sycl::context & ctx, const char * tag);
 void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const char * tag);
@@ -1545,7 +1548,9 @@ inline bool ggml_sycl_is_device_ptr(const void * ptr) {
 
 template <typename T>
 inline T * ggml_sycl_malloc_device_t(size_t count, const sycl::queue & queue, const char * tag) {
-    return static_cast<T *>(ggml_sycl_malloc_device(sizeof(T) * count, queue, tag));
+    // Use _raw: most callers of _t also do manual add_runtime_bytes.
+    // The routed ggml_sycl_malloc_device would double-count in those cases.
+    return static_cast<T *>(ggml_sycl_malloc_device_raw(sizeof(T) * count, queue, tag));
 }
 
 template <typename T>
@@ -1562,7 +1567,9 @@ inline T * ggml_sycl_malloc_shared_t(size_t count, const sycl::queue & queue, co
 inline void * ggml_sycl_malloc_device_tracked_bytes(size_t bytes, sycl::queue & queue, const char * tag) {
     const int device_id = ggml_sycl_get_device_id_from_queue(queue);
     ggml_sycl::unified_cache_add_runtime_bytes(device_id, bytes);
-    void * ptr = ggml_sycl_malloc_device(bytes, queue, tag);
+    // Use _raw to bypass the unified_cache_allocate route in ggml_sycl_malloc_device,
+    // since this function already manages its own budget tracking via add/sub_runtime_bytes.
+    void * ptr = ggml_sycl_malloc_device_raw(bytes, queue, tag);
     if (!ptr) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id, bytes);
     }

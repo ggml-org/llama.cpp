@@ -7700,7 +7700,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_probe_buffer_type_alloc_buffer(gg
     ggml_sycl_set_device(ctx->device);
     void * ptr = nullptr;
     ggml_sycl::unified_cache_add_runtime_bytes(ctx->device, size);
-    ptr = ggml_sycl_malloc_device(size, *ctx->stream, "probe_buffer");
+    ptr = ggml_sycl_malloc_device_raw(size, *ctx->stream, "probe_buffer");
     if (ptr == nullptr) {
         ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, size);
         return nullptr;
@@ -9594,7 +9594,7 @@ static sycl::event ggml_sycl_fill_onednn_packed(sycl::queue &                   
     if (!ctx->src_is_device) {
         const int runtime_device = ggml_sycl_get_device_id_from_queue(queue);
         ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, src_size);
-        tmp_dev = ggml_sycl_malloc_device(src_size, queue, "onednn_tmp");
+        tmp_dev = ggml_sycl_malloc_device_raw(src_size, queue, "onednn_tmp");
         if (!tmp_dev) {
             ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src_size);
             return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
@@ -13488,7 +13488,7 @@ static enum ggml_status ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_
         was inserted. You need to rewrite this code.
         */
         ggml_sycl::unified_cache_add_runtime_bytes(i, size);
-        buf = (char *) ggml_sycl_malloc_device(size, *stream, "tensor_data_device");
+        buf = (char *) ggml_sycl_malloc_device_raw(size, *stream, "tensor_data_device");
         if (!buf) {
             ggml_sycl::unified_cache_sub_runtime_bytes(i, size);
             char err_buf[1024];
@@ -13970,7 +13970,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                 stream = &dpct::get_current_device().default_queue();
             }
             ggml_sycl::unified_cache_add_runtime_bytes(device, padded_size);
-            char * buf = static_cast<char *>(ggml_sycl_malloc_device(padded_size, *stream, "tp_buffer_alloc"));
+            char * buf = static_cast<char *>(ggml_sycl_malloc_device_raw(padded_size, *stream, "tp_buffer_alloc"));
             if (!buf) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device, padded_size);
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n", padded_size,
@@ -14066,7 +14066,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                 stream = &dpct::get_current_device().default_queue();
             }
             ggml_sycl::unified_cache_add_runtime_bytes(device, padded_size);
-            char * buf = static_cast<char *>(ggml_sycl_malloc_device(padded_size, *stream, "tp_buffer_alloc"));
+            char * buf = static_cast<char *>(ggml_sycl_malloc_device_raw(padded_size, *stream, "tp_buffer_alloc"));
             if (!buf) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device, padded_size);
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n", padded_size,
@@ -16083,7 +16083,46 @@ static void ggml_sycl_alloc_trace_dump_if_requested(const char * reason) {
     std::call_once(once, [reason]() { ggml_sycl_alloc_trace_dump(reason); });
 }
 
+// Raw device allocation — no budget tracking, used internally by unified_alloc
+// and the unified cache itself (which manages its own budget via used_).
+void * ggml_sycl_malloc_device_raw(size_t size, const sycl::queue & queue, const char * tag) {
+    void * ptr = nullptr;
+    try {
+        ptr = sycl::malloc_device(size, queue);
+    } catch (const sycl::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    } catch (const std::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    }
+    if (ptr != nullptr) {
+        int dev_id = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
+        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, dev_id, ggml_sycl::alloc_type::DEVICE);
+        ggml_sycl_alloc_trace_record("device", size, tag);
+        if (size >= 1024 * 1024) {
+            GGML_SYCL_DEBUG("[ALLOC] device %.1f MB  tag=%s\n", size / (1024.0f * 1024.0f), tag ? tag : "unknown");
+        }
+    }
+    return ptr;
+}
+
+// Re-entrancy guard: unified_cache_allocate → unified_alloc → ggml_sycl_malloc_device.
+// When called from inside the cache, skip the cache route and use raw allocation.
+static thread_local bool g_inside_unified_allocate = false;
+
+struct scoped_allocate_guard {
+    scoped_allocate_guard()  { g_inside_unified_allocate = true; }
+    ~scoped_allocate_guard() { g_inside_unified_allocate = false; }
+};
+
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag) {
+    // If we're already inside unified_cache_allocate (re-entrant call from
+    // unified_alloc or cache internals), use raw allocation to avoid recursion.
+    if (g_inside_unified_allocate) {
+        return ggml_sycl_malloc_device_raw(size, queue, tag);
+    }
+
     // Strict mode: refuse allocation if budget is already exceeded
     static const bool strict_mode = ([] {
         const char * env = getenv("GGML_SYCL_MEMORY_STRICT");
@@ -16100,28 +16139,24 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
         }
     }
 
-
-
-    void * ptr = nullptr;
-    try {
-        ptr = sycl::malloc_device(size, queue);
-    } catch (const sycl::exception & e) {
-        // OOM or other allocation failure - return nullptr to allow caller fallback
-        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
-        return nullptr;
-    } catch (const std::exception & e) {
-        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
-        return nullptr;
-    }
-    if (ptr != nullptr) {
-        int dev_id = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
-        ggml_sycl::alloc_registry::instance().register_alloc(ptr, size, dev_id, ggml_sycl::alloc_type::DEVICE);
-        ggml_sycl_alloc_trace_record("device", size, tag);
-        if (size >= 1024 * 1024) {
-            GGML_SYCL_DEBUG("[ALLOC] device %.1f MB  tag=%s\n", size / (1024.0f * 1024.0f), tag ? tag : "unknown");
+    // Route through the unified cache allocator for budget tracking.
+    // Default category is COMPUTE_SCRATCH — individual callers will be
+    // migrated to pass explicit categories in T5.
+    int device = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
+    if (device >= 0 && ggml_sycl::unified_cache_enabled()) {
+        scoped_allocate_guard guard;
+        auto result = ggml_sycl::unified_cache_allocate(
+            device, size, ggml_sycl::alloc_category::COMPUTE_SCRATCH,
+            const_cast<sycl::queue &>(queue));
+        if (result.ptr != nullptr) {
+            return result.ptr;
         }
+        // unified_cache_allocate failed — fall through to raw allocation
+        // as a last resort (preserves existing behavior for callers that
+        // handle nullptr themselves).
     }
-    return ptr;
+
+    return ggml_sycl_malloc_device_raw(size, queue, tag);
 }
 
 // Track total host-pinned allocations for diagnostics.
@@ -16296,7 +16331,8 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         // doesn't change physical footprint and isn't re-tracked.  Without
         // this, the compute pool can consume 50-300 MB of VRAM invisible to the
         // unified cache budget, causing OOM when the cache fills to ~90%.
-        ptr = ggml_sycl_malloc_device(rounded_size, *qptr, "pool_leg");
+        // Use _raw to bypass unified_cache_allocate — manual budget tracking below.
+        ptr = ggml_sycl_malloc_device_raw(rounded_size, *qptr, "pool_leg");
         if (ptr) {
             ggml_sycl::unified_cache_add_runtime_bytes(
                 device, rounded_size, ggml_sycl::runtime_category::OTHER);
@@ -19177,12 +19213,12 @@ static void tp_device1_worker_thread_func() {
                     work.layer, input_q8_size, hidden_size, output_size);
         }
         ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-        char *  input_q8_dev  = (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "ffn_buffers_tp");
-        float * gate_out      = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
-        float * up_out        = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
-        float * hidden_out    = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
-        char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device(hidden_q8_size, *stream, "ffn_buffers_tp");
-        float * partial_out   = (float *) ggml_sycl_malloc_device(output_size, *stream, "ffn_buffers_tp");
+        char *  input_q8_dev  = (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "ffn_buffers_tp");
+        float * gate_out      = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
+        float * up_out        = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
+        float * hidden_out    = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
+        char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device_raw(hidden_q8_size, *stream, "ffn_buffers_tp");
+        float * partial_out   = (float *) ggml_sycl_malloc_device_raw(output_size, *stream, "ffn_buffers_tp");
 
         float * result_buf = (float *) ggml_sycl_host_malloc(output_size);
         if (g_ggml_sycl_tp_debug) {
@@ -19480,12 +19516,12 @@ static void init_dev1_kv_cache(int layer, int64_t max_seq_len, int64_t n_heads_k
     dev1_kv_cache_entry entry;
     const int           cache_device = ggml_sycl_get_device_id_from_queue(*stream);
     ggml_sycl::unified_cache_add_runtime_bytes(cache_device, cache_size);
-    entry.k_cache = (float *) ggml_sycl_malloc_device(cache_size, *stream, "tp_dev1_kv_cache");
+    entry.k_cache = (float *) ggml_sycl_malloc_device_raw(cache_size, *stream, "tp_dev1_kv_cache");
     if (!entry.k_cache) {
         ggml_sycl::unified_cache_sub_runtime_bytes(cache_device, cache_size);
     }
     ggml_sycl::unified_cache_add_runtime_bytes(cache_device, cache_size);
-    entry.v_cache = (float *) ggml_sycl_malloc_device(cache_size, *stream, "tp_dev1_kv_cache");
+    entry.v_cache = (float *) ggml_sycl_malloc_device_raw(cache_size, *stream, "tp_dev1_kv_cache");
     if (!entry.v_cache) {
         ggml_sycl::unified_cache_sub_runtime_bytes(cache_device, cache_size);
     }
@@ -19793,7 +19829,7 @@ static void ggml_sycl_mul_mat_tp_column_parallel_post(ggml_backend_sycl_context 
     }
     // Allocate on device 1
     ggml_sycl::unified_cache_add_runtime_bytes(device, src1_size);
-    float * input_dev1 = (float *) ggml_sycl_malloc_device(src1_size, *stream, "tp_input_staging");
+    float * input_dev1 = (float *) ggml_sycl_malloc_device_raw(src1_size, *stream, "tp_input_staging");
     if (!input_dev1) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device, src1_size);
     }
@@ -20213,12 +20249,12 @@ void ggml_sycl_tp_launch_async_ffn(ggml_backend_sycl_context & ctx,
     const size_t output_size = N_out * batch * sizeof(float);
     const size_t total_bytes = input_q8_size + hidden_q8_size + output_size + hidden_size * 3;
     ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-    char *  input_q8_dev  = (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "ffn_buffers_async");
-    float * gate_out      = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
-    float * up_out        = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
-    float * hidden_out    = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
-    char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device(hidden_q8_size, *stream, "ffn_buffers_async");
-    float * partial_out   = (float *) ggml_sycl_malloc_device(output_size, *stream, "ffn_buffers_async");
+    char *  input_q8_dev  = (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "ffn_buffers_async");
+    float * gate_out      = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
+    float * up_out        = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
+    float * hidden_out    = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
+    char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device_raw(hidden_q8_size, *stream, "ffn_buffers_async");
+    float * partial_out   = (float *) ggml_sycl_malloc_device_raw(output_size, *stream, "ffn_buffers_async");
     // Allocate DEDICATED result buffer for this async job (not shared!)
     // Each layer needs its own buffer to avoid races between concurrent async jobs
     float * result_buf    = (float *) ggml_sycl_host_malloc(output_size);
@@ -21197,17 +21233,17 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             input_q8_size + q_out_size + k_out_size + v_out_size + q_out_size + attn_q8_size + dst_size;
                         ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
                         char * input_q8_dev =
-                            (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "attn_buffers_tp");
+                            (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "attn_buffers_tp");
                         // Q, K, V output buffers (float)
-                        float * q_out      = (float *) ggml_sycl_malloc_device(q_out_size, *stream, "attn_buffers_tp");
-                        float * k_out      = (float *) ggml_sycl_malloc_device(k_out_size, *stream, "attn_buffers_tp");
-                        float * v_out      = (float *) ggml_sycl_malloc_device(v_out_size, *stream, "attn_buffers_tp");
+                        float * q_out      = (float *) ggml_sycl_malloc_device_raw(q_out_size, *stream, "attn_buffers_tp");
+                        float * k_out      = (float *) ggml_sycl_malloc_device_raw(k_out_size, *stream, "attn_buffers_tp");
+                        float * v_out      = (float *) ggml_sycl_malloc_device_raw(v_out_size, *stream, "attn_buffers_tp");
                         // Attention output buffer (same size as Q since it's the per-head output)
-                        float * attn_out   = (float *) ggml_sycl_malloc_device(q_out_size, *stream, "attn_buffers_tp");
+                        float * attn_out   = (float *) ggml_sycl_malloc_device_raw(q_out_size, *stream, "attn_buffers_tp");
                         // For O projection, need to quantize attn_out
-                        char * attn_q8_dev = (char *) ggml_sycl_malloc_device(attn_q8_size, *stream, "attn_buffers_tp");
+                        char * attn_q8_dev = (char *) ggml_sycl_malloc_device_raw(attn_q8_size, *stream, "attn_buffers_tp");
                         // Output buffer for O projection (partial result)
-                        float * partial_out = (float *) ggml_sycl_malloc_device(dst_size, *stream, "attn_buffers_tp");
+                        float * partial_out = (float *) ggml_sycl_malloc_device_raw(dst_size, *stream, "attn_buffers_tp");
 
                         if (!input_q8_dev || !q_out || !k_out || !v_out || !attn_out || !attn_q8_dev || !partial_out) {
                             fprintf(stderr, "SYCL TP: ERROR - failed to allocate attention buffers on device %d\n",
@@ -21401,7 +21437,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             const size_t scores_size = n_heads_q * n_query_tokens * kv_seq_len * sizeof(float);
                             ggml_sycl::unified_cache_add_runtime_bytes(device, scores_size);
                             float * attn_scores =
-                                (float *) ggml_sycl_malloc_device(scores_size, *stream, "attn_scores");
+                                (float *) ggml_sycl_malloc_device_raw(scores_size, *stream, "attn_scores");
                             if (!attn_scores) {
                                 ggml_sycl::unified_cache_sub_runtime_bytes(device, scores_size);
                             }
@@ -21769,9 +21805,9 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
         queue_ptr stream = ctx.stream(device, 0);
         // Allocate buffers on target device
         ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-        float * src1_ddf_dev = (float *) ggml_sycl_malloc_device(src1_float_slice_size, *stream, "tp_row_src1_ddf");
-        char *  src1_ddq_dev = (char *) ggml_sycl_malloc_device(src1_q8_size, *stream, "tp_row_src1_ddq");
-        float * partial_out  = (float *) ggml_sycl_malloc_device(dst_size, *stream, "tp_row_partial_out");
+        float * src1_ddf_dev = (float *) ggml_sycl_malloc_device_raw(src1_float_slice_size, *stream, "tp_row_src1_ddf");
+        char *  src1_ddq_dev = (char *) ggml_sycl_malloc_device_raw(src1_q8_size, *stream, "tp_row_src1_ddq");
+        float * partial_out  = (float *) ggml_sycl_malloc_device_raw(dst_size, *stream, "tp_row_partial_out");
         if (!src1_ddf_dev || !src1_ddq_dev || !partial_out) {
             fprintf(stderr, "SYCL TP: ERROR - failed to allocate temp buffers on device %d\n", device);
             ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
@@ -21866,7 +21902,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
             stream->memcpy(host_buf, partial_out, dst_size).wait();
             ggml_sycl_set_device(main_device);
             ggml_sycl::unified_cache_add_runtime_bytes(main_device, dst_size);
-            float * temp_add = (float *) ggml_sycl_malloc_device(dst_size, *main_stream, "temp_add");
+            float * temp_add = (float *) ggml_sycl_malloc_device_raw(dst_size, *main_stream, "temp_add");
             if (!temp_add) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(main_device, dst_size);
                 GGML_LOG_ERROR("SYCL TP: ERROR - failed to allocate temp_add buffer (%zu bytes)\n", dst_size);
@@ -23350,7 +23386,7 @@ static bool convert_tensor_layout(ggml_tensor * tensor,
             return false;
         }
         ggml_sycl::unified_cache_add_runtime_bytes(device_id, tiled_bytes);
-        void * tiled_buf = ggml_sycl_malloc_device(tiled_bytes, *stream, "xmx_tiled_buf");
+        void * tiled_buf = ggml_sycl_malloc_device_raw(tiled_bytes, *stream, "xmx_tiled_buf");
         if (!tiled_buf) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id, tiled_bytes);
             return false;
@@ -24409,7 +24445,7 @@ static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
 
     // Fallback: runtime allocation via malloc_device
     ggml_sycl::unified_cache_add_runtime_bytes(device, bytes);
-    void * table = ggml_sycl_malloc_device(bytes, queue, "moe_ptr_table");
+    void * table = ggml_sycl_malloc_device_raw(bytes, queue, "moe_ptr_table");
     if (!table) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device, bytes);
         GGML_LOG_ERROR("[MOE] Failed to allocate expert pointer table (%zu bytes)\n", count * sizeof(void *));
@@ -24636,7 +24672,7 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
                 sycl::free(entry.device_ids, *stream);
             }
             ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-            entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *stream, "moe_ids_device");
+            entry.device_ids    = ggml_sycl_malloc_device_raw(ids_bytes, *stream, "moe_ids_device");
             entry.device_bytes  = ids_bytes;
             entry.from_prealloc = false;
             if (!entry.device_ids) {
@@ -25578,7 +25614,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
                         sycl::free(ids_entry.device_ids, *ctx.stream());
                     }
                     ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-                    ids_entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *ctx.stream(), "moe_ids_device");
+                    ids_entry.device_ids    = ggml_sycl_malloc_device_raw(ids_bytes, *ctx.stream(), "moe_ids_device");
                     ids_entry.device_bytes  = ids_bytes;
                     ids_entry.from_prealloc = false;
                     if (!ids_entry.device_ids) {
@@ -37704,10 +37740,20 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             //
             // This is safe to do once at graph entry rather than per-node because
             // graph nodes only submit to the compute queue (in-order).
-            auto * cache = ggml_sycl::get_unified_cache_for_device(device);
-            if (cache) {
-                try { cache->get_bcs_queue().wait(); } catch (...) {}
-                try { cache->get_dma_queue().wait(); } catch (...) {}
+            //
+            // IMPORTANT: Skip during graph recording.  Level Zero forbids
+            // host-blocking calls (queue.wait) on queues sharing the same
+            // context as a recording queue.  During PP, g_graph_compute_active
+            // can remain true from the warmup ubatch (synchronize() not called
+            // between PP ubatches), so this guard fires inside begin_recording/
+            // end_recording → L0 deadlock.  Pre-staging already drains BCS/DMA
+            // before recording starts, so skipping here is safe.
+            if (!g_ggml_sycl_graph_recording) {
+                auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+                if (cache) {
+                    try { cache->get_bcs_queue().wait(); } catch (...) {}
+                    try { cache->get_dma_queue().wait(); } catch (...) {}
+                }
             }
 
             // Activate eviction guard — prevents sycl::free() during graph execution.
@@ -39816,7 +39862,7 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
     const size_t total_size       = static_cast<size_t>(soa_mmvq_count) * aligned_buf_size;
 
     ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, total_size);
-    void * bulk_ptr = ggml_sycl_malloc_device(total_size, *stream, "mmvq_soa_buffer_bulk");
+    void * bulk_ptr = ggml_sycl_malloc_device_raw(total_size, *stream, "mmvq_soa_buffer_bulk");
     if (!bulk_ptr) {
         ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, total_size);
         GGML_LOG_ERROR("[MMVQ-SOA-GRAPH] Failed to allocate bulk Q8_1 buffer (%.1f MB)\n",
@@ -46304,11 +46350,6 @@ normal_dispatch:
         //     }
         // }
 
-        // Note: Prompt phase graph recording is now supported for most models.
-        // oneDNN primitives are cached during warmup (first inference) via DnnlPrimitiveCache
-        // in gemm.hpp. During graph recording, cached primitives are reused (no JIT compilation),
-        // making the execute() calls graph-compatible.
-        //
         // WORKAROUND: Disable graphs for MoE streaming mode (host memory) when unified cache
         // is unavailable. With unified cache enabled, we can pre-stage expert layouts and
         // keep pointer tables stable for graph recording.
@@ -46582,6 +46623,9 @@ normal_dispatch:
                 // Pre-stage leaf tensors (ensures input data is on device before recording)
                 graph_prestage_leaf_tensors(sycl_ctx, cgraph);
 
+                // Clear stale eviction guard (same reason as first-time recording path)
+                ggml_sycl::unified_cache_set_graph_compute_active(false);
+
                 g_ggml_sycl_graph_recording_depth.fetch_add(1, std::memory_order_acq_rel);
                 g_ggml_sycl_graph_recording = true;
                 g_recording_graph_ptr = &model_sycl_graph;
@@ -46650,6 +46694,16 @@ normal_dispatch:
                 // since we cannot use .wait() calls during recording.
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-staging leaf tensors before recording...\n");
                 graph_prestage_leaf_tensors(sycl_ctx, cgraph);
+
+                // Clear stale eviction guard before recording.  During PP,
+                // synchronize() is not called between warmup and recording
+                // ubatches (llama-context uses submit_barrier, not synchronize).
+                // The warmup pass sets g_graph_compute_active=true and it is
+                // never cleared, causing compute_impl_guard to call queue.wait()
+                // inside the recording block → L0 deadlock.  No kernels are
+                // in-flight at this point (warmup's queue was drained by the
+                // graph_prestage_leaf_tensors barrier above), so clearing is safe.
+                ggml_sycl::unified_cache_set_graph_compute_active(false);
 
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] begin_recording...\n");
                 sycl_ctx->fa_graph_ptrs.clear();

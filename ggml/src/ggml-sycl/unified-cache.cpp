@@ -2138,7 +2138,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
 
                 if (!use_host_fallback) {
                     try {
-                        new_device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:realloc");
+                        new_device_ptr = ggml_sycl_malloc_device_raw(size, queue_, "unified_cache:realloc");
                     } catch (const sycl::exception & e) {
                         GGML_SYCL_DEBUG("[UNIFIED-CACHE] realloc malloc_device failed: %s, trying host fallback\n",
                                         e.what());
@@ -2261,7 +2261,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
 
     if (!use_host_fallback) {
         try {
-            device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:alloc");
+            device_ptr = ggml_sycl_malloc_device_raw(size, queue_, "unified_cache:alloc");
         } catch (const sycl::exception & e) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] malloc_device failed: %s, trying host fallback\n", e.what());
             use_host_fallback = true;
@@ -2440,7 +2440,7 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 
                 void * new_device_ptr = nullptr;
                 try {
-                    new_device_ptr = ggml_sycl_malloc_device(alloc_size, queue_, "unified_cache:alloc");
+                    new_device_ptr = ggml_sycl_malloc_device_raw(alloc_size, queue_, "unified_cache:alloc");
                 } catch (const sycl::exception & e) {
                     GGML_LOG_ERROR("[UNIFIED-CACHE] alloc malloc_device failed: %s\n", e.what());
                     it->second.pinned = was_pinned;
@@ -2498,7 +2498,7 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 
     void * device_ptr = nullptr;
     try {
-        device_ptr = ggml_sycl_malloc_device(alloc_size, queue_, "unified_cache:alloc");
+        device_ptr = ggml_sycl_malloc_device_raw(alloc_size, queue_, "unified_cache:alloc");
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] alloc malloc_device failed: %s\n", e.what());
         return nullptr;
@@ -3164,7 +3164,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             if (!force_host && !new_device_ptr) {
                 // Pool allocation failed; fall back to individual malloc_device
                 try {
-                    new_device_ptr = ggml_sycl_malloc_device(request.dst_size, queue_, "unified_cache:layout");
+                    new_device_ptr = ggml_sycl_malloc_device_raw(request.dst_size, queue_, "unified_cache:layout");
                 } catch (const sycl::exception & e) {
                     GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout malloc_device failed: %s, trying host fallback\n",
                                     e.what());
@@ -3810,7 +3810,7 @@ void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
         }
 
         try {
-            device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:slot");
+            device_ptr = ggml_sycl_malloc_device_raw(size, queue_, "unified_cache:slot");
         } catch (const sycl::exception & e) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate_slot: malloc_device failed: %s\n", e.what());
             return nullptr;
@@ -5721,7 +5721,7 @@ bool unified_cache::get_dma_staging_buffers(size_t slice_bytes, size_t count, dm
     for (size_t i = 0; i < count; ++i) {
         void * ptr = nullptr;
         try {
-            ptr = ggml_sycl_malloc_device(slice_bytes, queue_, "unified_cache:dma_stage");
+            ptr = ggml_sycl_malloc_device_raw(slice_bytes, queue_, "unified_cache:dma_stage");
         } catch (const sycl::exception & e) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging malloc_device failed: %s\n", e.what());
             ptr = nullptr;
@@ -6548,7 +6548,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                 }
             }
         }
-        ptr = ggml_sycl_malloc_device(alloc_size, *req.queue, "unified_alloc:device");
+        ptr = ggml_sycl_malloc_device_raw(alloc_size, *req.queue, "unified_alloc:device");
     } else {
         if (req.intent.constraints.use_pinned_pool) {
             if (auto * hcache = get_host_cache_for_device(req.device)) {
@@ -6879,6 +6879,95 @@ bool unified_free(const alloc_handle & handle) {
     }
 
     return unified_free_ptr(handle.ptr, handle.device);
+}
+
+// ============================================================================
+// Simplified allocation facade
+// ============================================================================
+
+// Map alloc_category to the internal alloc_role / runtime_category / constraints
+// used by the existing unified_alloc machinery.
+static void category_to_intent(alloc_category cat, alloc_intent & intent) {
+    switch (cat) {
+        case alloc_category::WEIGHT:
+            intent.role     = alloc_role::WEIGHT;
+            intent.category = runtime_category::OTHER;
+            break;
+        case alloc_category::KV_CACHE:
+            intent.role     = alloc_role::KV;
+            intent.category = runtime_category::KV_CACHE;
+            break;
+        case alloc_category::COMPUTE_SCRATCH:
+            intent.role     = alloc_role::COMPUTE;
+            intent.category = runtime_category::COMPUTE;
+            break;
+        case alloc_category::STAGING:
+            intent.role     = alloc_role::STAGING;
+            intent.category = runtime_category::STAGING;
+            break;
+        case alloc_category::CONTROL:
+            intent.role                       = alloc_role::GRAPH_TMP;
+            intent.category                   = runtime_category::GRAPH;
+            intent.constraints.must_device    = true;
+            break;
+        case alloc_category::EXPERT_CACHE:
+            intent.role     = alloc_role::EXPERT_STAGING;
+            intent.category = runtime_category::EXPERT_CACHE;
+            break;
+    }
+}
+
+// Returns true if a category is eligible for host-pinned fallback when VRAM is full.
+static bool category_allows_host_fallback(alloc_category cat) {
+    return cat == alloc_category::COMPUTE_SCRATCH || cat == alloc_category::STAGING;
+}
+
+unified_alloc_result unified_cache_allocate(
+    int             device,
+    size_t          size,
+    alloc_category  category,
+    sycl::queue &   queue) {
+
+    unified_alloc_result result{};
+    if (size == 0) {
+        return result;
+    }
+
+    alloc_request req{};
+    req.queue  = &queue;
+    req.device = device;
+    req.size   = size;
+    category_to_intent(category, req.intent);
+
+    alloc_handle handle{};
+    if (unified_alloc(req, &handle)) {
+        result.ptr  = handle.ptr;
+        result.tier = handle.tier;
+        result.size = handle.size;
+        return result;
+    }
+
+    // VRAM allocation failed — try host-pinned fallback for eligible categories.
+    if (category_allows_host_fallback(category) && !req.intent.constraints.must_device) {
+        req.intent.constraints.must_host_pinned = true;
+        req.intent.constraints.must_device      = false;
+        if (unified_alloc(req, &handle)) {
+            result.ptr  = handle.ptr;
+            result.tier = handle.tier;
+            result.size = handle.size;
+            return result;
+        }
+    }
+
+    // All attempts failed
+    return result;
+}
+
+void unified_cache_deallocate(void * ptr, int device) {
+    if (ptr == nullptr) {
+        return;
+    }
+    unified_free_ptr(ptr, device);
 }
 
 bool unified_alloc_validate_registry(int device, const char * where) {
@@ -8175,7 +8264,7 @@ void * unified_cache::load_partial_rows(const char * tensor_name,
     // Allocate device memory on this cache's queue
     void * dev_ptr = nullptr;
     try {
-        dev_ptr = ggml_sycl_malloc_device(partial_bytes, queue_, "unified_cache:partial_rows");
+        dev_ptr = ggml_sycl_malloc_device_raw(partial_bytes, queue_, "unified_cache:partial_rows");
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[PARTIAL-ROWS] malloc_device failed for '%s' device %d: %s\n",
                        tensor_name, device_idx, e.what());
@@ -8401,7 +8490,7 @@ unified_cache::vram_alloc_result unified_cache::allocate(size_t          size,
     void * ptr = nullptr;
     if (try_device) {
         try {
-            ptr = ggml_sycl_malloc_device(size, queue_, label);
+            ptr = ggml_sycl_malloc_device_raw(size, queue_, label);
         } catch (...) {
             ptr = nullptr;
         }
