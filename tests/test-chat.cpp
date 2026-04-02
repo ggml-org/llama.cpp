@@ -1930,6 +1930,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // IBM Granite 4.0 (production template shared by h-tiny, h-small, micro)
+        // Uses <tool_call> XML tags for tool calls, tools in system message
+        auto tst = peg_tester("models/templates/ibm-granite-granite-4.0.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(
+               "<tool_call>\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    {
         // ByteDance-Seed-OSS (reasoning and tool calling model)
         auto tst = peg_tester("models/templates/ByteDance-Seed-OSS.jinja", detailed_debug);
 
@@ -3158,6 +3174,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_reasoning("I will execute python to say hello")
             .expect_content("")
+            .run();
+
+        // Edge cases
+
+        // "<|channel|>commentary to=assistant" before reasoning
+        tst.test(
+               "<|channel|>commentary to=assistant<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // "<|channel|>commentary to=assistant" before final message
+        tst.test(
+               "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>commentary to=assistant<|channel|>final<|message|>Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
             .run();
     }
 
