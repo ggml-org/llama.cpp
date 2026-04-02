@@ -980,15 +980,19 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto channel         = p.literal("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
         auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
 
+        // Occasionally, gpt-oss-20b will prefix channels with this commentary
+        auto commentary_to_assistant = p.optional(p.literal("<|channel|>commentary to=assistant"));
+        auto start_analysis = commentary_to_assistant + p.literal("<|channel|>analysis<|message|>");
+
         if (extract_reasoning) {
-            p.rule("analysis", p.literal("<|channel|>analysis<|message|>") + p.reasoning(content) + end);
+            p.rule("analysis", start_analysis + p.reasoning(content) + end);
         } else {
-            p.rule("analysis", p.content(p.literal("<|channel|>analysis<|message|>") + content + end));
+            p.rule("analysis", p.content(start_analysis + content + end));
         }
 
         auto analysis = p.ref("analysis");
         auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
-        auto final_msg = p.rule("final", p.literal("<|channel|>final<|message|>") + p.content(content));
+        auto final_msg = p.rule("final", commentary_to_assistant + p.literal("<|channel|>final<|message|>") + p.content(content));
 
         // Consume any unsolicited tool calls, e.g. builtin functions
         auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
@@ -1054,6 +1058,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^\\s+to$" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^<\\|channel\\|>(?:commentary|analysis)\\s+to=functions$" },
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(\\s+to)" },
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(<\\|channel\\|>(?:commentary|analysis)\\s+to)" }
         };
