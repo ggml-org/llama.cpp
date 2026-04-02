@@ -4983,12 +4983,18 @@ class Step3VLVisionModel(MmprojModel):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
 
+        projector_stride = int(self.hparams.get("understand_projector_stride", -1))
+        hidden_size = int(self.hparams_vision.get("hidden_size", self.hparams_vision.get("width", -1)))
+        num_layers = int(self.hparams_vision.get("num_hidden_layers", self.hparams_vision.get("layers", -1)))
+        assert (projector_stride, int(self.hparams_vision.get("image_size", -1)), hidden_size, num_layers) == (2, 728, 1536, 47), (
+            "current Step3-VL conversion path is only validated for Step3-VL-10B"
+        )
+
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.STEP3VL)
         self.gguf_writer.add_vision_attention_layernorm_eps(float(self.hparams_vision["layer_norm_eps"]))
-        self.gguf_writer.add_vision_projector_scale_factor(4)
-        # 3024 max resize and 504 local crop come from step3-vl-10b processing_step3.py.
+        self.gguf_writer.add_vision_projector_scale_factor(projector_stride ** 2)
+        # 3024 max resize comes from step3-vl-10b processing_step3.py.
         self.gguf_writer.add_vision_preproc_image_size(3024)
-        self.gguf_writer.add_vision_image_crop_resolution(504)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
@@ -13010,6 +13016,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
 
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
+    # TODO: refactor this later to avoid adding exception here
     if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
         return arch
 

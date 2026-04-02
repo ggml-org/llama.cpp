@@ -48,7 +48,6 @@ struct clip_hparams {
 
     // for preprocessor
     int32_t image_longest_edge = 0;
-    int32_t image_crop_resolution = 0;
     int32_t image_min_pixels = -1;
     int32_t image_max_pixels = -1;
     resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;

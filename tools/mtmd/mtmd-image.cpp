@@ -1175,13 +1175,9 @@ int mtmd_image_preprocessor_step3vl::get_image_longest_edge(const clip_hparams &
     return params.image_longest_edge > 0 ? params.image_longest_edge : default_image_longest_edge;
 }
 
-int mtmd_image_preprocessor_step3vl::get_image_crop_size(const clip_hparams & params) {
-    return params.image_crop_resolution > 0 ? params.image_crop_resolution : default_image_crop_size;
-}
-
 int mtmd_image_preprocessor_step3vl::determine_window_size(const clip_hparams & params, int longer, int shorter) {
     const int image_size = params.image_size;
-    const int crop_size  = get_image_crop_size(params);
+    const int crop_size  = default_image_crop_size;
     const float aspect_ratio = static_cast<float>(longer) / shorter;
 
     if (longer <= image_size) {
@@ -1350,7 +1346,7 @@ bool mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img, clip
         img_for_crop = std::move(refined);
     }
 
-    const int crop_size = get_image_crop_size(hparams);
+    const int crop_size = default_image_crop_size;
     for (const auto & slice : instructions.slices) {
         // If the requested patch extends past the source image, pad the out-of-bounds area with black.
         clip_image_u8 patch = crop_with_black_padding(img_for_crop, slice.x, slice.y, slice.size.width, slice.size.height);

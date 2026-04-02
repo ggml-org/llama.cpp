@@ -1343,12 +1343,8 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
-                        get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
                         if (hparams.image_longest_edge == 0) {
                             hparams.image_longest_edge = 3024;
-                        }
-                        if (hparams.image_crop_resolution == 0) {
-                            hparams.image_crop_resolution = 504;
                         }
                         hparams.warmup_image_size = hparams.image_size;
                     } break;

@@ -166,7 +166,6 @@ private:
     static constexpr float crop_rounding_threshold    = 0.2f;
 
     static int get_image_longest_edge(const clip_hparams & params);
-    static int get_image_crop_size(const clip_hparams & params);
     static int determine_window_size(const clip_hparams & params, int longer, int shorter);
     static int calc_crop_extent(int length, int window_size);
     static std::vector<int> calc_grid(int length, int window_size);

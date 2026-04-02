@@ -38,7 +38,6 @@
 #define KEY_IMAGE_SIZE            "clip.vision.image_size"
 #define KEY_IMAGE_MIN_PIXELS      "clip.vision.image_min_pixels"
 #define KEY_IMAGE_MAX_PIXELS      "clip.vision.image_max_pixels"
-#define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
 #define KEY_PREPROC_MIN_TILES     "clip.vision.preproc_min_tiles"
 #define KEY_PREPROC_MAX_TILES     "clip.vision.preproc_max_tiles"
 #define KEY_PREPROC_IMAGE_SIZE    "clip.vision.preproc_image_size"

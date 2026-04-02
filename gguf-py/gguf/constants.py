@@ -304,7 +304,6 @@ class Keys:
         PREPROC_MIN_TILES     = "clip.vision.preproc_min_tiles"
         PREPROC_MAX_TILES     = "clip.vision.preproc_max_tiles"
         PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
-        IMAGE_CROP_RESOLUTION = "clip.vision.image_crop_resolution"
         PATCH_SIZE            = "clip.vision.patch_size"
         EMBEDDING_LENGTH      = "clip.vision.embedding_length"
         FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
