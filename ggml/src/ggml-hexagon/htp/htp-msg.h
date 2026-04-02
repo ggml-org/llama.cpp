@@ -81,7 +81,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS 
 #define HTP_OP_MAX_BUFS    8
-#define HTP_OP_MAX_REQS    128
+#define HTP_OP_MAX_REQS    256
 #define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
 
 enum htp_tensor_flags {
