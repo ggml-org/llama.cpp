@@ -921,7 +921,7 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
 
     // Initialize layout pool for consolidating layout allocations into
     // contiguous chunks (reduces GPU TLB misses from scattered USM mappings).
-    layout_pool_ = std::make_unique<sycl_device_pool>(queue_);
+    layout_pool_ = std::make_unique<sycl_device_pool>(queue_, ggml_sycl_get_device_id_from_queue(queue_));
 
     // Create a separate in-order DMA queue for cache operations (CCS engine).
     // This keeps cache DMA/fill work off the compute queue, preventing

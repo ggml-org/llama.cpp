@@ -33,12 +33,16 @@ void * ggml_sycl_malloc_device_raw(size_t size, const sycl::queue & queue, const
 
 namespace ggml_sycl {
 
+// Forward-declare to avoid circular include with unified-cache.hpp
+size_t unified_cache_total_available_bytes(int device);
+
 class sycl_device_pool {
   public:
     // chunk_size: default size for each large allocation (256 MB).
     // Requests larger than chunk_size get their own dedicated chunk.
-    sycl_device_pool(sycl::queue & queue, size_t chunk_size = 256 * 1024 * 1024)
-        : queue_(queue), default_chunk_size_(chunk_size) {}
+    // device_id: logical device index for VRAM budget queries (-1 = no budget check).
+    sycl_device_pool(sycl::queue & queue, int device_id = -1, size_t chunk_size = 256 * 1024 * 1024)
+        : queue_(queue), device_id_(device_id), default_chunk_size_(chunk_size) {}
 
     ~sycl_device_pool() {
         if (!abandoned_) {
@@ -90,6 +94,16 @@ class sycl_device_pool {
         size_t padded = size + align;  // worst-case alignment padding
         if (padded > chunk_size) {
             chunk_size = padded;
+        }
+
+        // Check if we have enough VRAM for a new chunk
+        if (device_id_ >= 0) {
+            size_t available = unified_cache_total_available_bytes(device_id_);
+            if (chunk_size > available) {
+                GGML_LOG_WARN("[DEVICE-POOL] chunk would exceed VRAM budget (need %.1f MB, have %.1f MB)\n",
+                              chunk_size / (1024.0 * 1024.0), available / (1024.0 * 1024.0));
+                return {};
+            }
         }
 
         // Use _raw to bypass unified_cache_allocate routing — the layout pool
@@ -226,6 +240,7 @@ class sycl_device_pool {
     }
 
     sycl::queue &        queue_;
+    int                  device_id_;
     size_t               default_chunk_size_;
     std::vector<chunk>   chunks_;
     size_t               chunk_bytes_ = 0;
