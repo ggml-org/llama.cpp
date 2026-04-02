@@ -7395,6 +7395,19 @@ void unified_cache_log_budget_summary(int device) {
     }
 }
 
+void unified_cache_seal_layout_pool(int device) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
+        return;
+    }
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
+        return;
+    }
+    cache->seal_layout_pool();
+    GGML_LOG_INFO("[UNIFIED-CACHE] Layout pool sealed on device %d\n", effective_device);
+}
+
 bool unified_cache_is_budget_exceeded(int device) {
     int effective_device = resolve_effective_device(device);
     if (effective_device < 0) {

@@ -56,6 +56,19 @@ class sycl_device_pool {
     sycl_device_pool(sycl_device_pool &&)                  = delete;
     sycl_device_pool & operator=(sycl_device_pool &&)      = delete;
 
+    // After S1-PRELOAD, seal the pool to prevent new chunk allocations.
+    // Subsequent allocations that don't fit in existing chunks return {nullptr, 0}.
+    // This avoids wasting VRAM on new chunks when all dense weights are loaded.
+    void seal() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sealed_ = true;
+    }
+
+    bool sealed() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return sealed_;
+    }
+
     // Result of a pool allocation: pointer + how much NEW physical memory was consumed.
     struct alloc_result {
         void * ptr                = nullptr;
@@ -86,6 +99,11 @@ class sycl_device_pool {
                 alloc_count_++;
                 return { ptr, 0 };
             }
+        }
+
+        // After seal(), don't allocate new chunks — only reuse existing space.
+        if (sealed_) {
+            return {};
         }
 
         // Need a new chunk
@@ -246,6 +264,7 @@ class sycl_device_pool {
     size_t               chunk_bytes_ = 0;
     int                  alloc_count_ = 0;
     bool                 abandoned_   = false;
+    bool                 sealed_     = false;
     mutable std::mutex   mutex_;
 };
 

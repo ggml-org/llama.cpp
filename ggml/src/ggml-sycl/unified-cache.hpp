@@ -939,6 +939,16 @@ class unified_cache {
 
     void print_stats() const;
 
+    // Seal the layout pool to prevent new chunk allocations after S1-PRELOAD.
+    // All dense weights are loaded by then; further layout requests (e.g. late
+    // MoE experts) that don't fit in existing chunks will fall back to
+    // individual allocations instead of wasting a full 256 MB chunk.
+    void seal_layout_pool() {
+        if (layout_pool_) {
+            layout_pool_->seal();
+        }
+    }
+
     // Access the internal SYCL queue (for deferred free of temp allocations
     // made on this queue's context, e.g. GPU-side reorder temp buffers).
     sycl::queue & get_queue() { return queue_; }
@@ -1737,6 +1747,9 @@ size_t unified_cache_evictable_expert_bytes(int device);
 
 // Log budget summary (weights, runtime, available) for diagnostics
 void unified_cache_log_budget_summary(int device);
+
+// Seal the layout pool to prevent new chunk allocations after S1-PRELOAD.
+void unified_cache_seal_layout_pool(int device);
 
 // Check if the cache budget is exceeded (eviction exhausted but used > budget)
 bool unified_cache_is_budget_exceeded(int device);

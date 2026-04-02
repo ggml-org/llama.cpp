@@ -10688,6 +10688,12 @@ static void ggml_sycl_preload_model_weights() {
                               dense_pin_keys.size(), cache_avail / (1024.0f * 1024.0f),
                               cache_budget / (1024.0f * 1024.0f));
             }
+
+            // Seal the layout pool to prevent new 256 MB chunk allocations.
+            // All dense weights are now loaded; any subsequent layout requests
+            // (late MoE experts, warmup conversions) will sub-allocate from
+            // existing chunks or fall back to individual allocations.
+            ggml_sycl::unified_cache_seal_layout_pool(device);
         }
 
         const auto t_end   = std::chrono::steady_clock::now();
@@ -46813,6 +46819,24 @@ normal_dispatch:
     // In prefix mode, dispatch the CPU suffix before record_completion.
     // The RAII guard handles this for early returns; call explicitly for normal exit.
     suffix_guard.dispatch_suffix();
+
+    // Drain the compute queue before returning to the caller.
+    // With large KV caches (32K+ context), the Level Zero driver can hang or
+    // reset (DEVICE_LOST) if too many kernels plus the subsequent deferred D2H
+    // logits copy are queued without an intermediate wait.  This explicit drain
+    // keeps the in-flight command list bounded and prevents the issue.
+    // The overhead is negligible (<0.5 ms) because the queue should be nearly
+    // drained by the time all 999+ nodes have been submitted on an in-order
+    // queue — the GPU is executing in parallel with submission.
+    if (graph_executed && !ggml_sycl_graph_recording_active()) {
+        try {
+            sycl_ctx->stream()->wait_and_throw();
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[SYCL] post-graph drain failed: %s\n", e.what());
+        }
+        // Clear the eviction guard now that all GPU work is done.
+        ggml_sycl::unified_cache_set_graph_compute_active(false);
+    }
 
     record_completion(graph_executed);
     ggml_sycl_watchdog_heartbeat();
