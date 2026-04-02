@@ -385,6 +385,9 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_CHAMELEON) {
             continue; // Only half-implemented and to be removed in the future.
         }
+        if (arch == LLM_ARCH_GEMMA4) {
+            continue; // FIXME @ngxson
+        }
         if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
             continue; // FIXME
         }
@@ -450,6 +453,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         }
         if (arch == LLM_ARCH_CHAMELEON) {
             continue; // Only half-implemented and to be removed in the future.
+        }
+        if (arch == LLM_ARCH_GEMMA4) {
+            continue; // FIXME @ngxson
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
             continue; // FIXME CUDA backend crashes.

@@ -100,6 +100,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
 
         bool has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
         bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+        bool pure_content        = reasoning.mode == reasoning_mode::NONE;
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
@@ -107,12 +108,14 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
                 response_format
             }) + p.end();
+            pure_content = false;
         } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
             parser = tools.build_parser(ctx);
+            pure_content = false;
         } else {
             parser = content.build_parser(ctx);
         }
-        return p.prefix(inputs.generation_prompt, reasoning.start) + parser;
+        return pure_content ? p.prefix(inputs.generation_prompt, reasoning.start) + parser : p.prefix(inputs.generation_prompt, reasoning.start) << parser;
     });
 }
 
@@ -166,6 +169,8 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
             return build_tool_parser_tag_json(ctx);
         case tool_format::TAG_WITH_TAGGED:
             return build_tool_parser_tag_tagged(ctx);
+        case tool_format::TAG_WITH_GEMMA4_DICT:
+            return build_tool_parser_tag_gemma4_dict(ctx);
         default:
             LOG_ERR("[ERROR] Template seems to support tool calls, but failed to determine tool format. Tool calling will not work properly. "
                 "Check for a fixed template for your model in the models/templates directory of your llama.cpp installation or "
@@ -428,6 +433,115 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(content_before_tools))) + tool_calls +
            p.end();
+}
+
+common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_context & ctx) const {
+    auto &       p           = ctx.p;
+    const auto & inputs      = ctx.inputs;
+    bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    // The Gemma4 string quote token used in place of JSON "
+    static const std::string QUOTE = "<|\"|>";
+
+    common_peg_parser tool_choice = p.choice();
+
+    foreach_function(inputs.tools, [&](const json & tool) {
+        const auto & func   = tool.at("function");
+        std::string  name   = func.at("name");
+        const auto & params = func.at("parameters");
+
+        if (!params.contains("properties") || !params.at("properties").is_object()) {
+            // No arguments - just match the function name with empty braces
+            auto func_parser = p.atomic(
+                p.tool_open(p.literal(function.name_prefix) + p.tool_name(p.literal(name)) + p.literal("{")) +
+                p.tool_args(p.eps()) +
+                p.tool_close(p.literal("}")));
+            tool_choice |= p.rule("tool-" + name, func_parser);
+            return;
+        }
+
+        const auto &          properties = params.at("properties");
+        std::set<std::string> required;
+        if (params.contains("required") && params.at("required").is_array()) {
+            params.at("required").get_to(required);
+        }
+
+        // Build per-argument parsers, sorted alphabetically (matching template's dictsort)
+        struct arg_entry {
+            std::string       param_name;
+            common_peg_parser parser;
+        };
+        std::vector<arg_entry> arg_entries;
+
+        for (const auto & [param_name, param_schema] : properties.items()) {
+            std::string type    = "object";
+            auto        type_v  = param_schema.contains("type") ? param_schema.at("type") : json::object();
+            if (type_v.is_string()) type_v.get_to(type);
+
+            common_peg_parser value_parser = p.eps();
+            if (type == "string") {
+                // String values are delimited by <|"|>...<|"|>
+                value_parser =
+                    p.literal(QUOTE) +
+                    p.tool_arg_string_value(p.schema(p.until(QUOTE),
+                        "tool-" + name + "-arg-" + param_name + "-schema", param_schema, true)) +
+                    p.literal(QUOTE);
+            } else {
+                // Numbers, booleans: raw text up to the next comma or closing brace
+                value_parser = p.tool_arg_value(p.until_one_of({",", "}"}));
+            }
+
+            auto arg = p.tool_arg(
+                p.tool_arg_open(p.tool_arg_name(p.literal(param_name)) + p.literal(":")) +
+                value_parser +
+                p.tool_arg_close(p.eps()));
+
+            arg_entries.push_back({param_name, p.rule("tool-" + name + "-arg-" + param_name, arg)});
+        }
+
+        // Sort alphabetically to match Jinja's dictsort
+        std::sort(arg_entries.begin(), arg_entries.end(), [](const auto & a, const auto & b) {
+            return a.param_name < b.param_name;
+        });
+
+        // Build arg sequence: any arg, then zero-or-more comma-separated additional args
+        common_peg_parser args_seq = p.eps();
+        if (!arg_entries.empty()) {
+            common_peg_parser any_arg = p.choice();
+            for (auto & entry : arg_entries) {
+                any_arg |= entry.parser;
+            }
+            args_seq = p.optional(
+                any_arg + p.repeat(p.literal(",") + any_arg, 0, (int) arg_entries.size() - 1));
+        }
+
+        // Full parser: call:name{args}
+        auto func_parser = p.atomic(
+            p.tool_open(p.literal(function.name_prefix) + p.tool_name(p.literal(name)) + p.literal("{")) +
+            p.tool_args(args_seq) +
+            p.tool_close(p.literal("}")));
+
+        tool_choice |= p.rule("tool-" + name, func_parser);
+    });
+
+    // Wrap each call in <|tool_call>...</tool_call|>
+    auto wrapped_call = p.literal(format.per_call_start) + tool_choice + p.literal(format.per_call_end);
+
+    common_peg_parser tool_calls = p.eps();
+    if (inputs.parallel_tool_calls) {
+        tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
+    } else {
+        tool_calls = p.trigger_rule("tool-call", wrapped_call);
+    }
+
+    if (!force_tools) {
+        tool_calls = p.optional(tool_calls);
+    }
+
+    auto content_before_tools = p.until(format.per_call_start);
+    return ctx.reasoning_parser +
+           (force_tools ? p.eps() : p.optional(p.content(content_before_tools))) +
+           tool_calls + p.end();
 }
 
 }  // namespace autoparser
