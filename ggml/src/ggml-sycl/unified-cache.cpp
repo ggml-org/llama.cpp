@@ -7072,15 +7072,16 @@ size_t unified_cache_available_for_compute(int device) {
         return 0;
     }
 
-    // Use budget-based availability as the primary limit.  The budget already
-    // accounts for reserved bytes (KV cache, compute buffers) and VRAM_BUDGET_PCT.
-    // Previously this function returned live free VRAM which could exceed the budget
-    // (e.g. 13 GB free on B50 but only 10.8 GB budget after reserves), causing
-    // Phase 2 expert uploads to overshoot and trigger budget-exceeded crashes later.
+    // Use the unified total-available view that sums BOTH budget channels
+    // (weights from used_ + runtime from g_runtime_reserved_bytes).
+    // Previously this only checked cache->available_for_compute() which relies
+    // on reserved_ being kept in sync via update_reserved_bytes() — a TOCTOU
+    // gap that could let the compute pool over-allocate when weights consumed
+    // VRAM between the last update_reserved_bytes call and this query.
     //
     // We still query live VRAM as a safety cap: if the driver reports less free
     // memory than the budget says, use the lower value.
-    const size_t budget_avail = cache->available_for_compute();
+    const size_t budget_avail = unified_cache_total_available_bytes(device);
     size_t free_vram = 0, total_vram = 0;
     ggml_backend_sycl_get_device_memory(effective_device, &free_vram, &total_vram);
     if (free_vram == 0) {
@@ -7091,6 +7092,34 @@ size_t unified_cache_available_for_compute(int device) {
     const size_t headroom   = size_t(256) << 20;
     const size_t live_avail = free_vram > headroom ? free_vram - headroom : 0;
     return std::min(budget_avail, live_avail);
+}
+
+size_t unified_cache_total_committed_bytes(int device) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
+        return 0;
+    }
+    // Use baseline-adjusted runtime bytes: base_budget_ was computed from free
+    // VRAM at init, which already excluded pre-existing runtime allocations.
+    // Using raw g_runtime_reserved_bytes would double-count the baseline.
+    const size_t runtime = runtime_reserved_adjusted_nolock(effective_device);
+    unified_cache * cache = get_cache_shared(effective_device);
+    const size_t weights = cache ? cache->weight_bytes() : 0;
+    return runtime + weights;
+}
+
+size_t unified_cache_total_available_bytes(int device) {
+    int effective_device = resolve_effective_device(device);
+    if (effective_device < 0) {
+        return 0;
+    }
+    unified_cache * cache = get_cache_shared(effective_device);
+    if (!cache) {
+        return 0;
+    }
+    const size_t base      = cache->base_budget();
+    const size_t committed = unified_cache_total_committed_bytes(device);
+    return base > committed ? base - committed : 0;
 }
 
 size_t unified_cache_total_managed(int device) {
@@ -7174,17 +7203,23 @@ void unified_cache_log_budget_summary(int device) {
         model_size, moe_total_log, n_exp_log, n_exp_used_log);
     const bool exceeds = (model_size > 0) && (effective_model > avail_for_wt);
 
+    const size_t committed = unified_cache_total_committed_bytes(device);
+    const size_t total_avl = unified_cache_total_available_bytes(device);
+
     GGML_LOG_INFO(
         "[UNIFIED-CACHE] Budget summary for device %d:\n"
         "  Total VRAM budget:    %8.1f MB\n"
         "  Weight bytes (used_): %8.1f MB\n"
         "  Runtime reserved:     %8.1f MB\n"
+        "  Total committed:      %8.1f MB  (weights + runtime)\n"
+        "  Total available:      %8.1f MB  (budget - committed)\n"
         "  Effective budget:     %8.1f MB\n"
         "  Available for alloc:  %8.1f MB\n"
         "  Avail for weights:    %8.1f MB\n"
         "  Budget pct:           %8d %%\n"
         "  Model exceeds VRAM:   %8s\n",
         device, base / (1024.0f * 1024.0f), wt / (1024.0f * 1024.0f), rt / (1024.0f * 1024.0f),
+        committed / (1024.0f * 1024.0f), total_avl / (1024.0f * 1024.0f),
         eff / (1024.0f * 1024.0f), avl / (1024.0f * 1024.0f), avail_for_wt / (1024.0f * 1024.0f), budget_pct,
         exceeds ? "yes" : "no");
 
@@ -7249,7 +7284,13 @@ bool unified_cache_is_budget_exceeded(int device) {
     if (!cache) {
         return false;
     }
-    return cache->is_budget_exceeded();
+    // Check the unified view: total committed (weights + runtime) > base budget.
+    // The per-cache is_budget_exceeded() only checks used_ > budget_ which can
+    // miss over-allocation when runtime_bytes grew since the last
+    // update_reserved_bytes() call.
+    const size_t committed = unified_cache_total_committed_bytes(device);
+    const size_t base      = cache->base_budget();
+    return cache->is_budget_exceeded() || committed > base;
 }
 
 bool unified_cache_has_evictions() {
@@ -7307,8 +7348,10 @@ unified_budget_info unified_cache_get_budget_info(int device) {
         info.budget_bytes  = unified_cache_total_managed(device);
         info.weight_bytes  = unified_cache_weight_bytes(device);
         info.runtime_bytes = unified_cache_get_runtime_bytes(device);
+        info.total_committed = unified_cache_total_committed_bytes(device);
         info.available_for_weights =
             info.budget_bytes > info.runtime_bytes ? info.budget_bytes - info.runtime_bytes : 0;
+        info.total_available = unified_cache_total_available_bytes(device);
     } else {
         // Cache not yet initialized — use raw calculation
         info.budget_bytes     = static_cast<size_t>(info.total_vram * (static_cast<double>(pct) / 100.0));
@@ -7317,6 +7360,8 @@ unified_budget_info unified_cache_get_budget_info(int device) {
             info.budget_bytes = info.total_vram - headroom;
         }
         info.available_for_weights = info.budget_bytes;
+        info.total_committed       = 0;
+        info.total_available       = info.budget_bytes;
     }
 
     // Populate MoE fields from tensor inventory

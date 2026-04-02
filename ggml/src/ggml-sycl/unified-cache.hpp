@@ -1669,6 +1669,15 @@ size_t unified_cache_get_runtime_host_bytes();
 // Query available VRAM for non-weight allocations (KV, compute, staging).
 size_t unified_cache_available_for_compute(int device);
 
+// Total VRAM committed across BOTH budget channels (weights + runtime).
+// This is the single authoritative number for "how much VRAM are we using?"
+//   = runtime_reserved_bytes[device] + cache->used() (weight layout bytes)
+size_t unified_cache_total_committed_bytes(int device);
+
+// Total VRAM still allocatable = base_budget - total_committed.
+// This is the single authoritative number for "how much VRAM can we still use?"
+size_t unified_cache_total_available_bytes(int device);
+
 // Raw VRAM budget before reservations (= free VRAM * budget_pct at init)
 size_t unified_cache_total_managed(int device);
 
@@ -1700,7 +1709,9 @@ struct unified_budget_info {
     size_t budget_bytes;           // Managed budget (total * pct - headroom)
     size_t weight_bytes;           // Current weight cache usage
     size_t runtime_bytes;          // KV + compute + staging + graph
+    size_t total_committed;        // weight_bytes + runtime_bytes (single VRAM ledger)
     size_t available_for_weights;  // budget - runtime (what can hold weights)
+    size_t total_available;        // budget - total_committed (what can still be allocated)
     int    budget_pct;             // GGML_SYCL_VRAM_BUDGET_PCT value used
     // model_exceeds_vram removed — unified non-blocking cache handles all model sizes
     // MoE expert breakdown (non-zero only for MoE models)
