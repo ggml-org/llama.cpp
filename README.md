@@ -110,3 +110,10 @@ Not in scope for this public fork:
 - quantizer research code
 - private mixed-policy search tooling
 - HF upload helpers
+
+## Credits
+
+- `TheTom/turboquant_plus` for public TurboQuant KV-cache engineering, benchmarking, and implementation notes:
+  - https://github.com/TheTom/turboquant_plus
+- `TheTom/ik_llama.cpp` for related open-source runtime work in the same area:
+  - https://github.com/TheTom/ik_llama.cpp
