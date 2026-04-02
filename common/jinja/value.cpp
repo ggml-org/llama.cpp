@@ -797,6 +797,8 @@ const func_builtins & value_bool_t::get_builtins() const {
 const func_builtins & value_array_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
+        {"upper", empty_value_fn<value_string>},
+        {"lower", empty_value_fn<value_string>},
         {"list", [](const func_args & args) -> value {
             args.ensure_vals<value_array>();
             const auto & arr = args.get_pos(0)->as_array();
