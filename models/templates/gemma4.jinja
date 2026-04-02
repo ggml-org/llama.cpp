@@ -15,12 +15,13 @@
                 {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
                 nullable:true
             {%- endif -%}
-            {%- if value['type'] | upper == 'STRING' -%}
+            {%- set value_type = value['type'] if value['type'] is string else value['type'][0] -%}
+            {%- if value_type | upper == 'STRING' -%}
                 {%- if value['enum'] -%}
                     {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
                     enum:{{ format_argument(value['enum']) }}
                 {%- endif -%}
-            {%- elif value['type'] | upper == 'OBJECT' -%}
+            {%- elif value_type | upper == 'OBJECT' -%}
                 ,properties:{
                 {%- if value['properties'] is defined and value['properties'] is mapping -%}
                     {{- format_parameters(value['properties'], value['required'] | default([])) -}}
@@ -36,7 +37,7 @@
                     {%- endfor -%}
                     ]
                 {%- endif -%}
-            {%- elif value['type'] | upper == 'ARRAY' -%}
+            {%- elif value_type | upper == 'ARRAY' -%}
                 {%- if value['items'] is mapping and value['items'] -%}
                     ,items:{
                     {%- set ns_items = namespace(found_first=false) -%}
@@ -72,7 +73,7 @@
                 {%- endif -%}
             {%- endif -%}
             {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
-            type:<|"|>{{ value['type'] | upper }}<|"|>}
+            type:<|"|>{{ value_type | upper }}<|"|>}
         {%- endif -%}
     {%- endfor -%}
 {%- endmacro -%}
