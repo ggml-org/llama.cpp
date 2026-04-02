@@ -392,9 +392,9 @@
 							</div>
 
 							<div class="flex flex-wrap gap-3 text-xs text-muted-foreground">
-								<span>Decoded: <strong class="text-foreground">{slot.n_decoded}</strong></span>
-								<span>Remaining: <strong class="text-foreground">{slot.n_remain}</strong></span>
-								<span>Context: <strong class="text-foreground">{slot.n_ctx}</strong></span>
+								<span>Decoded: <strong class="text-foreground">{slot.n_decoded ?? 0}</strong></span>
+								<span>Remaining: <strong class="text-foreground">{slot.n_remain === -1 ? '∞' : slot.n_remain ?? 0}</strong></span>
+								<span>Context: <strong class="text-foreground">{(slot.n_ctx ?? 0).toLocaleString()}</strong></span>
 							</div>
 						{:else}
 							{@const history = slotHistory.get(slot.id)}
@@ -424,6 +424,10 @@
 											</p>
 										</div>
 									{/if}
+									<div class="flex flex-wrap gap-3 text-xs text-muted-foreground">
+										<span>Decoded: <strong class="text-foreground">{history.n_decoded}</strong></span>
+										<span>Context: <strong class="text-foreground">{(slot.n_ctx ?? 0).toLocaleString()}</strong></span>
+									</div>
 								</div>
 							{:else}
 								<p class="text-sm text-muted-foreground">Waiting for request...</p>
