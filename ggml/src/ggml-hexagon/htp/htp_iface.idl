@@ -11,6 +11,7 @@ interface htp_iface : remote_handle64 {
     AEEResult stop();
     AEEResult enable_etm();
     AEEResult disable_etm();
+    AEEResult unmap_buffers();
 };
 
 #endif /* HTP_IDL */

@@ -271,6 +271,7 @@ struct ggml_backend_hexagon_buffer_context {
     void unmap() {
         if (!this->mapped) return;
 
+        htp_iface_unmap_buffers(sess->handle);
         fastrpc_munmap(sess->domain_id, this->fd, (void *) this->base, this->size);
 
         HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->name.c_str(),

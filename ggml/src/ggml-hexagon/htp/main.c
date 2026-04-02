@@ -148,6 +148,27 @@ AEEResult htp_iface_disable_etm(remote_handle64 handle) {
     return err;
 }
 
+AEEResult htp_iface_unmap_buffers(remote_handle64 handle) {
+    struct htp_context * ctx = (struct htp_context *) handle;
+
+    if (!ctx) {
+        return AEE_EBADPARM;
+    }
+
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+        struct htp_mmap *m = &ctx->mmap[i];
+        if (m->size) {
+            FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
+            HAP_munmap2((void *) m->base, m->size);
+            m->size = 0;
+            m->base = NULL;
+            m->fd   = -1;
+        }
+    }
+
+    return AEE_SUCCESS;
+}
+
 static void vtcm_acquire(struct htp_context * ctx) {
     if (ctx->vtcm_valid) return;
 
