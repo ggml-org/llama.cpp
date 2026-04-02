@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Component } from 'svelte';
 	import { Download, Upload, Trash2, Database } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
@@ -7,6 +8,14 @@
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
+
+	type SectionOpts = {
+		wrapperClass?: string;
+		titleClass?: string;
+		buttonVariant?: 'outline' | 'destructive';
+		buttonClass?: string;
+		summary?: { show: boolean; verb: string; items: DatabaseConversation[] };
+	};
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -175,6 +184,54 @@
 	}
 </script>
 
+{#snippet summaryList(show: boolean, verb: string, items: DatabaseConversation[])}
+	{#if show && items.length > 0}
+		<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
+			<h5 class="mb-2 text-sm font-medium">
+				{verb}
+				{items.length} conversation{items.length === 1 ? '' : 's'}
+			</h5>
+
+			<ul class="space-y-1 text-sm text-muted-foreground">
+				{#each items.slice(0, 10) as conv (conv.id)}
+					<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
+				{/each}
+
+				{#if items.length > 10}
+					<li class="italic">... and {items.length - 10} more</li>
+				{/if}
+			</ul>
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet section(
+	title: string,
+	description: string,
+	Icon: Component,
+	buttonText: string,
+	onclick: () => void,
+	opts: SectionOpts
+)}
+	{@const buttonClass = opts?.buttonClass ?? 'justify-start justify-self-start md:w-auto'}
+	{@const buttonVariant = opts?.buttonVariant ?? 'outline'}
+	<div class="grid gap-1 {opts?.wrapperClass ?? ''}">
+		<h4 class="mt-0 mb-2 text-sm font-medium {opts?.titleClass ?? ''}">{title}</h4>
+
+		<p class="mb-4 text-sm text-muted-foreground">{description}</p>
+
+		<Button class={buttonClass} {onclick} variant={buttonVariant}>
+			<Icon class="mr-2 h-4 w-4" />
+
+			{buttonText}
+		</Button>
+
+		{#if opts?.summary}
+			{@render summaryList(opts.summary.show, opts.summary.verb, opts.summary.items)}
+		{/if}
+	</div>
+{/snippet}
+
 <div class="space-y-6" in:fade={{ duration: 150 }}>
 	<div class="flex items-center gap-2 pb-4">
 		<Database class="h-5 w-5 md:h-6 md:w-6" />
@@ -182,106 +239,42 @@
 		<h1 class="text-xl font-semibold md:text-2xl">Import / Export</h1>
 	</div>
 
-	<div class="space-y-4">
-		<div class="grid">
-			<h4 class="mt-0 mb-2 text-sm font-medium">Export Conversations</h4>
+	<div class="space-y-6">
+		{@render section(
+			'Export Conversations',
+			'Download all your conversations as a JSON file. This includes all messages, attachments, and conversation history.',
+			Download,
+			'Export conversations',
+			handleExportClick,
+			{ summary: { show: showExportSummary, verb: 'Exported', items: exportedConversations } }
+		)}
 
-			<p class="mb-4 text-sm text-muted-foreground">
-				Download all your conversations as a JSON file. This includes all messages, attachments, and
-				conversation history.
-			</p>
+		{@render section(
+			'Import Conversations',
+			'Import one or more conversations from a previously exported JSON file. This will merge with your existing conversations.',
+			Upload,
+			'Import conversations',
+			handleImportClick,
+			{
+				wrapperClass: 'border-t border-border/30 pt-6',
+				summary: { show: showImportSummary, verb: 'Imported', items: importedConversations }
+			}
+		)}
 
-			<Button
-				class="w-full justify-start justify-self-start md:w-auto"
-				onclick={handleExportClick}
-				variant="outline"
-			>
-				<Download class="mr-2 h-4 w-4" />
-
-				Export conversations
-			</Button>
-
-			{#if showExportSummary && exportedConversations.length > 0}
-				<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
-					<h5 class="mb-2 text-sm font-medium">
-						Exported {exportedConversations.length} conversation{exportedConversations.length === 1
-							? ''
-							: 's'}
-					</h5>
-
-					<ul class="space-y-1 text-sm text-muted-foreground">
-						{#each exportedConversations.slice(0, 10) as conv (conv.id)}
-							<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
-						{/each}
-
-						{#if exportedConversations.length > 10}
-							<li class="italic">
-								... and {exportedConversations.length - 10} more
-							</li>
-						{/if}
-					</ul>
-				</div>
-			{/if}
-		</div>
-
-		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mt-0 mb-2 text-sm font-medium">Import Conversations</h4>
-
-			<p class="mb-4 text-sm text-muted-foreground">
-				Import one or more conversations from a previously exported JSON file. This will merge with
-				your existing conversations.
-			</p>
-
-			<Button
-				class="w-full justify-start justify-self-start md:w-auto"
-				onclick={handleImportClick}
-				variant="outline"
-			>
-				<Upload class="mr-2 h-4 w-4" />
-				Import conversations
-			</Button>
-
-			{#if showImportSummary && importedConversations.length > 0}
-				<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
-					<h5 class="mb-2 text-sm font-medium">
-						Imported {importedConversations.length} conversation{importedConversations.length === 1
-							? ''
-							: 's'}
-					</h5>
-
-					<ul class="space-y-1 text-sm text-muted-foreground">
-						{#each importedConversations.slice(0, 10) as conv (conv.id)}
-							<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
-						{/each}
-
-						{#if importedConversations.length > 10}
-							<li class="italic">
-								... and {importedConversations.length - 10} more
-							</li>
-						{/if}
-					</ul>
-				</div>
-			{/if}
-		</div>
-
-		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mt-0 mb-2 text-sm font-medium text-destructive">Delete All Conversations</h4>
-
-			<p class="mb-4 text-sm text-muted-foreground">
-				Permanently delete all conversations and their messages. This action cannot be undone.
-				Consider exporting your conversations first if you want to keep a backup.
-			</p>
-
-			<Button
-				class="text-destructive-foreground w-full justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
-				onclick={handleDeleteAllClick}
-				variant="destructive"
-			>
-				<Trash2 class="mr-2 h-4 w-4" />
-
-				Delete all conversations
-			</Button>
-		</div>
+		{@render section(
+			'Delete All Conversations',
+			'Permanently delete all conversations and their messages. This action cannot be undone. Consider exporting your conversations first if you want to keep a backup.',
+			Trash2,
+			'Delete all conversations',
+			handleDeleteAllClick,
+			{
+				wrapperClass: 'border-t border-border/30 pt-4',
+				titleClass: 'text-destructive',
+				buttonVariant: 'destructive',
+				buttonClass:
+					'text-destructive-foreground justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto'
+			}
+		)}
 	</div>
 </div>
 

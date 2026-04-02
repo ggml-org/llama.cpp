@@ -282,7 +282,7 @@
 									: 'text-muted-foreground',
 						isOpen ? 'text-foreground' : ''
 					)}
-					style="max-width: min(calc(100cqw - 9rem), 24rem)"
+					style="max-width: min(calc(100cqw - 9rem), 25rem)"
 					disabled={disabled || updating}
 				>
 					<Package class="h-3.5 w-3.5" />

@@ -1,8 +1,6 @@
 <script lang="ts">
-	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { SIDEBAR_WIDTH_MOBILE } from './constants.js';
 	import { useSidebar } from './context.svelte.js';
 
 	let {
@@ -33,29 +31,10 @@
 	>
 		{@render children?.()}
 	</div>
-{:else if sidebar.isMobile}
-	<Sheet.Root bind:open={() => sidebar.openMobile, (v) => sidebar.setOpenMobile(v)} {...restProps}>
-		<Sheet.Content
-			data-sidebar="sidebar"
-			data-slot="sidebar"
-			data-mobile="true"
-			class="z-99999 w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground sm:z-99 [&>button]:hidden"
-			style="--sidebar-width: {SIDEBAR_WIDTH_MOBILE};"
-			{side}
-		>
-			<Sheet.Header class="sr-only">
-				<Sheet.Title>Sidebar</Sheet.Title>
-				<Sheet.Description>Displays the mobile sidebar.</Sheet.Description>
-			</Sheet.Header>
-			<div class="flex h-full w-full flex-col">
-				{@render children?.()}
-			</div>
-		</Sheet.Content>
-	</Sheet.Root>
 {:else}
 	<div
 		bind:this={ref}
-		class="group peer hidden text-sidebar-foreground md:block"
+		class="group peer block text-sidebar-foreground"
 		data-state={sidebar.state}
 		data-collapsible={sidebar.state === 'collapsed' ? collapsible : ''}
 		data-variant={variant}
@@ -67,8 +46,11 @@
 			data-slot="sidebar-gap"
 			class={cn(
 				'relative bg-transparent transition-[width] duration-200 ease-linear',
-				variant === 'floating' ? 'w-[calc(var(--sidebar-width)+0.75rem)]' : 'w-(--sidebar-width)',
-				'group-data-[collapsible=offcanvas]:w-0',
+				'w-0',
+				variant === 'floating'
+					? 'md:w-[calc(var(--sidebar-width)+0.75rem)]'
+					: 'md:w-(--sidebar-width)',
+				'md:group-data-[collapsible=offcanvas]:w-0',
 				'group-data-[side=right]:rotate-180',
 				variant === 'floating' || variant === 'inset'
 					? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
@@ -79,7 +61,7 @@
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-				'fixed inset-y-0 z-999 hidden w-(--sidebar-width) duration-200 ease-linear md:z-0 md:flex',
+				'fixed inset-y-0 z-[900] flex w-[calc(100dvw-1.5rem)] duration-200 ease-linear md:z-0 md:w-(--sidebar-width)',
 				variant === 'floating'
 					? [
 							'transition-[left,right,width,opacity]',

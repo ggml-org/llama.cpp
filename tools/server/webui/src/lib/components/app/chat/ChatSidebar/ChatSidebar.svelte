@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil } from '@lucide/svelte';
+	import { Trash2, Pencil, X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -140,6 +141,7 @@
 			searchQuery = '';
 		}
 
+		handleMobileSidebarItemClick();
 		await goto(`#/chat/${id}`);
 	}
 
@@ -149,13 +151,25 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<ScrollArea class="flex-1">
+	<ScrollArea class="h-full flex-1">
 		<Sidebar.Header
-			class=" top-0 z-10 gap-4 bg-sidebar/50 p-3 pt-4 pb-2 backdrop-blur-lg md:sticky"
+			class=" sticky top-0 z-10 gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2"
 		>
-			<a href="#/" onclick={handleMobileSidebarItemClick}>
-				<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
-			</a>
+			<div class="flex items-center justify-between">
+				<a href="#/" onclick={handleMobileSidebarItemClick}>
+					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
+				</a>
+
+				<Button
+					class="rounded-full md:hidden"
+					variant="ghost"
+					size="icon"
+					onclick={() => sidebar.toggle()}
+				>
+					<X class="h-4 w-4" />
+					<span class="sr-only">Close sidebar</span>
+				</Button>
+			</div>
 
 			<ChatSidebarActions
 				bind:this={chatSidebarActions}
@@ -209,11 +223,11 @@
 				</Sidebar.Menu>
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
-	</ScrollArea>
 
-	<Sidebar.Footer>
-		<ChatSidebarFooter />
-	</Sidebar.Footer>
+		<Sidebar.Footer class="sticky bottom-0 z-10 mt-2 bg-sidebar/50 p-3 backdrop-blur-lg">
+			<ChatSidebarFooter />
+		</Sidebar.Footer>
+	</ScrollArea>
 </div>
 
 <DialogConfirmation

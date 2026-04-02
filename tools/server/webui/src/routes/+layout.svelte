@@ -248,8 +248,8 @@
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(isSettingsRoute && !isDesktop)}
 				<Sidebar.Trigger
 					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-						? 'md:left-[calc(var(--sidebar-width)+0.75rem)]'
-						: 'md:left-0!'}"
+						? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+						: 'left-0!'}"
 					style="translate: 1rem 1rem;"
 				/>
 			{/if}

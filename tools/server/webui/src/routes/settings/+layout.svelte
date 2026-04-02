@@ -2,12 +2,23 @@
 	import { X } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
+	import { page } from '$app/state';
 	import { ActionIcon } from '$lib/components/app';
 
 	let { children } = $props();
 
+	let previousRouteId = $state<string | null>(null);
+
+	$effect(() => {
+		const currentId = page.route.id;
+		return () => {
+			previousRouteId = currentId;
+		};
+	});
+
 	function handleClose() {
-		if (browser && window.history.length > 1) {
+		const prevIsSettings = previousRouteId?.startsWith('/settings');
+		if (browser && window.history.length > 1 && !prevIsSettings) {
 			history.back();
 		} else {
 			goto('#/');

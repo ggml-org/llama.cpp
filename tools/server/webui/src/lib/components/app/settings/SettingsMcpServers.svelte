@@ -85,7 +85,7 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }}>
+<div in:fade={{ duration: 150 }} class="max-h-full overflow-auto">
 	<div class="flex items-center gap-2 p-4 md:absolute md:top-8 md:left-8 md:p-0">
 		<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
@@ -141,7 +141,10 @@
 		{/if}
 
 		{#if servers.length > 0}
-			<div class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(28rem, 1fr));">
+			<div
+				class="grid gap-3"
+				style="grid-template-columns: repeat(auto-fill, minmax(min(32rem, calc(100dvw - 2rem)), 1fr));"
+			>
 				{#each servers as server (server.id)}
 					{#if !initialLoadComplete}
 						<McpServerCardSkeleton />
