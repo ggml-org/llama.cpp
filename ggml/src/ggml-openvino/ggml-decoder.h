@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ggml-quants.h"
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "openvino/decoder.h"
 
@@ -9,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
-#include <optional>
 #include <vector>
 
 struct ModelParams {
@@ -239,7 +239,8 @@ public:
     }
 
     inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]);
+        return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
+               (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
     }
 
     inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -247,7 +248,8 @@ public:
     }
 
     inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_SET_ROWS && op->src[2] == tensor;
+        return (op->op == GGML_OP_SET_ROWS && op->src[2] == tensor) ||
+               tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
     }
 
     inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {

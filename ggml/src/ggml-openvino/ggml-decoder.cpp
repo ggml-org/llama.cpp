@@ -1,20 +1,15 @@
 #include "ggml-decoder.h"
 
-#include "ggml-backend-impl.h"
-#include "ggml-backend.h"
+#include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino.h"
 #include "ggml-quants.h"
-
-#include <ggml-impl.h>
-#include <ggml.h>
 
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <execution>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -30,12 +25,10 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/runtime/tensor.hpp>
-#include <optional>
 #include <ostream>
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
@@ -159,7 +152,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             if (src->ne[2] * src->ne[3] == node->ne[1]) {
                 op_case = 5;
             }
-        } else if (src->ne[0] * src->ne[1] == node->ne[1]) {
+        } else if (src->ne[0] * src->ne[1] * src->ne[2] == node->ne[1]) {
             op_case = 3;
         } else if (src->ne[1] * src->ne[2] == node->ne[1]) {
             op_case = 6;
@@ -173,20 +166,40 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             // kv cache tensor
             std::string src_name(node->view_src->name);
             int layer = extract_layer_from_name(src_name);
-            if (!is_swa_layer(layer)) {
-                op_case = 2;
+            if (ggml_is_contiguous(node->src[0])) {
+                // -  19: [    64,     8,   256,     1] VIEW            cache_k_l0 (view)             [ 2,   128,  1024, 1048576]
+                //         [   512,  1024,     1,     1]      0: NONE     cache_k_l0                    [ 2,  1024, 1048576, 1048576]
+                // -  20: [    64,   256,     8,     1] PERMUTE         cache_k_l0 (view) (permuted)  [ 2,  1024,   128, 1048576]
+                //         [    64,     8,   256,     1]      0: VIEW     cache_k_l0 (view)             [ 2,   128,  1024, 1048576]
+                if (!is_swa_layer(layer)) {
+                    op_case = 3;
+                } else {
+                    op_case = 4;
+                }
             } else {
-                op_case = 3;
+                // special case of cache v when `-fa off`
+                // -  17: [   256,     8,    64,     1] VIEW            cache_v_l0 (view)             [ 2, 131072,  2048, 1048576]
+                //         [   512,  1024,     1,     1]      0: NONE     cache_v_l0                   [ 2,  1024, 1048576, 1048576]
+                // -  18: [   256,    64,     8,     1] PERMUTE         cache_v_l0 (view) (permuted)  [ 2,  2048, 131072, 1048576]
+                //         [   256,     8,    64,     1]      0: VIEW     cache_v_l0 (view)            [ 2, 131072,  2048, 1048576]
+                if (!is_swa_layer(layer)) {
+                    op_case = 5;
+                } else {
+                    op_case = 6;
+                }
             }
         } else {
             // rope'ed query tensor
-            op_case = 4;
+            op_case = 2;
         }
         break;
     }
     case GGML_OP_MUL_MAT: {
         if (node->src[0]->op == GGML_OP_VIEW && node->src[1]->op == GGML_OP_VIEW) {
             op_case = 3;
+        } else if (node->src[1]->op == GGML_OP_SOFT_MAX) {
+            // In the case of `-fa off`, softmax is used, v_trans=true, the dynamic dim is ne[0] for cache_v
+            op_case = 2;
         }
         break;
     }
@@ -287,13 +300,20 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
-        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
-            model_params.n_heads = node->src[0]->ne[2];
-            model_params.n_heads_kv = node->src[1]->ne[2];
-            model_params.head_size = node->src[0]->ne[0];
+        if (node->op == GGML_OP_FLASH_ATTN_EXT || node->op == GGML_OP_SOFT_MAX) {
             compute_params.input_len = node->src[0]->ne[1];
 
+            auto * q_perm = node->src[0];
             auto * cache_k_perm = node->src[1];
+            if (node->op == GGML_OP_SOFT_MAX) {
+                q_perm = node->src[0]->src[1];
+                cache_k_perm = node->src[0]->src[0];
+            }
+            model_params.head_size = cache_k_perm->ne[0];
+            model_params.n_heads_kv = cache_k_perm->ne[2];
+            model_params.n_heads = q_perm->ne[2];
+            compute_params.token_len_per_seq = q_perm->ne[1];
+
             if (cache_k_perm->op == GGML_OP_CPY) {
                 cache_k_perm = cache_k_perm->src[0];
             }
@@ -303,7 +323,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
 
             auto * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name);
+
             auto * mask = node->src[3];
+            if (node->op == GGML_OP_SOFT_MAX) {
+                mask = node->src[1];
+            }
             std::string mask_name(mask->name);
 
             model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);
@@ -320,7 +344,6 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             size_t offset;
             memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
             compute_params.seq_active_start = offset / seq_size;
-            compute_params.token_len_per_seq = node->ne[2];
 
             if (mask_name.find("swa") != std::string::npos) {
                 compute_params.attention_size_swa = mask->ne[0];
@@ -332,7 +355,6 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
                 compute_params.token_len_per_seq = 1;
             }
-            break;
         }
         // if the node op is TRANSPOSE and its input is PERMUTE and the source of the PERMUTE is VIEW, then get the attention size with the TRANSPOSE node ne[0] (in case no GGML_OP_FLASH_ATTN_EXT)
         if (node->op == GGML_OP_TRANSPOSE && node->src[0]->op == GGML_OP_PERMUTE &&

@@ -47,6 +47,16 @@ OutputVector translate_soft_max(const NodeContext & context) {
     // For max_bias > 0 (ALiBi), apply per-head slope to mask before adding.
     if (context.get_input_size() > 1) {
         ov::Output<ov::Node> mask = context.get_input(1);
+
+        // For stateful
+        std::string mask_name = "KQ_mask_sliced";
+        if (context.get_input_names()[1].find("swa") != std::string::npos) {
+            mask_name = "KQ_mask_swa_sliced";
+        }
+        if (context.has_input(mask_name)) {
+            mask = context.get_input(mask_name);
+        }
+
         if (mask.get_element_type() != logits.get_element_type()) {
             mask = std::make_shared<ov::op::v0::Convert>(mask, logits.get_element_type());
         }

@@ -34,23 +34,19 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     auto q = std::make_shared<ov::op::v0::Convert>(q_f32, ov::element::f16);
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f16, ov::Shape{}, std::vector<float>{scale});
 
-    ov::Output<ov::Node> mask_sliced, res;
+    ov::Output<ov::Node> res;
+
+    // For stateful
     std::string mask_name = "KQ_mask_sliced";
     if (context.get_input_names()[3].find("swa") != std::string::npos) {
         mask_name = "KQ_mask_swa_sliced";
     }
     if (context.has_input(mask_name)) {
-        mask_sliced = context.get_input(mask_name);
-    } else {
-        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto token_len = get_dimensions(q, {2});
-        mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, two);
+        mask = context.get_input(mask_name);
     }
 
-    if (mask_sliced.get_element_type() != ov::element::f16) {
-        mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
+    if (mask.get_element_type() != ov::element::f16) {
+        mask = std::make_shared<ov::op::v0::Convert>(mask, ov::element::f16);
     }
 
     auto tile_kv = [&](int64_t num_heads, int64_t num_heads_kv, int64_t head_size, ov::Output<Node> kv) {
@@ -77,7 +73,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     k = tile_kv(q_shape[1], k_shape[1], q_shape[3], k);
     v = tile_kv(q_shape[1], k_shape[1], q_shape[3], v);
 
-    auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask_sliced, scale_node, false);
+    auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask, scale_node, false);
     res = std::make_shared<ov::op::v1::Transpose>(sdpa,
                                                   ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
     res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);

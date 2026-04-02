@@ -13,6 +13,7 @@
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
+#include <openvino/core/type/element_type.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
@@ -88,19 +89,22 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
             if (is_static) {
                 mask_sliced = mask;
             } else if (ggml_model_decoder.is_stateful()) {
-                auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
-                auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
-                auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-                auto three_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
-                auto neg_one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
-                auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
+                auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+                auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+                auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+                auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+
+                auto step = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+                auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+
                 auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-                auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one_1d, three_1d);
-                auto reshaped_inp_pos = std::make_shared<ov::op::v1::Reshape>(gather_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
-                auto inp_pos_incremented = std::make_shared<ov::op::v1::Add>(reshaped_inp_pos, ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {1}));
-                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, std::make_shared<v1::ConvertLike>(inp_pos_incremented, token_len_per_seq)}, 0);
-                mask_sliced =
-                    std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+                auto last_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one, three);
+                auto last_inp_pos_1d = std::make_shared<ov::op::v1::Reshape>(
+                    last_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
+                auto last_inp_pos_cvt = std::make_shared<ov::op::v0::Convert>(last_inp_pos_1d, ov::element::i64);
+                auto last_inp_pos_inc = std::make_shared<ov::op::v1::Add>(last_inp_pos_cvt, one);
+
+                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, last_inp_pos_inc, step, axes);
                 mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
                 mask_sliced->set_friendly_name(sliced_name);
             } else {

@@ -10,7 +10,6 @@
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/reshape.hpp>
-#include <stdexcept>
 #include <vector>
 
 namespace ov {
@@ -47,7 +46,14 @@ OutputVector translate_reshape(const NodeContext & context) {
             std::vector<int64_t>{(int64_t) output_shape[0], (int64_t) output_shape[1], -1, (int64_t) output_shape[3]});
 
     } else if (op_case == 3) {
-        throw std::runtime_error("might be outdated RESHAPE case");
+        //  -  14: [     1,  1024,     1,     1] RESHAPE              Vcur-0 (reshaped) (reshaped)
+        //         [   512,     2,     1,     1]            0: RESHAPE     Vcur-0 (reshaped)
+        //  -  15: [     1, 524288,     1,     1] RESHAPE              cache_v_l0 (reshaped)
+        //         [   512,  1024,     1,     1]            0: NONE        cache_v_l0
+        //  -  16: [     1, 524288,     1,     1] SET_ROWS             cache_v_l0 (reshaped) (view)
+        //         [     1,  1024,     1,     1]            0: RESHAPE     Vcur-0 (reshaped) (reshaped)
+        //         [  1024,     1,     1,     1]            1: NONE        leaf_11
+        //         [     1, 524288,     1,     1]            2: RESHAPE     cache_v_l0 (reshaped)
         new_shape_node = ov::op::v0::Constant::create(
             ov::element::i64, {4}, std::vector<int64_t>{(int64_t) output_shape[0], (int64_t) output_shape[1], -1, 1});
 

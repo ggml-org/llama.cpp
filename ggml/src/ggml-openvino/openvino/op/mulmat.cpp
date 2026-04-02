@@ -34,10 +34,7 @@ OutputVector translate_mulmat(const NodeContext & context) {
     ov::Output<ov::Node> A = context.get_input(1);
 
     bool transpose_b = true;
-    if (op_case == 2) {
-        B = B.get_node_shared_ptr()->input_value(0);
-        transpose_b = false;
-    } else if (op_case == 3) {
+    if (op_case == 3) {
         B = process_view_input(context, 0);
         A = process_view_input(context, 1);
     }
@@ -55,6 +52,7 @@ OutputVector translate_mulmat(const NodeContext & context) {
     auto batch_small = A_batch_larger ? B_batch : A_batch;
 
     Output<Node> Z = A_batch_larger ? B : A;
+    auto Z_shape = A_batch_larger ? B_shape : A_shape;
     int64_t factor = batch_large / batch_small;
     if (factor > 1 && batch_small > 1) {
         auto batch_large_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{batch_large});
@@ -67,7 +65,11 @@ OutputVector translate_mulmat(const NodeContext & context) {
         auto broadcast_shape = ov::op::v0::Constant::create(
             ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, factor, (int64_t) 1, (int64_t) 1});
         auto new_Z_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
-                                                        {(int64_t) 0, batch_large, (int64_t) -1, (int64_t) A_shape[3]});
+                                                        {(int64_t) 0, batch_large, (int64_t) -1, (int64_t) Z_shape[3]});
+        if (op_case == 2) {
+            new_Z_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
+                                                       {(int64_t) 0, batch_large, (int64_t) Z_shape[2], (int64_t) -1});
+        }
 
         auto Z_broadcasted = std::make_shared<ov::op::v3::Broadcast>(Z_unsqueezed, broadcast_shape,
                                                                      ov::op::BroadcastType::BIDIRECTIONAL);
