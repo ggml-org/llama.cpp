@@ -36,7 +36,7 @@
             "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
             "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
             "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
-            "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG", 
+            "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
             "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
             "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -DNDEBUG -g",
             "CMAKE_PREFIX_PATH":  "$env{OPENCL_SDK_ROOT}",
@@ -82,7 +82,7 @@
     { "name": "arm64-android-snapdragon-release", "inherits": [ "base", "arm64-android-snapdragon", "release" ] },
 
     { "name": "arm64-windows-snapdragon-debug"  , "inherits": [ "base", "arm64-windows-snapdragon", "debug" ] },
-    { "name": "arm64-windows-snapdragon-release", "inherits": [ "base", "arm64-windows-snapdragon", "release" ] }, 
+    { "name": "arm64-windows-snapdragon-release", "inherits": [ "base", "arm64-windows-snapdragon", "release" ] },
 
     { "name": "arm64-linux-snapdragon-debug"  , "inherits": [ "base", "arm64-linux-snapdragon", "debug" ] },
     { "name": "arm64-linux-snapdragon-release", "inherits": [ "base", "arm64-linux-snapdragon", "release" ] }
