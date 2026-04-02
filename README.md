@@ -56,6 +56,37 @@ huggingface-cli download YTan2000/Qwen3.5-27B-TQ3_4S \
   --port 8090
 ```
 
+## KV Cache Settings
+
+For the cleanest baseline, run with normal KV cache:
+
+```bash
+./build/bin/llama-server \
+  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
+  -ngl 99 \
+  -fa on \
+  -c 4096 \
+  --port 8090
+```
+
+For the TurboQuant KV-cache path used in local experiments, use:
+
+```bash
+./build/bin/llama-server \
+  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
+  -ngl 99 \
+  -fa on \
+  -c 8192 \
+  -ctk tq3_0 \
+  -ctv tq3_0 \
+  --port 8090
+```
+
+Notes:
+- `-ctk tq3_0 -ctv tq3_0` is the currently supported TurboQuant KV-cache setting in this fork.
+- Keep weight-format and KV-cache experiments separate when benchmarking.
+- If you want the exact weight-format baseline, leave KV cache at the default types.
+
 ## Benchmark
 
 ```bash
