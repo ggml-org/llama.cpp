@@ -16290,8 +16290,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             ggml_sycl_buffer & b = buffer_pool[i];
 
             if (b.ptr != nullptr) {
-                ggml_sycl::alloc_registry::instance().unregister_alloc(b.ptr);
-                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
+                ggml_sycl::unified_cache_deallocate(b.ptr, device);
                 pool_size -= b.size;
             }
         }
@@ -16346,20 +16345,19 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         void * ptr;
 
-        // Track NEW physical VRAM consumed by pool growth.  Only the first
-        // allocation of each new buffer is tracked — reuse of existing buffers
-        // doesn't change physical footprint and isn't re-tracked.  Without
-        // this, the compute pool can consume 50-300 MB of VRAM invisible to the
-        // unified cache budget, causing OOM when the cache fills to ~90%.
-        // Use _raw to bypass unified_cache_allocate — manual budget tracking below.
-        ptr = ggml_sycl_malloc_device_raw(rounded_size, *qptr, "pool_leg");
-        if (ptr) {
-            ggml_sycl::unified_cache_add_runtime_bytes(
-                device, rounded_size, ggml_sycl::runtime_category::OTHER);
-        }
+        // Allocate through the unified cache with COMPUTE_SCRATCH category.
+        // When VRAM is available, this returns device memory.  When VRAM is
+        // full (weights + KV consumed most of it), the cache automatically
+        // falls back to host-pinned memory (sycl::malloc_host) which the GPU
+        // can still access via PCIe zero-copy — slower but correct.
+        // This prevents DEVICE_LOST from compute pool over-allocation.
+        auto alloc_result = ggml_sycl::unified_cache_allocate(
+            device, rounded_size, ggml_sycl::alloc_category::COMPUTE_SCRATCH, *qptr);
+        ptr = alloc_result.ptr;
 
         if (!ptr) {
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, rounded_size);
+            GGML_LOG_WARN("%s: can't allocate %lu bytes (neither VRAM nor host-pinned)\n",
+                          __func__, rounded_size);
             return nullptr;
         }
         *actual_size = rounded_size;
