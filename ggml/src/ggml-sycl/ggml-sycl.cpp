@@ -5623,17 +5623,14 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // This is the difference between total and free at this point
     const size_t already_allocated = base_mem > free_mem ? base_mem - free_mem : 0;
 
-    // Budget for weight cache = effective_pct% of total VRAM minus headroom
-    // Headroom = max(256MB, 10% of total) for runtime scratch space
-    // NOTE: We do NOT subtract already_allocated here. The unified cache tracks all
-    // allocations and will stream from host if VRAM is exhausted. Pre-subtracting
-    // already_allocated artificially reduces the budget, causing models that fit
-    // to be incorrectly marked as "exceeds VRAM" and placed in host memory.
-    const size_t min_headroom  = 256ull * 1024ull * 1024ull;
-    const size_t base_headroom = std::max<size_t>(min_headroom, base_mem / 10);
+    // No artificial headroom — the unified cache manages all memory and
+    // subsystems (compute scratch, KV cache) fall back to host-pinned
+    // when VRAM is full.  The free_mem cap in the cache constructor
+    // already handles the real constraint (actual free VRAM at startup).
+    const size_t base_headroom = 0;
 
     // Apply GGML_SYCL_VRAM_BUDGET_PCT if set (same env var as unified cache and get_memory)
-    int          budget_pct     = 90;  // Default: 90% of total VRAM
+    int          budget_pct     = 100;  // Default: 100% — unified cache owns all VRAM
     const char * env_budget_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
     if (env_budget_pct) {
         budget_pct = std::max(1, std::min(100, std::atoi(env_budget_pct)));
@@ -5659,8 +5656,10 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // are sequenced after model load (no cross-thread visibility requirement).
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_relaxed);
 
-    GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB, model_size=%.1f MB, exceeds_budget=%s\n",
-                  budget_pct, vram_budget / (1024.0 * 1024.0), effective_model_size / (1024.0 * 1024.0),
+    GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB (free=%.1f MB), "
+                  "model_size=%.1f MB, exceeds_budget=%s\n",
+                  budget_pct, vram_budget / (1024.0 * 1024.0), free_mem / (1024.0 * 1024.0),
+                  effective_model_size / (1024.0 * 1024.0),
                   model_size_exceeds_budget ? "true" : "false");
 
     // Initialize double-buffered layer streaming when:

@@ -35,7 +35,7 @@ static std::unordered_map<int, std::unique_ptr<unified_cache>> g_device_caches;
 static std::unique_ptr<host_cache>                             g_host_cache_shared;
 static std::shared_mutex                                       g_cache_rw_mutex;
 static size_t                                                  g_unified_cache_budget      = 0;  // 0 = auto-calculate
-static int                                                     g_unified_cache_budget_pct  = 90;
+static int                                                     g_unified_cache_budget_pct  = 100;
 static size_t                                                  g_unified_cache_host_budget = 0;  // 0 = auto-calc
 static int                                                     g_unified_cache_host_budget_pct = 90;
 static unified_cache_mode                                      g_cache_mode = unified_cache_mode::AUTO;
@@ -6122,12 +6122,6 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
 
         budget = static_cast<size_t>(base_mem * (static_cast<double>(pct) / 100.0));
 
-        const size_t min_headroom = 256ull * 1024ull * 1024ull;
-        const size_t headroom     = std::max(min_headroom, base_mem / 10);
-        if (base_mem > headroom && budget > base_mem - headroom) {
-            budget = base_mem - headroom;
-        }
-
         // Cap budget to actual free VRAM at startup to account for system overhead
         // (display compositor, driver structures, etc.) which can be 1-2 GB
         if (free_mem > 0 && budget > free_mem) {
@@ -6140,9 +6134,9 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
         char desc[256] = { 0 };
         ggml_backend_sycl_get_device_description(device_id, desc, sizeof(desc));
         GGML_LOG_INFO(
-            "[UNIFIED-CACHE] Device %d (%s): total=%.1f MB free=%.1f MB budget=%.1f MB (%d%%, headroom=%.1f MB)\n",
+            "[UNIFIED-CACHE] Device %d (%s): total=%.1f MB free=%.1f MB budget=%.1f MB (%d%%)\n",
             device_id, desc, base_mem / (1024.0f * 1024.0f), free_mem / (1024.0f * 1024.0f),
-            budget / (1024.0f * 1024.0f), pct, headroom / (1024.0f * 1024.0f));
+            budget / (1024.0f * 1024.0f), pct);
     }
 
     const size_t staging_bytes = resolve_host_staging_bytes();
