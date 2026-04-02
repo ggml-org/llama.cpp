@@ -428,7 +428,10 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_COUNT   = 41,
+        GGML_TYPE_TURBO4_0 = 41,
+        GGML_TYPE_TURBO3_0 = 42,
+        GGML_TYPE_TURBO2_0 = 43,
+        GGML_TYPE_COUNT   = 44,
     };
 
     // precision
