@@ -75,6 +75,7 @@ enum htp_op {
     HTP_OP_SUM_ROWS,
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
+    HTP_OP_CUMSUM,
     INVALID
 };
 

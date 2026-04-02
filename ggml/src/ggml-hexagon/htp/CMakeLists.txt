@@ -33,6 +33,7 @@ add_library(${HTP_LIB} SHARED
     repeat-ops.c
     argsort-ops.c
     ssm-conv.c
+    cumsum-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
