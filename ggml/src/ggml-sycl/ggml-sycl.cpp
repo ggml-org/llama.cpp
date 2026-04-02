@@ -39146,6 +39146,14 @@ gpu_dispatch:
                                node->name ? node->name : "(null)", e.what());
                 std::abort();
             }
+        } else if (!ggml_sycl_graph_recording_active() && (i & 31) == 31) {
+            // Drain queue every 32 nodes to prevent L0 command list overflow
+            // that causes GPU hang with large KV caches (32K+ context).
+            try {
+                sycl_ctx->stream(sycl_ctx->device, 0)->wait_and_throw();
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] queue drain failed at node %d: %s\n", i, e.what());
+            }
         }
         if (do_nan_check && (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16)) {
             queue_ptr     stream    = sycl_ctx->stream(sycl_ctx->device, 0);
@@ -46819,24 +46827,6 @@ normal_dispatch:
     // In prefix mode, dispatch the CPU suffix before record_completion.
     // The RAII guard handles this for early returns; call explicitly for normal exit.
     suffix_guard.dispatch_suffix();
-
-    // Drain the compute queue before returning to the caller.
-    // With large KV caches (32K+ context), the Level Zero driver can hang or
-    // reset (DEVICE_LOST) if too many kernels plus the subsequent deferred D2H
-    // logits copy are queued without an intermediate wait.  This explicit drain
-    // keeps the in-flight command list bounded and prevents the issue.
-    // The overhead is negligible (<0.5 ms) because the queue should be nearly
-    // drained by the time all 999+ nodes have been submitted on an in-order
-    // queue — the GPU is executing in parallel with submission.
-    if (graph_executed && !ggml_sycl_graph_recording_active()) {
-        try {
-            sycl_ctx->stream()->wait_and_throw();
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] post-graph drain failed: %s\n", e.what());
-        }
-        // Clear the eviction guard now that all GPU work is done.
-        ggml_sycl::unified_cache_set_graph_compute_active(false);
-    }
 
     record_completion(graph_executed);
     ggml_sycl_watchdog_heartbeat();
