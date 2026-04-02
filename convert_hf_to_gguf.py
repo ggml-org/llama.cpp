@@ -5001,64 +5001,6 @@ class Step3VLVisionModel(MmprojModel):
         if name.startswith("model.") or name.startswith("lm_head."):
             return
 
-        if name == "vision_model.conv1.weight":
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH), data_torch)
-            return
-
-        if name == "vision_model.positional_embedding":
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_EMBD_POS), data_torch)
-            return
-
-        if name.startswith("vision_model.ln_pre."):
-            suffix = name.rsplit(".", 1)[1]
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_PRE_NORM, suffix=f".{suffix}"), data_torch)
-            return
-
-        if name.startswith("vision_model.transformer.resblocks."):
-            match = re.match(r"vision_model\.transformer\.resblocks\.(\d+)\.(.*)", name)
-            if match is None:
-                raise ValueError(f"Unexpected Step3-VL tensor {name!r}")
-
-            block_id = int(match.group(1))
-            block_name = match.group(2)
-
-            if block_name.startswith("attn.in_proj_"):
-                suffix = ".weight" if block_name.endswith("_weight") else ".bias"
-                q_tensor, k_tensor, v_tensor = torch.chunk(data_torch, 3, dim=0)
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_Q, block_id, suffix=suffix), q_tensor)
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_K, block_id, suffix=suffix), k_tensor)
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_V, block_id, suffix=suffix), v_tensor)
-                return
-
-            tensor_type: gguf.MODEL_TENSOR | None = None
-            suffix = ".weight"
-
-            if block_name.startswith("attn.out_proj."):
-                tensor_type = gguf.MODEL_TENSOR.V_ENC_ATTN_O
-                suffix = f".{block_name.rsplit('.', 1)[1]}"
-            elif block_name.startswith("ln_1."):
-                tensor_type = gguf.MODEL_TENSOR.V_ENC_INPUT_NORM
-                suffix = f".{block_name.rsplit('.', 1)[1]}"
-            elif block_name.startswith("ln_2."):
-                tensor_type = gguf.MODEL_TENSOR.V_ENC_POST_ATTN_NORM
-                suffix = f".{block_name.rsplit('.', 1)[1]}"
-            elif block_name.startswith("mlp.c_fc."):
-                tensor_type = gguf.MODEL_TENSOR.V_ENC_FFN_UP
-                suffix = f".{block_name.rsplit('.', 1)[1]}"
-            elif block_name.startswith("mlp.c_proj."):
-                tensor_type = gguf.MODEL_TENSOR.V_ENC_FFN_DOWN
-                suffix = f".{block_name.rsplit('.', 1)[1]}"
-            elif block_name == "ls_1.gamma":
-                tensor_type = gguf.MODEL_TENSOR.V_LAYER_SCALE_1
-            elif block_name == "ls_2.gamma":
-                tensor_type = gguf.MODEL_TENSOR.V_LAYER_SCALE_2
-
-            if tensor_type is None:
-                raise ValueError(f"Unexpected Step3-VL block tensor {name!r}")
-
-            yield (self.format_tensor_name(tensor_type, block_id, suffix=suffix), data_torch)
-            return
-
         if name.startswith("vision_model.vit_downsampler"):
             match = re.match(r"vision_model\.vit_downsampler(\d+)\.(weight|bias)", name)
             if match is None:
@@ -5074,7 +5016,16 @@ class Step3VLVisionModel(MmprojModel):
             return
 
         if name.startswith("vision_model."):
-            raise ValueError(f"Unsupported Step3-VL vision tensor {name!r}")
+            if name == "vision_model.positional_embedding":
+                name += ".weight"
+            elif name.endswith(".gamma") and ".ls_" in name:
+                name = name.removesuffix(".gamma") + ".weight"
+
+            name = name.replace("attn.in_proj_weight", "attn.in_proj.weight")
+            name = name.replace("attn.in_proj_bias", "attn.in_proj.bias")
+
+            yield (self.map_tensor_name(name), data_torch)
+            return
 
         return
 
