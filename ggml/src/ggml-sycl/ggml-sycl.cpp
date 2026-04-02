@@ -46667,8 +46667,16 @@ normal_dispatch:
             sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
+        } else if (!is_decode_phase) {
+            // PP (prompt-processing) phase: skip graph recording entirely.
+            // oneDNN primitive.execute() used in the FP16 PP path is
+            // incompatible with Level Zero command graph recording (internal
+            // synchronization, context queries).  PP runs once per prompt so
+            // graph replay savings are negligible.  TG graphs are unaffected.
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping graph recording for PP phase\n");
+            compute_impl_unlocked();
         } else {
-            // First time - record and finalize the graph
+            // First time - record and finalize the graph (TG / decode phase)
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] Creating command_graph for %d nodes...\n", cgraph->n_nodes);
             try {
