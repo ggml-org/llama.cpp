@@ -88,8 +88,11 @@
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
 #define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
-#define TN_LS_1            "%s.blk.%d.ls1.%s" // layer scale
-#define TN_LS_2            "%s.blk.%d.ls2.%s" // layer scale
+#define TN_LS_1            "%s.blk.%d.ls1.%s"         // layer scale
+#define TN_LS_2            "%s.blk.%d.ls2.%s"         // layer scale
+#define TN_LS_OUT          "%s.blk.%d.out_scale.%s"      // layer out scale (gemma4)
+#define TN_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s" // post-attn norm (gemma4)
+#define TN_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"  // post-FFN norm (gemma4)
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
@@ -213,6 +216,10 @@
 #define TN_MNV5_MSFA_FFN_PROJ_BN "v.msfa.ffn.pw_proj.bn.weight"
 #define TN_MNV5_MSFA_NORM        "v.msfa.norm.weight"
 
+// gemma4
+#define TN_STD_BIAS              "v.std_bias"
+#define TN_STD_SCALE             "v.std_scale"
+
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
@@ -233,6 +240,8 @@ enum projector_type {
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_GEMMA3NV,
     PROJECTOR_TYPE_GEMMA3NA,
+    PROJECTOR_TYPE_GEMMA4V,
+    PROJECTOR_TYPE_GEMMA4A,
     PROJECTOR_TYPE_PHI4,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -272,6 +281,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_GEMMA3NV,  "gemma3nv"},
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
+    { PROJECTOR_TYPE_GEMMA4V,   "gemma4v"},
+    { PROJECTOR_TYPE_GEMMA4A,   "gemma4a"},
     { PROJECTOR_TYPE_PHI4,      "phi4"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
@@ -474,6 +485,18 @@ static std::vector<std::string> string_split_str(std::string s, const std::strin
     }
     tokens.push_back(s);
     return tokens;
+}
+
+// remove when moving to c++20
+inline bool string_starts_with(std::string_view str, std::string_view prefix) {
+    return str.size() >= prefix.size() &&
+           str.compare(0, prefix.size(), prefix) == 0;
+}
+
+// remove when moving to c++20
+inline bool string_ends_with(std::string_view str, std::string_view suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 //

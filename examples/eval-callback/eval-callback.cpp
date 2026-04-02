@@ -15,11 +15,16 @@ static bool run(llama_context * ctx, const common_params & params) {
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
-    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos, true);
 
     if (tokens.empty()) {
         LOG_ERR("%s : there are not input tokens to process - (try to provide a prompt with '-p')\n", __func__);
         return false;
+    }
+
+    LOG_INF("number of input tokens = %zu\n", tokens.size());
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        LOG_INF("  %d\n", tokens[i]);
     }
 
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {

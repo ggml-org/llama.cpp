@@ -1545,6 +1545,50 @@ static void requires_non_null_content(json & messages) {
     }
 }
 
+// Gemma4 uses a custom tool_responses field instead of role:tool messages.
+// Convert consecutive role:tool messages into a single user message with tool_responses.
+static void convert_tool_responses_gemma4(json & messages) {
+    json result = json::array();
+    size_t i = 0;
+    while (i < messages.size()) {
+        if (messages[i].contains("role") && messages[i].at("role") == "tool") {
+            json tool_responses = json::array();
+            while (i < messages.size() &&
+                   messages[i].contains("role") &&
+                   messages[i].at("role") == "tool") {
+                const auto & tool_msg = messages[i];
+                std::string name;
+                if (tool_msg.contains("tool_call_id") && tool_msg.at("tool_call_id").is_string()) {
+                    name = tool_msg.at("tool_call_id");
+                } else if (tool_msg.contains("name") && tool_msg.at("name").is_string()) {
+                    name = tool_msg.at("name");
+                }
+                json response;
+                if (tool_msg.contains("content")) {
+                    const auto & content = tool_msg.at("content");
+                    if (content.is_string()) {
+                        // Try to parse the content as JSON; fall back to raw string
+                        try {
+                            response = json::parse(content.get<std::string>());
+                        } catch (...) {
+                            response = content;
+                        }
+                    } else {
+                        response = content;
+                    }
+                }
+                tool_responses.push_back({{"name", name}, {"response", response}});
+                i++;
+            }
+            result.push_back({{"role", "user"}, {"tool_responses", tool_responses}});
+        } else {
+            result.push_back(messages[i]);
+            i++;
+        }
+    }
+    messages = result;
+}
+
 static void func_args_not_string(json & messages) {
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
@@ -1671,6 +1715,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     if (tmpl.original_caps().supports_object_arguments) {
         workaround::func_args_not_string(params.messages);
+    }
+
+    if (src.find("'<|tool_call>call:'") != std::string::npos) {
+        workaround::convert_tool_responses_gemma4(params.messages);
     }
 
     params.add_generation_prompt = false;
