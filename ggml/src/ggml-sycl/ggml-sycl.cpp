@@ -569,9 +569,15 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
     SYCL_CHECK(
         CHECK_TRY_ERROR(dpct::get_current_device().queues_wait_and_throw()));
 
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream)
-                                    .memset(ctx->dev_ptr, value, buffer->size)
-                                    .wait()));
+    constexpr size_t MAX_CHUNK = 2ULL << 30;  // 2 GiB
+    for (size_t off = 0; off < buffer->size; off += MAX_CHUNK) {
+        size_t chunk = std::min(buffer->size - off, MAX_CHUNK);
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (*stream)
+                .memset(static_cast<char*>(ctx->dev_ptr) + off, value, chunk)
+                .wait()
+        ));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
