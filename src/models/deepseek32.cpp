@@ -127,9 +127,9 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_hadamard(ctx0, indexer_q, n_embd_indexer_head);
+                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
                 cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_hadamard(ctx0, indexer_k, n_embd_indexer_head);
+                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache

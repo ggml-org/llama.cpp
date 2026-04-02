@@ -6655,39 +6655,6 @@ struct test_diag : public test_case {
     }
 };
 
-// GGML_OP_HADAMARD
-struct test_hadamard : public test_case {
-    const ggml_type type_a;
-    const std::array<int64_t, 4> ne_a;
-    int nh;
-
-    std::string vars() override {
-        return VARS_TO_STR3(type_a, ne_a, nh);
-    }
-
-    test_hadamard(ggml_type type_a = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne_a = {128, 10, 10, 10},
-            int nh = 128)
-        : type_a(type_a), ne_a(ne_a), nh(nh) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type_a, 4, ne_a.data());
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-
-        ggml_tensor * out = ggml_hadamard(ctx, a, nh);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            init_tensor_uniform(t, -1.0f, 1.0f);
-        }
-    }
-};
-
 // GGML_OP_SCATTER
 struct test_scatter : public test_case {
     const ggml_type type_a;
@@ -8808,9 +8775,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
-    // hadamard
-    test_cases.emplace_back(new test_hadamard());
-
     // scatter
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 1, 1, 1}, {3, 1, 1, 1}, 0.0f, true));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {10, 1, 1, 1}, {3, 1, 1, 1}, 0.0f, false));
@@ -9095,9 +9059,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
-
-    // hadamard
-    test_cases.emplace_back(new test_hadamard());
 
     // scatter
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, true));

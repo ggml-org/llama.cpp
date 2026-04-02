@@ -559,7 +559,6 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
-        GGML_OP_HADAMARD,
         GGML_OP_SCATTER,
 
         GGML_OP_UNARY,
@@ -2482,11 +2481,6 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state);
-
-    GGML_API struct ggml_tensor * ggml_hadamard(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        int                   n);
 
     GGML_API struct ggml_tensor * ggml_scatter(
         struct ggml_context * ctx,

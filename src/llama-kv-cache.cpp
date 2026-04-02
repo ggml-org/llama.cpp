@@ -281,6 +281,11 @@ llama_kv_cache::llama_kv_cache(
         !hparams.is_n_embd_k_gqa_variable() &&
         hparams.n_embd_head_k() % 64 == 0;
 
+    // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
+    if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+        attn_rot_k = true;
+    }
+
     attn_rot_v =
         !attn_rot_disable &&
         ggml_is_quantized(type_v) &&

@@ -502,6 +502,8 @@ void llm_graph_input_attn_k_dsa::set_input(const llama_ubatch * ubatch) {
     mctx->get_lid()->set_input_k_idxs(self_k_idxs_lid, ubatch);
 
     mctx->get_lid()->set_input_kq_mask(self_kq_mask_lid, ubatch, cparams.causal_attn);
+
+    mctx->get_lid()->set_input_k_rot(self_k_rot_lid);
 }
 
 bool llm_graph_input_attn_k_dsa::can_reuse(const llm_graph_params & params) {
@@ -2458,22 +2460,16 @@ llm_graph_input_attn_k_dsa * llm_graph_context::build_attn_inp_k_dsa() const {
         inp->self_k_idxs_mla = mctx_cur->get_mla()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_kq_mask_mla = build_attn_inp_kq_mask(ctx0, mctx_cur->get_mla(), ubatch, cparams);
-        ggml_set_input(inp->self_kq_mask_mla);
-        ggml_set_name(inp->self_kq_mask_mla, "self_kq_mask_mla");
-
         inp->self_kq_mask_mla_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_mla, GGML_TYPE_F16) : inp->self_kq_mask_mla;
-        ggml_set_name(inp->self_kq_mask_mla_cnv, "self_kq_mask_mla_cnv");
     }
 
     {
         inp->self_k_idxs_lid = mctx_cur->get_lid()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_kq_mask_lid = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams);
-        ggml_set_input(inp->self_kq_mask_lid);
-        ggml_set_name(inp->self_kq_mask_lid, "self_kq_mask_lid");
-
         inp->self_kq_mask_lid_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_lid, GGML_TYPE_F16) : inp->self_kq_mask_lid;
-        ggml_set_name(inp->self_kq_mask_lid_cnv, "self_kq_mask_lid_cnv");
+
+        inp->self_k_rot_lid = mctx_cur->get_lid()->build_input_k_rot(ctx0);
     }
 
     return (llm_graph_input_attn_k_dsa *) res->add_input(std::move(inp));

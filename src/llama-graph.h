@@ -385,6 +385,8 @@ public:
     ggml_tensor * self_kq_mask_lid     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_lid_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
+    ggml_tensor * self_k_rot_lid = nullptr;
+
     const llama_hparams hparams;
     const llama_cparams cparams;
 
