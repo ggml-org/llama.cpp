@@ -7562,7 +7562,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
         std::vector<ggml_backend_buffer_ptr> bufs;
-        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        if (ml.host_ptr && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+            GGML_ASSERT(!ml.no_alloc);
+            const size_t max_size = ggml_get_max_tensor_size(ctx);
+            ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char*)ml.host_ptr + ml.host_ptr_offset, ml.host_ptr_size, max_size);
+            if (buf == nullptr) {
+                throw std::runtime_error(format("unable to allocate host_ptr buffer for %s", ggml_backend_buft_name(buft)));
+            }
+            bufs.emplace_back(buf);
+            buf_map.emplace(0, buf);
+        } else if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
             GGML_ASSERT(!ml.no_alloc);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
@@ -8703,6 +8712,9 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.host_ptr                    =*/ nullptr,
+        /*.host_ptr_offset             =*/ 0,
+        /*.host_ptr_size               =*/ 0,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_direct_io               =*/ false,

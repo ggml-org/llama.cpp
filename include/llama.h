@@ -308,6 +308,11 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // host pointer for user-loaded models (zero-copy CPU tensors)
+        void * host_ptr;        // mmap base pointer
+        size_t host_ptr_offset; // data offset within host_ptr
+        size_t host_ptr_size;   // size of tensor data region
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible

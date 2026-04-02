@@ -863,6 +863,8 @@ struct vk_device_struct {
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    vk::PipelineCache pipeline_cache;
+    std::string       pipeline_cache_path;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -887,6 +889,18 @@ struct vk_device_struct {
         all_pipelines.clear();
 
         device.destroyDescriptorSetLayout(dsl);
+
+        // Save pipeline cache to disk
+        if (pipeline_cache && !pipeline_cache_path.empty()) {
+            auto data = device.getPipelineCacheData(pipeline_cache);
+            if (!data.empty()) {
+                if (FILE* f = fopen(pipeline_cache_path.c_str(), "wb")) {
+                    fwrite(data.data(), 1, data.size(), f);
+                    fclose(f);
+                }
+            }
+            device.destroyPipelineCache(pipeline_cache);
+        }
 
         device.destroy();
     }
@@ -2011,7 +2025,7 @@ void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     allocations[buf->buffer] = size;
     total_device += device ? size : 0;
     total_host += device ? 0 : size;
-    VK_LOG_MEMORY(buf->device->name << ": +" << format_size(size) << " " << type << " at " << buf->buffer << ". Total device: " << format_size(total_device) << ", total host: " << format_size(total_host));
+    VK_LOG_MEMORY(buf->device->name << ": +" << format_size(size) << " " << type << " at " << (VkBuffer)buf->buffer << ". Total device: " << format_size(total_device) << ", total host: " << format_size(total_host));
 }
 
 void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
@@ -2027,10 +2041,10 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
     total_device -= device ? it->second : 0;
     total_host -= device ? 0 : it->second;
     if (it != allocations.end()) {
-        VK_LOG_MEMORY(buf->device->name << ": -" << format_size(it->second) << " " << type << " at " << buf->buffer << ". Total device: " << format_size(total_device) << ", total host: " << format_size(total_host));
+        VK_LOG_MEMORY(buf->device->name << ": -" << format_size(it->second) << " " << type << " at " << (VkBuffer)buf->buffer << ". Total device: " << format_size(total_device) << ", total host: " << format_size(total_host));
         allocations.erase(it);
     } else {
-        VK_LOG_MEMORY("ERROR " << buf->device->name << ": Attempted to deallocate unknown " << type << " memory at " << buf->buffer);
+        VK_LOG_MEMORY("ERROR " << buf->device->name << ": Attempted to deallocate unknown " << type << " memory at " << (VkBuffer)buf->buffer);
     }
 }
 
@@ -2196,7 +2210,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 #endif
 
     try {
-        pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        pipeline->pipeline = device->device.createComputePipeline(device->pipeline_cache, compute_pipeline_create_info).value;
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -4774,6 +4788,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk_device device = std::make_shared<vk_device_struct>();
         vk_instance.devices[idx] = device;
 
+        const char* vk_cache_dir = getenv("GGML_VK_CACHE_DIR");
+        if (vk_cache_dir) {
+            device->pipeline_cache_path = std::string(vk_cache_dir) + "/vk_pipeline_cache_" + std::to_string(idx) + ".bin";
+        }
+
         device->memory_logger = std::unique_ptr<vk_memory_logger>(new vk_memory_logger());
 
         size_t dev_num = vk_instance.device_indices[idx];
@@ -5421,6 +5440,35 @@ static vk_device ggml_vk_get_device(size_t idx) {
         };
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
+
+        // Load pipeline cache from disk
+        {
+            vk::PipelineCacheCreateInfo cache_info;
+            std::vector<uint8_t> cache_data;
+            if (!device->pipeline_cache_path.empty()) {
+                if (FILE* f = fopen(device->pipeline_cache_path.c_str(), "rb")) {
+                    fseek(f, 0, SEEK_END);
+                    cache_data.resize((size_t)ftell(f));
+                    fseek(f, 0, SEEK_SET);
+                    fread(cache_data.data(), 1, cache_data.size(), f);
+                    fclose(f);
+                    // Validate UUID — discard cache if device/driver changed
+                    if (cache_data.size() >= 32) {
+                        auto props = device->physical_device.getProperties();
+                        if (memcmp(cache_data.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+                            cache_data.clear();
+                        }
+                    } else {
+                        cache_data.clear();
+                    }
+                    if (!cache_data.empty()) {
+                        cache_info.setInitialDataSize(cache_data.size());
+                        cache_info.setPInitialData(cache_data.data());
+                    }
+                }
+            }
+            device->pipeline_cache = device->device.createPipelineCache(cache_info);
+        }
 
         // Queues
         ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
@@ -6493,7 +6541,7 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     const uint32_t wg2 = CEIL_DIV(elements[2], pipeline->wg_denoms[2]);
     VK_LOG_DEBUG("ggml_vk_dispatch_pipeline(" << pipeline->name << ", {";
     for (auto& buffer : descriptor_buffer_infos) {
-        std::cerr << "(" << buffer.buffer << ", " << buffer.offset << ", " << buffer.range << "), ";
+        std::cerr << "(" << (VkBuffer)buffer.buffer << ", " << buffer.offset << ", " << buffer.range << "), ";
     }
     std::cerr << "}, (" << wg0 << "," << wg1 << "," << wg2 << "))");
     GGML_ASSERT(wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
@@ -7080,7 +7128,7 @@ static void ggml_vk_matmul(
         uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d,
         uint32_t split_k, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3,
         uint32_t padded_n) {
-        VK_LOG_DEBUG("ggml_vk_matmul(a: (" << a.buffer->buffer << ", " << a.offset << ", " << a.size << "), b: (" << b.buffer->buffer << ", " << b.offset << ", " << b.size << "), d: (" << d.buffer->buffer << ", " << d.offset << ", " << d.size << "), split_k: (" << (split_k_buffer.buffer != nullptr ? split_k_buffer.buffer->buffer : VK_NULL_HANDLE) << ", " << split_k_buffer.offset << ", " << split_k_buffer.size << "), m: " << m << ", n: " << n << ", k: " << k << ", stride_a: " << stride_a << ", stride_b: " << stride_b << ", stride_d: " << stride_d << ", batch_stride_a: " << batch_stride_a << ", batch_stride_b: " << batch_stride_b << ", batch_stride_d: " << batch_stride_d << ", split_k: " << split_k << ", batch: " << batch << ", ne02: " << ne02 << ", ne12: " << ne12 << ", broadcast2: " << broadcast2 << ", broadcast3: " << broadcast3 << ", padded_n: " << padded_n << ")");
+        VK_LOG_DEBUG("ggml_vk_matmul(a: (" << (VkBuffer)a.buffer->buffer << ", " << a.offset << ", " << a.size << "), b: (" << (VkBuffer)b.buffer->buffer << ", " << b.offset << ", " << b.size << "), d: (" << (VkBuffer)d.buffer->buffer << ", " << d.offset << ", " << d.size << "), split_k: (" << (split_k_buffer.buffer != nullptr ? (VkBuffer)(split_k_buffer.buffer->buffer) : VK_NULL_HANDLE) << ", " << split_k_buffer.offset << ", " << split_k_buffer.size << "), m: " << m << ", n: " << n << ", k: " << k << ", stride_a: " << stride_a << ", stride_b: " << stride_b << ", stride_d: " << stride_d << ", batch_stride_a: " << batch_stride_a << ", batch_stride_b: " << batch_stride_b << ", batch_stride_d: " << batch_stride_d << ", split_k: " << split_k << ", batch: " << batch << ", ne02: " << ne02 << ", ne12: " << ne12 << ", broadcast2: " << broadcast2 << ", broadcast3: " << broadcast3 << ", padded_n: " << padded_n << ")");
     if (split_k == 1) {
         ggml_pipeline_request_descriptor_sets(ctx, pipeline, CEIL_DIV(batch, ctx->device->properties.limits.maxComputeWorkGroupCount[2]));
 
@@ -7160,7 +7208,7 @@ static void ggml_vk_matmul_id(
         uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d,
         uint32_t n_as, uint32_t nei0, uint32_t nei1, uint32_t nbi1, uint32_t ne11,
         uint32_t padded_n) {
-    VK_LOG_DEBUG("ggml_vk_matmul_id(a: (" << a.buffer->buffer << ", " << a.offset << ", " << a.size << "), b: (" << b.buffer->buffer << ", " << b.offset << ", " << b.size << "), d: (" << d.buffer->buffer << ", " << d.offset << ", " << d.size << "), ids: (" << ids.buffer->buffer << ", " << ids.offset << ", " << ids.size << "), expert_count: (" << expert_count_buf.buffer->buffer << ", " << expert_count_buf.offset << ", " << expert_count_buf.size << "), " <<
+    VK_LOG_DEBUG("ggml_vk_matmul_id(a: (" << (VkBuffer)a.buffer->buffer << ", " << a.offset << ", " << a.size << "), b: (" << (VkBuffer)b.buffer->buffer << ", " << b.offset << ", " << b.size << "), d: (" << (VkBuffer)d.buffer->buffer << ", " << d.offset << ", " << d.size << "), ids: (" << (VkBuffer)ids.buffer->buffer << ", " << ids.offset << ", " << ids.size << "), expert_count: (" << (VkBuffer)expert_count_buf.buffer->buffer << ", " << expert_count_buf.offset << ", " << expert_count_buf.size << "), " <<
         "m: " << m << ", n: " << n << ", k: " << k << ", stride_a: " << stride_a << ", stride_b: " << stride_b << ", stride_d: " << stride_d << ", " <<
         "batch_stride_a: " << batch_stride_a << ", batch_stride_b: " << batch_stride_b << ", batch_stride_d: " << batch_stride_d << ", " <<
         "n_as: " << n_as << ", nei0: " << nei0 << ", nei1: " << nei1 << ", nbi1: " << nbi1 << ", ne11: " << ne11 << ")");

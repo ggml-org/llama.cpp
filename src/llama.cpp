@@ -840,6 +840,10 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, params.use_mmap, params.use_direct_io,
             params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
+        ml.host_ptr        = params.host_ptr;
+        ml.host_ptr_offset = params.host_ptr_offset;
+        ml.host_ptr_size   = params.host_ptr_size;
+
         ml.print_info();
 
         model.hparams.vocab_only = params.vocab_only;

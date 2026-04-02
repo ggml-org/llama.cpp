@@ -1364,6 +1364,8 @@ bool llama_model_loader::load_all_data(
         void * progress_callback_user_data) {
     if (files.empty()) {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            // skip CPU tensors — they point directly at host_ptr (zero copy)
+            if (host_ptr && ggml_backend_buffer_is_host(t->buffer)) continue;
             set_tensor_data(t, set_tensor_data_ud);
         }
         return true;

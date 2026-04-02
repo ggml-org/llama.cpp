@@ -853,6 +853,17 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     return result;
 }
 
+struct gguf_context * gguf_init_from_mem(const void * buf, size_t size, struct gguf_init_params params) {
+    FILE * file = fmemopen((void *)buf, size, "rb");
+    if (!file) {
+        GGML_LOG_ERROR("%s: fmemopen failed errno=%d\n", __func__, errno);
+        return nullptr;
+    }
+    struct gguf_context * result = gguf_init_from_file_impl(file, params);
+    fclose(file);
+    return result;
+}
+
 void gguf_free(struct gguf_context * ctx) {
     if (ctx == nullptr) {
         return;

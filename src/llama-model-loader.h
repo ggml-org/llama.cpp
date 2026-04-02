@@ -77,6 +77,9 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool use_direct_io = false;
+    void *  host_ptr        = nullptr;
+    size_t  host_ptr_offset = 0;
+    size_t  host_ptr_size   = 0;
     bool check_tensors;
     bool no_alloc;
 
