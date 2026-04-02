@@ -4949,6 +4949,136 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("StepVLForConditionalGeneration")
+class Step3VLVisionModel(MmprojModel):
+    def __init__(self, dir_model: Path, *args, hparams: dict[str, Any] | None = None, **kwargs):
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        assert hparams is not None
+
+        vision_config = {**hparams.get("vision_config", {})}
+
+        hidden_size = int(vision_config.get("hidden_size", vision_config.get("width", 0)))
+        if hidden_size <= 0:
+            raise ValueError("Step3-VL vision hidden_size/width not found")
+
+        mlp_ratio = float(vision_config.get("mlp_ratio", 8960 / 1536))
+        vision_config["hidden_size"] = hidden_size
+        vision_config["num_hidden_layers"] = int(vision_config.get("num_hidden_layers", vision_config.get("layers", 0)))
+        vision_config["num_attention_heads"] = int(vision_config.get("num_attention_heads", vision_config.get("heads", 0)))
+        vision_config["intermediate_size"] = int(vision_config.get("intermediate_size", round(hidden_size * mlp_ratio)))
+        vision_config["layer_norm_eps"] = float(vision_config.get("layer_norm_eps", 1e-5))
+        vision_config["use_ln_pre"] = bool(vision_config.get("use_ln_pre", True))
+        vision_config["use_ln_post"] = bool(vision_config.get("use_ln_post", False))
+        vision_config["use_abs_posemb"] = bool(vision_config.get("use_abs_posemb", True))
+        vision_config["use_rope2d"] = bool(vision_config.get("use_rope2d", True))
+        hparams["vision_config"] = vision_config
+
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        self.preprocessor_config.setdefault("image_mean", list(_MISTRAL_COMMON_DATASET_MEAN))
+        self.preprocessor_config.setdefault("image_std", list(_MISTRAL_COMMON_DATASET_STD))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.STEP3VL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(self.hparams_vision["layer_norm_eps"]))
+        self.gguf_writer.add_vision_projector_scale_factor(4)
+        # 3024 max resize and 504 local crop come from step3-vl-10b processing_step3.py.
+        self.gguf_writer.add_vision_preproc_image_size(3024)
+        self.gguf_writer.add_vision_image_crop_resolution(504)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid
+
+        if name.startswith("model.") or name.startswith("lm_head."):
+            return
+
+        if name == "vision_model.conv1.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH), data_torch)
+            return
+
+        if name == "vision_model.positional_embedding":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_EMBD_POS), data_torch)
+            return
+
+        if name.startswith("vision_model.ln_pre."):
+            suffix = name.rsplit(".", 1)[1]
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_PRE_NORM, suffix=f".{suffix}"), data_torch)
+            return
+
+        if name.startswith("vision_model.transformer.resblocks."):
+            match = re.match(r"vision_model\.transformer\.resblocks\.(\d+)\.(.*)", name)
+            if match is None:
+                raise ValueError(f"Unexpected Step3-VL tensor {name!r}")
+
+            block_id = int(match.group(1))
+            block_name = match.group(2)
+
+            if block_name.startswith("attn.in_proj_"):
+                suffix = ".weight" if block_name.endswith("_weight") else ".bias"
+                q_tensor, k_tensor, v_tensor = torch.chunk(data_torch, 3, dim=0)
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_Q, block_id, suffix=suffix), q_tensor)
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_K, block_id, suffix=suffix), k_tensor)
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_ENC_ATTN_V, block_id, suffix=suffix), v_tensor)
+                return
+
+            tensor_type: gguf.MODEL_TENSOR | None = None
+            suffix = ".weight"
+
+            if block_name.startswith("attn.out_proj."):
+                tensor_type = gguf.MODEL_TENSOR.V_ENC_ATTN_O
+                suffix = f".{block_name.rsplit('.', 1)[1]}"
+            elif block_name.startswith("ln_1."):
+                tensor_type = gguf.MODEL_TENSOR.V_ENC_INPUT_NORM
+                suffix = f".{block_name.rsplit('.', 1)[1]}"
+            elif block_name.startswith("ln_2."):
+                tensor_type = gguf.MODEL_TENSOR.V_ENC_POST_ATTN_NORM
+                suffix = f".{block_name.rsplit('.', 1)[1]}"
+            elif block_name.startswith("mlp.c_fc."):
+                tensor_type = gguf.MODEL_TENSOR.V_ENC_FFN_UP
+                suffix = f".{block_name.rsplit('.', 1)[1]}"
+            elif block_name.startswith("mlp.c_proj."):
+                tensor_type = gguf.MODEL_TENSOR.V_ENC_FFN_DOWN
+                suffix = f".{block_name.rsplit('.', 1)[1]}"
+            elif block_name == "ls_1.gamma":
+                tensor_type = gguf.MODEL_TENSOR.V_LAYER_SCALE_1
+            elif block_name == "ls_2.gamma":
+                tensor_type = gguf.MODEL_TENSOR.V_LAYER_SCALE_2
+
+            if tensor_type is None:
+                raise ValueError(f"Unexpected Step3-VL block tensor {name!r}")
+
+            yield (self.format_tensor_name(tensor_type, block_id, suffix=suffix), data_torch)
+            return
+
+        if name.startswith("vision_model.vit_downsampler"):
+            match = re.match(r"vision_model\.vit_downsampler(\d+)\.(weight|bias)", name)
+            if match is None:
+                raise ValueError(f"Unexpected Step3-VL projector tensor {name!r}")
+
+            proj_id = int(match.group(1)) - 1
+            suffix = f".{match.group(2)}"
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, proj_id, suffix=suffix), data_torch)
+            return
+
+        if name == "vit_large_projector.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ_FC), data_torch)
+            return
+
+        if name.startswith("vision_model."):
+            raise ValueError(f"Unsupported Step3-VL vision tensor {name!r}")
+
+        return
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration")
 class Qwen3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
@@ -4966,6 +5096,16 @@ class Qwen3VLTextModel(Qwen3Model):
         if name.startswith("model.visual."):
             return
 
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("StepVLForConditionalGeneration")
+class Step3VLTextModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("vision_model.") or name.startswith("model.vision_model.") or name.startswith("vit_large_projector."):
+            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -12916,6 +13056,11 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     elif "ssm_cfg" in hparams:
         # For non-hf Mamba and Mamba2 models
         arch = hparams["ssm_cfg"].get("layer", "Mamba") + "ForCausalLM"
+
+    # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
+    # For text conversion we route to a dedicated text-only class.
+    if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+        return arch
 
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:

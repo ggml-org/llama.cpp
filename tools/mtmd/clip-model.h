@@ -48,6 +48,7 @@ struct clip_hparams {
 
     // for preprocessor
     int32_t image_longest_edge = 0;
+    int32_t image_crop_resolution = 0;
     int32_t image_min_pixels = -1;
     int32_t image_max_pixels = -1;
     resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
@@ -79,7 +80,6 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-
     std::unordered_set<int32_t> vision_feature_layer;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;

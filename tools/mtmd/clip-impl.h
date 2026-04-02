@@ -34,20 +34,21 @@
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
-#define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
-#define KEY_IMAGE_SIZE          "clip.vision.image_size"
-#define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
-#define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
-#define KEY_PREPROC_MIN_TILES   "clip.vision.preproc_min_tiles"
-#define KEY_PREPROC_MAX_TILES   "clip.vision.preproc_max_tiles"
-#define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
-#define KEY_PATCH_SIZE          "clip.vision.patch_size"
-#define KEY_IMAGE_MEAN          "clip.vision.image_mean"
-#define KEY_IMAGE_STD           "clip.vision.image_std"
-#define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
-#define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
-#define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
-#define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
+#define KEY_VISION_PROJ_TYPE      "clip.vision.projector_type" // for models with mixed modalities
+#define KEY_IMAGE_SIZE            "clip.vision.image_size"
+#define KEY_IMAGE_MIN_PIXELS      "clip.vision.image_min_pixels"
+#define KEY_IMAGE_MAX_PIXELS      "clip.vision.image_max_pixels"
+#define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
+#define KEY_PREPROC_MIN_TILES     "clip.vision.preproc_min_tiles"
+#define KEY_PREPROC_MAX_TILES     "clip.vision.preproc_max_tiles"
+#define KEY_PREPROC_IMAGE_SIZE    "clip.vision.preproc_image_size"
+#define KEY_PATCH_SIZE            "clip.vision.patch_size"
+#define KEY_IMAGE_MEAN            "clip.vision.image_mean"
+#define KEY_IMAGE_STD             "clip.vision.image_std"
+#define KEY_FEATURE_LAYER         "clip.vision.feature_layer"
+#define KEY_PROJ_SCALE_FACTOR     "clip.vision.projector.scale_factor"
+#define KEY_SPATIAL_MERGE_SIZE    "clip.vision.spatial_merge_size"
+#define KEY_IS_DEEPSTACK_LAYERS   "clip.vision.is_deepstack_layers"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -237,6 +238,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
+    PROJECTOR_TYPE_STEP3VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_GEMMA3NV,
     PROJECTOR_TYPE_GEMMA3NA,
@@ -278,6 +280,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
+    { PROJECTOR_TYPE_STEP3VL,   "step3vl"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_GEMMA3NV,  "gemma3nv"},
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
