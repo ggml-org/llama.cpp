@@ -38,12 +38,6 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_TQ3_4S:
             mul_mat_q_case<GGML_TYPE_TQ3_4S>(ctx, args, stream);
             break;
-        case GGML_TYPE_Q4_0_TQ:
-            mul_mat_q_case<GGML_TYPE_Q4_0_TQ>(ctx, args, stream);
-            break;
-        case GGML_TYPE_Q4_1_TQ:
-            mul_mat_q_case<GGML_TYPE_Q4_1_TQ>(ctx, args, stream);
-            break;
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, args, stream);
             break;
@@ -312,20 +306,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         return ne11 >= 64;
     }
 
-    if (type == GGML_TYPE_Q4_0_TQ &&
-        GGML_CUDA_CC_IS_NVIDIA(cc) &&
-        fp16_mma_hardware_available(cc) &&
-        n_experts == 0) {
-        return ne11 >= 64;
-    }
-
-    if (type == GGML_TYPE_Q4_1_TQ &&
-        GGML_CUDA_CC_IS_NVIDIA(cc) &&
-        fp16_mma_hardware_available(cc) &&
-        n_experts == 0) {
-        return ne11 >= 64;
-    }
-
     bool mmq_supported;
 
     switch (type) {
@@ -339,8 +319,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_TQ3_4S:
-        case GGML_TYPE_Q4_0_TQ:
-        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
