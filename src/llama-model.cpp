@@ -13,6 +13,7 @@
 #include "llama-memory-recurrent.h"
 
 #include "ggml-cpp.h"
+#include "ggml-tq-adaptive.h"
 
 #include "models/models.h"
 
