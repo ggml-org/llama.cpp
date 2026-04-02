@@ -320,8 +320,13 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             // Infer string type from enum values when type is unspecified
             if (type == "object" && param_schema.contains("enum")) {
                 const auto & enum_vals = param_schema.at("enum");
-                if (enum_vals.is_array() && !enum_vals.empty() && enum_vals[0].is_string()) {
-                    type = "string";
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -509,8 +514,13 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
             // Infer string type from enum values when type is unspecified
             if (type == "object" && param_schema.contains("enum")) {
                 const auto & enum_vals = param_schema.at("enum");
-                if (enum_vals.is_array() && !enum_vals.empty() && enum_vals[0].is_string()) {
-                    type = "string";
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
                 }
             }
 
