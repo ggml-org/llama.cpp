@@ -7,10 +7,108 @@
 #include "log.h"
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
 using json = nlohmann::ordered_json;
+
+namespace {
+
+// Gemma4-specific PEG builder extending the standard chat builder.
+// Adds value type parsers that use <|\"|> as string delimiters
+// instead of JSON's double quotes, and disables json-to-schema
+// conversion for these types.
+class common_peg_gemma4_builder {
+    common_chat_peg_builder & p_;
+    static constexpr const char * QUOTE = "<|\"|>";
+
+public:
+    explicit common_peg_gemma4_builder(common_chat_peg_builder & p) : p_(p) {}
+
+    common_peg_parser gemma4_string() {
+        return p_.rule("gemma4-string", [&]() {
+            return p_.literal(QUOTE) + p_.until(QUOTE) + p_.literal(QUOTE);
+        });
+    }
+
+    common_peg_parser gemma4_number() {
+        return p_.rule("gemma4-number", [&]() {
+            auto digit1_9 = p_.chars("[1-9]", 1, 1);
+            auto digits   = p_.chars("[0-9]");
+            auto int_part = p_.choice({p_.literal("0"), p_.sequence({digit1_9, p_.chars("[0-9]", 0, -1)})});
+            auto frac     = p_.sequence({p_.literal("."), digits});
+            auto exp      = p_.sequence({p_.choice({p_.literal("e"), p_.literal("E")}),
+                                         p_.optional(p_.chars("[+-]", 1, 1)), digits});
+            auto not_number_continuation = p_.negate(p_.chars("[0-9.eE+-]", 1, 1));
+            return p_.sequence({p_.optional(p_.literal("-")), int_part, p_.optional(frac),
+                                p_.optional(exp), not_number_continuation});
+        });
+    }
+
+    common_peg_parser gemma4_bool() {
+        return p_.rule("gemma4-bool", [&]() {
+            return p_.choice({p_.literal("true"), p_.literal("false")});
+        });
+    }
+
+    common_peg_parser gemma4_null() {
+        return p_.rule("gemma4-null", [&]() {
+            return p_.literal("null");
+        });
+    }
+
+    common_peg_parser gemma4_dict() {
+        return p_.rule("gemma4-dict", [&]() {
+            auto ws = p_.space();
+            auto key = p_.until(":");
+            auto member = p_.sequence({key, p_.literal(":"), ws, gemma4_value()});
+            auto members = p_.sequence({member, p_.zero_or_more(p_.sequence({p_.literal(","), ws, member}))});
+            return p_.sequence({
+                p_.literal("{"), ws,
+                p_.choice({p_.literal("}"), p_.sequence({members, ws, p_.literal("}")})})
+            });
+        });
+    }
+
+    common_peg_parser gemma4_array() {
+        return p_.rule("gemma4-array", [&]() {
+            auto ws = p_.space();
+            auto elements = p_.sequence({gemma4_value(), p_.zero_or_more(p_.sequence({p_.literal(","), ws, gemma4_value()}))});
+            return p_.sequence({
+                p_.literal("["), ws,
+                p_.choice({p_.literal("]"), p_.sequence({elements, ws, p_.literal("]")})})
+            });
+        });
+    }
+
+    common_peg_parser gemma4_value() {
+        return p_.rule("gemma4-value", [&]() {
+            return p_.choice({gemma4_string(), gemma4_dict(), gemma4_array(),
+                              gemma4_number(), gemma4_bool(), gemma4_null()});
+        });
+    }
+
+    // Select the appropriate value parser based on JSON schema type.
+    // Does NOT use schema() - the gemma4 types are pure PEG without
+    // JSON schema metadata, so GBNF is generated directly from the
+    // PEG structure.
+    common_peg_parser gemma4_value_for_type(const json & schema) {
+        if (!schema.contains("type") || !schema.at("type").is_string()) {
+            return gemma4_value();
+        }
+        std::string type = schema.at("type").get<std::string>();
+        if (type == "string")  { return gemma4_string(); }
+        if (type == "number")  { return gemma4_number(); }
+        if (type == "integer") { return gemma4_number(); }
+        if (type == "boolean") { return gemma4_bool(); }
+        if (type == "object")  { return gemma4_dict(); }
+        if (type == "array")   { return gemma4_array(); }
+        return gemma4_value();
+    }
+};
+
+}  // anonymous namespace
 
 // Helper to iterate over tools/functions
 static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
@@ -43,7 +141,9 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     // Create the result structure
     common_chat_params data;
     data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
-    data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.format           = (autoparser.tools.format.mode == tool_format::TAG_WITH_GEMMA4_DICT)
+                            ? COMMON_CHAT_FORMAT_PEG_GEMMA4
+                            : COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = autoparser.preserved_tokens;
 
     auto parser = autoparser.build_parser(inputs);
@@ -92,6 +192,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
 
         ctx.extracting_reasoning = extract_reasoning && reasoning.mode != reasoning_mode::NONE;
         ctx.content              = &content;
+        ctx.reasoning            = &reasoning;
 
         // Build reasoning parser
         ctx.reasoning_parser = reasoning.build_parser(ctx);
@@ -440,7 +541,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
     const auto & inputs      = ctx.inputs;
     bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
-    // The Gemma4 string quote token used in place of JSON "
+    common_peg_gemma4_builder g4(p);
     static const std::string QUOTE = "<|\"|>";
 
     common_peg_parser tool_choice = p.choice();
@@ -451,7 +552,6 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
         const auto & params = func.at("parameters");
 
         if (!params.contains("properties") || !params.at("properties").is_object()) {
-            // No arguments - just match the function name with empty braces
             auto func_parser = p.atomic(
                 p.tool_open(p.literal(function.name_prefix) + p.tool_name(p.literal(name)) + p.literal("{")) +
                 p.tool_args(p.eps()) +
@@ -486,9 +586,18 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
                     p.tool_arg_string_value(p.schema(p.until(QUOTE),
                         "tool-" + name + "-arg-" + param_name + "-schema", param_schema, true)) +
                     p.literal(QUOTE);
+            } else if (type == "number" || type == "integer") {
+                value_parser = p.tool_arg_value(g4.gemma4_number());
+            } else if (type == "boolean") {
+                value_parser = p.tool_arg_value(g4.gemma4_bool());
+            } else if (type == "null") {
+                value_parser = p.tool_arg_value(g4.gemma4_null());
+            } else if (type == "object") {
+                value_parser = p.tool_arg_value(g4.gemma4_dict());
+            } else if (type == "array") {
+                value_parser = p.tool_arg_value(g4.gemma4_array());
             } else {
-                // Numbers, booleans: raw text up to the next comma or closing brace
-                value_parser = p.tool_arg_value(p.until_one_of({",", "}"}));
+                value_parser = p.tool_arg_value(g4.gemma4_value());
             }
 
             auto arg = p.tool_arg(
@@ -538,9 +647,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
         tool_calls = p.optional(tool_calls);
     }
 
-    auto content_before_tools = p.until(format.per_call_start);
+    auto content_before_tools = p.until_one_of({ format.per_call_start, ctx.reasoning->start });
     return ctx.reasoning_parser +
-           (force_tools ? p.eps() : p.optional(p.content(content_before_tools))) +
+           (force_tools ? p.eps() : p.optional(p.content(content_before_tools) + p.optional(ctx.reasoning_parser))) +
            tool_calls + p.end();
 }
 
