@@ -1,8 +1,6 @@
 #include "agent-loop.h"
 #include "console.h"
 
-#include "base64.hpp"
-
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -67,8 +65,11 @@ agent_loop::agent_loop(server_context & server_ctx,
     task_defaults_.antiprompt  = params.antiprompt;
     task_defaults_.stream      = true;
     task_defaults_.timings_per_token = true;
-    task_defaults_.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-    task_defaults_.chat_parser_params.parse_tool_calls = true;
+
+    // Cache vocab pointer — valid for the lifetime of the model (survives sleep/wake).
+    auto * lctx = server_ctx.get_llama_context();
+    GGML_ASSERT(lctx != nullptr && "llama_context must be available at agent construction");
+    vocab_ = llama_model_get_vocab(llama_get_model(lctx));
 
     // Initialize tool context
     tool_ctx_.working_dir = config.working_dir.empty() ? "." : config.working_dir;
@@ -279,62 +280,33 @@ void agent_loop::clear() {
     stats_ = session_stats{};
 }
 
-common_chat_params agent_loop::format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools,
-                                                      std::vector<raw_buffer> & out_files) {
-    auto meta = server_ctx_.get_meta();
-    auto & chat_params = meta.chat_params;
-
-    // Deep copy messages so we can transform image_url → media_marker without
-    // altering the canonical messages_ (which retains image data for sessions).
-    json transformed = messages_;
-
-    for (auto & msg : transformed) {
-        if (!msg.contains("content") || !msg["content"].is_array()) {
-            continue;
-        }
-
-        json new_content = json::array();
-        for (auto & part : msg["content"]) {
-            std::string type = part.value("type", "");
-            if (type == "image_url") {
-                if (meta.has_inp_image) {
-                    // Decode data URI → raw_buffer
-                    std::string url = part["image_url"].value("url", "");
-                    auto comma = url.find(',');
-                    if (comma != std::string::npos) {
-                        std::string b64 = url.substr(comma + 1);
-                        std::string decoded = base64::decode(b64);
-                        raw_buffer buf(decoded.begin(), decoded.end());
-                        out_files.push_back(std::move(buf));
-                    }
-                    // Replace with media_marker for the chat template
-                    new_content.push_back({
-                        {"type", "media_marker"},
-                        {"text", "<__media__>"}
-                    });
-                }
-                // else: no vision — silently drop image block
-            } else {
-                new_content.push_back(part);
+json agent_loop::build_oai_request_body(const std::vector<common_chat_tool> & chat_tools,
+                                        bool has_vision) {
+    // Deep copy messages so we don't mutate the canonical messages_.
+    // Strip image_url blocks when the model lacks vision support to avoid
+    // oaicompat_chat_params_parse throwing "image input is not supported".
+    json messages = messages_;
+    if (!has_vision) {
+        for (auto & msg : messages) {
+            if (!msg.contains("content") || !msg["content"].is_array()) {
+                continue;
             }
+            json filtered = json::array();
+            for (const auto & part : msg["content"]) {
+                if (part.value("type", "") != "image_url") {
+                    filtered.push_back(part);
+                }
+            }
+            msg["content"] = filtered;
         }
-        msg["content"] = new_content;
     }
 
-    common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(transformed);
-    inputs.tools                 = chat_tools;
-    inputs.tool_choice           = chat_tools.empty() ? COMMON_CHAT_TOOL_CHOICE_NONE : COMMON_CHAT_TOOL_CHOICE_AUTO;
-    inputs.json_schema           = ""; // TODO
-    inputs.grammar               = ""; // TODO
-    inputs.use_jinja             = chat_params.use_jinja;
-    inputs.parallel_tool_calls   = false;
-    inputs.add_generation_prompt = true;
-    inputs.reasoning_format      = chat_params.reasoning_format;
-    inputs.enable_thinking       = chat_params.enable_thinking;
-    inputs.chat_template_kwargs  = chat_params.chat_template_kwargs;
-
-    return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
+    json body;
+    body["messages"]          = std::move(messages);
+    body["tools"]             = common_chat_tools_to_json_oaicompat(chat_tools);
+    body["stream"]            = true;
+    body["timings_per_token"] = true;
+    return body;
 }
 
 common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
@@ -346,24 +318,19 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
         task.id        = rd.get_new_id();
         task.index     = 0;
-        task.params    = task_defaults_;
 
-        // Build tools JSON in OAI-compatible format
+        // Route through the same OAI-compat code path as the HTTP server.
+        auto meta = server_ctx_.get_meta();
         auto chat_tools = tool_registry::instance().to_chat_tools();
-
+        json body = build_oai_request_body(chat_tools, meta.has_inp_image);
         std::vector<raw_buffer> files;
-        auto chat_params = format_chat_with_tools(chat_tools, files);
+        json data = oaicompat_chat_params_parse(body, meta.chat_params, files);
+
+        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, data);
 
         task.cli        = true;
-        task.cli_prompt = std::move(chat_params.prompt);
+        task.cli_prompt = data.at("prompt").get<std::string>();
         task.cli_files  = std::move(files);
-
-        task.params.chat_parser_params = common_chat_parser_params(chat_params);
-        task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-        task.params.chat_parser_params.parse_tool_calls = !chat_tools.empty();
-        if (!chat_params.parser.empty()) {
-            task.params.chat_parser_params.parser.load(chat_params.parser);
-        }
 
         rd.post_task(std::move(task));
     }
@@ -689,6 +656,10 @@ json agent_loop::build_assistant_msg(const common_chat_msg & parsed, int iterati
     msg["role"] = "assistant";
     msg["content"] = parsed.content;
 
+    if (!parsed.reasoning_content.empty()) {
+        msg["reasoning_content"] = parsed.reasoning_content;
+    }
+
     if (!parsed.tool_calls.empty()) {
         msg["tool_calls"] = json::array();
         for (const auto & call : parsed.tool_calls) {
@@ -944,23 +915,19 @@ common_chat_msg agent_loop::generate_completion_streaming(
         server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
         task.id        = rd.get_new_id();
         task.index     = 0;
-        task.params    = task_defaults_;
 
+        // Route through the same OAI-compat code path as the HTTP server.
+        auto meta = server_ctx_.get_meta();
         auto chat_tools = tool_registry::instance().to_chat_tools();
-
+        json body = build_oai_request_body(chat_tools, meta.has_inp_image);
         std::vector<raw_buffer> files;
-        auto chat_params = format_chat_with_tools(chat_tools, files);
+        json data = oaicompat_chat_params_parse(body, meta.chat_params, files);
+
+        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, data);
 
         task.cli        = true;
-        task.cli_prompt = std::move(chat_params.prompt);
+        task.cli_prompt = data.at("prompt").get<std::string>();
         task.cli_files  = std::move(files);
-
-        task.params.chat_parser_params = common_chat_parser_params(chat_params);
-        task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-        task.params.chat_parser_params.parse_tool_calls = !chat_tools.empty();
-        if (!chat_params.parser.empty()) {
-            task.params.chat_parser_params.parser.load(chat_params.parser);
-        }
 
         rd.post_task(std::move(task));
     }

@@ -197,11 +197,9 @@ public:
     const session_stats & get_stats() const { return stats_; }
 
 private:
-    // Build prompt + parser metadata using server chat template config.
-    // When the model supports vision, extracts image_url content blocks from messages,
-    // decodes them to raw_buffer and appends to out_files, replacing with media_marker.
-    common_chat_params format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools,
-                                              std::vector<raw_buffer> & out_files);
+    // Build an OAI-compatible request body from the agent's messages and tools.
+    // Strips image_url blocks when has_vision is false.
+    json build_oai_request_body(const std::vector<common_chat_tool> & chat_tools, bool has_vision);
 
     // Generate a completion and get the parsed response with tool calls
     common_chat_msg generate_completion(result_timings & out_timings);
@@ -240,6 +238,7 @@ private:
                                   const std::string & previous_summary);
 
     server_context & server_ctx_;
+    const llama_vocab * vocab_;
     const common_params * params_;
     agent_config config_;
     std::atomic<bool> & is_interrupted_;

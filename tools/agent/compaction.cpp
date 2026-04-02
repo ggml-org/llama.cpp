@@ -31,6 +31,10 @@ int32_t compaction_estimate_tokens(const json & msg) {
         chars += count_content_chars(msg["content"]);
     }
 
+    if (msg.contains("reasoning_content") && msg["reasoning_content"].is_string()) {
+        chars += (int32_t) msg["reasoning_content"].get<std::string>().size();
+    }
+
     // Count tool call names and arguments
     if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
         for (const auto & tc : msg["tool_calls"]) {
@@ -148,6 +152,11 @@ std::string compaction_serialize_conversation(const json & messages, size_t star
             }
             out << "[User]: " << content << "\n\n";
         } else if (role == "assistant") {
+            // Reasoning
+            if (msg.contains("reasoning_content") && msg["reasoning_content"].is_string() && !msg["reasoning_content"].get<std::string>().empty()) {
+                out << "[Assistant thinking]: " << msg["reasoning_content"].get<std::string>() << "\n\n";
+            }
+
             // Content
             if (msg.contains("content") && msg["content"].is_string() && !msg["content"].get<std::string>().empty()) {
                 out << "[Assistant]: " << msg["content"].get<std::string>() << "\n\n";
