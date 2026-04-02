@@ -4,6 +4,7 @@
 #include "gguf-model-data.h"
 
 #include "common.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 
 #include <algorithm>
@@ -531,14 +532,18 @@ static std::optional<gguf_remote_model> fetch_and_parse(
     return std::nullopt;
 }
 
+static std::string get_cache_file_path(const std::string& cdir, const std::string& repo_part, const std::string& filename) {
+    std::string fname_part = sanitize_for_path(filename);
+    return cdir + "/" + repo_part + "--" + fname_part + ".partial";
+}
+
 // Try cache first, then fetch and parse a single GGUF shard.
 static std::optional<gguf_remote_model> fetch_or_cached(
         const std::string & repo,
         const std::string & filename,
         const std::string & cdir,
         const std::string & repo_part) {
-    std::string fname_part = sanitize_for_path(filename);
-    std::string cache_path = cdir + "/" + repo_part + "--" + fname_part + ".partial";
+    std::string cache_path = get_cache_file_path(cdir, repo_part, filename);
 
     {
         std::vector<char> cached;
@@ -610,4 +615,85 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
     }
 
     return model_opt;
+}
+
+gguf_context_ptr gguf_fetch_gguf_ctx(
+        const std::string & repo,
+        const std::string & quant,
+        const std::string & cache_dir) {
+    std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
+    std::string repo_part = sanitize_for_path(repo);
+
+    std::string split_prefix;
+    std::string filename = detect_gguf_filename(repo, quant, split_prefix);
+
+    if (filename.empty()) {
+        return nullptr;
+    }
+
+    auto model_opt = fetch_or_cached(repo, filename, cdir, repo_part);
+    if (!model_opt.has_value()) {
+        fprintf(stderr, "gguf_fetch: failed to fetch %s\n", filename.c_str());
+        return nullptr;
+    }
+
+    auto & model = model_opt.value();
+
+    const std::string cache_path = get_cache_file_path(cdir, repo_part, filename);
+
+    ggml_context_ptr ggml_ctx_ptr;
+    ggml_context * ggml_ctx{};
+    gguf_init_params params{true, &ggml_ctx};
+    gguf_context_ptr ctx{gguf_init_from_file(cache_path.c_str(), params)};
+    ggml_ctx_ptr.reset(ggml_ctx);
+
+    if (ctx == nullptr) {
+        fprintf(stderr, "gguf_fetch: gguf_init_from_file failed\n");
+        return nullptr;
+    }
+
+    // If the model is split across multiple files we need to fetch the remaining shards metadata
+    if (model.n_split > 1) {
+        if (split_prefix.empty()) {
+            fprintf(stderr, "gguf_fetch: model reports %u splits but filename has no split pattern\n", model.n_split);
+            return nullptr;
+        }
+
+        fprintf(stderr, "gguf_fetch: split model with %u shards, fetching remaining %u...\n",
+                model.n_split, model.n_split - 1);
+
+        for (int i = 2; i <= model.n_split; i++) {
+            char num_buf[6], total_buf[6];
+            snprintf(num_buf,   sizeof(num_buf),   "%05d", i);
+            snprintf(total_buf, sizeof(total_buf), "%05d", (int)model.n_split);
+            std::string shard_name = split_prefix + "-" + num_buf + "-of-" + total_buf + ".gguf";
+
+            auto shard = fetch_or_cached(repo, shard_name, cdir, repo_part);
+            if (!shard.has_value()) {
+                fprintf(stderr, "gguf_fetch: failed to fetch shard %d: %s\n", i, shard_name.c_str());
+                return nullptr;
+            }
+
+            // Load tensors from shard and add to main gguf_context
+            const std::string shard_path = get_cache_file_path(cdir, repo_part, shard_name);
+            ggml_context_ptr shard_ggml_ctx_ptr;
+            ggml_context * shard_ggml_ctx{};
+            gguf_init_params shard_params{true, &shard_ggml_ctx};
+            gguf_context_ptr shard_ctx{gguf_init_from_file(shard_path.c_str(), shard_params)};
+            shard_ggml_ctx_ptr.reset(shard_ggml_ctx);
+
+            if (shard_ctx == nullptr) {
+                fprintf(stderr, "gguf_fetch: shard gguf_init_from_file failed\n");
+                return nullptr;
+            }
+
+            for (ggml_tensor * t = ggml_get_first_tensor(shard_ggml_ctx); t; t = ggml_get_next_tensor(shard_ggml_ctx, t)) {
+                gguf_add_tensor(ctx.get(), t);
+            }
+        }
+
+        gguf_set_val_u16(ctx.get(), "split.count", 1);
+    }
+
+    return ctx;
 }
