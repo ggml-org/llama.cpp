@@ -39147,6 +39147,19 @@ gpu_dispatch:
                 std::abort();
             }
         }
+        // [SYCL-FIX] Periodic queue drain for L0 command list overflow
+        {
+            const bool need_drain = !g_ggml_sycl_debug_sync
+                                 && !g_ggml_sycl_graph_recording
+                                 && ((i & 31) == 31);
+            if (need_drain) {
+                try {
+                    sycl_ctx->stream(sycl_ctx->device, 0)->wait_and_throw();
+                } catch (const sycl::exception & e) {
+                    GGML_LOG_ERROR("[SYCL] queue drain failed at node %d: %s\n", i, e.what());
+                }
+            }
+        }
         if (do_nan_check && (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16)) {
             queue_ptr     stream    = sycl_ctx->stream(sycl_ctx->device, 0);
             const void *  node_data = ggml_sycl_get_data_ptr(node, sycl_ctx->device);
