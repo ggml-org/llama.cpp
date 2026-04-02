@@ -116,6 +116,39 @@ int main() {
     // Verify tensor count
     TEST_ASSERT(model3.tensors.size() == 780, "expected tensor count == 780");
 
+    // Test a hybrid-attention model with array-valued head counts
+    auto result4 = gguf_fetch_model_meta("ggml-org/Step-3.5-Flash-GGUF", "Q4_K");
+    if (!result4.has_value()) {
+        fprintf(stderr, "FAIL: could not fetch Step-3.5-Flash metadata\n");
+        return 1;
+    }
+    const auto & model4 = result4.value();
+
+    fprintf(stderr, "Architecture:  %s\n", model4.architecture.c_str());
+    fprintf(stderr, "n_embd:        %u\n", model4.n_embd);
+    fprintf(stderr, "n_ff:          %u\n", model4.n_ff);
+    fprintf(stderr, "n_vocab:       %u\n", model4.n_vocab);
+    fprintf(stderr, "n_layer:       %u\n", model4.n_layer);
+    fprintf(stderr, "n_head:        %u\n", model4.n_head);
+    fprintf(stderr, "n_head_kv:     %u\n", model4.n_head_kv);
+    fprintf(stderr, "n_expert:      %u\n", model4.n_expert);
+    fprintf(stderr, "n_embd_head_k: %u\n", model4.n_embd_head_k);
+    fprintf(stderr, "n_embd_head_v: %u\n", model4.n_embd_head_v);
+    fprintf(stderr, "tensors:       %zu\n", model4.tensors.size());
+
+    TEST_ASSERT(model4.architecture == "step35", "expected architecture 'step35'");
+
+    TEST_ASSERT(model4.n_layer == 45, "expected n_layer == 45");
+    TEST_ASSERT(model4.n_embd == 4096, "expected n_embd == 4096");
+    TEST_ASSERT(model4.n_ff == 11264, "expected n_ff == 11264");
+    TEST_ASSERT(model4.n_head == 64, "expected n_head == 64 (first element of per-layer array)");
+    TEST_ASSERT(model4.n_head_kv == 8, "expected n_head_kv == 8 (first element of per-layer array)");
+    TEST_ASSERT(model4.n_expert == 288, "expected n_expert == 288");
+    TEST_ASSERT(model4.n_embd_head_k == 128, "expected n_embd_head_k == 128");
+    TEST_ASSERT(model4.n_embd_head_v == 128, "expected n_embd_head_v == 128");
+    TEST_ASSERT(model4.n_vocab == 128896, "expected n_vocab == 128896");
+    TEST_ASSERT(model4.tensors.size() == 754, "expected tensor count == 754");
+
     fprintf(stderr, "=== ALL TESTS PASSED ===\n");
     return 0;
 }

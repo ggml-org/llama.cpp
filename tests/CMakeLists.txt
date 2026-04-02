@@ -274,6 +274,12 @@ if (TARGET cpp-httplib)
         add_executable(test-gguf-model-data test-gguf-model-data.cpp)
         target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data common)
         llama_test(test-gguf-model-data LABEL "model")
+
+        # test-quant-type-selection requires gguf-model-data for remote model metadata
+        llama_build_and_test(test-quant-type-selection.cpp LABEL "model")
+        target_link_libraries(test-quant-type-selection PRIVATE gguf-model-data)
+        target_compile_definitions(test-quant-type-selection PRIVATE
+            SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots")
     endif()
 endif()
 
