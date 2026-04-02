@@ -5719,6 +5719,27 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                       desired_extra / (1024.0 * 1024.0), base_headroom / (1024.0 * 1024.0),
                       base_mem / (1024.0 * 1024.0));
     }
+    // VRAM budget breakdown by category priority
+    {
+        const double MB              = 1024.0 * 1024.0;
+        const size_t dense_weights   = g_tensor_inventory_total_size - g_moe_expert_total_bytes;
+        const size_t expert_reserve  = g_moe_expert_vram_reserve[ctx->device];
+        const size_t total_headroom  = base_headroom + desired_extra;
+        const size_t committed       = dense_weights + expert_reserve + total_headroom;
+        const size_t scratch_remaining = vram_budget > committed ? vram_budget - committed : 0;
+
+        GGML_LOG_INFO("[VRAM-BUDGET] Device %d: %.1f MB total, %.1f MB budget (%d%%)\n",
+                      ctx->device, base_mem / MB, vram_budget / MB, budget_pct);
+        GGML_LOG_INFO("[VRAM-BUDGET]   Weights (dense): %.1f MB  [priority 1]\n", dense_weights / MB);
+        if (g_moe_expert_total_bytes > 0) {
+            GGML_LOG_INFO("[VRAM-BUDGET]   Expert cache:    %.1f MB reserved (%.1f MB total)  [priority 2]\n",
+                          expert_reserve / MB, g_moe_expert_total_bytes / MB);
+        }
+        GGML_LOG_INFO("[VRAM-BUDGET]   Headroom:        %.1f MB  (scratch + KV + runtime)\n", total_headroom / MB);
+        GGML_LOG_INFO("[VRAM-BUDGET]   Available:       %.1f MB  (for KV [pri 0], scratch [pri 3], staging [pri 4])\n",
+                      scratch_remaining / MB);
+    }
+
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load(std::memory_order_relaxed) ? "enabled" : "disabled");

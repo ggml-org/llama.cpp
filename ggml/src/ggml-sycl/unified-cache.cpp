@@ -2005,8 +2005,17 @@ float host_cache::compute_score(const host_cache_entry & entry) const {
     int64_t age        = time_.load() - entry.last_access;
     float   decay      = std::exp(-DECAY_ALPHA * static_cast<float>(age));
     float   base_score = static_cast<float>(entry.access_count) * decay;
+
+    // Priority-based score boost (consistent with unified_cache::compute_score)
+    const alloc_category cat = (entry.type == cache_entry_type::MOE_EXPERT)
+                                   ? alloc_category::EXPERT_CACHE
+                                   : alloc_category::WEIGHT;
+    constexpr int k_max_priority = 4;
+    const float   priority_boost = static_cast<float>(k_max_priority - alloc_category_priority(cat) + 1);
+    base_score *= priority_boost;
+
     if (entry.type == cache_entry_type::DENSE_WEIGHT) {
-        return base_score * 2.0f;
+        return base_score;
     }
     // Boost MoE experts with high popularity (low rank = more popular).
     // This makes popular experts resist eviction after warmup profiling.
@@ -4894,11 +4903,20 @@ size_t unified_cache::evict_and_flush(size_t bytes_needed) {
 static int eviction_tier(const unified_cache_entry & entry) {
     // Tiered eviction priority (lower = evict first):
     // -1: host-resident (already slow, evict first to reclaim tracking)
-    //  0: MoE experts (cold), 1: MoE experts (hot), 2: dense (cold), 3: dense (hot)
+    // Derived from alloc_category_priority (lower priority number = higher VRAM
+    // priority = harder to evict = HIGHER eviction tier).
+    //   MoE experts: category priority 2 → inverted base 2 → tiers 4-5 (cold/hot)
+    //   Dense weights: category priority 1 → inverted base 3 → tiers 6-7 (cold/hot)
+    // Hot entries get +1 within their category to resist eviction.
     if (entry.host_resident) {
         return -1;  // Host-resident entries evict first (they're already slow)
     }
-    const int base = (entry.type == cache_entry_type::DENSE_WEIGHT) ? 2 : 0;
+    const alloc_category cat = (entry.type == cache_entry_type::MOE_EXPERT)
+                                   ? alloc_category::EXPERT_CACHE
+                                   : alloc_category::WEIGHT;
+    constexpr int k_max_priority = 4;  // max value from alloc_category_priority
+    const int     inverted       = k_max_priority - alloc_category_priority(cat);
+    const int     base           = inverted * 2;
     return base + (entry.hot ? 1 : 0);
 }
 
@@ -5039,10 +5057,17 @@ float unified_cache::compute_score(const unified_cache_entry & entry) const {
     float   decay      = std::exp(-DECAY_ALPHA * static_cast<float>(age));
     float   base_score = static_cast<float>(entry.access_count) * decay;
 
-    // Dense weights get 2x priority (harder to evict than MoE experts)
-    // Rationale: Dense weights are accessed every token, experts only when selected
+    // Higher VRAM priority (lower priority number) → higher score → harder to evict.
+    // Dense weights (priority 1) get more boost than MoE experts (priority 2).
+    const alloc_category cat = (entry.type == cache_entry_type::MOE_EXPERT)
+                                   ? alloc_category::EXPERT_CACHE
+                                   : alloc_category::WEIGHT;
+    constexpr int k_max_priority = 4;
+    const float   priority_boost = static_cast<float>(k_max_priority - alloc_category_priority(cat) + 1);
+    base_score *= priority_boost;  // WEIGHT → 4x, EXPERT_CACHE → 3x
+
     if (entry.type == cache_entry_type::DENSE_WEIGHT) {
-        return base_score * 2.0f;
+        return base_score;
     }
     if (entry.hot) {
         constexpr float k_hot_boost = 1.5f;
@@ -6920,6 +6945,18 @@ static void category_to_intent(alloc_category cat, alloc_intent & intent) {
 // Returns true if a category is eligible for host-pinned fallback when VRAM is full.
 static bool category_allows_host_fallback(alloc_category cat) {
     return cat == alloc_category::COMPUTE_SCRATCH || cat == alloc_category::STAGING;
+}
+
+int alloc_category_priority(alloc_category cat) {
+    switch (cat) {
+        case alloc_category::KV_CACHE:        return 0;  // hot KV: latency-critical, always VRAM
+        case alloc_category::WEIGHT:          return 1;  // attention weights: used every token
+        case alloc_category::CONTROL:         return 1;  // tiny, must be on device
+        case alloc_category::EXPERT_CACHE:    return 2;  // MoE experts: evictable via LRU/frequency
+        case alloc_category::COMPUTE_SCRATCH: return 3;  // ephemeral, can use host-pinned
+        case alloc_category::STAGING:         return 4;  // always host-ok
+    }
+    return 3;  // unknown → treat as scratch
 }
 
 unified_alloc_result unified_cache_allocate(

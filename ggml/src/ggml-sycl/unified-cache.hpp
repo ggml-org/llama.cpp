@@ -1543,6 +1543,14 @@ enum class alloc_category : uint8_t {
     EXPERT_CACHE    = 5,  // MoE expert data, evictable from device
 };
 
+// Returns eviction priority: lower number = higher VRAM priority (less likely to evict).
+// 0 = KV cache (hot tokens, latency-critical)
+// 1 = attention weights / control buffers (used every token)
+// 2 = MoE expert cache (evictable via LRU/frequency)
+// 3 = compute scratch (ephemeral, can use host-pinned PCIe zero-copy)
+// 4 = staging buffers (always host-ok)
+int alloc_category_priority(alloc_category cat);
+
 struct unified_alloc_result {
     void *     ptr  = nullptr;
     alloc_tier tier = alloc_tier::DEVICE_VRAM;
