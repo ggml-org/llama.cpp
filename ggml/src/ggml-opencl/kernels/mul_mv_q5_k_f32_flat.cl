@@ -18,7 +18,11 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+//------------------------------------------------------------------------------
+// block_q5_K
+//------------------------------------------------------------------------------
 #define QK_K            256
+#define BLOCK_Q5K_SIZE  176
 #define K_SCALE_SIZE    12
 
 typedef struct {
@@ -38,11 +42,14 @@ typedef struct {
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 16
 #elif defined(ADRENO_GPU)
-#define N_DST       4
-#define N_SIMDGROUP 1
+#define N_DST       16
+#define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
 #endif
 
+#undef  BLOCK_STRIDE
+// number of (super) blocks each subgroup processes
+// each thread in a subgroup processes a block (32 weights)
 #define BLOCK_STRIDE (N_SIMDWIDTH/8)
 
 #ifdef INTEL_GPU
@@ -50,28 +57,30 @@ REQD_SUBGROUP_SIZE_16
 #elif defined (ADRENO_GPU)
 REQD_SUBGROUP_SIZE_64
 #endif
-kernel void kernel_mul_mv_q5_K_f32(
-        global char * src0,
-        int offset0,
-        global char * src1,
-        int offset1,
-        global char * dst,
-        int offsetd,
-        int ne00,
-        int ne01,
-        ulong nb01,
-        ulong nb02,
-        ulong nb03,
-        int ne12,
-        ulong nb11,
-        ulong nb12,
-        ulong nb13,
-        int ne0,
-        int ne1,
-        int r2,
-        int r3
+kernel void kernel_mul_mv_q5_K_f32_flat(
+    global uchar * src0_q,
+    global uchar * src0_qh,
+    global uchar * src0_s,
+    global half  * src0_d,
+    global half  * src0_dm,
+    global char  * src1,
+    int offset1,
+    global char  * dst,
+    int offsetd,
+    int ne00,
+    int ne01,
+    ulong nb01,
+    ulong nb02,
+    ulong nb03,
+    int ne12,
+    ulong nb11,
+    ulong nb12,
+    ulong nb13,
+    int ne0,
+    int ne1,
+    int r2,
+    int r3
 ) {
-    src0 = src0 + offset0;
     src1 = src1 + offset1;
     dst  = dst  + offsetd;
 
@@ -79,10 +88,10 @@ kernel void kernel_mul_mv_q5_K_f32(
     ushort kmask2 = 0x0f0f;
     ushort kmask3 = 0xc0c0;
 
-    int ix = get_sub_group_local_id()/8;  // super block index
-    int it = get_sub_group_local_id()%8;  // block index (inside super block)
-    int iq = it/4;     // 0 or 1 - first or second half of the super block
-    int ir = it%4;     // 0...3 - block index in the half super block
+    int ix = get_sub_group_local_id()/8;
+    int it = get_sub_group_local_id()%8;
+    int iq = it/4;
+    int ir = it%4;
 
     int nb = ne00/QK_K;
 
@@ -94,11 +103,16 @@ kernel void kernel_mul_mv_q5_K_f32(
     int i12 = im%ne12;
     int i13 = im/ne12;
 
-    int offset_src0 = first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03;
-    int offset_src1 =        r1*nb11 + (i12   )*nb12 + (i13   )*nb13;
+    int offset_src0 = (first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03)/BLOCK_Q5K_SIZE;
+    uint blk = nb01 / BLOCK_Q5K_SIZE;
+    global uchar * blk_q  = (global uchar *)src0_q  + offset_src0*(QK_K/2);
+    global uchar * blk_qh = (global uchar *)src0_qh + offset_src0*(QK_K/8);
+    global uchar * blk_s  = (global uchar *)src0_s  + offset_src0*K_SCALE_SIZE;
+    global half  * blk_d  = (global half  *)src0_d  + offset_src0;
+    global half  * blk_dm = (global half  *)src0_dm + offset_src0;
 
-    global block_q5_K * x = (global block_q5_K *) (src0 + offset_src0);
-    global float      * y = (global float      *) (src1 + offset_src1);
+    int offset_src1 = r1*nb11 + (i12)*nb12 + (i13)*nb13;
+    global float * y = (global float *)(src1 + offset_src1);
 
     float yl[16];
     float yh[16];
@@ -131,10 +145,11 @@ kernel void kernel_mul_mv_q5_K_f32(
             sumy.s3 += yh[i+8];
         }
 
-        global ushort * sc = (global ushort *)x[ib].scales + iq;
-        global ushort * q1 = (global ushort *)x[ib].qs + 16 * iq + 4 * ir;
-        global uchar  * qh = x[ib].qh + 8 * ir;
-        global half   * dh = &x[ib].d;
+        global ushort * q1 = (global ushort *)(blk_q  + ib * (QK_K/2)) + (16 * iq + 4 * ir);
+        global uchar  * qh = (global uchar  *)(blk_qh + ib * (QK_K/8)) + 8 * ir;
+        global ushort * sc = (global ushort *)(blk_s  + ib * K_SCALE_SIZE) + iq;
+        global half   * d  = blk_d  + ib;
+        global half   * dm = blk_dm + ib;
 
         for (int row = 0; row < N_DST; row++) {
             sc16[0] = sc[0] & kmask1;
@@ -157,18 +172,19 @@ kernel void kernel_mul_mv_q5_K_f32(
                 acc2.s3 += yh[i+9] * ((q2[i/2] & 0xF000) + (qh[i+1] & u2_hi ? 16.f*4096.f: 0.f));
             }
 
-            float dall = dh[0];
-            float dmin = dh[1];
+            float dall = *d;
+            float dmin = *dm;
             sumf[row] += dall * ((acc1.s0 + 1.f/256.f * acc1.s1) * sc8[0] +
                                  (acc1.s2 + 1.f/256.f * acc1.s3) * sc8[1] * 1.f/16.f +
                                  (acc2.s0 + 1.f/256.f * acc2.s1) * sc8[4] +
                                  (acc2.s2 + 1.f/256.f * acc2.s3) * sc8[5] * 1.f/16.f) -
                          dmin * (sumy.s0 * sc8[2] + sumy.s1 * sc8[3] + sumy.s2 * sc8[6] + sumy.s3 * sc8[7]);
 
-            q1  += nb01/2;
-            sc  += nb01/2;
-            dh  += nb01/2;
-            qh += nb01;
+            q1 += blk*64;
+            qh += blk*32;
+            sc += blk*6;
+            d  += blk;
+            dm += blk;
         }
 
         y4 += BLOCK_STRIDE * QK_K;
