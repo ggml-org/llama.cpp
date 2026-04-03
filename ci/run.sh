@@ -119,6 +119,11 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
         CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
     fi
 
+    # Build shared libs on Windows
+    # to reduce binary size and avoid errors in library loading unit tests
+    if uname -s | grep -qi nt; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DBUILD_SHARED_LIBS=ON"
+    fi
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
