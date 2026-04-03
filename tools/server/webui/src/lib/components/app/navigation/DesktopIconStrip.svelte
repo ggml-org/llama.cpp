@@ -4,6 +4,8 @@
 	import { ActionIcon } from '$lib/components/app/actions';
 	import { McpLogo } from '$lib/components/app/mcp';
 	import { Database, Settings, Search, SquarePen } from '@lucide/svelte';
+	import { fade } from 'svelte/transition';
+	import { onMount, type Component } from 'svelte';
 
 	interface Props {
 		sidebarOpen: boolean;
@@ -12,9 +14,62 @@
 
 	let { sidebarOpen, onSearchClick }: Props = $props();
 
+	const TRANSITION_DURATION = 200;
+
 	let isMcpActive = $derived(page.route.id === '/settings/mcp');
 	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
 	let isSettingsActive = $derived(page.route.id === '/settings/chat');
+
+	interface IconItem {
+		icon: Component;
+		tooltip: string;
+		onclick: () => void;
+		activeClass?: string;
+		group: 'top' | 'bottom';
+	}
+
+	let icons = $derived<IconItem[]>([
+		{
+			icon: SquarePen,
+			tooltip: 'New Chat',
+			onclick: () => goto('?new_chat=true#/'),
+			group: 'top'
+		},
+		{
+			icon: Search,
+			tooltip: 'Search',
+			onclick: onSearchClick,
+			group: 'top'
+		},
+		{
+			icon: McpLogo,
+			tooltip: 'MCP Servers',
+			onclick: () => goto('#/settings/mcp'),
+			activeClass: isMcpActive ? 'bg-accent text-accent-foreground' : '',
+			group: 'bottom'
+		},
+		{
+			icon: Database,
+			tooltip: 'Import / Export',
+			onclick: () => goto('#/settings/import-export'),
+			activeClass: isImportExportActive ? 'bg-accent text-accent-foreground' : '',
+			group: 'bottom'
+		},
+		{
+			icon: Settings,
+			tooltip: 'Settings',
+			onclick: () => goto('#/settings/chat'),
+			activeClass: isSettingsActive ? 'bg-accent text-accent-foreground' : '',
+			group: 'bottom'
+		}
+	]);
+
+	let topIcons = $derived(icons.filter((i) => i.group === 'top'));
+	let bottomIcons = $derived(icons.filter((i) => i.group === 'bottom'));
+
+	let mounted = $state(false);
+	onMount(() => (mounted = true));
+	let showIcons = $derived(mounted && !sidebarOpen);
 </script>
 
 <!-- Spacer to reserve space for icon strip in the flex layout -->
@@ -30,54 +85,35 @@
 		: 'opacity-100'}"
 >
 	<div class="mt-12 flex flex-col items-center gap-1">
-		<ActionIcon
-			icon={SquarePen}
-			tooltip="New Chat"
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent!"
-			onclick={() => goto('?new_chat=true#/')}
-		/>
-
-		<ActionIcon
-			icon={Search}
-			tooltip="Search"
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent!"
-			onclick={onSearchClick}
-		/>
+		{#each topIcons as item (item.tooltip)}
+			{#if showIcons}
+				<div in:fade={{ duration: TRANSITION_DURATION, delay: TRANSITION_DURATION }}>
+					<ActionIcon
+						icon={item.icon}
+						tooltip={item.tooltip}
+						size="lg"
+						iconSize="h-4 w-4"
+						class="h-9 w-9 rounded-full hover:bg-accent! {item.activeClass ?? ''}"
+						onclick={item.onclick}
+					/>
+				</div>
+			{/if}
+		{/each}
 	</div>
 	<div class="flex flex-col items-center gap-1">
-		<ActionIcon
-			icon={McpLogo}
-			tooltip="MCP Servers"
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent! {isMcpActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			onclick={() => goto('#/settings/mcp')}
-		/>
-		<ActionIcon
-			icon={Database}
-			tooltip="Import / Export"
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent! {isImportExportActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			onclick={() => goto('#/settings/import-export')}
-		/>
-		<ActionIcon
-			icon={Settings}
-			tooltip="Settings"
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent! {isSettingsActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			onclick={() => goto('#/settings/chat')}
-		/>
+		{#each bottomIcons as item (item.tooltip)}
+			{#if showIcons}
+				<div in:fade={{ duration: TRANSITION_DURATION, delay: TRANSITION_DURATION }}>
+					<ActionIcon
+						icon={item.icon}
+						tooltip={item.tooltip}
+						size="lg"
+						iconSize="h-4 w-4"
+						class="h-9 w-9 rounded-full hover:bg-accent! {item.activeClass ?? ''}"
+						onclick={item.onclick}
+					/>
+				</div>
+			{/if}
+		{/each}
 	</div>
 </aside>

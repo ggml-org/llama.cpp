@@ -4,6 +4,8 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import {
 		ChatSidebar,
 		ChatSettings,
@@ -32,6 +34,7 @@
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
+	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
@@ -107,6 +110,10 @@
 			titleUpdateResolve = null;
 		}
 	}
+
+	onMount(() => {
+		mounted = true;
+	});
 
 	$effect(() => {
 		if (alwaysShowSidebarOnDesktop && isDesktop) {
@@ -241,12 +248,16 @@
 			</Sidebar.Root>
 
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(isSettingsRoute && !isDesktop)}
-				<Sidebar.Trigger
-					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-						? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-						: 'left-0!'}"
-					style="translate: 1rem 1rem;"
-				/>
+				{#if mounted}
+					<div in:fade={{ duration: 200 }}>
+						<Sidebar.Trigger
+							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+								: 'left-0!'}"
+							style="translate: 1rem 1rem;"
+						/>
+					</div>
+				{/if}
 			{/if}
 
 			{#if isDesktop && !alwaysShowSidebarOnDesktop}
