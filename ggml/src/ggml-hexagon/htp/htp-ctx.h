@@ -43,12 +43,6 @@ struct htp_context {
     size_t      vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
 #endif
 
-    // Cached src1 spad position from the last quantize pass.
-    // When SKIP_QUANTIZE is set the Q8 activation data is already in VTCM
-    // at this address; the matmul must read from here instead of recomputing
-    // the offset (which depends on the current op's src0 size).
-    uint8_t *   prev_src1_spad;
-
     uint32_t    opmask;
 
     struct htp_mmap mmap[HTP_MAX_MMAPS];

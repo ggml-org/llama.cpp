@@ -2916,9 +2916,10 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+    // Place src1 spad first. We use it for dyn.quant and may reuse between ops
+    octx->src1_spad.data = octx->ctx->vtcm_base;
+    octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
 
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
@@ -2927,13 +2928,6 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
         const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
-        // Cache where src1 was written so subsequent SKIP_QUANTIZE ops can find it
-        octx->ctx->prev_src1_spad = octx->src1_spad.data;
-    } else {
-        // SKIP_QUANTIZE: Q8 data lives at the address written by the previous
-        // quantize pass.  The current op may have a different src0 size (e.g.
-        // IQ4_NL vs MXFP4), so src1_spad.data computed above could be wrong.
-        octx->src1_spad.data = octx->ctx->prev_src1_spad;
     }
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
@@ -3131,9 +3125,10 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    // Place src1 spad first.  We use it for dyn.quant and may reuse in subseq ops
+    octx->src1_spad.data = octx->ctx->vtcm_base;
+    octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    octx->src2_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src2_spad.data + octx->src2_spad.size;
 
     octx->src0_spad.stride = src0_row_size_padded;
@@ -3164,9 +3159,6 @@ int op_matmul_id(struct htp_ops_context * octx) {
         const uint32_t n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
-        octx->ctx->prev_src1_spad = octx->src1_spad.data;
-    } else {
-        octx->src1_spad.data = octx->ctx->prev_src1_spad;
     }
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
