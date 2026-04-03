@@ -175,16 +175,20 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
 
 // Callback function for recording CPU profiling events from C code (ggml-cpu.c)
 static void ggml_cpu_profiler_record_callback(void *        context,
-                                              int           type,
-                                              const char *  name,
-                                              int           split_id,
-                                              uint64_t      start_ns,
-                                              uint64_t      end_ns,
-                                              uint64_t      bytes,
-                                              const char *  extra,
-                                              const int64_t ne_src0[4],
-                                              const int64_t ne_src1[4],
-                                              const int64_t ne_src2[4]) {
+                                               int           type,
+                                               const char *  name,
+                                               int           split_id,
+                                               uint64_t      start_ns,
+                                               uint64_t      end_ns,
+                                               uint64_t      bytes,
+                                               const char *  extra,
+                                               const int64_t ne_src0[4],
+                                               const int64_t ne_src1[4],
+                                               const int64_t ne_src2[4],
+                                               int           type_src0,
+                                               int           type_src1,
+                                               int           type_src2,
+                                               int           sub_op) {
     auto *              cpu_ctx = (ggml_backend_cpu_context *) context;
     ggml_profile_record rec;
     rec.type       = (enum ggml_profile_event_type) type;
@@ -195,6 +199,10 @@ static void ggml_cpu_profiler_record_callback(void *        context,
     rec.end_ns     = end_ns;
     rec.bytes      = bytes;
     rec.extra      = extra;
+    rec.type_src0  = type_src0;
+    rec.type_src1  = type_src1;
+    rec.type_src2  = type_src2;
+    rec.sub_op     = sub_op;
     if (ne_src0) {
         memcpy(rec.ne_src0, ne_src0, sizeof(rec.ne_src0));
     } else {

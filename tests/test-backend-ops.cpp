@@ -20,6 +20,8 @@
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -9669,8 +9671,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
     return test_cases;
 }
 
+struct profile_test_plan;
+
+static profile_test_plan make_test_plan_from_profile(
+        const char * profile_path, int top_n);
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, const char * test_file_path, int parallel_workers) {
+                         printer * output_printer, const char * test_file_path, int parallel_workers,
+                         std::vector<std::unique_ptr<test_case>> profile_test_cases = {}) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -9691,15 +9699,19 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
     std::vector<std::unique_ptr<test_case>> test_cases;
 
     if (test_file_path == nullptr) {
-        switch (mode) {
-        case MODE_TEST:
-        case MODE_GRAD:
-        case MODE_SUPPORT:
-            test_cases = make_test_cases_eval();
-            break;
-        case MODE_PERF:
-            test_cases = make_test_cases_perf();
-            break;
+        if (!profile_test_cases.empty()) {
+            test_cases = std::move(profile_test_cases);
+        } else {
+            switch (mode) {
+            case MODE_TEST:
+            case MODE_GRAD:
+            case MODE_SUPPORT:
+                test_cases = make_test_cases_eval();
+                break;
+            case MODE_PERF:
+                test_cases = make_test_cases_perf();
+                break;
+            }
         }
     } else {
         test_cases = make_test_cases_from_file(test_file_path);
@@ -9954,7 +9966,7 @@ static void show_test_coverage() {
 
 static void usage(char ** argv) {
     printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops]", argv[0]);
-    printf(" [--show-coverage] [--test-file <path>] [-j <n>]\n");
+    printf(" [--show-coverage] [--test-file <path>] [-j <n>] [--from-profile <path>] [--top-n <N>]\n");
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
@@ -9969,6 +9981,414 @@ static void usage(char ** argv) {
     printf("    -j <n> runs tests using <n> parallel worker threads (default: 1, test mode only)\n");
 }
 
+// ##############################
+// ## Profiler-based perf ##
+// ##############################
+
+static ggml_op profile_name_to_op(const std::string & name) {
+    static const std::unordered_map<std::string, ggml_op> map = {
+        {"ADD",             GGML_OP_ADD},
+        {"ADD1",            GGML_OP_ADD1},
+        {"ARGSORT",         GGML_OP_ARGSORT},
+        {"CLAMP",           GGML_OP_CLAMP},
+        {"CONCAT",          GGML_OP_CONCAT},
+        {"CONT",            GGML_OP_CONT},
+        {"CPY",             GGML_OP_CPY},
+        {"DIV",             GGML_OP_DIV},
+        {"FLASH_ATTN_EXT",  GGML_OP_FLASH_ATTN_EXT},
+        {"GET_ROWS",        GGML_OP_GET_ROWS},
+        {"GET_ROWS_BACK",   GGML_OP_GET_ROWS_BACK},
+        {"GLU",             GGML_OP_GLU},
+        {"IM2COL_BACK",     GGML_OP_IM2COL_BACK},
+        {"MUL",             GGML_OP_MUL},
+        {"MUL_MAT",         GGML_OP_MUL_MAT},
+        {"MUL_MAT_ID",      GGML_OP_MUL_MAT_ID},
+        {"OUT_PROD",        GGML_OP_OUT_PROD},
+        {"POOL_2D",         GGML_OP_POOL_2D},
+        {"RMS_NORM",        GGML_OP_RMS_NORM},
+        {"SCALE",           GGML_OP_SCALE},
+        {"SET_ROWS",        GGML_OP_SET_ROWS},
+        {"SQR",             GGML_OP_SQR},
+        {"SSM_CONV",        GGML_OP_SSM_CONV},
+        {"SSM_SCAN",        GGML_OP_SSM_SCAN},
+        {"SUM_ROWS",        GGML_OP_SUM_ROWS},
+        {"UNARY",           GGML_OP_UNARY},
+        {"SOFT_MAX",        GGML_OP_SOFT_MAX},
+    };
+    auto it = map.find(name);
+    if (it != map.end()) {
+        return it->second;
+    }
+    return GGML_OP_COUNT;
+}
+
+static bool compute_output_ne(ggml_op op,
+        const int64_t ne0[4], const int64_t ne1[4], const int64_t ne2[4],
+        int64_t ne_out[4]) {
+    ne_out[0] = ne_out[1] = ne_out[2] = ne_out[3] = 0;
+    switch (op) {
+        case GGML_OP_MUL_MAT:
+            ne_out[0] = ne0[1]; ne_out[1] = ne1[1];
+            ne_out[2] = std::max(ne0[2], ne1[2]);
+            ne_out[3] = std::max(ne0[3], ne1[3]);
+            return true;
+        case GGML_OP_MUL_MAT_ID:
+            ne_out[0] = ne0[1]; ne_out[1] = ne2[0];
+            ne_out[2] = ne1[2]; ne_out[3] = 1;
+            return true;
+        case GGML_OP_ADD:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+        case GGML_OP_SCALE:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = std::max(ne0[i], ne1[i]);
+            }
+            return true;
+        case GGML_OP_ADD1:
+            ne_out[0] = ne0[0]; ne_out[1] = ne0[1];
+            ne_out[2] = ne0[2]; ne_out[3] = ne0[3];
+            return true;
+        case GGML_OP_SQR:
+        case GGML_OP_UNARY:
+        case GGML_OP_SSM_SCAN:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_SOFT_MAX:
+            ne_out[0] = ne0[0]; ne_out[1] = ne0[1];
+            ne_out[2] = ne0[2]; ne_out[3] = ne0[3];
+            return true;
+        case GGML_OP_RMS_NORM:
+            ne_out[0] = ne0[0]; ne_out[1] = ne0[1];
+            ne_out[2] = ne0[2]; ne_out[3] = ne0[3];
+            return true;
+        case GGML_OP_FLASH_ATTN_EXT:
+            ne_out[0] = ne1[1]; ne_out[1] = ne1[1];
+            ne_out[2] = ne0[2]; ne_out[3] = ne0[3];
+            return true;
+        case GGML_OP_GET_ROWS:
+            ne_out[0] = ne0[0]; ne_out[1] = ne1[1];
+            ne_out[2] = ne1[2]; ne_out[3] = ne1[3];
+            return true;
+        case GGML_OP_GET_ROWS_BACK:
+            ne_out[0] = ne0[0]; ne_out[1] = ne1[1];
+            ne_out[2] = ne1[2]; ne_out[3] = ne1[3];
+            return true;
+        case GGML_OP_SET_ROWS:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_OUT_PROD:
+            ne_out[0] = ne0[0]; ne_out[1] = ne1[0];
+            ne_out[2] = std::max(ne0[2], ne1[2]);
+            ne_out[3] = std::max(ne0[3], ne1[3]);
+            return true;
+        case GGML_OP_CONCAT:
+            ne_out[0] = ne0[0] + ne1[0];
+            ne_out[1] = std::max(ne0[1], ne1[1]);
+            ne_out[2] = std::max(ne0[2], ne1[2]);
+            ne_out[3] = std::max(ne0[3], ne1[3]);
+            return true;
+        case GGML_OP_ARGSORT:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_CLAMP:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_CPY:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_POOL_2D:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_SSM_CONV:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        case GGML_OP_IM2COL_BACK:
+            for (int i = 0; i < 4; i++) {
+                ne_out[i] = ne0[i];
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+static std::vector<int64_t> json_get_ne(const nlohmann::json & arr) {
+    std::vector<int64_t> ne(4, 0);
+    if (!arr.is_array()) return ne;
+    for (size_t i = 0; i < std::min(arr.size(), (size_t)4); i++) {
+        ne[i] = arr[i].get<int64_t>();
+    }
+    return ne;
+}
+
+static bool ne_is_zero(const std::vector<int64_t> & ne) {
+    for (auto v : ne) if (v != 0) return false;
+    return true;
+}
+
+struct profile_op_key {
+    std::string     name;
+    int             backend_id;
+    int             type_src0;
+    int             type_src1;
+    int             type_src2;
+    int             sub_op;
+    std::vector<int64_t> ne_src0;
+    std::vector<int64_t> ne_src1;
+    std::vector<int64_t> ne_src2;
+
+    bool operator==(const profile_op_key & o) const {
+        return name == o.name && backend_id == o.backend_id &&
+               type_src0 == o.type_src0 && type_src1 == o.type_src1 && type_src2 == o.type_src2 &&
+               sub_op == o.sub_op &&
+               ne_src0 == o.ne_src0 && ne_src1 == o.ne_src1 && ne_src2 == o.ne_src2;
+    }
+};
+
+struct profile_op_key_hash {
+    size_t operator()(const profile_op_key & k) const {
+        size_t h = std::hash<std::string>{}(k.name);
+        h ^= std::hash<int>{}(k.backend_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.type_src0) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.type_src1) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.type_src2) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.sub_op) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        for (auto v : k.ne_src0) { h ^= std::hash<int64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2); }
+        for (auto v : k.ne_src1) { h ^= std::hash<int64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2); }
+        for (auto v : k.ne_src2) { h ^= std::hash<int64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2); }
+        return h;
+    }
+};
+
+struct profile_op_agg {
+    profile_op_key key;
+    uint64_t total_ns;
+    int64_t  count;
+    double   max_ns;
+};
+
+struct profile_test_plan {
+    struct backend_plan {
+        int backend_id;
+        std::string backend_name;
+        std::vector<std::unique_ptr<test_case>> test_cases;
+        std::vector<profile_op_agg> aggs;
+    };
+    std::vector<backend_plan> backends;
+};
+
+static profile_test_plan make_test_plan_from_profile(
+        const char * profile_path, int top_n) {
+    using json = nlohmann::json;
+    profile_test_plan plan;
+
+    std::ifstream f(profile_path);
+    if (!f.is_open()) {
+        fprintf(stderr, "Error: cannot open profile file: %s\n", profile_path);
+        return plan;
+    }
+
+    json root;
+    try {
+        root = json::parse(f);
+    } catch (const json::parse_error & e) {
+        fprintf(stderr, "Error: failed to parse profile JSON: %s\n", e.what());
+        return plan;
+    }
+
+    if (!root.contains("records") || !root["records"].is_array()) {
+        fprintf(stderr, "Error: no 'records' array found in profile\n");
+        return plan;
+    }
+
+    std::unordered_map<int, std::string> backend_names;
+    if (root.contains("backends") && root["backends"].is_array()) {
+        for (const auto & be : root["backends"]) {
+            int id = be.value("id", -1);
+            std::string name = be.value("name", "");
+            if (id >= 0 && !name.empty()) {
+                backend_names[id] = name;
+            }
+        }
+    }
+
+    const auto & records = root["records"];
+    std::unordered_map<profile_op_key, profile_op_agg, profile_op_key_hash> aggs;
+
+    for (const auto & rec : records) {
+        int rec_type = rec.value("type", -1);
+        if (rec_type != 0) continue;
+
+        std::string name = rec.value("name", "");
+        ggml_op op = profile_name_to_op(name);
+        if (op == GGML_OP_COUNT) continue;
+
+        profile_op_key key;
+        key.name       = name;
+        key.backend_id = rec.value("backend_id", 0);
+        key.type_src0  = rec.value("type_src0", -1);
+        key.type_src1  = rec.value("type_src1", -1);
+        key.type_src2  = rec.value("type_src2", -1);
+        key.sub_op     = rec.value("sub_op", -1);
+        key.ne_src0    = json_get_ne(rec.value("ne_src0", json::array()));
+        key.ne_src1    = json_get_ne(rec.value("ne_src1", json::array()));
+        key.ne_src2    = json_get_ne(rec.value("ne_src2", json::array()));
+
+        uint64_t dur = rec.value("duration_ns", (uint64_t)0);
+
+        auto & agg = aggs[key];
+        agg.key = key;
+        agg.total_ns += dur;
+        agg.count++;
+        agg.max_ns = std::max(agg.max_ns, (double)dur);
+    }
+
+    std::vector<profile_op_agg> sorted;
+    sorted.reserve(aggs.size());
+    for (auto & [_, agg] : aggs) {
+        sorted.push_back(std::move(agg));
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const profile_op_agg & a, const profile_op_agg & b) {
+                  return a.total_ns > b.total_ns;
+              });
+
+    uint64_t global_max_ns = sorted.empty() ? 1 : sorted[0].total_ns;
+
+    int n = std::min(top_n, (int)sorted.size());
+    if (n == 0) {
+        fprintf(stderr, "Warning: no matching OP records found in profile\n");
+        return plan;
+    }
+
+    auto make_src = [](int type_id, const std::vector<int64_t> & ne) -> input_tensor {
+        input_tensor src;
+        src.type = (type_id >= 0) ? (ggml_type)type_id : GGML_TYPE_F32;
+        for (int d = 0; d < 4; d++) {
+            src.ne[d] = d < (int)ne.size() ? ne[d] : 0;
+            src.nb[d] = 0;
+        }
+        return src;
+    };
+
+    auto make_test_from_agg = [&](const profile_op_agg & agg) -> std::unique_ptr<test_case> {
+        ggml_op op = profile_name_to_op(agg.key.name);
+
+        std::vector<input_tensor> sources;
+        if (!ne_is_zero(agg.key.ne_src0)) {
+            sources.push_back(make_src(agg.key.type_src0, agg.key.ne_src0));
+        }
+        if (!ne_is_zero(agg.key.ne_src1)) {
+            sources.push_back(make_src(agg.key.type_src1, agg.key.ne_src1));
+        }
+        if (op == GGML_OP_MUL_MAT_ID) {
+            if (!ne_is_zero(agg.key.ne_src2)) {
+                sources.push_back(make_src(agg.key.type_src2, agg.key.ne_src2));
+            } else if (sources.size() >= 2) {
+                input_tensor src;
+                src.type = GGML_TYPE_I32;
+                src.ne[0] = sources[1].ne[1];
+                src.ne[1] = 1;
+                src.ne[2] = 1;
+                src.ne[3] = 1;
+                src.nb[0] = src.nb[1] = src.nb[2] = src.nb[3] = 0;
+                sources.push_back(src);
+            }
+        }
+
+        int64_t ne0[4] = {0}, ne1[4] = {0}, ne2[4] = {0};
+        if (sources.size() > 0) { for (int d = 0; d < 4; d++) ne0[d] = sources[0].ne[d]; }
+        if (sources.size() > 1) { for (int d = 0; d < 4; d++) ne1[d] = sources[1].ne[d]; }
+        if (sources.size() > 2) { for (int d = 0; d < 4; d++) ne2[d] = sources[2].ne[d]; }
+
+        int64_t ne_out[4] = {0, 0, 0, 0};
+        if (!compute_output_ne(op, ne0, ne1, ne2, ne_out)) {
+            return nullptr;
+        }
+
+        ggml_type out_type = GGML_TYPE_F32;
+        std::array<int32_t, GGML_MAX_OP_PARAMS / sizeof(int32_t)> op_params{};
+        op_params.fill(0);
+
+        if (op == GGML_OP_MUL_MAT_ID && sources.size() >= 2) {
+            op_params[0] = (int32_t)sources[1].ne[1];
+        } else if ((op == GGML_OP_UNARY || op == GGML_OP_GLU) && agg.key.sub_op >= 0) {
+            op_params[0] = (int32_t)agg.key.sub_op;
+        }
+
+        std::array<int64_t, 4> out_ne;
+        for (int d = 0; d < 4; d++) out_ne[d] = ne_out[d];
+
+        return std::unique_ptr<test_case>(new test_generic_op(op, out_type, out_ne, op_params, sources,
+            agg.key.name + " [from profile]"));
+    };
+
+    printf("  Loaded %d profiler ops, running top %d:\n", (int)sorted.size(), n);
+    for (int i = 0; i < n; i++) {
+        const auto & agg = sorted[i];
+        double pct = 100.0 * agg.total_ns / global_max_ns;
+        int bid = agg.key.backend_id;
+        std::string bname = backend_names.count(bid) ? backend_names[bid] : std::to_string(bid);
+        printf("    #%d: %s @ %s %ldx %.3fms total (%.1f%% of top)\n",
+               i + 1, agg.key.name.c_str(), bname.c_str(), agg.count,
+               agg.total_ns / 1e6, pct);
+        if (!ne_is_zero(agg.key.ne_src0)) {
+            const char * tn = agg.key.type_src0 >= 0 ? ggml_type_name((ggml_type)agg.key.type_src0) : "?";
+            printf("         src0: [%lld, %lld, %lld, %lld] (%s)\n",
+                   (long long)agg.key.ne_src0[0], (long long)agg.key.ne_src0[1],
+                   (long long)agg.key.ne_src0[2], (long long)agg.key.ne_src0[3], tn);
+        }
+        if (!ne_is_zero(agg.key.ne_src1)) {
+            const char * tn = agg.key.type_src1 >= 0 ? ggml_type_name((ggml_type)agg.key.type_src1) : "?";
+            printf("         src1: [%lld, %lld, %lld, %lld] (%s)\n",
+                   (long long)agg.key.ne_src1[0], (long long)agg.key.ne_src1[1],
+                   (long long)agg.key.ne_src1[2], (long long)agg.key.ne_src1[3], tn);
+        }
+        if (!ne_is_zero(agg.key.ne_src2)) {
+            const char * tn = agg.key.type_src2 >= 0 ? ggml_type_name((ggml_type)agg.key.type_src2) : "?";
+            printf("         src2: [%lld, %lld, %lld, %lld] (%s)\n",
+                   (long long)agg.key.ne_src2[0], (long long)agg.key.ne_src2[1],
+                   (long long)agg.key.ne_src2[2], (long long)agg.key.ne_src2[3], tn);
+        }
+
+        auto tc = make_test_from_agg(agg);
+        if (!tc) continue;
+
+        int bid2 = agg.key.backend_id;
+        std::string bname2 = backend_names.count(bid2) ? backend_names[bid2] : std::to_string(bid2);
+
+        profile_test_plan::backend_plan * bp = nullptr;
+        for (auto & b : plan.backends) {
+            if (b.backend_id == bid2 && b.backend_name == bname2) {
+                bp = &b;
+                break;
+            }
+        }
+        if (!bp) {
+            plan.backends.push_back({bid2, bname2, {}, {}});
+            bp = &plan.backends.back();
+        }
+        bp->test_cases.push_back(std::move(tc));
+        bp->aggs.push_back(agg);
+    }
+
+    return plan;
+}
+
 int main(int argc, char ** argv) {
     test_mode mode = MODE_TEST;
     output_formats output_format = CONSOLE;
@@ -9977,6 +10397,8 @@ int main(int argc, char ** argv) {
     const char * params_filter = nullptr;
     const char * test_file_path = nullptr;
     int parallel_workers = 1;
+    const char * profile_path = nullptr;
+    int profile_top_n = 10;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -10042,6 +10464,21 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--from-profile") == 0) {
+            if (i + 1 < argc) {
+                profile_path = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--top-n") == 0) {
+            if (i + 1 < argc) {
+                profile_top_n = atoi(argv[++i]);
+                if (profile_top_n <= 0) profile_top_n = 10;
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             usage(argv);
             return 1;
@@ -10051,6 +10488,10 @@ int main(int argc, char ** argv) {
     // load and enumerate backends
     ggml_backend_load_all();
 
+    if (profile_path != nullptr) {
+        mode = MODE_PERF;
+    }
+
     // Create printer for output format
     std::unique_ptr<printer> output_printer = create_printer(output_format);
     if (output_printer) {
@@ -10058,6 +10499,83 @@ int main(int argc, char ** argv) {
     }
 
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));
+
+    if (profile_path != nullptr) {
+        profile_test_plan plan = make_test_plan_from_profile(profile_path, profile_top_n);
+
+        size_t n_ok = 0;
+        size_t total = plan.backends.size();
+
+        for (size_t bi = 0; bi < plan.backends.size(); bi++) {
+            auto & bp = plan.backends[bi];
+
+            ggml_backend_dev_t dev = nullptr;
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t d = ggml_backend_dev_get(i);
+                if (strcmp(ggml_backend_dev_name(d), bp.backend_name.c_str()) == 0) {
+                    dev = d;
+                    break;
+                }
+            }
+
+            if (dev == nullptr) {
+                fprintf(stderr, "Warning: backend '%s' from profile not found, skipping\n", bp.backend_name.c_str());
+                n_ok++;
+                output_printer->print_backend_init(
+                    backend_init_info(bi, total, bp.backend_name.c_str(), true, "Not found"));
+                continue;
+            }
+
+            if (backend_filter != NULL && strcmp(backend_filter, bp.backend_name.c_str()) != 0) {
+                output_printer->print_backend_init(
+                    backend_init_info(bi, total, bp.backend_name.c_str(), true, "Skipping"));
+                n_ok++;
+                continue;
+            }
+
+            ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
+            GGML_ASSERT(backend != NULL);
+
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+            if (ggml_backend_set_n_threads_fn) {
+                ggml_backend_set_n_threads_fn(backend, N_THREADS);
+            }
+
+            size_t free, total_mem;
+            ggml_backend_dev_memory(dev, &free, &total_mem);
+            output_printer->print_backend_init(backend_init_info(bi, plan.backends.size(), bp.backend_name.c_str(),
+                                                                 false, "", ggml_backend_dev_description(dev),
+                                                                 total_mem / 1024 / 1024, free / 1024 / 1024, true));
+
+            std::vector<std::unique_ptr<test_case>> cases;
+            for (auto & tc : bp.test_cases) {
+                cases.push_back(std::move(tc));
+            }
+
+            bool ok = test_backend(backend, dev, MODE_PERF, op_names_filter, params_filter,
+                                   output_printer.get(), nullptr, 1, std::move(cases));
+
+            if (ok) {
+                n_ok++;
+            }
+            output_printer->print_backend_status(
+                backend_status_info(ggml_backend_name(backend), ok ? test_status_t::OK : test_status_t::FAIL));
+
+            ggml_backend_free(backend);
+        }
+
+        ggml_quantize_free();
+
+        if (output_printer) {
+            output_printer->print_footer();
+        }
+
+        output_printer->print_overall_summary(
+            overall_summary_info(n_ok, total, n_ok == total));
+
+        return n_ok != total;
+    }
 
     size_t n_ok = 0;
 
@@ -10071,7 +10589,8 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        if (backend_filter == NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode != MODE_GRAD) {
+        if (backend_filter == NULL &&
+            ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode != MODE_GRAD) {
             output_printer->print_backend_init(backend_init_info(
                 i, ggml_backend_dev_count(), ggml_backend_dev_name(dev), true, "Skipping CPU backend"));
             n_ok++;
@@ -10084,11 +10603,10 @@ int main(int argc, char ** argv) {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
         if (ggml_backend_set_n_threads_fn) {
-            // TODO: better value for n_threads
             ggml_backend_set_n_threads_fn(backend, N_THREADS);
         }
 
-        size_t free, total;  // NOLINT
+        size_t free, total;
         ggml_backend_dev_memory(dev, &free, &total);
         output_printer->print_backend_init(backend_init_info(i, ggml_backend_dev_count(), ggml_backend_dev_name(dev),
                                                              false, "", ggml_backend_dev_description(dev),

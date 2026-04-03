@@ -274,6 +274,16 @@ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend, 
             rec.end_ns     = t_end;
             rec.bytes      = ggml_nbytes(node);
             rec.extra      = NULL;
+            rec.type_src0  = node->src[0] ? (int)node->src[0]->type : -1;
+            rec.type_src1  = node->src[1] ? (int)node->src[1]->type : -1;
+            rec.type_src2  = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? (int)node->src[2]->type : -1;
+            int sub_op = -1;
+            if (node->op == GGML_OP_UNARY) {
+                sub_op = (int)ggml_get_unary_op(node);
+            } else if (node->op == GGML_OP_GLU) {
+                sub_op = (int)ggml_get_glu_op(node);
+            }
+            rec.sub_op = sub_op;
             if (node->src[0]) { memcpy(rec.ne_src0, node->src[0]->ne, sizeof(rec.ne_src0)); } else { memset(rec.ne_src0, 0, sizeof(rec.ne_src0)); }
             if (node->src[1]) { memcpy(rec.ne_src1, node->src[1]->ne, sizeof(rec.ne_src1)); } else { memset(rec.ne_src1, 0, sizeof(rec.ne_src1)); }
             if (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) { memcpy(rec.ne_src2, node->src[2]->ne, sizeof(rec.ne_src2)); } else { memset(rec.ne_src2, 0, sizeof(rec.ne_src2)); }

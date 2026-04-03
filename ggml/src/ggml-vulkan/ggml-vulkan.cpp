@@ -16653,6 +16653,18 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                     rec.end_ns     = cpu_ts + duration_ns;
                     rec.bytes      = ggml_nbytes(node);
                     rec.extra      = name;  // fusion name or NULL
+                    rec.type_src0  = node->src[0] ? (int)node->src[0]->type : -1;
+                    rec.type_src1  = node->src[1] ? (int)node->src[1]->type : -1;
+                    rec.type_src2  = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? (int)node->src[2]->type : -1;
+                    {
+                        int sub_op = -1;
+                        if (node->op == GGML_OP_UNARY) {
+                            sub_op = (int)ggml_get_unary_op(node);
+                        } else if (node->op == GGML_OP_GLU) {
+                            sub_op = (int)ggml_get_glu_op(node);
+                        }
+                        rec.sub_op = sub_op;
+                    }
                     memcpy(rec.ne_src0, src0_ne, sizeof(rec.ne_src0));
                     memcpy(rec.ne_src1, src1_ne, sizeof(rec.ne_src1));
                     memcpy(rec.ne_src2, src2_ne, sizeof(rec.ne_src2));
@@ -16705,11 +16717,26 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                     rec.end_ns     = cpu_ts + duration_ns;
                     rec.bytes      = total_bytes;
                     rec.extra      = names[0];  // fusion name of first op, or NULL
+                    rec.type_src0  = node->src[0] ? (int)node->src[0]->type : -1;
+                    rec.type_src1  = node->src[1] ? (int)node->src[1]->type : -1;
+                    rec.type_src2  = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? (int)node->src[2]->type : -1;
+                    {
+                        int sub_op = -1;
+                        if (node->op == GGML_OP_UNARY) {
+                            sub_op = (int)ggml_get_unary_op(node);
+                        } else if (node->op == GGML_OP_GLU) {
+                            sub_op = (int)ggml_get_glu_op(node);
+                        }
+                        rec.sub_op = sub_op;
+                    }
                     memcpy(rec.ne_src0, src0_ne, sizeof(rec.ne_src0));
                     memcpy(rec.ne_src1, src1_ne, sizeof(rec.ne_src1));
                     memcpy(rec.ne_src2, src2_ne, sizeof(rec.ne_src2));
                     ctx->profiler_state->records.push_back(rec);
                 }
+            }
+        }
+    }
             }
         }
         if (ctx->perf_logger) {
