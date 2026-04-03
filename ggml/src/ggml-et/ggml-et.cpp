@@ -1522,8 +1522,8 @@ static const struct ggml_backend_i ggml_backend_et_i = {
 };
 
 static const char * ggml_backend_et_device_get_name(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
-    return GGML_ET_NAME;
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+    return dev_ctx->name.c_str();
 }
 
 static const char * ggml_backend_et_device_get_description(ggml_backend_dev_t dev) {
