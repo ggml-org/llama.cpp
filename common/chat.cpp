@@ -1077,6 +1077,150 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
+// Gemma 4
+static common_chat_params common_chat_params_init_gemma4(const common_chat_template &    tmpl,
+                                                         const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    // TODO: Move workaround here, maybe?
+
+    auto prompt = common_chat_template_direct_apply_impl(tmpl, inputs);
+
+    data.prompt            = prompt;
+    data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
+    data.supports_thinking = true;
+
+    data.preserved_tokens = {
+        "<|channel>",
+        "<channel|>",
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|tool_response>",
+        "<tool_response|>",
+        "<|turn>",
+        "<turn|>"
+    };
+
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
+
+        if (extract_reasoning) {
+            p.rule("thought", p.literal("<|channel>thought\n") + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+        } else {
+            p.rule("thought", p.content(p.literal("<|channel>thought\n") + p.until("<channel|>") + p.literal("<channel|>")));
+        }
+
+        auto thought = p.ref("thought");
+
+        if (has_response_format) {
+            auto response_format = p.literal("```json") <<
+                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
+                p.literal("```");
+            return p.optional(thought) + response_format;
+        }
+
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // Gemma4 tool calling syntax
+            auto gemma4_string = p.rule("gemma4-string", p.literal("<|\"|>") + p.until("<|\"|>") + p.literal("<|\"|>"));
+            auto gemma4_bool = p.rule("gemma4-bool", p.choice({p.literal("true"), p.literal("false")}));
+            auto gemma4_null = p.rule("gemma4-null", p.literal("null"));
+            auto gemma4_number = p.rule("gemma4-number", [&]() {
+                auto digit1_9 = p.chars("[1-9]", 1, 1);
+                auto digits   = p.chars("[0-9]");
+                auto int_part = p.choice({p.literal("0"), p.sequence({digit1_9, p.chars("[0-9]", 0, -1)})});
+                auto frac     = p.sequence({p.literal("."), digits});
+                auto exp      = p.sequence({p.choice({p.literal("e"), p.literal("E")}),
+                                             p.optional(p.chars("[+-]", 1, 1)), digits});
+                auto not_number_continuation = p.negate(p.chars("[0-9.eE+-]", 1, 1));
+                return p.sequence({p.optional(p.literal("-")), int_part, p.optional(frac),
+                                    p.optional(exp), not_number_continuation});
+            });
+            auto gemma4_dict = p.rule("gemma4-dict", [&]() {
+                auto ws = p.space();
+                auto key = p.until(":");
+                auto member = p.sequence({key, p.literal(":"), ws, p.ref("gemma4-value")});
+                auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
+                return p.sequence({
+                    p.literal("{"), ws,
+                    p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+                });
+            });
+            auto gemma4_array = p.rule("gemma4-array", [&]() {
+                auto ws = p.space();
+                auto value = p.ref("gemma4-value");
+                auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
+                return p.sequence({
+                    p.literal("["), ws,
+                    p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+                });
+            });
+            auto gemma4_value = p.rule("gemma4-value", [&]() {
+                return p.choice({
+                    p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
+                    p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
+                });
+            });
+
+            auto tool_choice = p.choice();
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string  name     = function.at("name");
+                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
+                // const auto & params   = function.at("parameters");
+
+                tool_choice |= p.rule("tool-" + name, p.sequence({
+                    p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
+                    p.tool_args(gemma4_value),
+                }));
+            });
+
+            auto tool_call  = p.trigger_rule("tool-call", "<|tool_call>call:" + tool_choice + "<tool_call|>");
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
+            auto message = p.rule("message", p.optional(thought) + content);
+
+            return p.sequence({
+                start,
+                p.one_or_more(message),
+                p.repeat(
+                    /* p   = */ tool_call,
+                    /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
+                    /* max = */ inputs.parallel_tool_calls ? -1 : 1
+                )
+            });
+        }
+
+        auto content = p.rule("content", p.content(p.until("<|channel>")));
+        auto message = p.rule("message", p.optional(thought) + content);
+        return p.one_or_more(message);
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
+        };
+    }
+
+    return data;
+}
+
 // Functionary v3.2 - uses recipient-based format: >>>recipient\n{content}
 static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template &    tmpl,
                                                                    const autoparser::generation_params & inputs) {
@@ -1556,26 +1700,40 @@ static void requires_non_null_content(json & messages) {
 }
 
 // Gemma4 uses a custom tool_responses field instead of role:tool messages.
-// Convert consecutive role:tool messages into a single user message with tool_responses.
+// Merge role:tool messages with the previous role:assistant message containing
+// tool calls
 static void convert_tool_responses_gemma4(json & messages) {
     json result = json::array();
     size_t i = 0;
+
     while (i < messages.size()) {
-        if (messages[i].contains("role") && messages[i].at("role") == "tool") {
-            json tool_responses = json::array();
-            while (i < messages.size() &&
-                   messages[i].contains("role") &&
-                   messages[i].at("role") == "tool") {
-                const auto & tool_msg = messages[i];
-                std::string name;
-                if (tool_msg.contains("tool_call_id") && tool_msg.at("tool_call_id").is_string()) {
-                    name = tool_msg.at("tool_call_id");
-                } else if (tool_msg.contains("name") && tool_msg.at("name").is_string()) {
-                    name = tool_msg.at("name");
-                }
+        auto & msg = messages[i];
+
+        if (msg.value("role", "") != "assistant" || !msg.contains("tool_calls") ||
+            !msg.at("tool_calls").is_array() || msg.at("tool_calls").empty()) {
+            result.push_back(msg);
+            i++;
+            continue;
+        }
+
+        size_t j = i + 1;
+
+        auto & tool_calls = msg.at("tool_calls");
+        size_t tool_call_idx = 0;
+
+        auto tool_responses = json::array();
+
+        while (j < messages.size() && messages[j].value("role", "") == "tool" && tool_call_idx < tool_calls.size()) {
+            auto & tool_call = tool_calls[tool_call_idx];
+            auto & tool_result = messages[j];
+
+            if (tool_call.contains("function")) {
+                auto & function = tool_call.at("function");
+                auto name = function.value("name", tool_result.value("tool_call_id", ""));
+
                 json response;
-                if (tool_msg.contains("content")) {
-                    const auto & content = tool_msg.at("content");
+                if (tool_result.contains("content")) {
+                    const auto & content = tool_result.at("content");
                     if (content.is_string()) {
                         // Try to parse the content as JSON; fall back to raw string
                         try {
@@ -1588,14 +1746,20 @@ static void convert_tool_responses_gemma4(json & messages) {
                     }
                 }
                 tool_responses.push_back({{"name", name}, {"response", response}});
-                i++;
             }
-            result.push_back({{"role", "user"}, {"tool_responses", tool_responses}});
-        } else {
-            result.push_back(messages[i]);
-            i++;
+
+            j++;
+            tool_call_idx++;
         }
+
+        if (!tool_responses.empty()) {
+            msg["tool_responses"] = tool_responses;
+        }
+        result.push_back(msg);
+
+        i = j;
     }
+
     messages = result;
 }
 
@@ -1631,10 +1795,10 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-std::optional<common_chat_params> common_chat_try_specialized_template(
+static std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
-        const autoparser::generation_params & params) {
+        autoparser::generation_params & params) {
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
@@ -1687,6 +1851,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
+    // Gemma4 format detection
+    if (src.find("'<|tool_call>call:'") != std::string::npos) {
+        workaround::convert_tool_responses_gemma4(params.messages);
+        return common_chat_params_init_gemma4(tmpl, params);
+    }
+
     return std::nullopt;
 }
 
@@ -1725,10 +1895,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     if (tmpl.original_caps().supports_object_arguments) {
         workaround::func_args_not_string(params.messages);
-    }
-
-    if (src.find("'<|tool_call>call:'") != std::string::npos) {
-        workaround::convert_tool_responses_gemma4(params.messages);
     }
 
     params.add_generation_prompt = false;
