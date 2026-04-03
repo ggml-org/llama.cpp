@@ -588,8 +588,15 @@ void dequantize_row_tbq3_0(const block_tbq3_0 * GGML_RESTRICT x, float * GGML_RE
 
         turboq_rotate_block_inverse(unit_approx, rotated, seed);
 
+        // Norm correction: re-normalize unit_approx to unit length
+        float recon_norm_sq = 0.0f;
+        for (int64_t j = 0; j < QK_K; j++) {
+            recon_norm_sq += unit_approx[j] * unit_approx[j];
+        }
+        float recon_scale = (recon_norm_sq > 1e-20f) ? (norm / sqrtf(recon_norm_sq)) : norm;
+
         for (int64_t j = 0; j < QK_K; ++j) {
-            y[b * QK_K + j] = unit_approx[j] * norm;
+            y[b * QK_K + j] = unit_approx[j] * recon_scale;
         }
     }
 }
@@ -677,8 +684,16 @@ void dequantize_row_tbq4_0(const block_tbq4_0 * GGML_RESTRICT x, float * GGML_RE
 
         turboq_rotate_block_inverse(unit_approx, rotated, seed);
 
+        // Norm correction: re-normalize unit_approx to unit length
+        // This removes magnitude bias from quantization error
+        float recon_norm_sq = 0.0f;
+        for (int64_t j = 0; j < QK_K; j++) {
+            recon_norm_sq += unit_approx[j] * unit_approx[j];
+        }
+        float recon_scale = (recon_norm_sq > 1e-20f) ? (norm / sqrtf(recon_norm_sq)) : norm;
+
         for (int64_t j = 0; j < QK_K; ++j) {
-            y[b * QK_K + j] = unit_approx[j] * norm;
+            y[b * QK_K + j] = unit_approx[j] * recon_scale;
         }
     }
 }
