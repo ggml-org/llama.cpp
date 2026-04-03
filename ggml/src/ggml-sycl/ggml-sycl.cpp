@@ -29115,11 +29115,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     // Set GGML_SYCL_UNIFIED_FORCE_LEGACY=1 to bypass unified kernel entirely.
                     static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
 
-                    // DS1-DIAG: skip entire !force_legacy block
-                    static bool ds1_noop = (std::getenv("DS1_NOOP") != nullptr);
-                    if (!force_legacy && !ds1_noop) {
+                    if (!force_legacy) {
                         // Prefer COALESCED layout for quantized types (best TG performance).
-                        // COALESCED dequant→FP16 is available for Q4_0 (oneDNN PP path).
                         // Fallback chain: COALESCED → SOA → AOS.
                         // Unified weight resolution: single O(1) cache lookup with
                         // built-in COALESCED → SOA → AOS fallback.
@@ -29130,15 +29127,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
                         float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
-                        // DS1-DIAG: skip the else block body (resolve_weight already ran)
-                        static bool ds1_skip_else = (std::getenv("DS1_SKIP_ELSE") != nullptr);
-
                         if (!src0_data || !src1_data || !dst_data) {
                             GGML_SYCL_DEBUG("[UNIFIED] Skipping - null pointer(s): src0=%p (%s) src1=%p dst=%p\n",
                                             src0_data, src0_ptr_source ? src0_ptr_source : "?", src1_data, dst_data);
                             // Fall through to legacy dispatch below
-                        } else if (ds1_skip_else) {
-                            // DS1-DIAG: skip else block body but let resolve_weight/get_data_ptr run
                         } else {
                             // =============================================================
                             // OneDNN FP16 Matmul Path: Use oneDNN's optimized FP16 matmul
@@ -29194,12 +29186,16 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             }
 
                             bool used_onednn_fp16 = false;
+                            // Skip oneDNN FP16 path for COALESCED layout: the coalesced
+                            // dequant kernel produces FP16 output in tile-interleaved order
+                            // that doesn't match the row-major layout oneDNN expects.
+                            // COALESCED TG is handled by legacy MMVQ_COALESCED dispatch.
                             if (onednn_pp_enabled && M >= onednn_pp_threshold && ggml_is_quantized(src0->type) &&
-                                ggml_is_contiguous(src0)) {
+                                ggml_is_contiguous(src0) && requested_layout != GGML_LAYOUT_COALESCED) {
                                 // Get dequantization function matching the actual data layout.
-                                // When src0 is in a reordered layout (SOA or COALESCED), use the
+                                // When src0 is in a reordered layout (SOA), use the
                                 // layout-aware dequant kernel. ggml_get_to_fp16_sycl inspects the
-                                // tensor extra to select the correct dequant (SOA vs COALESCED).
+                                // tensor extra to select the correct dequant.
                                 auto * extra_pp            = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
                                 bool   src0_is_reordered   = ggml_sycl_layout_is_soa_or_coalesced(extra_pp) &&
                                                              requested_layout != GGML_LAYOUT_AOS;

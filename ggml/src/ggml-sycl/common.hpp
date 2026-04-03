@@ -2222,19 +2222,6 @@ inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
             if (key.valid) {
                 result = cache->get_weight_ptr(key);
                 if (result) {
-                    // DS1-DIAG: log tensor name vs resolved pointer
-                    static std::atomic<int> rw_diag{0};
-                    if (rw_diag.fetch_add(1, std::memory_order_relaxed) < 20) {
-                        GGML_LOG_WARN("[DS1-DIAG] resolve_weight: name=%s tensor=%p tensor->data=%p "
-                                      "resolved_ptr=%p layout=%d on_device=%d "
-                                      "key: model=%llu hash=0x%llx offs=%zu nbytes=%zu\n",
-                                      tensor->name ? tensor->name : "(null)",
-                                      (const void *)tensor, tensor->data,
-                                      result.ptr, (int)result.layout, result.on_device ? 1 : 0,
-                                      (unsigned long long)key.model_id,
-                                      (unsigned long long)key.name_hash,
-                                      key.file_offs, key.nbytes);
-                    }
                     // Validate that the returned layout is compatible with this
                     // tensor's dimensions. COALESCED requires specific alignment
                     // ((ncols/block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0).
