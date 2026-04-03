@@ -657,6 +657,66 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nullable_string_tool{
+    /* .name = */ "set_nullable_str",
+    /* .description = */ "Set a nullable string value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["string", "null"],
+                "description": "A nullable string"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_string_null_first_tool{
+    /* .name = */ "set_nullable_str_nf",
+    /* .description = */ "Set a nullable string value with null first in type array",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["null", "string"],
+                "description": "A nullable string with null first"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_int_tool{
+    /* .name = */ "set_nullable_int",
+    /* .description = */ "Set a nullable integer value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": ["integer", "null"],
+                "description": "A nullable integer"
+            }
+        },
+        "required": ["count"]
+    })",
+};
+
+static common_chat_tool enum_no_type_tool{
+    /* .name = */ "set_unit",
+    /* .description = */ "Set a temperature unit",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "unit": {
+                "enum": ["celsius", "fahrenheit"],
+                "description": "Temperature unit"
+            }
+        },
+        "required": ["unit"]
+    })",
+};
+
 static common_chat_tool string_param_tool{
     /* .name = */ "string_param",
     /* .description = */ "Tool with string parameter for testing",
@@ -2200,6 +2260,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             })
             .run();
+
     }
 
     {
@@ -2382,6 +2443,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "tool_2req_5opt", R"({"req1": "test", "req2": 99, "opt3": "c", "opt1": "a", "opt5": "e", "opt4": 4, "opt2": 2})", {} },
             })
             .expect_reconstruction()
+            .run();
+
+        // nullable string type ["string", "null"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable string with null first in type array ["null", "string"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str_nf>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_null_first_tool })
+            .expect_tool_calls({
+                { "set_nullable_str_nf", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable integer type ["integer", "null"] - should use JSON value path, not string
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_int>\n"
+               "<parameter=count>\n42\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_int_tool })
+            .expect_tool_calls({
+                { "set_nullable_int", R"({"count": 42})", {} },
+            })
+            .run();
+
+        // enum without explicit type key - should infer string from enum values
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_unit>\n"
+               "<parameter=unit>\ncelsius\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ enum_no_type_tool })
+            .expect_tool_calls({
+                { "set_unit", R"({"unit": "celsius"})", {} },
+            })
             .run();
     }
     {

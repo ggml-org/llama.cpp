@@ -1561,7 +1561,23 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         if (!s.schema) {
             return true;
         }
-        if (s.raw && s.schema->contains("type") && s.schema->at("type").is_string() && s.schema->at("type") == "string") {
+        if (s.raw && s.schema->contains("type")) {
+            const auto & type_val = s.schema->at("type");
+            if (type_val.is_string() && type_val == "string") {
+                return true;
+            }
+            // Handle nullable types like ["string", "null"] - delegate when the
+            // non-null type is string, since the tagged format uses raw text
+            if (type_val.is_array()) {
+                for (const auto & t : type_val) {
+                    if (t.is_string() && t.get<std::string>() != "null") {
+                        return t.get<std::string>() == "string";
+                    }
+                }
+            }
+        }
+        // Delegate for enum schemas in raw mode - enum values are literal strings
+        if (s.raw && !s.schema->contains("type") && s.schema->contains("enum")) {
             return true;
         }
         return false;

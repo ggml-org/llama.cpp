@@ -400,12 +400,34 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         for (const auto & [param_name, param_schema] : properties.items()) {
             bool        is_required = required.find(param_name) != required.end();
             std::string type        = "object";
-            auto        type_obj    = param_schema.contains("type") ? param_schema.at("type") : json::object();
-            if (type_obj.is_string()) {
-                type_obj.get_to(type);
-            } else if (type_obj.is_object()) {
-                if (type_obj.contains("type") && type_obj.at("type").is_string()) {
-                    type_obj.at("type").get_to(type);
+            if (param_schema.contains("type")) {
+                const auto & type_obj = param_schema.at("type");
+                if (type_obj.is_string()) {
+                    type_obj.get_to(type);
+                } else if (type_obj.is_array()) {
+                    // Handle nullable types like ["string", "null"]
+                    for (const auto & t : type_obj) {
+                        if (t.is_string() && t.get<std::string>() != "null") {
+                            type = t.get<std::string>();
+                            break;
+                        }
+                    }
+                } else if (type_obj.is_object()) {
+                    if (type_obj.contains("type") && type_obj.at("type").is_string()) {
+                        type_obj.at("type").get_to(type);
+                    }
+                }
+            }
+            // Infer string type from enum values when type is unspecified
+            if (type == "object" && param_schema.contains("enum")) {
+                const auto & enum_vals = param_schema.at("enum");
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -574,9 +596,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
         std::vector<arg_entry> arg_entries;
 
         for (const auto & [param_name, param_schema] : properties.items()) {
-            std::string type    = "object";
-            auto        type_v  = param_schema.contains("type") ? param_schema.at("type") : json::object();
-            if (type_v.is_string()) type_v.get_to(type);
+            std::string type = "object";
+            if (param_schema.contains("type")) {
+                const auto & type_v = param_schema.at("type");
+                if (type_v.is_string()) {
+                    type_v.get_to(type);
+                } else if (type_v.is_array()) {
+                    // Handle nullable types like ["string", "null"]
+                    for (const auto & t : type_v) {
+                        if (t.is_string() && t.get<std::string>() != "null") {
+                            type = t.get<std::string>();
+                            break;
+                        }
+                    }
+                }
+            }
+            // Infer string type from enum values when type is unspecified
+            if (type == "object" && param_schema.contains("enum")) {
+                const auto & enum_vals = param_schema.at("enum");
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
+                }
+            }
 
             common_peg_parser value_parser = p.eps();
             if (type == "string") {
