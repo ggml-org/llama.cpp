@@ -216,6 +216,15 @@ set_target_properties(ggml-base PROPERTIES
 )
 
 target_include_directories(ggml-base PRIVATE .)
+
+# Link Accelerate framework for TurboQuant cblas_sgemv on Apple Silicon
+if (APPLE)
+    find_library(ACCELERATE_FRAMEWORK Accelerate)
+    if (ACCELERATE_FRAMEWORK)
+        target_link_libraries(ggml-base PRIVATE ${ACCELERATE_FRAMEWORK})
+    endif()
+endif()
+
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()

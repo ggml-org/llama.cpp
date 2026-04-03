@@ -18,6 +18,11 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#define TURBOQ_USE_ACCELERATE 1
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define TURBOQ_TLS __thread
 #elif defined(_MSC_VER)
@@ -252,28 +257,34 @@ static const float * turboq_get_projection_row(int64_t d, uint64_t seed) {
 // Dense matrix-vector multiply: y = M * x  (M is d×d column-major)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Dense matrix-vector multiply using Accelerate (cblas) on Apple Silicon
+// Falls back to scalar/AVX2 on other platforms
+// ---------------------------------------------------------------------------
+
+// y = M * x  (M is d×d column-major)
 static void matvec(float * y, const float * M, const float * x, int64_t d) {
+#if TURBOQ_USE_ACCELERATE
+    // cblas_sgemv: y = alpha * M * x + beta * y
+    // M is column-major, CblasColMajor, CblasNoTrans
+    cblas_sgemv(CblasColMajor, CblasNoTrans, (int)d, (int)d, 1.0f, M, (int)d, x, 1, 0.0f, y, 1);
+#else
     for (int64_t i = 0; i < d; i++) {
         float sum = 0.0f;
         for (int64_t j = 0; j < d; j++) {
-            sum += M[i + j * d] * x[j]; // M[i,j] = M[i + j*d] (column-major)
+            sum += M[i + j * d] * x[j];
         }
         y[i] = sum;
     }
-}
-
-#if defined(__AVX2__)
-static inline float turboq_hsum_avx(__m256 v) {
-    __m128 lo = _mm256_castps256_ps128(v);
-    __m128 hi = _mm256_extractf128_ps(v, 1);
-    __m128 sum = _mm_add_ps(lo, hi);
-    sum = _mm_hadd_ps(sum, sum);
-    sum = _mm_hadd_ps(sum, sum);
-    return _mm_cvtss_f32(sum);
-}
 #endif
+}
 
+// y = M_row * x  (M_row is d×d row-major)
 static void matvec_row(float * y, const float * M, const float * x, int64_t d) {
+#if TURBOQ_USE_ACCELERATE
+    // Row-major M with CblasRowMajor
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, (int)d, (int)d, 1.0f, M, (int)d, x, 1, 0.0f, y, 1);
+#else
     for (int64_t i = 0; i < d; ++i) {
         const float * row = M + i * d;
         float sum = 0.0f;
@@ -283,26 +294,30 @@ static void matvec_row(float * y, const float * M, const float * x, int64_t d) {
         for (; j + 7 < d; j += 8) {
             const __m256 mv = _mm256_loadu_ps(row + j);
             const __m256 xv = _mm256_loadu_ps(x + j);
-#if defined(__FMA__)
-            acc = _mm256_fmadd_ps(mv, xv, acc);
-#else
             acc = _mm256_add_ps(acc, _mm256_mul_ps(mv, xv));
-#endif
         }
-        sum += turboq_hsum_avx(acc);
+        // horizontal sum
+        __m128 lo = _mm256_castps256_ps128(acc);
+        __m128 hi = _mm256_extractf128_ps(acc, 1);
+        __m128 s128 = _mm_add_ps(lo, hi);
+        s128 = _mm_hadd_ps(s128, s128);
+        s128 = _mm_hadd_ps(s128, s128);
+        sum += _mm_cvtss_f32(s128);
 #endif
         for (; j < d; ++j) {
             sum += row[j] * x[j];
         }
         y[i] = sum;
     }
+#endif
 }
 
-// ---------------------------------------------------------------------------
-// Dense matrix-transpose-vector multiply: y = M^T * x  (M is d×d column-major)
-// ---------------------------------------------------------------------------
-
+// y = M^T * x  (M is d×d column-major)
 static void matvec_t(float * y, const float * M, const float * x, int64_t d) {
+#if TURBOQ_USE_ACCELERATE
+    // M^T with CblasColMajor, CblasTrans
+    cblas_sgemv(CblasColMajor, CblasTrans, (int)d, (int)d, 1.0f, M, (int)d, x, 1, 0.0f, y, 1);
+#else
     for (int64_t j = 0; j < d; j++) {
         const float * col = M + j * d;
         float sum = 0.0f;
@@ -312,19 +327,21 @@ static void matvec_t(float * y, const float * M, const float * x, int64_t d) {
         for (; i + 7 < d; i += 8) {
             const __m256 mv = _mm256_loadu_ps(col + i);
             const __m256 xv = _mm256_loadu_ps(x + i);
-#if defined(__FMA__)
-            acc = _mm256_fmadd_ps(mv, xv, acc);
-#else
             acc = _mm256_add_ps(acc, _mm256_mul_ps(mv, xv));
-#endif
         }
-        sum += turboq_hsum_avx(acc);
+        __m128 lo = _mm256_castps256_ps128(acc);
+        __m128 hi = _mm256_extractf128_ps(acc, 1);
+        __m128 s128 = _mm_add_ps(lo, hi);
+        s128 = _mm_hadd_ps(s128, s128);
+        s128 = _mm_hadd_ps(s128, s128);
+        sum += _mm_cvtss_f32(s128);
 #endif
         for (; i < d; ++i) {
-            sum += col[i] * x[i]; // M^T[j,i] = M[i,j] = M[i + j*d]
+            sum += col[i] * x[i];
         }
         y[j] = sum;
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------
