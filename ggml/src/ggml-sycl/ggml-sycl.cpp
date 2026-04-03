@@ -4137,7 +4137,20 @@ static void ggml_sycl_debug_dump_tensor_meta(const char * tag, const ggml_tensor
 // Larger batches (e.g., prefill with 512 tokens) fall back to host-side oneDNN batching
 // which is ~7x faster for large batches (679 t/s vs 87 t/s on GPT-OSS 20B).
 // The fused kernel excels at decode (single-token) but is slower than oneDNN for prefill.
-constexpr int64_t GGML_SYCL_FUSED_MOE_MAX_BATCH = 32;
+// Override with GGML_SYCL_FUSED_MOE_MAX_BATCH=N env var (0 = always use oneDNN).
+static int64_t get_fused_moe_max_batch() {
+    static int64_t val = []() -> int64_t {
+        const char * env = std::getenv("GGML_SYCL_FUSED_MOE_MAX_BATCH");
+        if (env) {
+            int v = std::atoi(env);
+            GGML_LOG_INFO("[MoE] FUSED_MOE_MAX_BATCH override: %d\n", v);
+            return v >= 0 ? v : 32;
+        }
+        return 32;
+    }();
+    return val;
+}
+#define GGML_SYCL_FUSED_MOE_MAX_BATCH (get_fused_moe_max_batch())
 
 // Model load phase flag - when true, skip weight caching to avoid OOM during load
 static std::atomic<bool>     g_sycl_in_model_load{ false };
@@ -7632,6 +7645,20 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
 
     // Check if tensor->data is mmap'd memory (non-USM) that can't be accessed by GPU kernels.
     if (tensor->data != nullptr) {
+        // Fast check via alloc_registry before falling back to sycl::get_pointer_type.
+        // Per-layer KV allocations may be in a different SYCL context, causing
+        // get_pointer_type to return 'unknown'.  alloc_registry always knows.
+        const auto * alloc_info = ggml_sycl::alloc_registry::instance().lookup(tensor->data);
+        if (alloc_info && alloc_info->type == ggml_sycl::alloc_type::DEVICE) {
+            g_data_ptr_cache[tensor] = tensor->data;
+            return tensor->data;
+        }
+        if (alloc_info && alloc_info->type == ggml_sycl::alloc_type::HOST_PINNED) {
+            // Host-pinned is GPU-accessible via PCIe zero-copy — return directly
+            g_data_ptr_cache[tensor] = tensor->data;
+            return tensor->data;
+        }
+
         std::optional<sycl::context> ctx_storage;
         sycl::context *              ctx = nullptr;
         if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
@@ -13026,6 +13053,21 @@ static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
 static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     if (tensor->view_src != nullptr) {
+        // View's data was already computed as view_src->data + view_offs by the
+        // allocator, and view_src->data was remapped by init_tensor.  So the
+        // view's data pointer is correct.  But we must propagate data_device so
+        // the fast path (ggml_sycl_get_data_ptr) resolves without hitting the
+        // slow path that may fail on cross-context device pointers.
+        if (tensor->view_src->extra) {
+            auto * src_extra = static_cast<ggml_tensor_extra_gpu *>(tensor->view_src->extra);
+            if (src_extra->data_device[ctx->device]) {
+                if (!tensor->extra) {
+                    tensor->extra = new ggml_tensor_extra_gpu{};
+                }
+                auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+                extra->data_device[ctx->device] = tensor->data;
+            }
+        }
         return GGML_STATUS_SUCCESS;
     }
 
@@ -13063,6 +13105,19 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
             size_t offset_within_layer = abs_offset - ctx->layer_base_offsets[layer_id];
             void * old_data = tensor->data;
             tensor->data = static_cast<char *>(la.ptr) + offset_within_layer;
+
+            // Set data_device so the fast path (ggml_sycl_get_data_ptr) resolves
+            // directly without hitting the slow path.  Without this, the slow path
+            // may fail to identify the per-layer device pointer (cross-context
+            // get_pointer_type returns unknown) and try to memcpy from device memory
+            // on the host side → segfault on 120B.
+            if (la.on_device) {
+                if (!tensor->extra) {
+                    tensor->extra = new ggml_tensor_extra_gpu{};
+                }
+                auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+                extra->data_device[ctx->device] = tensor->data;
+            }
 
             // Diagnostic: log first 4 layers + last layer to verify remapping
             if (layer_id < 4 || static_cast<uint32_t>(layer_id) == ctx->n_layers - 1) {
@@ -13274,6 +13329,24 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     // Each layer gets its own allocation (~100MB for Mistral 7B at n_ctx=10240)
     // instead of one monolithic 3+GB allocation.  This eliminates
     // UR_RESULT_ERROR_OUT_OF_RESOURCES from VRAM fragmentation.
+    //
+    // IMPORTANT: Reserve headroom for compute scratch (FP16 dequant buffers for
+    // oneDNN attention GEMM).  Without this, KV fills all VRAM and the attention
+    // path can't allocate scratch → abort.  The reserve is the size of the
+    // largest attention weight (N*K*2 bytes for FP16) plus activation scratch.
+    const size_t compute_scratch_reserve = 512ull * 1024ull * 1024ull;  // 512 MB headroom
+    size_t       kv_device_budget       = 0;
+    {
+        size_t total_avail = ggml_sycl::unified_cache_total_available_bytes(device);
+        kv_device_budget   = total_avail > compute_scratch_reserve
+                               ? total_avail - compute_scratch_reserve
+                               : 0;
+        GGML_LOG_INFO("[KV-TIER] Device %d: avail=%.0f MB, scratch_reserve=%.0f MB, kv_budget=%.0f MB\n",
+                      device, total_avail / (1024.0 * 1024.0),
+                      compute_scratch_reserve / (1024.0 * 1024.0),
+                      kv_device_budget / (1024.0 * 1024.0));
+    }
+
     std::vector<kv_layer_alloc> layer_allocs(n_layers);
     size_t total_device = 0;
     size_t total_host   = 0;
@@ -13285,7 +13358,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         char tag[64];
         snprintf(tag, sizeof(tag), "kv_tier:layer_%u", l);
 
-        if (layout[l].on_device && kv_host_val != 1) {
+        if (layout[l].on_device && kv_host_val != 1 && total_device + layer_size <= kv_device_budget) {
             // Try device allocation via unified cache (handles budget + eviction).
             auto result = ggml_sycl::unified_cache_allocate(
                 device, layer_size,
@@ -28158,6 +28231,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
     return true;
 }
 
+// DS1-DIAG: optnone to test if compiler misoptimization causes ### bug
+__attribute__((optnone))
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                               const ggml_tensor *         src0,
                               const ggml_tensor *         src1,
@@ -28323,6 +28398,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     bool used_onednn = false;
 #if GGML_SYCL_DNNL
                     if (M >= 2) {
+                        GGML_LOG_INFO("[PP2-ONEDNN] MXFP4 AOS oneDNN GEMM: M=%lld N=%lld K=%lld\n", (long long)M, (long long)N, (long long)K);
                         // Dequant MXFP4→FP16, convert F32→FP16, oneDNN GEMM
                         const to_fp16_sycl_t dequant_fn =
                             ggml_get_to_fp16_sycl(src0->type, dst, /*full_tensor=*/false);
@@ -28978,9 +29054,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
             } catch (const std::exception & e) {
-                GGML_LOG_WARN("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
-                GGML_ABORT("[SYCL] No fallback available for batched F16 mul_mat — "
-                           "try GGML_SYCL_ONEDNN_PP=0 or reduce VRAM usage");
+                GGML_LOG_ERROR("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
+                GGML_ABORT("[SYCL] batched F16 mul_mat failed — likely VRAM exhaustion. "
+                           "The per-layer KV allocator should leave headroom for compute scratch.");
             }
         }
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) &&
@@ -28996,9 +29072,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
             } catch (const std::exception & e) {
-                GGML_LOG_WARN("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
-                GGML_ABORT("[SYCL] No fallback available for batched F16 mul_mat — "
-                           "try GGML_SYCL_ONEDNN_PP=0 or reduce VRAM usage");
+                GGML_LOG_ERROR("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
+                GGML_ABORT("[SYCL] batched F16 mul_mat failed — likely VRAM exhaustion. "
+                           "The per-layer KV allocator should leave headroom for compute scratch.");
             }
         } else {
             GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
@@ -29039,7 +29115,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     // Set GGML_SYCL_UNIFIED_FORCE_LEGACY=1 to bypass unified kernel entirely.
                     static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
 
-                    if (!force_legacy) {
+                    // DS1-DIAG: skip entire !force_legacy block
+                    static bool ds1_noop = (std::getenv("DS1_NOOP") != nullptr);
+                    if (!force_legacy && !ds1_noop) {
                         // Prefer COALESCED layout for quantized types (best TG performance).
                         // COALESCED dequant→FP16 is available for Q4_0 (oneDNN PP path).
                         // Fallback chain: COALESCED → SOA → AOS.
@@ -29052,10 +29130,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
                         float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
+                        // DS1-DIAG: skip the else block body (resolve_weight already ran)
+                        static bool ds1_skip_else = (std::getenv("DS1_SKIP_ELSE") != nullptr);
+
                         if (!src0_data || !src1_data || !dst_data) {
                             GGML_SYCL_DEBUG("[UNIFIED] Skipping - null pointer(s): src0=%p (%s) src1=%p dst=%p\n",
                                             src0_data, src0_ptr_source ? src0_ptr_source : "?", src1_data, dst_data);
                             // Fall through to legacy dispatch below
+                        } else if (ds1_skip_else) {
+                            // DS1-DIAG: skip else block body but let resolve_weight/get_data_ptr run
                         } else {
                             // =============================================================
                             // OneDNN FP16 Matmul Path: Use oneDNN's optimized FP16 matmul

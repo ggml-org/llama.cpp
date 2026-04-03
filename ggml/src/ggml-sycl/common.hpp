@@ -2018,10 +2018,22 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
     if (tensor == nullptr) {
         return nullptr;
     }
+    // Fast path 1: extra->data_device (set by weight buffer init_tensor and KV init_tensor)
     if (tensor->extra != nullptr) {
         void * ptr = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)->data_device[device];
         if (ptr != nullptr) {
             return ptr;
+        }
+    }
+    // Fast path 2: check alloc_registry for device/host-pinned pointers.
+    // Per-layer KV allocations and unified_cache_allocate results are always
+    // registered here.  This avoids the slow path's sycl::get_pointer_type()
+    // which can fail for cross-context device pointers.
+    if (tensor->data != nullptr) {
+        const auto * info = ggml_sycl::alloc_registry::instance().lookup(tensor->data);
+        if (info && (info->type == ggml_sycl::alloc_type::DEVICE ||
+                     info->type == ggml_sycl::alloc_type::HOST_PINNED)) {
+            return tensor->data;
         }
     }
     return ggml_sycl_get_data_ptr_slow(tensor, device);
@@ -2040,9 +2052,31 @@ inline bool ggml_sycl_tensor_is_weight(const ggml_tensor * tensor) {
     return ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
-// Get the effective layout data pointer for a tensor on a specific device.
-// If a layout is active for the device, return that pointer; otherwise fallback to data pointer.
-inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
+// Forward declaration for layout resolution (defined below).
+inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int device);
+
+// Unified tensor pointer resolution.  Handles ALL tensor types:
+//   - Weight tensors: layout resolution (SOA/COALESCED/AOS from unified cache)
+//   - KV cache tensors: data_device or alloc_registry (per-layer allocations)
+//   - Activations/dst: data_ptr (pool allocations)
+// Callers should use this instead of choosing between get_data_ptr/get_layout_ptr.
+inline void * ggml_sycl_resolve_tensor_ptr(const ggml_tensor * tensor, int device) {
+    if (tensor == nullptr) {
+        return nullptr;
+    }
+    // Non-weight tensors (KV cache, activations, etc): use get_data_ptr which
+    // handles per-layer KV device pointers, alloc_registry lookups, and
+    // host-pinned zero-copy pointers.
+    if (!ggml_sycl_tensor_is_weight(tensor)) {
+        return ggml_sycl_get_data_ptr(tensor, device);
+    }
+    // Weight tensors: fall through to layout resolution below.
+    return ggml_sycl_get_layout_ptr_impl(tensor, device);
+}
+
+// Internal: layout resolution for weight tensors.  Use ggml_sycl_resolve_tensor_ptr
+// instead of calling this directly.
+inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int device) {
     if (tensor == nullptr) {
         return nullptr;
     }
@@ -2188,6 +2222,19 @@ inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
             if (key.valid) {
                 result = cache->get_weight_ptr(key);
                 if (result) {
+                    // DS1-DIAG: log tensor name vs resolved pointer
+                    static std::atomic<int> rw_diag{0};
+                    if (rw_diag.fetch_add(1, std::memory_order_relaxed) < 20) {
+                        GGML_LOG_WARN("[DS1-DIAG] resolve_weight: name=%s tensor=%p tensor->data=%p "
+                                      "resolved_ptr=%p layout=%d on_device=%d "
+                                      "key: model=%llu hash=0x%llx offs=%zu nbytes=%zu\n",
+                                      tensor->name ? tensor->name : "(null)",
+                                      (const void *)tensor, tensor->data,
+                                      result.ptr, (int)result.layout, result.on_device ? 1 : 0,
+                                      (unsigned long long)key.model_id,
+                                      (unsigned long long)key.name_hash,
+                                      key.file_offs, key.nbytes);
+                    }
                     // Validate that the returned layout is compatible with this
                     // tensor's dimensions. COALESCED requires specific alignment
                     // ((ncols/block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0).
@@ -2217,6 +2264,14 @@ inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
         result.on_device = (ggml_sycl_get_alloc_type(result.ptr) == sycl::usm::alloc::device);
     }
     return result;
+}
+
+// Legacy name — redirects to resolve_tensor_ptr which handles both
+// weight tensors (layout resolution) and non-weight tensors (KV cache,
+// activations) transparently.  All callers get correct behavior for
+// per-layer KV allocations without needing individual fixes.
+inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
+    return ggml_sycl_resolve_tensor_ptr(tensor, device);
 }
 
 inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
