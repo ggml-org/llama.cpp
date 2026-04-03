@@ -499,7 +499,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 // word-level pre-splitting. We only need to split on newlines
                 // since BPE merge lookup asserts no newlines in tokens.
                 regex_exprs = {
-                    "[^\\n]+|\\n",
+                    "[^\\n]+|[\\n]+",
                 };
                 byte_encode = false; // uses raw UTF-8, not GPT-2 byte encoding
                 break;
