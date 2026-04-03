@@ -18,6 +18,7 @@
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 	import ChatSidebarFooter from './ChatSidebarFooter.svelte';
+	import { APP_NAME } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -157,7 +158,7 @@
 		>
 			<div class="flex items-center justify-between">
 				<a href="#/" onclick={handleMobileSidebarItemClick}>
-					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
+					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">{APP_NAME}</h1>
 				</a>
 
 				<Button

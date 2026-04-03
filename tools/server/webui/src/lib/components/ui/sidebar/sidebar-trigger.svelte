@@ -24,7 +24,9 @@
 	size="icon-lg"
 	class="rounded-full backdrop-blur-lg {className} {sidebar.open
 		? 'top-1.5'
-		: 'top-0'} md:left-[14.5rem]"
+		: 'top-0'} md:left-[calc(var(--sidebar-width)-3.25rem)] {sidebar.isResizing
+		? '!duration-0'
+		: ''}"
 	type="button"
 	onclick={(e) => {
 		onclick?.(e);

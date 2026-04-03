@@ -13,6 +13,7 @@
 		disabled?: boolean;
 		onclick: (e?: MouseEvent) => void;
 		'aria-label'?: string;
+		tooltipSide?: 'top' | 'right' | 'bottom' | 'left';
 	}
 
 	let {
@@ -23,6 +24,7 @@
 		class: className = '',
 		disabled = false,
 		iconSize = 'h-3 w-3',
+		tooltipSide = 'top',
 		onclick,
 		'aria-label': ariaLabel
 	}: Props = $props();
@@ -44,7 +46,7 @@
 		</Button>
 	</Tooltip.Trigger>
 
-	<Tooltip.Content>
+	<Tooltip.Content side={tooltipSide}>
 		<p>{tooltip}</p>
 	</Tooltip.Content>
 </Tooltip.Root>

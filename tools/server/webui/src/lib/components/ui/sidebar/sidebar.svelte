@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
+	import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './constants.js';
 	import { useSidebar } from './context.svelte.js';
 
 	let {
@@ -18,6 +19,40 @@
 	} = $props();
 
 	const sidebar = useSidebar();
+
+	function remToPx(rem: string): number {
+		const val = parseFloat(rem);
+		const fontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+		return val * fontSize;
+	}
+
+	function handleResizePointerDown(e: PointerEvent) {
+		if (sidebar.isMobile) return;
+		e.preventDefault();
+
+		const target = e.currentTarget as HTMLElement;
+		target.setPointerCapture(e.pointerId);
+
+		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
+		const maxPx = remToPx(SIDEBAR_MAX_WIDTH);
+
+		sidebar.isResizing = true;
+
+		function onPointerMove(ev: PointerEvent) {
+			const newWidth = side === 'left' ? ev.clientX : window.innerWidth - ev.clientX;
+			const clamped = Math.min(maxPx, Math.max(minPx, newWidth));
+			sidebar.sidebarWidth = `${clamped}px`;
+		}
+
+		function onPointerUp() {
+			sidebar.isResizing = false;
+			target.removeEventListener('pointermove', onPointerMove);
+			target.removeEventListener('pointerup', onPointerUp);
+		}
+
+		target.addEventListener('pointermove', onPointerMove);
+		target.addEventListener('pointerup', onPointerUp);
+	}
 </script>
 
 {#if collapsible === 'none'}
@@ -46,6 +81,7 @@
 			data-slot="sidebar-gap"
 			class={cn(
 				'relative bg-transparent transition-[width] duration-200 ease-linear',
+				sidebar.isResizing && '!duration-0',
 				'w-0',
 				variant === 'floating'
 					? 'md:w-[calc(var(--sidebar-width)+0.75rem)]'
@@ -62,6 +98,7 @@
 			data-slot="sidebar-container"
 			class={cn(
 				'fixed inset-y-0 z-[900] flex w-[calc(100dvw-1.5rem)] duration-200 ease-linear md:z-0 md:w-(--sidebar-width)',
+				sidebar.isResizing && '!duration-0',
 				variant === 'floating'
 					? [
 							'transition-[left,right,width,opacity]',
@@ -94,6 +131,24 @@
 			>
 				{@render children?.()}
 			</div>
+			<!-- Resize handle -->
+			{#if side === 'left'}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					data-slot="sidebar-resize-handle"
+					class="absolute inset-y-0 right-0 z-50 hidden w-1.5 cursor-ew-resize touch-none select-none hover:bg-sidebar-border/50 active:bg-sidebar-border md:block"
+					class:bg-sidebar-border={sidebar.isResizing}
+					onpointerdown={handleResizePointerDown}
+				></div>
+			{:else}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					data-slot="sidebar-resize-handle"
+					class="absolute inset-y-0 left-0 z-50 hidden w-1.5 cursor-ew-resize touch-none select-none hover:bg-sidebar-border/50 active:bg-sidebar-border md:block"
+					class:bg-sidebar-border={sidebar.isResizing}
+					onpointerdown={handleResizePointerDown}
+				></div>
+			{/if}
 		</div>
 	</div>
 {/if}

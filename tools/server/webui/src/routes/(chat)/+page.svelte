@@ -7,6 +7,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
+	import { APP_NAME } from '$lib/constants';
 
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
@@ -87,7 +88,7 @@
 </script>
 
 <svelte:head>
-	<title>llama.cpp</title>
+	<title>{APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable
