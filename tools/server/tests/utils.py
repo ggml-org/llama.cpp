@@ -102,6 +102,9 @@ class ServerProcess:
     mmproj_url: str | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
+    cache_ram: int | None = None
+    no_clear_idle: bool = False
+    log_path: str | None = None
     webui_mcp_proxy: bool = False
 
     # session variables
@@ -237,6 +240,10 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.cache_ram is not None:
+            server_args.extend(["--cache-ram", self.cache_ram])
+        if self.no_clear_idle:
+            server_args.append("--no-clear-idle")
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
 
@@ -249,11 +256,16 @@ class ServerProcess:
             flags |= subprocess.CREATE_NEW_PROCESS_GROUP
             flags |= subprocess.CREATE_NO_WINDOW
 
+        if self.log_path:
+            self._log = open(self.log_path, "w")
+        else:
+            self._log = sys.stdout
+
         self.process = subprocess.Popen(
             [str(arg) for arg in [server_path, *server_args]],
             creationflags=flags,
-            stdout=sys.stdout,
-            stderr=sys.stdout,
+            stdout=self._log,
+            stderr=self._log if self._log != sys.stdout else sys.stdout,
             env={**os.environ, "LLAMA_CACHE": "tmp"} if "LLAMA_CACHE" not in os.environ else None,
         )
         server_instances.add(self)
@@ -298,6 +310,8 @@ class ServerProcess:
             except Exception as e:
                 print(f"Error waiting for server: {e}")
             self.process = None
+        if hasattr(self, '_log') and self._log != sys.stdout:
+            self._log.close()
 
     def make_request(
         self,
