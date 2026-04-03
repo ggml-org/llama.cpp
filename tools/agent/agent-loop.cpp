@@ -237,6 +237,24 @@ If a skill has `<allowed_tools>`, it declares which tools it needs. This helps y
         system_prompt += config.skills_prompt_section;
     }
 
+    // Inject environment context (working directory + date)
+    {
+        system_prompt += "\n# Environment\n\n";
+        system_prompt += "Current working directory: " + tool_ctx_.working_dir + "\n";
+
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_buf;
+#if defined(_WIN32)
+        localtime_s(&tm_buf, &time);
+#else
+        localtime_r(&time, &tm_buf);
+#endif
+        char date_buf[11];
+        std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%d", &tm_buf);
+        system_prompt += "Current date: " + std::string(date_buf) + "\n";
+    }
+
     messages_.push_back({
         {"role", "system"},
         {"content", system_prompt}
