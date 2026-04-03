@@ -972,6 +972,8 @@ unified_cache::~unified_cache() {
         if (layout_pool_) {
             layout_pool_->abandon();
         }
+        // Leak arena memory intentionally — process is exiting.
+        compute_arena_ptr_ = nullptr;
         return;
     }
 
@@ -986,6 +988,7 @@ unified_cache::~unified_cache() {
         if (layout_pool_) {
             layout_pool_->abandon();
         }
+        compute_arena_ptr_ = nullptr;
         return;
     }
 
@@ -1006,6 +1009,16 @@ unified_cache::~unified_cache() {
             used_.fetch_sub(pool_freed, std::memory_order_relaxed);
         }
         layout_pool_.reset();
+    }
+    // Free compute arena and return its budget.
+    if (compute_arena_ptr_) {
+        try {
+            sycl::free(compute_arena_ptr_, queue_);
+        } catch (...) {}
+        saturating_sub_used(compute_arena_size_);
+        compute_arena_ptr_  = nullptr;
+        compute_arena_size_ = 0;
+        compute_arena_off_.store(0, std::memory_order_relaxed);
     }
 
     // Free staging buffer
@@ -6943,14 +6956,14 @@ static bool category_allows_host_fallback(alloc_category cat) {
 
 int alloc_category_priority(alloc_category cat) {
     switch (cat) {
-        case alloc_category::KV_CACHE:        return 0;  // hot KV: latency-critical, always VRAM
-        case alloc_category::WEIGHT:          return 1;  // attention weights: used every token
-        case alloc_category::CONTROL:         return 1;  // tiny, must be on device
-        case alloc_category::EXPERT_CACHE:    return 2;  // MoE experts: evictable via LRU/frequency
-        case alloc_category::COMPUTE_SCRATCH: return 3;  // ephemeral, can use host-pinned
+        case alloc_category::COMPUTE_SCRATCH: return 0;  // pre-reserved arena, must stay in VRAM
+        case alloc_category::KV_CACHE:        return 1;  // hot KV: latency-critical, always VRAM
+        case alloc_category::WEIGHT:          return 2;  // attention weights: used every token
+        case alloc_category::CONTROL:         return 2;  // tiny, must be on device
+        case alloc_category::EXPERT_CACHE:    return 3;  // MoE experts: evictable via LRU/frequency
         case alloc_category::STAGING:         return 4;  // always host-ok
     }
-    return 3;  // unknown → treat as scratch
+    return 4;  // unknown → treat as staging
 }
 
 unified_alloc_result unified_cache_allocate(
@@ -8610,6 +8623,94 @@ void unified_cache::deallocate(void * ptr, size_t size, alloc_lifetime lifetime)
     }
 }
 
+// --- Compute Arena ---
+// Pre-reserved VRAM bump allocator for compute scratch buffers.
+// Single sycl::malloc_device allocation, bump-allocated during graph_compute,
+// reset between invocations.  Must be called BEFORE S1-PRELOAD.
+
+bool unified_cache::reserve_compute_arena(size_t arena_bytes) {
+    if (compute_arena_ptr_ && compute_arena_size_ >= arena_bytes) {
+        return true;  // Already reserved with sufficient capacity.
+    }
+
+    // Free existing arena if resizing.
+    if (compute_arena_ptr_) {
+        try {
+            sycl::free(compute_arena_ptr_, queue_);
+        } catch (...) {}
+        saturating_sub_used(compute_arena_size_);
+        compute_arena_ptr_  = nullptr;
+        compute_arena_size_ = 0;
+        compute_arena_off_.store(0, std::memory_order_relaxed);
+    }
+
+    // Allocate a single contiguous VRAM block.
+    try {
+        compute_arena_ptr_ = sycl::malloc_device(arena_bytes, queue_);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[COMPUTE-ARENA] sycl::malloc_device failed (%.1f MB): %s\n",
+                       arena_bytes / (1024.0 * 1024.0), e.what());
+        compute_arena_ptr_ = nullptr;
+    }
+
+    if (!compute_arena_ptr_) {
+        GGML_LOG_ERROR("[COMPUTE-ARENA] Failed to reserve %.1f MB of VRAM\n",
+                       arena_bytes / (1024.0 * 1024.0));
+        return false;
+    }
+
+    compute_arena_size_ = arena_bytes;
+    compute_arena_off_.store(0, std::memory_order_relaxed);
+
+    // Track arena bytes against the unified cache budget so S1-PRELOAD
+    // sees reduced available VRAM and loads fewer weights.
+    used_.fetch_add(arena_bytes, std::memory_order_relaxed);
+
+    GGML_LOG_INFO("[COMPUTE-ARENA] Reserved %.1f MB VRAM for compute scratch\n",
+                  arena_bytes / (1024.0 * 1024.0));
+    return true;
+}
+
+void * unified_cache::arena_alloc(size_t size) {
+    if (!compute_arena_ptr_ || size == 0) {
+        return nullptr;
+    }
+
+    // Align to 256 bytes for GPU coalescing.
+    const size_t aligned = (size + 255) & ~size_t(255);
+
+    // Atomic bump allocator — lock-free.
+    size_t off = compute_arena_off_.fetch_add(aligned, std::memory_order_relaxed);
+    if (off + aligned > compute_arena_size_) {
+        // Arena exhausted — roll back.
+        compute_arena_off_.fetch_sub(aligned, std::memory_order_relaxed);
+        return nullptr;
+    }
+
+    return static_cast<uint8_t *>(compute_arena_ptr_) + off;
+}
+
+void unified_cache::arena_reset() {
+    compute_arena_off_.store(0, std::memory_order_relaxed);
+}
+
+bool unified_cache::arena_owns(const void * ptr) const {
+    if (!compute_arena_ptr_ || !ptr) {
+        return false;
+    }
+    const auto p    = reinterpret_cast<uintptr_t>(ptr);
+    const auto base = reinterpret_cast<uintptr_t>(compute_arena_ptr_);
+    return p >= base && p < base + compute_arena_size_;
+}
+
+size_t unified_cache::compute_arena_capacity() const {
+    return compute_arena_size_;
+}
+
+size_t unified_cache::compute_arena_used() const {
+    return compute_arena_off_.load(std::memory_order_relaxed);
+}
+
 // --- Inference Scratch Pool ---
 
 bool unified_cache::reserve_scratch_pool(size_t pool_bytes) {
@@ -8723,6 +8824,47 @@ void unified_cache_deallocate(int                           device_id,
     if (cache) {
         cache->deallocate(ptr, size, lifetime);
     }
+}
+
+bool unified_cache_reserve_compute_arena(int device_id, size_t arena_bytes) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return false;
+    }
+    return cache->reserve_compute_arena(arena_bytes);
+}
+
+void * unified_cache_arena_alloc(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return nullptr;
+    }
+    return cache->arena_alloc(size);
+}
+
+void unified_cache_arena_reset(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (cache) {
+        cache->arena_reset();
+    }
+}
+
+bool unified_cache_arena_owns(int device_id, const void * ptr) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return false;
+    }
+    return cache->arena_owns(ptr);
+}
+
+size_t unified_cache_compute_arena_capacity(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    return cache ? cache->compute_arena_capacity() : 0;
+}
+
+size_t unified_cache_compute_arena_used(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    return cache ? cache->compute_arena_used() : 0;
 }
 
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {

@@ -10535,6 +10535,26 @@ static void ggml_sycl_preload_model_weights() {
         return;
     }
 
+    // --- Compute Arena: reserve VRAM for compute scratch BEFORE S1-PRELOAD ---
+    // This guarantees FP16 attention scratch has VRAM even after weights fill budget.
+    // Default 256 MB; override with GGML_SYCL_COMPUTE_ARENA_MB=N (0 to disable).
+    {
+        size_t arena_mb = 256;
+        const char * env = std::getenv("GGML_SYCL_COMPUTE_ARENA_MB");
+        if (env) {
+            arena_mb = static_cast<size_t>(std::max(0, std::atoi(env)));
+        }
+        if (arena_mb > 0) {
+            const size_t arena_bytes = arena_mb * 1024 * 1024;
+            const int total_gpus = ggml_sycl_info().total_gpu_count;
+            for (int d = 0; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
+                if (ggml_sycl::unified_cache_total_managed(d) > 0) {
+                    ggml_sycl::unified_cache_reserve_compute_arena(d, arena_bytes);
+                }
+            }
+        }
+    }
+
     const bool s1_mode = g_all_weights_host.load(std::memory_order_acquire);
 
     // S1 mode: async bulk preload with AOS layout.
@@ -16512,6 +16532,8 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             ggml_sycl_buffer & b = buffer_pool[i];
 
             if (b.ptr != nullptr) {
+                // Only free non-arena allocations.  Arena memory is freed
+                // by the unified_cache destructor.
                 ggml_sycl::unified_cache_deallocate(b.ptr, device);
                 pool_size -= b.size;
             }
@@ -16567,15 +16589,28 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         void * ptr;
 
-        // Allocate through the unified cache with COMPUTE_SCRATCH category.
+        // Try the pre-reserved compute arena first.  The arena is allocated
+        // BEFORE S1-PRELOAD so it always has VRAM available even after weights
+        // fill the budget.  Arena pointers are bump-allocated and reset between
+        // graph_compute calls — they must NOT enter pool_leg's free-list.
+        ptr = ggml_sycl::unified_cache_arena_alloc(device, rounded_size);
+        if (ptr) {
+            *actual_size = rounded_size;
+            // Note: arena allocs are NOT tracked in pool_size — the arena
+            // manages its own memory and resets between graph_compute calls.
+            return ptr;
+        }
+
+        // Arena full or not reserved — fall back to unified cache.
         // When VRAM is available, this returns device memory.  When VRAM is
         // full (weights + KV consumed most of it), the cache automatically
         // falls back to host-pinned memory (sycl::malloc_host) which the GPU
         // can still access via PCIe zero-copy — slower but correct.
-        // This prevents DEVICE_LOST from compute pool over-allocation.
-        auto alloc_result = ggml_sycl::unified_cache_allocate(
-            device, rounded_size, ggml_sycl::alloc_category::COMPUTE_SCRATCH, *qptr);
-        ptr = alloc_result.ptr;
+        {
+            auto alloc_result = ggml_sycl::unified_cache_allocate(
+                device, rounded_size, ggml_sycl::alloc_category::COMPUTE_SCRATCH, *qptr);
+            ptr = alloc_result.ptr;
+        }
 
         if (!ptr) {
             GGML_LOG_WARN("%s: can't allocate %lu bytes (neither VRAM nor host-pinned)\n",
@@ -16594,6 +16629,12 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 
     void free(void * ptr, size_t size) override {
+        // Arena pointers are ephemeral — they reset between graph_compute calls.
+        // Do NOT cache them in the buffer pool; just discard.
+        if (ggml_sycl::unified_cache_arena_owns(device, ptr)) {
+            return;
+        }
+
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr == nullptr) {
@@ -28231,8 +28272,6 @@ static bool ggml_sycl_mul_mat_tensor_split(
     return true;
 }
 
-// DS1-DIAG: optnone to test if compiler misoptimization causes ### bug
-__attribute__((optnone))
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                               const ggml_tensor *         src0,
                               const ggml_tensor *         src1,
@@ -28398,7 +28437,6 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     bool used_onednn = false;
 #if GGML_SYCL_DNNL
                     if (M >= 2) {
-                        GGML_LOG_INFO("[PP2-ONEDNN] MXFP4 AOS oneDNN GEMM: M=%lld N=%lld K=%lld\n", (long long)M, (long long)N, (long long)K);
                         // Dequant MXFP4→FP16, convert F32→FP16, oneDNN GEMM
                         const to_fp16_sycl_t dequant_fn =
                             ggml_get_to_fp16_sycl(src0->type, dst, /*full_tensor=*/false);
@@ -29186,12 +29224,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             }
 
                             bool used_onednn_fp16 = false;
-                            // Skip oneDNN FP16 path for COALESCED layout: the coalesced
-                            // dequant kernel produces FP16 output in tile-interleaved order
-                            // that doesn't match the row-major layout oneDNN expects.
-                            // COALESCED TG is handled by legacy MMVQ_COALESCED dispatch.
                             if (onednn_pp_enabled && M >= onednn_pp_threshold && ggml_is_quantized(src0->type) &&
-                                ggml_is_contiguous(src0) && requested_layout != GGML_LAYOUT_COALESCED) {
+                                ggml_is_contiguous(src0)) {
                                 // Get dequantization function matching the actual data layout.
                                 // When src0 is in a reordered layout (SOA), use the
                                 // layout-aware dequant kernel. ggml_get_to_fp16_sycl inspects the
@@ -29199,8 +29233,24 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                 auto * extra_pp            = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
                                 bool   src0_is_reordered   = ggml_sycl_layout_is_soa_or_coalesced(extra_pp) &&
                                                              requested_layout != GGML_LAYOUT_AOS;
+                                const bool src0_is_coalesced = (requested_layout == GGML_LAYOUT_COALESCED);
                                 const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst, src0_is_reordered);
-                                if (dequant_to_fp16) {
+
+                                // For COALESCED Q4_0, use the dedicated row-major dequant
+                                // kernel that reads tile-interleaved qs and writes proper
+                                // row-major FP16 for oneDNN.
+                                auto dequant_weights_to_fp16 = [&](const void * data, sycl::half * out,
+                                                                   size_t n_elems, dpct::queue_ptr q) {
+                                    if (src0_is_coalesced && src0->type == GGML_TYPE_Q4_0) {
+                                        const int bpr = static_cast<int>(K / QK4_0);
+                                        const int nr  = static_cast<int>(N);
+                                        dequantize_row_q4_0_coalesced_to_fp16_rowmajor(data, out, bpr, nr, q);
+                                    } else {
+                                        dequant_to_fp16(data, out, n_elems, q);
+                                    }
+                                };
+
+                                if (dequant_to_fp16 || src0_is_coalesced) {
                                     // Calculate buffer sizes needed
                                     const size_t src0_elems        = static_cast<size_t>(N) * static_cast<size_t>(K);
                                     const size_t src1_elems        = static_cast<size_t>(M) * static_cast<size_t>(K);
@@ -29277,8 +29327,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                                 fp16_cache_hit   = true;
                                             } else {
                                                 // Cache miss: dequantize to scratch first
-                                                dequant_to_fp16(src0_data, weights_scratch, src0_elems,
-                                                                ctx.stream());
+                                                dequant_weights_to_fp16(src0_data, weights_scratch, src0_elems,
+                                                                        ctx.stream());
                                                 fp16_weights_ptr = weights_scratch;
 
                                                 // Only cache device-resident weights to avoid
@@ -29311,8 +29361,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                                 pipe.prefetch_buf  = -1;
                                                 pipe.prefetch_src0 = nullptr;
                                             }
-                                            dequant_to_fp16(src0_data, weights_scratch, src0_elems,
-                                                            ctx.stream());
+                                            dequant_weights_to_fp16(src0_data, weights_scratch, src0_elems,
+                                                                    ctx.stream());
                                             fp16_weights_ptr = weights_scratch;
                                         }
 
@@ -45708,6 +45758,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // Register compute queue with unified cache so deferred frees wait for
     // in-flight GPU kernels. Without this, cache eviction during MoE prestage
     // can free VRAM while MUL_MAT_ID kernels still reference those pointers.
+    // Also reset the compute arena bump pointer so this graph's scratch
+    // allocations start from offset 0 (reusing the pre-reserved VRAM).
     {
         const int n_devs = ggml_sycl_info().total_gpu_count;
         for (int d = 0; d < n_devs && d < GGML_SYCL_MAX_DEVICES; d++) {
@@ -45715,6 +45767,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             if (cache) {
                 cache->set_compute_queue(sycl_ctx->stream());
             }
+            ggml_sycl::unified_cache_arena_reset(d);
         }
     }
 

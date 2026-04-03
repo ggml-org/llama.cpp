@@ -1125,6 +1125,31 @@ class unified_cache {
     // Accepts both device and host-pinned pointers (determined automatically).
     void deallocate(void * ptr, size_t size, alloc_lifetime lifetime);
 
+    // === Compute Arena ===
+    // Pre-reserved VRAM bump allocator for compute scratch buffers.
+    // Reserved BEFORE S1-PRELOAD so weights cannot consume all VRAM.
+    // arena_alloc() bump-allocates from the arena; arena_reset() resets the
+    // bump pointer between graph_compute calls so the VRAM is reused each token.
+    // pool_leg does NOT cache arena pointers — they are ephemeral per graph.
+    //
+    // arena_bytes: total VRAM to reserve for compute scratch.
+    // Returns true if reservation succeeded.
+    bool reserve_compute_arena(size_t arena_bytes);
+
+    // Try to sub-allocate from the compute arena (bump pointer, 256-byte aligned).
+    // Returns nullptr if arena is not reserved or has insufficient space.
+    void * arena_alloc(size_t size);
+
+    // Reset the arena bump pointer to 0 (call between graph_compute invocations).
+    void arena_reset();
+
+    // Check if a pointer belongs to the compute arena.
+    bool arena_owns(const void * ptr) const;
+
+    // Current compute arena capacity and usage.
+    size_t compute_arena_capacity() const;
+    size_t compute_arena_used() const;
+
     // === Inference Scratch Pool ===
     // Pre-allocated VRAM pool for per-op temporaries (Q8_1, FP16 dequant, etc.).
     // Call reserve_scratch_pool() once at context creation with the max scratch
@@ -1249,6 +1274,13 @@ class unified_cache {
     // All layout allocations in ensure_cached_layout() are sub-allocated from this pool.
     // The pool is destroyed (freeing all chunks) in the unified_cache destructor.
     std::unique_ptr<ggml_sycl::sycl_device_pool> layout_pool_;
+
+    // Compute arena: pre-reserved VRAM for compute scratch buffers.
+    // Single sycl::malloc_device allocation made BEFORE S1-PRELOAD fills VRAM.
+    // Bump-allocated during graph_compute, reset between invocations.
+    void *              compute_arena_ptr_  = nullptr;
+    size_t              compute_arena_size_ = 0;
+    std::atomic<size_t> compute_arena_off_{ 0 };
 
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;
@@ -1554,10 +1586,10 @@ enum class alloc_category : uint8_t {
 };
 
 // Returns eviction priority: lower number = higher VRAM priority (less likely to evict).
-// 0 = KV cache (hot tokens, latency-critical)
-// 1 = attention weights / control buffers (used every token)
-// 2 = MoE expert cache (evictable via LRU/frequency)
-// 3 = compute scratch (ephemeral, can use host-pinned PCIe zero-copy)
+// 0 = compute scratch (pre-reserved arena, must stay in VRAM for FP16 attention)
+// 1 = KV cache (hot tokens, latency-critical)
+// 2 = attention weights / control buffers (used every token)
+// 3 = MoE expert cache (evictable via LRU/frequency)
 // 4 = staging buffers (always host-ok)
 int alloc_category_priority(alloc_category cat);
 
@@ -1974,6 +2006,24 @@ void unified_cache_deallocate(int    device_id,
                               void * ptr,
                               size_t size,
                               unified_cache::alloc_lifetime lifetime);
+
+// Reserve the compute arena (pre-reserved VRAM for compute scratch).
+// Must be called BEFORE S1-PRELOAD to guarantee VRAM availability.
+bool unified_cache_reserve_compute_arena(int device_id, size_t arena_bytes);
+
+// Try to sub-allocate from the compute arena.
+// Returns nullptr if arena is not reserved or has insufficient space.
+void * unified_cache_arena_alloc(int device_id, size_t size);
+
+// Reset the arena bump pointer (call between graph_compute invocations).
+void unified_cache_arena_reset(int device_id);
+
+// Check if a pointer belongs to the compute arena.
+bool unified_cache_arena_owns(int device_id, const void * ptr);
+
+// Query compute arena capacity and usage.
+size_t unified_cache_compute_arena_capacity(int device_id);
+size_t unified_cache_compute_arena_used(int device_id);
 
 // Reserve the inference scratch pool on a device.
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
