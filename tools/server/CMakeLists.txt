@@ -34,6 +34,8 @@ set(TARGET_SRCS
     server.cpp
     server-http.cpp
     server-http.h
+    server-trace.cpp
+    server-trace.h
     server-models.cpp
     server-models.h
 )

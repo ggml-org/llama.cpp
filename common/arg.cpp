@@ -3010,6 +3010,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--http-trace-dir"}, "PATH",
+        "directory for writing HTTP request/response JSONL trace logs, one rotating file per day: trace-YYYYMMDD.jsonl (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.http_trace_dir = value;
+            if (!fs_is_directory(params.http_trace_dir)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
+            if (!params.http_trace_dir.empty() && params.http_trace_dir[params.http_trace_dir.size() - 1] != DIRECTORY_SEPARATOR) {
+                params.http_trace_dir += DIRECTORY_SEPARATOR;
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--media-path"}, "PATH",
         "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
         [](common_params & params, const std::string & value) {

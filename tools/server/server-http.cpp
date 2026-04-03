@@ -1,9 +1,11 @@
 #include "common.h"
 #include "server-http.h"
 #include "server-common.h"
+#include "server-trace.h"
 
 #include <cpp-httplib/httplib.h>
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <thread>
@@ -23,6 +25,7 @@
 class server_http_context::Impl {
 public:
     std::unique_ptr<httplib::Server> srv;
+    std::unique_ptr<http_tracer>     tracer; // null when tracing is disabled
 };
 
 server_http_context::server_http_context()
@@ -296,6 +299,13 @@ bool server_http_context::init(const common_params & params) {
 #endif
         }
     }
+
+    // Initialise HTTP trace logger if requested
+    if (!params.http_trace_dir.empty()) {
+        SRV_INF("http trace logging enabled, writing to: %s\n", params.http_trace_dir.c_str());
+        pimpl->tracer = std::make_unique<http_tracer>(params.http_trace_dir);
+    }
+
     return true;
 }
 
@@ -420,7 +430,8 @@ static void process_handler_response(server_http_req_ptr && request, server_http
 }
 
 void server_http_context::get(const std::string & path, const server_http_context::handler_t & handler) const {
-    pimpl->srv->Get(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    http_tracer * tracer = pimpl->tracer.get(); // null if tracing is disabled
+    pimpl->srv->Get(path_prefix + path, [handler, tracer](const httplib::Request & req, httplib::Response & res) {
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -429,13 +440,34 @@ void server_http_context::get(const std::string & path, const server_http_contex
             req.body,
             req.is_connection_closed
         });
+
+        auto        t_start = std::chrono::steady_clock::now();
+        std::string req_id;
+        if (tracer) {
+            req_id = tracer->new_request_id();
+            tracer->log_request(req_id, req.method, request->path, request->headers, request->body);
+        }
+
         server_http_res_ptr response = handler(*request);
+
+        if (tracer && response) {
+            if (response->is_stream()) {
+                tracer->log_stream_start(req_id);
+                tracer->wrap_streaming_response(req_id, t_start, response->next);
+            } else {
+                auto    t_end = std::chrono::steady_clock::now();
+                int64_t ms    = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
+                tracer->log_response(req_id, response->status, ms, response->data, response->content_type, response->headers);
+            }
+        }
+
         process_handler_response(std::move(request), response, res);
     });
 }
 
 void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
-    pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    http_tracer * tracer = pimpl->tracer.get(); // null if tracing is disabled
+    pimpl->srv->Post(path_prefix + path, [handler, tracer](const httplib::Request & req, httplib::Response & res) {
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -444,7 +476,27 @@ void server_http_context::post(const std::string & path, const server_http_conte
             req.body,
             req.is_connection_closed
         });
+
+        auto        t_start = std::chrono::steady_clock::now();
+        std::string req_id;
+        if (tracer) {
+            req_id = tracer->new_request_id();
+            tracer->log_request(req_id, req.method, request->path, request->headers, request->body);
+        }
+
         server_http_res_ptr response = handler(*request);
+
+        if (tracer && response) {
+            if (response->is_stream()) {
+                tracer->log_stream_start(req_id);
+                tracer->wrap_streaming_response(req_id, t_start, response->next);
+            } else {
+                auto    t_end = std::chrono::steady_clock::now();
+                int64_t ms    = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
+                tracer->log_response(req_id, response->status, ms, response->data, response->content_type, response->headers);
+            }
+        }
+
         process_handler_response(std::move(request), response, res);
     });
 }
