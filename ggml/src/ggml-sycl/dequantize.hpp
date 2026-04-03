@@ -301,6 +301,65 @@ static void dequantize_block_q4_0_coalesced(const void * __restrict__ vx, dst_t 
     }
 }
 
+// COALESCED→row-major FP16 dequant for oneDNN PP path.
+// Uses 2D grid [nrows, tiles_per_row * WARP_SIZE] so each work-group handles one
+// tile of one row. Output is written in true row-major order: row r, column c
+// goes to y[r * ncols + c].
+template<typename dst_t>
+static void dequantize_block_q4_0_coalesced_rowmajor(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                                     const int blocks_per_row, const int nrows,
+                                                     const sycl::nd_item<2> & item) {
+    constexpr int TILE_BLOCKS      = WARP_SIZE;  // 32 blocks per tile
+    constexpr int BYTES_PER_BLOCK  = QK4_0 / 2;  // 16 bytes of qs per block
+    constexpr int WORDS_PER_BLOCK  = BYTES_PER_BLOCK / 4;  // 4 words of 4 bytes
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;  // 128 bytes between word planes
+    constexpr int QS_BYTES_PER_TILE = TILE_BLOCKS * BYTES_PER_BLOCK;  // 512
+
+    const int row           = item.get_global_id(0);
+    const int block_in_tile = item.get_local_id(1);
+    const int tile          = item.get_group(1);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+    if (block_idx >= blocks_per_row) {
+        return;
+    }
+
+    // --- Quant bytes: per-row, tile-interleaved word-major ---
+    const int64_t row_quants_bytes   = (int64_t) blocks_per_row * BYTES_PER_BLOCK;
+    const int64_t total_quants_bytes = (int64_t) nrows * row_quants_bytes;
+    const int64_t tile_qs_base       = (int64_t) row * row_quants_bytes + (int64_t) tile * QS_BYTES_PER_TILE;
+
+    uint8_t qs_buf[BYTES_PER_BLOCK];
+#pragma unroll
+    for (int w = 0; w < WORDS_PER_BLOCK; w++) {
+        const int64_t src_offset = tile_qs_base + w * WORD_PLANE_STRIDE + block_in_tile * 4;
+        const uint8_t * src = (const uint8_t *) vx + src_offset;
+#pragma unroll
+        for (int b = 0; b < 4; b++) {
+            qs_buf[w * 4 + b] = src[b];
+        }
+    }
+
+    // --- Scale: contiguous after ALL quants, in global block order ---
+    const int64_t global_block = (int64_t) row * blocks_per_row + block_idx;
+    const auto *  s_ptr        = (const sycl::half *) ((const uint8_t *) vx + total_quants_bytes) + global_block;
+    const float   d            = float(*s_ptr);
+
+    // --- Output: row-major FP16 ---
+    dst_t * y_ptr = yy + (int64_t) row * blocks_per_row * QK4_0 + block_idx * QK4_0;
+
+#pragma unroll
+    for (int l = 0; l < QK4_0 / 2; ++l) {
+        int vq      = qs_buf[l];
+        y_ptr[l + 0]  = d * ((vq & 0xF) - 8);
+        y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    }
+}
+
 template<typename dst_t>
 static void dequantize_block_q4_1(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
                                   const sycl::nd_item<3> &item_ct1) {

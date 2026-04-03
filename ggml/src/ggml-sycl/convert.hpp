@@ -119,6 +119,14 @@ void reorder_q6_k_aos_to_coalesced_sycl(
     int64_t ne01,
     dpct::queue_ptr stream);
 
+// Dequantize Q4_0 COALESCED→row-major FP16 (for oneDNN PP path)
+void dequantize_row_q4_0_coalesced_to_fp16_rowmajor(
+    const void * src,
+    sycl::half * dst,
+    int blocks_per_row,
+    int nrows,
+    dpct::queue_ptr stream);
+
 // Convert Q4_0 from Coalesced layout to SoA layout (for testing/debugging)
 void reorder_q4_0_coalesced_to_soa_sycl(
     const void * src,

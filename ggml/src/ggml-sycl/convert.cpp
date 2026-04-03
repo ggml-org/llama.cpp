@@ -136,6 +136,26 @@ static void dequantize_row_q4_0_sycl_coalesced(const void * vx, dst_t * y, const
                          });
 }
 
+// COALESCED→row-major FP16 dequant for oneDNN PP path.
+// Unlike the 1D dequantize_row_q4_0_sycl_coalesced (which uses flattened block
+// indexing), this uses a 2D [nrows, tiles_per_row] grid with explicit per-row
+// tile addressing so the output is guaranteed row-major.
+template <typename dst_t>
+static void dequantize_row_q4_0_sycl_coalesced_rowmajor(const void * vx, dst_t * y,
+                                                         const int blocks_per_row, const int nrows,
+                                                         dpct::queue_ptr stream) {
+    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+    GGML_ASSERT(blocks_per_row % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    stream->parallel_for(
+        sycl::nd_range<2>(sycl::range<2>(nrows, tiles_per_row * WARP_SIZE), sycl::range<2>(1, WARP_SIZE)),
+        [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            dequantize_block_q4_0_coalesced_rowmajor(vx, y, blocks_per_row, nrows, item);
+        });
+}
+
 template <typename dst_t>
 static void dequantize_row_q4_1_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
     const int64_t nb32 = k / 32;
@@ -1035,6 +1055,15 @@ static void reorder_q4_0_coalesced_to_soa_kernel(const uint8_t * __restrict__ sr
         // Read d value and write to d array
         dst_d[dst_d_idx] = *(const sycl::half *) (src + total_quants_bytes + dst_d_idx * D_BYTES_PER_BLOCK);
     }
+}
+
+// Public wrapper: COALESCED Q4_0 → row-major FP16 (for oneDNN PP)
+void dequantize_row_q4_0_coalesced_to_fp16_rowmajor(const void *    src,
+                                                     sycl::half *    dst,
+                                                     int             blocks_per_row,
+                                                     int             nrows,
+                                                     dpct::queue_ptr stream) {
+    dequantize_row_q4_0_sycl_coalesced_rowmajor(src, dst, blocks_per_row, nrows, stream);
 }
 
 // Host function to launch Q4_0 Coalesced to SoA conversion
