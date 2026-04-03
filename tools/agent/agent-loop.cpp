@@ -86,8 +86,14 @@ agent_loop::agent_loop(server_context & server_ctx,
     std::string system_prompt = R"(You are llama-agent, a powerful local AI coding assistant running on llama.cpp.
 
 You help users with software engineering tasks by reading files, writing code, running commands, and navigating codebases. You run entirely on the user's machine - no data leaves their system.
+)";
+    if (has_vision) {
+        system_prompt += R"(
+You have vision capabilities. When you use the `read` tool on an image file, you will see the image and can analyze its visual contents. Use this to identify objects, read text in screenshots, understand diagrams, classify images, and more.
 
-# Tools
+)";
+    }
+    system_prompt += R"(# Tools
 
 You have access to the following tools:
 
