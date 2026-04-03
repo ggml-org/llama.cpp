@@ -2771,6 +2771,12 @@ int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * f
         fprintf(fp, ", \"ne_src2\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src2[0], (long long) rec.ne_src2[1],
                 (long long) rec.ne_src2[2], (long long) rec.ne_src2[3]);
 
+        // Tensor types (quantization)
+        fprintf(fp, ", \"type_src0\": %d", rec.type_src0);
+        fprintf(fp, ", \"type_src1\": %d", rec.type_src1);
+        fprintf(fp, ", \"type_src2\": %d", rec.type_src2);
+        fprintf(fp, ", \"sub_op\": %d", rec.sub_op);
+
         fprintf(fp, "}%s\n", (i < (int) sched->profiling_records.size() - 1) ? "," : "");
     }
 

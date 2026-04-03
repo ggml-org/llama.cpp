@@ -30,6 +30,10 @@ typedef struct ggml_profile_record {
     int64_t                      ne_src0[4];  // src[0] tensor dimensions (e.g. weight matrix for MUL_MAT)
     int64_t                      ne_src1[4];  // src[1] tensor dimensions (e.g. input matrix for MUL_MAT)
     int64_t                      ne_src2[4];  // src[2] tensor dimensions (e.g. ids for MUL_MAT_ID)
+    int                          type_src0;   // src[0] tensor type (ggml_type), -1 if N/A
+    int                          type_src1;   // src[1] tensor type (ggml_type), -1 if N/A
+    int                          type_src2;   // src[2] tensor type (ggml_type), -1 if N/A
+    int                          sub_op;      // sub-operation (ggml_unary_op or ggml_glu_op), -1 if N/A
 } ggml_profile_record;
 
 // Backend profiler interface - each backend optionally implements this
