@@ -65,7 +65,7 @@ struct common_speculative_callback {
     virtual ~common_speculative_callback();
 
     // Add a token to the draft sequence.
-    virtual void batch_add_token(const llama_token token, bool logits) = 0;
+    virtual void batch_add_token(llama_token token, bool logits) = 0;
 
     // Sample and accept tokens from the main model.
     virtual llama_tokens sampler_sample_and_accept_n(const llama_tokens & drafted) = 0;
@@ -125,7 +125,7 @@ struct common_speculative_session {
     common_speculative_accept_response sample_and_accept();
 
     // rewind (because of a draft not fully accepted)
-    void rewind(const llama_pos p0);
+    void rewind(llama_pos p0);
 
     // print statistics
     void print_stats() const;
