@@ -107,6 +107,7 @@ struct cpu_expert_task {
     const void *  weight_host;   // Expert weight data in host RAM (quantized)
     const float * act_host;      // Activation vector (float32, length K)
     float *       output_host;   // Output buffer (float32, length N)
+    const float * bias = nullptr; // Optional bias vector (float32, length N)
     ggml_type     type;          // Weight quant type (Q4_0, Q8_0, Q6_K, etc.)
     int           K;             // Input dimension (columns per weight row)
     int           N;             // Output rows (expert output dimension)

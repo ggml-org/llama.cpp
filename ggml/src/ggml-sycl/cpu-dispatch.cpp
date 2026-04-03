@@ -743,11 +743,39 @@ void ggml_sycl_cpu_expert_mul_mat(const cpu_expert_task & task) {
         return;
     }
 
-    // Delegate to ggml_sycl_cpu_vec_dot_rows which handles activation
-    // quantization, TBB parallelism, and SIMD kernels (Q4_0 4-row, etc.).
-    ggml_sycl_cpu_vec_dot_rows(task.type, task.K,
-                                task.weight_host, task.act_host,
-                                task.output_host, task.N);
+    if (!task.bias) {
+        // Fast path: delegate to the shared row kernel when no bias is needed.
+        ggml_sycl_cpu_vec_dot_rows(task.type, task.K,
+                                   task.weight_host, task.act_host,
+                                   task.output_host, task.N);
+        return;
+    }
+
+    const auto * cpu_traits = ggml_get_type_traits_cpu(task.type);
+    if (!cpu_traits || !cpu_traits->vec_dot) {
+        return;
+    }
+
+    const ggml_type   vdt        = cpu_traits->vec_dot_type;
+    const auto *      vdt_traits = ggml_get_type_traits_cpu(vdt);
+    ggml_from_float_t from_float = vdt_traits ? vdt_traits->from_float : nullptr;
+    if (!from_float) {
+        return;
+    }
+
+    const size_t q_size = ggml_row_size(vdt, task.K);
+    const size_t row_stride = ggml_row_size(task.type, task.K);
+    static thread_local std::vector<uint8_t> q_buf;
+    q_buf.resize(q_size);
+    from_float(task.act_host, q_buf.data(), task.K);
+
+    for (int i = 0; i < task.N; i++) {
+        const void * row = static_cast<const char *>(task.weight_host) + (size_t) i * row_stride;
+        float dot = 0.0f;
+        cpu_traits->vec_dot(task.K, &dot, sizeof(float), row, 0, q_buf.data(), 0, 1);
+        task.output_host[i] = dot + task.bias[i];
+    }
+
 }
 
 void ggml_sycl_cpu_expert_mul_mat_batched(
@@ -1017,6 +1045,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                             }
                             simd_mul_mat_q4_0_q8_0_16row(t.K, out + i, row_ptrs,
                                                          (const uint8_t *) act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 16; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                         // 8-row VNNI kernel
                         for (; i + 7 < chunk; i += 8) {
@@ -1031,6 +1064,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 6) * m.row_stride,
                                 wbase + (size_t)(i + 7) * m.row_stride,
                                 (const uint8_t *) act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 8; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                         } // has_avxvnniint8
 #endif
@@ -1043,6 +1081,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 2) * m.row_stride,
                                 wbase + (size_t)(i + 3) * m.row_stride,
                                 act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 4; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                     } else if (t.type == GGML_TYPE_Q6_K && chunk >= 4) {
                         const char * wbase = (const char *) t.weight_host
@@ -1058,6 +1101,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 2) * m.row_stride,
                                 wbase + (size_t)(i + 3) * m.row_stride,
                                 (const uint8_t *) act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 4; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                     } else if (t.type == GGML_TYPE_MXFP4 && chunk >= 4) {
                         const char * wbase = (const char *) t.weight_host
@@ -1076,6 +1124,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 row_ptrs[k] = wbase + (size_t)(i + k) * m.row_stride;
                             }
                             simd_mxfp4_q8_0_16row(t.K, out + i, row_ptrs, act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 16; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                         for (; i + 7 < chunk; i += 8) {
                             simd_mxfp4_q8_0_8row(
@@ -1089,6 +1142,11 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                                 wbase + (size_t)(i + 6) * m.row_stride,
                                 wbase + (size_t)(i + 7) * m.row_stride,
                                 act_q);
+                            if (t.bias) {
+                                for (int k = 0; k < 8; k++) {
+                                    out[i + k] += t.bias[local_r + i + k];
+                                }
+                            }
                         }
                         // VNNI-native 4-row tiled for remainder after 16/8
                         {
@@ -1124,6 +1182,9 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
 
                             for (int j = 0; j < chunk4; j++) {
                                 out[i + j] = ggml_sycl_hsum_float_8(accs[j]);
+                                if (t.bias) {
+                                    out[i + j] += t.bias[local_r + i + j];
+                                }
                             }
                             i += chunk4;
                         }
@@ -1164,6 +1225,9 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
 
                                 for (int j = 0; j < chunk4; j++) {
                                     out[i + j] = ggml_sycl_hsum_float_8(accs[j]);
+                                    if (t.bias) {
+                                        out[i + j] += t.bias[local_r + i + j];
+                                    }
                                 }
                                 i += chunk4;
                             }
@@ -1180,6 +1244,9 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
                         float dot = 0.0f;
                         m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
                                               row, 0, q8_ptrs[cur_task], 0, 1);
+                        if (t.bias) {
+                            dot += t.bias[row_idx];
+                        }
                         t.output_host[row_idx] = dot;
                     }
 
@@ -1230,6 +1297,9 @@ void ggml_sycl_cpu_expert_mul_mat_batched(
         float dot = 0.0f;
         m.cpu_traits->vec_dot(t.K, &dot, sizeof(float),
                               row, 0, q8_ptrs[cur_task], 0, 1);
+        if (t.bias) {
+            dot += t.bias[local_r];
+        }
         t.output_host[local_r] = dot;
     }
 #endif
@@ -1319,6 +1389,9 @@ static void cpu_expert_mul_mat_int4(const cpu_expert_task & task) {
         const void * row = (const char *) task.weight_host + (size_t) n * row_stride;
         float dot = 0.0f;
         cpu_traits->vec_dot(K, &dot, sizeof(float), row, 0, q8_buf.data(), 0, 1);
+        if (task.bias) {
+            dot += task.bias[n];
+        }
         task.output_host[n] = dot;
     }
 #else
