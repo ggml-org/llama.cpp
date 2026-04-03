@@ -1,7 +1,7 @@
 #pragma once
 
 #include "chat-auto-parser.h"
-#include "peg-parser.h"
+
 #include <functional>
 #include <optional>
 #include <string>

@@ -4,6 +4,7 @@
 #include "common.h"
 #include "jinja/caps.h"
 #include "peg-parser.h"
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <optional>
