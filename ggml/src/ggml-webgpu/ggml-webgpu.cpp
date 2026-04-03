@@ -11,12 +11,6 @@
 
 #ifdef __EMSCRIPTEN__
 #    include <emscripten/emscripten.h>
-
-// iOS browsers have very strict limits on the number of in-flight GPU commands, so we need to limit to 1 batch in flight at a time to avoid GPU timeouts.
-EM_JS(int, ggml_webgpu_is_ios_browser, (), {
-    const ua = navigator.userAgent;
-    return (ua.includes('iPhone') || ua.includes('iPad')) ? 1 : 0;
-});
 #endif
 
 #include <webgpu/webgpu_cpp.h>
@@ -85,14 +79,13 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* Constants */
 
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 32u
-#define WEBGPU_NUM_PARAM_SLOTS \
-    (WEBGPU_COMMAND_SUBMIT_BATCH_SIZE + 10)  // a few extra for safety, since some operations may need multiple slots
-#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS       5000u
-#define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS       (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
-#define WEBGPU_PARAMS_BUF_SIZE_BYTES         128  // enough for 32 parameters
-#define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES 4
-#define WEBGPU_STORAGE_BUF_BINDING_MULT      4    // a storage buffer binding size must be a multiple of 4
+#define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 32u
+#define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
+#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           5000u
+#define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
+#define WEBGPU_PARAMS_BUF_SIZE_BYTES             128  // enough for 32 parameters
+#define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES     4
+#define WEBGPU_STORAGE_BUF_BINDING_MULT          4    // a storage buffer binding size must be a multiple of 4
 
 // For operations which process a row in parallel, this seems like a reasonable
 // default
@@ -257,7 +250,8 @@ struct webgpu_global_context_struct {
     wgpu::Adapter  adapter;
     wgpu::Device   device;
     wgpu::Queue    queue;
-    uint32_t       max_inflight_batches = UINT32_MAX;
+    uint32_t       command_submit_batch_size = WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
+    uint32_t       max_inflight_batches      = UINT32_MAX;
 
     webgpu_capabilities  capabilities;
     // Shared buffer to move data from device to host
@@ -442,16 +436,36 @@ static void ggml_backend_webgpu_check_wait_status(wgpu::WaitStatus wait_status,
     }
 }
 
+#ifdef __EMSCRIPTEN__
+// iOS browsers seem to have very strict limits on the number of in-flight GPU commands, so we need to throttle to avoid failures.
+EM_JS(int, ggml_webgpu_is_ios_browser, (), {
+    const ua = navigator.userAgent;
+    return (ua.includes('iPhone') || ua.includes('iPad')) ? 1 : 0;
+});
+#endif
+
 static uint32_t ggml_backend_webgpu_get_max_inflight_batches(const wgpu::AdapterInfo & info) {
 #ifdef __EMSCRIPTEN__
     if (ggml_webgpu_is_ios_browser()) {
-        return 1;
+        return 2;
     }
 #else
     GGML_UNUSED(info);
 #endif
 
     return UINT32_MAX;
+}
+
+static uint32_t ggml_backend_webgpu_get_command_submit_batch_size(const wgpu::AdapterInfo & info) {
+#ifdef __EMSCRIPTEN__
+    if (ggml_webgpu_is_ios_browser()) {
+        return 16;
+    }
+#else
+    GGML_UNUSED(info);
+#endif
+
+    return WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
 }
 
 static void ggml_backend_webgpu_wait_queue(webgpu_global_context & ctx) {
@@ -2785,7 +2799,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             num_batched_kernels += cmd.value().num_kernels;
         }
 
-        if (num_batched_kernels >= WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
+        if (num_batched_kernels >= ctx->global_ctx->command_submit_batch_size) {
             num_batched_kernels                = 0;
             wgpu::CommandBuffer batch_commands = batch_encoder.Finish();
             ggml_backend_webgpu_submit_commands(ctx, batch_commands, num_inflight_batches);
@@ -3250,7 +3264,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     }
 #endif
     ctx->webgpu_global_ctx->adapter.GetInfo(&info);
-    ctx->webgpu_global_ctx->max_inflight_batches = ggml_backend_webgpu_get_max_inflight_batches(info);
+    ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size(info);
+    ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches(info);
     wgpu::SupportedFeatures features;
     ctx->webgpu_global_ctx->adapter.GetFeatures(&features);
     // we require f16 support
@@ -3360,10 +3375,9 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     GGML_LOG_INFO(
         "ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | "
-        "device_desc: %s | max_inflight_batches: %u\n",
+        "device_desc: %s\n",
         info.vendorID, std::string(info.vendor).c_str(), std::string(info.architecture).c_str(), info.deviceID,
-        std::string(info.device).c_str(), std::string(info.description).c_str(),
-        ctx->webgpu_global_ctx->max_inflight_batches);
+        std::string(info.device).c_str(), std::string(info.description).c_str());
     return true;
 }
 
@@ -3372,8 +3386,10 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
     webgpu_ctx->global_ctx                          = dev_ctx->webgpu_global_ctx;
     webgpu_ctx->shader_lib = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
-    webgpu_ctx->param_arena.init(webgpu_ctx->global_ctx->device, WEBGPU_PARAMS_BUF_SIZE_BYTES, WEBGPU_NUM_PARAM_SLOTS,
-                                 webgpu_ctx->global_ctx->capabilities.limits.minUniformBufferOffsetAlignment);
+    webgpu_ctx->param_arena.init(
+        webgpu_ctx->global_ctx->device, WEBGPU_PARAMS_BUF_SIZE_BYTES,
+        webgpu_ctx->global_ctx->command_submit_batch_size + WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN,
+        webgpu_ctx->global_ctx->capabilities.limits.minUniformBufferOffsetAlignment);
     ggml_webgpu_create_buffer(webgpu_ctx->global_ctx->device, webgpu_ctx->set_rows_dev_error_buf,
                               WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
                               wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, "set_rows_dev_error_buf");
