@@ -465,8 +465,9 @@ const func_builtins & value_int_t::get_builtins() const {
             double val = static_cast<double>(args.get_pos(0)->as_int());
             return mk_val<value_float>(val);
         }},
-        {"tojson", tojson},
+        {"safe", tojson},
         {"string", tojson},
+        {"tojson", tojson},
     };
     return builtins;
 }
@@ -485,8 +486,9 @@ const func_builtins & value_float_t::get_builtins() const {
             int64_t val = static_cast<int64_t>(args.get_pos(0)->as_float());
             return mk_val<value_int>(val);
         }},
-        {"tojson", tojson},
+        {"safe", tojson},
         {"string", tojson},
+        {"tojson", tojson},
     };
     return builtins;
 }
@@ -771,6 +773,11 @@ const func_builtins & value_string_t::get_builtins() const {
 
 
 const func_builtins & value_bool_t::get_builtins() const {
+    static const func_handler tostring = [](const func_args & args) -> value {
+        args.ensure_vals<value_bool>();
+        bool val = args.get_pos(0)->as_bool();
+        return mk_val<value_string>(val ? "True" : "False");
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"int", [](const func_args & args) -> value {
@@ -783,11 +790,8 @@ const func_builtins & value_bool_t::get_builtins() const {
             bool val = args.get_pos(0)->as_bool();
             return mk_val<value_float>(val ? 1.0 : 0.0);
         }},
-        {"string", [](const func_args & args) -> value {
-            args.ensure_vals<value_bool>();
-            bool val = args.get_pos(0)->as_bool();
-            return mk_val<value_string>(val ? "True" : "False");
-        }},
+        {"safe", tostring},
+        {"string", tostring},
         {"tojson", tojson},
     };
     return builtins;
@@ -1100,18 +1104,14 @@ const func_builtins & value_object_t::get_builtins() const {
 }
 
 const func_builtins & value_none_t::get_builtins() const {
+    static const func_handler tostring = [](const func_args &) -> value {
+        return mk_val<value_string>("None");
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"tojson", tojson},
-        {"string", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
-        {"safe", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
-        {"strip", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
+        {"string", tostring},
+        {"safe", tostring},
         {"items", empty_value_fn<value_array>},
         {"map", empty_value_fn<value_array>},
         {"reject", empty_value_fn<value_array>},

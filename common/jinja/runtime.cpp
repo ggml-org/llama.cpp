@@ -306,6 +306,19 @@ value filter_expression::execute_impl(context & ctx) {
             filter_id = "strip"; // alias
         }
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
+        // TODO: Refactor filters so this coercion can be done automatically
+        if (!input->is_undefined() && !is_val<value_string>(input) && (
+            filter_id == "capitalize" ||
+            filter_id == "lower" ||
+            filter_id == "replace" ||
+            filter_id == "strip" ||
+            filter_id == "title" ||
+            filter_id == "upper" ||
+            filter_id == "wordcount"
+        )) {
+            JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
+            input = mk_val<value_string>(input->as_string());
+        }
         return try_builtin_func(ctx, filter_id, input)->invoke(func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
