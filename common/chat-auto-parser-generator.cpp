@@ -322,9 +322,9 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
                                                     const common_peg_parser & call_id_section, bool have_call_id,
                                                     const common_peg_parser & args,
                                                     std::optional<common_peg_parser> atomic_peek) const {
-    auto              open         = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix);
+    auto              open           = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix);
     bool              matched_atomic = false;
-    common_peg_parser func_parser  = p.eps();
+    common_peg_parser func_parser    = p.eps();
 
     if (!function.name_suffix.empty()) {
         func_parser    = open + call_id_section + p.space() + args;
