@@ -150,16 +150,15 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -384,16 +383,15 @@ jobs:
         id: dawn-depends
         run: |
           sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -427,7 +425,7 @@ jobs:
 
       - name: Fetch emdawnwebgpu
         run: |
-          DAWN_TAG="v20251027.212519"
+          DAWN_TAG="v20260317.182325"
           EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
           echo "Downloading ${EMDAWN_PKG}"
           curl -L -o emdawn.zip \
@@ -474,6 +472,7 @@ jobs:
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGPU_TARGETS="gfx1030" \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -943,7 +942,7 @@ jobs:
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
@@ -986,12 +985,13 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.1/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGPU_TARGETS="gfx1100"  `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 

@@ -57,13 +57,14 @@ ZenDNN is optimized for AMD EPYC™ processors and AMD Ryzen™ processors based
 
 ## Supported Operations
 
-The ZenDNN backend currently accelerates **matrix multiplication (MUL_MAT)** operations only. Other operations are handled by the standard CPU backend.
+The ZenDNN backend accelerates **matrix multiplication (MUL_MAT)** and **expert-based matrix multiplication (MUL_MAT_ID)** operations. Other operations are handled by the standard CPU backend.
 
 | Operation    | Status  | Notes                                          |
 |:-------------|:-------:|:----------------------------------------------:|
 | MUL_MAT      | Support | Accelerated via ZenDNN LowOHA MatMul           |
+| MUL_MAT_ID   | Support | Accelerated via ZenDNN LowOHA MatMul (MoE)     |
 
-*Note:* Since only MUL_MAT is accelerated, models will benefit most from ZenDNN when matrix multiplications dominate the computational workload (which is typical for transformer-based LLMs).
+*Note:* Since MUL_MAT and MUL_MAT_ID are accelerated, models will benefit most from ZenDNN when matrix multiplications dominate the computational workload (which is typical for transformer-based LLMs and Mixture-of-Experts models).
 
 ## DataType Supports
 
@@ -181,7 +182,7 @@ For detailed profiling and logging options, refer to the [ZenDNN Logging Documen
 
 ## Known Issues
 
-- **Limited operation support**: Currently only matrix multiplication (MUL_MAT) is accelerated via ZenDNN. Other operations fall back to the standard CPU backend.
+- **Limited operation support**: Currently matrix multiplication (MUL_MAT) and expert-based matrix multiplication (MUL_MAT_ID) are accelerated via ZenDNN. Other operations fall back to the standard CPU backend. Future updates may expand supported operations.
 - **BF16 support**: BF16 operations require AMD Zen 4 or Zen 5 architecture (EPYC 9004/9005 series). On older CPUs, operations will use FP32.
 - **NUMA awareness**: For multi-socket systems, manual NUMA binding may be required for optimal performance.
 
@@ -216,4 +217,4 @@ Please add the **[ZenDNN]** prefix/tag in issues/PRs titles to help the ZenDNN-t
 
 ## TODO
 
-- Expand operation support beyond MUL_MAT (attention operations, activations, etc.)
+- Expand operation support beyond MUL_MAT and MUL_MAT_ID (attention operations, activations, etc.)
