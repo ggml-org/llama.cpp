@@ -564,6 +564,7 @@ struct llm_tokenizer_bpe_session {
         const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
+        auto tok_pre = vocab.get_pre_type();
 
         for (const auto & word : word_collection) {
             work_queue = llm_bigram_bpe::queue();
@@ -576,6 +577,13 @@ struct llm_tokenizer_bpe_session {
             if (vocab.get_ignore_merges() && vocab.text_to_token(word) != LLAMA_TOKEN_NULL) {
                 symbols.emplace_back(llm_symbol{-1, -1, word.c_str(), word.size()});
                 offset = word.size();
+            } else if (tok_pre == LLAMA_VOCAB_PRE_TYPE_GEMMA4 && word.find_first_not_of('\n') == std::string::npos) {
+                // fix for gemma 4, ref: https://github.com/ggml-org/llama.cpp/pull/21343
+                auto tok = vocab.text_to_token(word);
+                if (tok != LLAMA_TOKEN_NULL) {
+                    symbols.emplace_back(llm_symbol{-1, -1, word.c_str(), word.size()});
+                    offset = word.size();
+                }
             }
 
             while (offset < word.size()) {
