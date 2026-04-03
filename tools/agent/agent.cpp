@@ -406,15 +406,38 @@ int main(int argc, char ** argv) {
     console::log("\n");
 
     // Display resumed conversation history
+    // Helper: extract text from content that may be a string or array of content blocks.
+    auto extract_text = [](const json & msg) -> std::string {
+        if (!msg.contains("content")) {
+            return "";
+        }
+        const auto & c = msg["content"];
+        if (c.is_string()) {
+            return c.get<std::string>();
+        }
+        if (c.is_array()) {
+            std::string text;
+            for (const auto & block : c) {
+                if (block.contains("type") && block["type"] == "image_url") {
+                    text += "[image]\n";
+                } else if (block.contains("text") && block["text"].is_string()) {
+                    text += block["text"].get<std::string>();
+                }
+            }
+            return text;
+        }
+        return "";
+    };
+
     if (resume_ptr && !resume_ptr->messages.empty()) {
         for (const auto & m : resume_ptr->messages) {
             std::string role = m.value("role", "");
             if (role == "user") {
                 console::set_display(DISPLAY_TYPE_USER_INPUT);
-                console::log("› %s\n", m.value("content", "").c_str());
+                console::log("› %s\n", extract_text(m).c_str());
                 console::set_display(DISPLAY_TYPE_RESET);
             } else if (role == "assistant") {
-                std::string content = m.value("content", "");
+                std::string content = extract_text(m);
                 if (!content.empty()) {
                     console::log("%s\n", content.c_str());
                 }
@@ -427,7 +450,7 @@ int main(int argc, char ** argv) {
                     }
                 }
             } else if (role == "tool") {
-                std::string output = m.value("content", "");
+                std::string output = extract_text(m);
                 if (output.length() > 500) {
                     output = output.substr(0, 500) + "\n... (truncated)";
                 }
