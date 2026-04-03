@@ -92,7 +92,13 @@
 #define TN_LS_2            "%s.blk.%d.ls2.%s"         // layer scale
 #define TN_LS_OUT          "%s.blk.%d.out_scale.%s"      // layer out scale (gemma4)
 #define TN_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s" // post-attn norm (gemma4)
+#define TN_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"  // pre-attn norm (gemma4a)
 #define TN_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"  // post-FFN norm (gemma4)
+#define TN_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s" // post-FFN2 norm (gemma4a)
+#define TN_PER_DIM_SCALE   "%s.blk.%d.per_dim_scale.%s"   // per-head attn scale (gemma4a)
+#define TN_ATTN_K_REL      "%s.blk.%d.attn_k_rel.%s"      // relative position key proj (gemma4a)
+#define TN_AUDIO_CONV2D    "a.conv1d.%d.%s"                // subsampling conv2d (gemma4a)
+#define TN_AUDIO_INP_PROJ  "a.input_projection.weight"     // audio input projection (gemma4a)
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
@@ -108,6 +114,7 @@
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
+#define TN_MM_AUDIO_INP_PROJ "mm.a.input_projection.weight" // gemma4a audio embedder
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.%s"             // idefics3, deepseekocr
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v

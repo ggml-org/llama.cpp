@@ -8,6 +8,7 @@
 #include <vector>
 #include <fstream>
 #include <algorithm>
+#include <functional>
 
 // some of the code here is copied from whisper.cpp
 
@@ -37,23 +38,37 @@ void mtmd_audio_cache::fill_mel_filterbank_matrix(int   n_mel,
                                                   float fmin,
                                                   float fmax,
                                                   bool  slaney_area_norm,
-                                                  float scale) {
+                                                  float scale,
+                                                  bool  use_htk) {
     GGML_ASSERT(n_mel > 0 && n_fft > 1);
     if (fmax <= 0.0f) {
         fmax = 0.5f * sample_rate;
     }
 
-    // Slaney scale (matches librosa default)
-    const double min_log_hz  = 1000.0;
-    const double lin_slope   = 3 / 200.;
-    const double min_log_mel = min_log_hz * lin_slope;
-    const double log_step    = log(6.4) / 27.0;
-    auto         hz_to_mel   = [min_log_hz, lin_slope, log_step, min_log_mel](const double f_hz) -> double {
-        return (f_hz < min_log_hz) ? f_hz * lin_slope : min_log_mel + log(f_hz / min_log_hz) / log_step;
-    };
-    auto mel_to_hz = [min_log_hz, lin_slope, log_step, min_log_mel](const double m) -> double {
-        return (m < min_log_mel) ? m / lin_slope : min_log_hz * exp((m - min_log_mel) * log_step);
-    };
+    std::function<double(double)> hz_to_mel;
+    std::function<double(double)> mel_to_hz;
+
+    if (use_htk) {
+        // HTK mel scale: m = 2595 * log10(1 + f/700)
+        hz_to_mel = [](const double f_hz) -> double {
+            return 2595.0 * log10(1.0 + f_hz / 700.0);
+        };
+        mel_to_hz = [](const double m) -> double {
+            return 700.0 * (pow(10.0, m / 2595.0) - 1.0);
+        };
+    } else {
+        // Slaney scale (matches librosa default)
+        const double min_log_hz  = 1000.0;
+        const double lin_slope   = 3 / 200.;
+        const double min_log_mel = min_log_hz * lin_slope;
+        const double log_step    = log(6.4) / 27.0;
+        hz_to_mel = [min_log_hz, lin_slope, log_step, min_log_mel](const double f_hz) -> double {
+            return (f_hz < min_log_hz) ? f_hz * lin_slope : min_log_mel + log(f_hz / min_log_hz) / log_step;
+        };
+        mel_to_hz = [min_log_hz, lin_slope, log_step, min_log_mel](const double m) -> double {
+            return (m < min_log_mel) ? m / lin_slope : min_log_hz * exp((m - min_log_mel) * log_step);
+        };
+    }
 
     // infer N_fft from n_fft_bins
     const double bin_hz_step = double(sample_rate) / double(n_fft);
@@ -261,6 +276,10 @@ struct filter_params {
     float   preemph = 0.f;
     bool    use_natural_log = false;
     bool    norm_per_feature = false;
+    float   mel_floor = 0.f;        // added before log (0 = use default 5.96e-8)
+    bool    use_magnitude = false;   // true = |X|, false = |X|^2 (power)
+    bool    semicausal_pad = false;  // true = left-only padding
+    bool    skip_global_norm = false; // true = skip Whisper-style (x+4)/4 normalization
 };
 
 static void log_mel_spectrogram_worker_thread(int                        ith,
@@ -301,10 +320,10 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
         // FFT
         fft(cache, fft_in.data(), frame_size, fft_out.data());
 
-        // Calculate modulus^2 of complex numbers
-        // Use pow(fft_out[2 * j + 0], 2) + pow(fft_out[2 * j + 1], 2) causes inference quality problem? Interesting.
+        // Calculate magnitude or power spectrum
         for (int j = 0; j < n_fft_bins; j++) {
-            fft_out[j] = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
+            float power = fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
+            fft_out[j] = params.use_magnitude ? sqrtf(power) : power;
         }
 
         // mel spectrogram
@@ -324,9 +343,12 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
             for (; k < n_fft_bins; k++) {
                 sum += fft_out[k] * filters.data[j * n_fft_bins + k];
             }
-            sum = params.use_natural_log
-                ? log(sum + 5.960464477539063e-08)
-                : log10(std::max(sum, 1e-10));
+            {
+                double floor = params.mel_floor > 0.f ? (double)params.mel_floor : 5.960464477539063e-08;
+                sum = params.use_natural_log
+                    ? log(sum + floor)
+                    : log10(std::max(sum, 1e-10));
+            }
             out.data[j * out.n_len + i] = sum;
         }
     }
@@ -360,7 +382,14 @@ static bool log_mel_spectrogram(
 
     // Padding
     std::vector<float> samples_padded;
-    if (params.center_padding) {
+    if (params.semicausal_pad) {
+        // Semicausal: left-pad only (frame_length / 2 zeros)
+        const int pad_left = params.hann_window_size / 2;
+        samples_padded.resize(pad_left + n_samples, 0.0f);
+        std::copy(samples, samples + n_samples, samples_padded.data() + pad_left);
+        samples = samples_padded.data();
+        n_samples = samples_padded.size();
+    } else if (params.center_padding) {
         const auto pad_amount = frame_size / 2;
         samples_padded = std::vector<float>(n_samples + 2 * pad_amount, 0);
         std::copy(samples, samples + n_samples, samples_padded.data() + pad_amount);
@@ -394,13 +423,14 @@ static bool log_mel_spectrogram(
         }
     }
 
-    // pad hann window if it's smaller than frame_size
-    // TODO: probably unnecessary here? (or better doing it in g_cache?)
+    // pad hann window if it's smaller than frame_size (fft_length)
+    // Left-align: window the first hann_window_size samples, zero-pad the rest.
+    // This matches HF/PyTorch rfft(windowed_frame, n=fft_length) behavior where
+    // the frame is frame_length samples and the FFT zero-pads to fft_length.
     std::vector<float> hann_window_padded;
     if (params.hann_window_size < frame_size) {
-        hann_window_padded.resize(frame_size);
-        const int padding = (frame_size - params.hann_window_size) / 2;
-        std::copy(hann, hann + params.hann_window_size, &hann_window_padded[padding]);
+        hann_window_padded.resize(frame_size, 0.0f);
+        std::copy(hann, hann + params.hann_window_size, &hann_window_padded[0]);
         hann = hann_window_padded.data();
     }
 
@@ -408,7 +438,12 @@ static bool log_mel_spectrogram(
     GGML_ASSERT(params.n_fft_bins > 0);
     GGML_ASSERT(params.hop_length > 0);
     out.n_mel = params.n_mel;
-    out.n_len = (n_samples - frame_size) / frame_step + 1;
+    // When window < fft_length, use window+1 for frame count (matches HF unfold behavior).
+    // The worker reads frame_size samples but the Hann window zeros everything beyond hann_window_size.
+    const int effective_frame_for_count = (params.hann_window_size < frame_size)
+        ? (params.hann_window_size + 1)
+        : frame_size;
+    out.n_len = (n_samples - effective_frame_for_count) / frame_step + 1;
     // TODO: handle these checks better
     if (out.n_mel > 0 && (unsigned long)out.n_len > SIZE_MAX / out.n_mel) {
         LOG_ERR("%s: size overflow\n", __func__);
@@ -464,8 +499,8 @@ static bool log_mel_spectrogram(
                 out.data[i * out.n_len + j] = 0.0;
             }
         }
-    } else {
-        // clamping and normalization
+    } else if (!params.skip_global_norm) {
+        // Whisper-style clamping and normalization (NOT used by Gemma4)
         double mmax = -1e20;
         for (int i = 0; i < out.n_mel*out.n_len; i++) {
             if (out.data[i] > mmax) {
@@ -588,7 +623,8 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
 void mtmd_audio_preprocessor_conformer::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
-    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+                                     mel_fmin, mel_fmax, slaney_norm, 1.0f, use_htk_mel);
 }
 
 bool mtmd_audio_preprocessor_conformer::preprocess(const float *                 samples,
@@ -599,16 +635,23 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
         return false;
     }
 
+    // No padding to fixed length — process actual audio duration.
+    // HF runs the encoder on actual-length mel, not padded to 30s.
+
     filter_params params;
     params.n_mel            = hparams.n_mel_bins;
     params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
     params.hann_window_size = hparams.audio_window_len;
     params.hop_length       = hparams.audio_hop_len;
     params.sample_rate      = hparams.audio_sample_rate;
-    params.center_padding   = true;
-    params.preemph          = 0.97f;
+    params.center_padding   = !use_semicausal_pad;
+    params.semicausal_pad   = use_semicausal_pad;
+    params.preemph          = preemph_coeff;
     params.use_natural_log  = true;
-    params.norm_per_feature = true;
+    params.norm_per_feature = use_norm_per_feature;
+    params.mel_floor        = mel_floor;
+    params.use_magnitude    = use_magnitude;
+    params.skip_global_norm = true;  // Gemma4 expects raw log-mel, no Whisper normalization
 
     // make sure the cache is initialized
     GGML_ASSERT(!cache.sin_vals.empty());

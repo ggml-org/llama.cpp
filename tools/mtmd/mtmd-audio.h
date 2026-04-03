@@ -45,7 +45,8 @@ struct mtmd_audio_cache {
                                     float fmin             = 0.0f,   // e.g. 0.0
                                     float fmax             = -1.0f,  // e.g. sr/2; pass -1 for auto
                                     bool  slaney_area_norm = true,
-                                    float scale = 1.0f  // optional extra scaling
+                                    float scale = 1.0f,  // optional extra scaling
+                                    bool  use_htk = false // HTK mel scale vs Slaney
     );
 };
 
@@ -72,6 +73,17 @@ struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+    // Configurable params (set before initialize())
+    float preemph_coeff       = 0.97f;
+    bool  use_norm_per_feature = true;
+    float mel_floor           = 0.0f;   // 0 = use default
+    bool  use_magnitude       = false;  // false = power spectrum
+    bool  use_semicausal_pad  = false;
+    bool  use_htk_mel         = false;
+    bool  slaney_norm         = true;   // Slaney area normalization on filterbank
+    float mel_fmin            = 0.0f;   // min frequency for mel filterbank
+    float mel_fmax            = -1.0f;  // max frequency (-1 = sr/2)
 
   private:
     mtmd_audio_cache cache;
