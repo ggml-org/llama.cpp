@@ -119,6 +119,11 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
         CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
     fi
 
+    # Build shared libs on Windows
+    # to reduce binary size and avoid errors in library loading unit tests
+    if uname -s | grep -qi nt; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DBUILD_SHARED_LIBS=ON"
+    fi
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
@@ -221,7 +226,7 @@ function gg_run_ctest_debug {
 
     set -e
 
-    # Check cmake and ctest are installed
+    # Check required binaries are installed
     gg_check_build_requirements
 
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
@@ -252,7 +257,7 @@ function gg_run_ctest_release {
 
     set -e
 
-    # Check cmake and ctest are installed
+    # Check required binaries are installed
     gg_check_build_requirements
 
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
@@ -627,8 +632,36 @@ function gg_sum_rerank_tiny {
 }
 
 function gg_check_build_requirements {
+    if ! command -v git &> /dev/null; then
+        gg_printf 'git not found, please install'
+    fi
+
+    if ! command -v git-lfs &> /dev/null; then
+        gg_printf 'git-lfs not found, please install'
+    fi
+
+    if ! command -v wget &> /dev/null; then
+        gg_printf 'wget not found, please install'
+    fi
+
+    if ! command -v python3 &> /dev/null; then
+        gg_printf 'python3 not found, please install'
+    fi
+
+    if ! command -v pip3 &> /dev/null; then
+        gg_printf 'pip3 not found, please install'
+    fi
+
+    if ! python3 -m ensurepip --help &> /dev/null; then
+        gg_printf 'ensurepip not found, please install python3-venv package'
+    fi
+
     if ! command -v cmake &> /dev/null; then
         gg_printf 'cmake not found, please install'
+    fi
+
+    if ! command -v ccache &> /dev/null; then
+        gg_printf 'ccache not found, please consider installing for faster builds'
     fi
 
     if ! command -v ctest &> /dev/null; then

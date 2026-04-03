@@ -6,6 +6,7 @@
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -317,6 +318,44 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
            p.end();
 }
 
+common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, const std::string & name,
+                                                    const common_peg_parser & call_id_section, bool have_call_id,
+                                                    const common_peg_parser & args,
+                                                    std::optional<common_peg_parser> atomic_peek) const {
+    auto              open           = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix);
+    bool              matched_atomic = false;
+    common_peg_parser func_parser    = p.eps();
+
+    if (!function.name_suffix.empty()) {
+        func_parser    = open + call_id_section + p.space() + args;
+        matched_atomic = true;
+    } else if (have_call_id) {
+        func_parser    = p.atomic(open + call_id_section) + p.space() + args;
+        matched_atomic = true;
+    } else if (atomic_peek.has_value()) {
+        func_parser    = p.atomic(open + call_id_section + p.space() + *atomic_peek) + args;
+        matched_atomic = true;
+    } else {
+        func_parser = open + call_id_section + p.space() + args;
+    }
+
+    if (!function.close.empty()) {
+        func_parser = func_parser + p.space() + p.tool_close(p.literal(function.close));
+    } else if (!format.per_call_end.empty()) {
+        // When there's no func_close but there is a per_call_end marker, use peek() to ensure
+        // we only emit tool_close when we can actually see the closing marker. This prevents
+        // premature closing during partial parsing when we've seen e.g. "</" which could be
+        // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
+        func_parser = func_parser + p.tool_close(p.peek(p.literal(format.per_call_end)));
+    } else {
+        func_parser = func_parser + p.tool_close(p.space());  // force this to process tool closing callbacks in mapper
+    }
+    if (!matched_atomic) {
+        func_parser = p.atomic(func_parser);
+    }
+    return func_parser;
+}
+
 common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
@@ -330,17 +369,27 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
 
         // Build call_id parser based on position (if supported)
+        bool have_call_id = false;
         common_peg_parser call_id_section = p.eps();
         if (call_id.pos == call_id_position::BETWEEN_FUNC_AND_ARGS && !call_id.prefix.empty() &&
-            !call_id.suffix.empty()) {
-            call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(call_id.suffix))) + call_id.suffix;
+            (!call_id.suffix.empty() || !arguments.start.empty())) {
+            if (!call_id.suffix.empty()) {
+                call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(call_id.suffix))) + call_id.suffix;
+            } else {
+                call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(arguments.start)));
+            }
+            have_call_id = true;
+        }
+        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
+        if (!arguments.start.empty()) {
+            args_parser = p.literal(arguments.start) + args_parser;
+        }
+        if (!arguments.end.empty()) {
+            args_parser = args_parser + p.literal(arguments.end);
         }
 
-        auto func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
-                           call_id_section + p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
-        if (!function.close.empty()) {
-            func_parser = func_parser + function.close;
-        }
+        auto atomic_peek = !arguments.start.empty() ? std::optional(p.peek(p.literal(arguments.start))) : std::nullopt;
+        auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_parser, atomic_peek);
         tool_choice |= p.rule("tool-" + name, func_parser);
     });
 
@@ -400,12 +449,34 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         for (const auto & [param_name, param_schema] : properties.items()) {
             bool        is_required = required.find(param_name) != required.end();
             std::string type        = "object";
-            auto        type_obj    = param_schema.contains("type") ? param_schema.at("type") : json::object();
-            if (type_obj.is_string()) {
-                type_obj.get_to(type);
-            } else if (type_obj.is_object()) {
-                if (type_obj.contains("type") && type_obj.at("type").is_string()) {
-                    type_obj.at("type").get_to(type);
+            if (param_schema.contains("type")) {
+                const auto & type_obj = param_schema.at("type");
+                if (type_obj.is_string()) {
+                    type_obj.get_to(type);
+                } else if (type_obj.is_array()) {
+                    // Handle nullable types like ["string", "null"]
+                    for (const auto & t : type_obj) {
+                        if (t.is_string() && t.get<std::string>() != "null") {
+                            type = t.get<std::string>();
+                            break;
+                        }
+                    }
+                } else if (type_obj.is_object()) {
+                    if (type_obj.contains("type") && type_obj.at("type").is_string()) {
+                        type_obj.at("type").get_to(type);
+                    }
+                }
+            }
+            // Infer string type from enum values when type is unspecified
+            if (type == "object" && param_schema.contains("enum")) {
+                const auto & enum_vals = param_schema.at("enum");
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -448,52 +519,31 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             args_seq = args_seq + p.repeat(p.space() + any_opt, 0, (int) optional_parsers.size());
         }
 
+        if (!arguments.start.empty()) {
+            args_seq = p.literal(arguments.start) + args_seq;
+        }
+        if (!arguments.end.empty()) {
+            args_seq = args_seq + p.literal(arguments.end);
+        }
+
         // Build call_id parser based on position (if supported)
         common_peg_parser call_id_section = p.eps();
         bool have_call_id = false;
         if (call_id.pos == call_id_position::BETWEEN_FUNC_AND_ARGS && !call_id.prefix.empty() &&
-            !call_id.suffix.empty()) {
+            (!call_id.suffix.empty() || !arguments.start.empty())) {
             have_call_id = true;
-            call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(call_id.suffix)) + call_id.suffix);
+            if (!call_id.suffix.empty()) {
+                call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(call_id.suffix)) + call_id.suffix);
+            } else {
+                call_id_section = p.optional(call_id.prefix + p.tool_id(p.until(arguments.start)));
+            }
         }
 
-        bool matched_atomic = false;
-        common_peg_parser func_parser = p.eps();
-        if (!function.name_suffix.empty()) {
-            func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
-                call_id_section + p.space() + args_seq;
-            matched_atomic = true;
-        } else if (have_call_id) {
-            func_parser = p.atomic(p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
-                call_id_section) + p.space() + args_seq;
-            matched_atomic = true;
-        } else if (!arguments.name_prefix.empty() && !required_parsers.empty()) {
-            // Only peek for an arg tag when there are required args that must follow.
-            // When all args are optional, the model may emit no arg tags at all (#20650).
-            func_parser = p.atomic(p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
-                call_id_section + p.space() + p.peek(p.literal(arguments.name_prefix))) + args_seq;
-            matched_atomic = true;
-        } else {
-            func_parser = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix) +
-                call_id_section + p.space() + args_seq;
-        }
-
-        if (!function.close.empty()) {
-            func_parser = func_parser + p.space() + p.tool_close(p.literal(function.close));
-        } else if (!format.per_call_end.empty()) {
-            // When there's no func_close but there is a per_call_end marker, use peek() to ensure
-            // we only emit tool_close when we can actually see the closing marker. This prevents
-            // premature closing during partial parsing when we've seen e.g. "</" which could be
-            // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
-            func_parser = func_parser + p.tool_close(p.peek(p.literal(format.per_call_end)));
-        } else {
-            func_parser =
-                func_parser + p.tool_close(p.space());  // force this to process tool closing callbacks in mapper
-        }
-        if (!matched_atomic) {
-            func_parser = p.atomic(func_parser);
-        }
-
+        // Only peek for an arg tag when there are required args that must follow.
+        // When all args are optional, the model may emit no arg tags at all (#20650).
+        auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
+            std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
+        auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
         tool_choice |= p.rule("tool-" + name, func_parser);
     });
 
@@ -574,9 +624,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
         std::vector<arg_entry> arg_entries;
 
         for (const auto & [param_name, param_schema] : properties.items()) {
-            std::string type    = "object";
-            auto        type_v  = param_schema.contains("type") ? param_schema.at("type") : json::object();
-            if (type_v.is_string()) type_v.get_to(type);
+            std::string type = "object";
+            if (param_schema.contains("type")) {
+                const auto & type_v = param_schema.at("type");
+                if (type_v.is_string()) {
+                    type_v.get_to(type);
+                } else if (type_v.is_array()) {
+                    // Handle nullable types like ["string", "null"]
+                    for (const auto & t : type_v) {
+                        if (t.is_string() && t.get<std::string>() != "null") {
+                            type = t.get<std::string>();
+                            break;
+                        }
+                    }
+                }
+            }
+            // Infer string type from enum values when type is unspecified
+            if (type == "object" && param_schema.contains("enum")) {
+                const auto & enum_vals = param_schema.at("enum");
+                if (enum_vals.is_array()) {
+                    for (const auto & v : enum_vals) {
+                        if (v.is_string()) {
+                            type = "string";
+                            break;
+                        }
+                    }
+                }
+            }
 
             common_peg_parser value_parser = p.eps();
             if (type == "string") {

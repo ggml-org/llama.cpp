@@ -657,6 +657,66 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nullable_string_tool{
+    /* .name = */ "set_nullable_str",
+    /* .description = */ "Set a nullable string value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["string", "null"],
+                "description": "A nullable string"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_string_null_first_tool{
+    /* .name = */ "set_nullable_str_nf",
+    /* .description = */ "Set a nullable string value with null first in type array",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["null", "string"],
+                "description": "A nullable string with null first"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_int_tool{
+    /* .name = */ "set_nullable_int",
+    /* .description = */ "Set a nullable integer value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": ["integer", "null"],
+                "description": "A nullable integer"
+            }
+        },
+        "required": ["count"]
+    })",
+};
+
+static common_chat_tool enum_no_type_tool{
+    /* .name = */ "set_unit",
+    /* .description = */ "Set a temperature unit",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "unit": {
+                "enum": ["celsius", "fahrenheit"],
+                "description": "Temperature unit"
+            }
+        },
+        "required": ["unit"]
+    })",
+};
+
 static common_chat_tool string_param_tool{
     /* .name = */ "string_param",
     /* .description = */ "Tool with string parameter for testing",
@@ -2200,6 +2260,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             })
             .run();
+
     }
 
     {
@@ -2383,6 +2444,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .expect_reconstruction()
             .run();
+
+        // nullable string type ["string", "null"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable string with null first in type array ["null", "string"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str_nf>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_null_first_tool })
+            .expect_tool_calls({
+                { "set_nullable_str_nf", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable integer type ["integer", "null"] - should use JSON value path, not string
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_int>\n"
+               "<parameter=count>\n42\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_int_tool })
+            .expect_tool_calls({
+                { "set_nullable_int", R"({"count": 42})", {} },
+            })
+            .run();
+
+        // enum without explicit type key - should infer string from enum values
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_unit>\n"
+               "<parameter=unit>\ncelsius\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ enum_no_type_tool })
+            .expect_tool_calls({
+                { "set_unit", R"({"unit": "celsius"})", {} },
+            })
+            .run();
     }
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
@@ -2541,55 +2654,57 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // #20424 introduced effective_input = generation_prompt + input, but the throw
     // uses input.substr(result.end) where result.end is in effective_input space.
     {
-        auto tmpls = common_chat_templates_ptr(
-            common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
+        if (!g_template_filter.empty() && std::string("models/templates/GLM-4.7-Flash.jinja").find(g_template_filter) != std::string::npos) {
+            auto tmpls = common_chat_templates_ptr(
+                common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
 
-        static common_chat_tool weather_tool{
-            "get_weather", "Get weather",
-            R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
-        };
+            static common_chat_tool weather_tool{
+                "get_weather", "Get weather",
+                R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
+            };
 
-        common_chat_templates_inputs inputs;
-        inputs.tools = { weather_tool };
-        inputs.enable_thinking = true;
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        inputs.add_generation_prompt = true;
-        inputs.use_jinja = true;
-        common_chat_msg msg;
-        msg.role = "user";
-        msg.content = "get_weather";
-        inputs.messages = { msg };
+            common_chat_templates_inputs inputs;
+            inputs.tools = { weather_tool };
+            inputs.enable_thinking = true;
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            inputs.add_generation_prompt = true;
+            inputs.use_jinja = true;
+            common_chat_msg msg;
+            msg.role = "user";
+            msg.content = "get_weather";
+            inputs.messages = { msg };
 
-        auto params = common_chat_templates_apply(tmpls.get(), inputs);
-        common_peg_arena arena;
-        arena.load(params.parser);
-        common_chat_parser_params pp(params);
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            common_peg_arena arena;
+            arena.load(params.parser);
+            common_chat_parser_params pp(params);
 
-        // generation_prompt is non-empty for thinking models, so result.end
-        // will be offset by generation_prompt.size() into effective_input space.
-        assert(!pp.generation_prompt.empty());
+            // generation_prompt is non-empty for thinking models, so result.end
+            // will be offset by generation_prompt.size() into effective_input space.
+            assert(!pp.generation_prompt.empty());
 
-        std::string bad_input =
-            "Thinking.\n"
-            "</think>"
-            "<tool_call>get_weather"
-            "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
-            "</tool_call>\n";
+            std::string bad_input =
+                "Thinking.\n"
+                "</think>"
+                "<tool_call>get_weather"
+                "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
+                "</tool_call>\n";
 
-        bool got_runtime_error = false;
-        bool got_out_of_range = false;
-        std::string error_msg;
-        try {
-            common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
-        } catch (const std::out_of_range & e) {
-            got_out_of_range = true;
-            error_msg = e.what();
-        } catch (const std::runtime_error & e) {
-            got_runtime_error = true;
-            error_msg = e.what();
+            bool got_runtime_error = false;
+            bool got_out_of_range = false;
+            std::string error_msg;
+            try {
+                common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
+            } catch (const std::out_of_range & e) {
+                got_out_of_range = true;
+                error_msg = e.what();
+            } catch (const std::runtime_error & e) {
+                got_runtime_error = true;
+                error_msg = e.what();
+            }
+            GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
+            GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
         }
-        GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
-        GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
     }
 
     // Kimi-K2-Thinking tests - custom parser
@@ -3169,6 +3284,21 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_id)
             .expect_reconstruction()
             .run();
+
+        tst.test("[TOOL_CALLS]special_function[CALL_ID]000000001[ARGS]{\"arg1\": 1}"
+            "[TOOL_CALLS]special_function_with_opt[CALL_ID]000000002[ARGS]{\"arg1\": 1, \"arg2\": 2}")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+            })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "000000001" },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", "000000002" },
+            })
+            .expect_reconstruction()
+            .run();
+
+
     }
     // Devstral
     {

@@ -1631,7 +1631,7 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-static std::optional<common_chat_params> try_specialized_template(
+std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         const autoparser::generation_params & params) {
@@ -1778,7 +1778,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         return data;
     }
 
-    if (auto result = try_specialized_template(tmpl, src, params)) {
+    if (auto result = common_chat_try_specialized_template(tmpl, src, params)) {
         result->generation_prompt = params.generation_prompt;
         return *result;
     }
