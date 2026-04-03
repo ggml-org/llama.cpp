@@ -13005,10 +13005,10 @@ static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
         }
     }
 
-    // Free the synthetic allocator base (host-pinned address reservation).
+    // Free the synthetic allocator base (plain aligned_alloc, NOT SYCL USM).
     if (ctx->alloc_base) {
         ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->alloc_base);
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->alloc_base, *ctx->stream)));
+        std::free(ctx->alloc_base);
         ctx->alloc_base = nullptr;
     }
 
@@ -13061,13 +13061,38 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
             }
 
             size_t offset_within_layer = abs_offset - ctx->layer_base_offsets[layer_id];
+            void * old_data = tensor->data;
             tensor->data = static_cast<char *>(la.ptr) + offset_within_layer;
+
+            // Diagnostic: log first 4 layers + last layer to verify remapping
+            if (layer_id < 4 || static_cast<uint32_t>(layer_id) == ctx->n_layers - 1) {
+                const auto * alloc_info = ggml_sycl::alloc_registry::instance().lookup(tensor->data);
+                const char * alloc_type_str = alloc_info ? (alloc_info->type == ggml_sycl::alloc_type::DEVICE ? "DEVICE" :
+                    alloc_info->type == ggml_sycl::alloc_type::HOST_PINNED ? "HOST_PINNED" : "OTHER") : "UNKNOWN";
+                GGML_LOG_INFO("[KV-REMAP] %s: layer=%d alloc_base=%p old_data=%p abs_off=%zu "
+                              "layer_base=%zu off_in_layer=%zu la.ptr=%p la.size=%zu -> data=%p (%s)\n",
+                              name, layer_id, ctx->alloc_base, old_data, abs_offset,
+                              ctx->layer_base_offsets[layer_id], offset_within_layer,
+                              la.ptr, la.size, tensor->data, alloc_type_str);
+            }
+
+            // Bounds check: verify remapped pointer is within the per-layer allocation
+            if (offset_within_layer + ggml_nbytes(tensor) > la.size) {
+                GGML_LOG_ERROR("[KV-REMAP] ERROR: %s overflows layer alloc! "
+                               "off_in_layer=%zu + nbytes=%zu > la.size=%zu\n",
+                               name, offset_within_layer, ggml_nbytes(tensor), la.size);
+            }
+
             return GGML_STATUS_SUCCESS;
         }
     }
 
     // Fallback for tensors that don't match layer naming: leave pointer as-is
     // (will point into alloc_base which is host-accessible).
+    if (layer_id >= 0) {
+        GGML_LOG_WARN("[KV-REMAP] FALLBACK: %s layer_id=%d not remapped (n_layers=%u, allocs=%zu)\n",
+                      name, layer_id, ctx->n_layers, ctx->layer_allocs.size());
+    }
     return GGML_STATUS_SUCCESS;
 }
 
@@ -13324,11 +13349,18 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     // Allocate synthetic base pointer for the ggml allocator.
     // The allocator needs a contiguous address range to compute per-tensor offsets.
     // init_tensor remaps each tensor from this synthetic space to the actual
-    // per-layer allocation.  Uses sycl::malloc_host for a lightweight reservation.
-    void * alloc_base = sycl::malloc_host(size, *buft_ctx->stream);
+    // per-layer allocation.  Uses plain aligned_alloc (NOT sycl::malloc_host)
+    // to avoid:
+    //   1. Wasting GB of host-pinned memory (GPU page table entries) for an
+    //      address range that is never accessed by GPU kernels.
+    //   2. Polluting the alloc_registry with a large HOST_PINNED range that
+    //      could shadow per-layer DEVICE entries in range-based lookup.
+    const size_t alloc_align = 128;  // match buffer alignment
+    const size_t alloc_padded = (size + alloc_align - 1) & ~(alloc_align - 1);
+    void * alloc_base = std::aligned_alloc(alloc_align, alloc_padded);
     if (!alloc_base) {
         GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate %zu bytes for allocator base\n",
-                       device, size);
+                       device, alloc_padded);
         for (auto & la : layer_allocs) {
             if (la.ptr) {
                 ggml_sycl::unified_cache_deallocate(
@@ -13338,8 +13370,37 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         }
         return nullptr;
     }
+    // Zero the synthetic base so any un-remapped fallback reads zeros
+    // (defensive — all KV tensors should be remapped by init_tensor).
+    std::memset(alloc_base, 0, alloc_padded);
+    // Register as MMAP so alloc_registry can identify it if needed, but
+    // using a type that won't be confused with DEVICE or HOST_PINNED.
     ggml_sycl::alloc_registry::instance().register_alloc(
-        alloc_base, size, device, ggml_sycl::alloc_type::HOST_PINNED);
+        alloc_base, alloc_padded, device, ggml_sycl::alloc_type::MMAP);
+
+    // Diagnostic: check for address space overlap between alloc_base and device allocations.
+    // If a device pointer falls within [alloc_base, alloc_base+size), alloc_registry
+    // lookup would return HOST_PINNED instead of DEVICE — causing incorrect dispatch.
+    {
+        uintptr_t ab_start = reinterpret_cast<uintptr_t>(alloc_base);
+        uintptr_t ab_end   = ab_start + size;
+        for (uint32_t l = 0; l < n_layers; l++) {
+            if (!layer_allocs[l].ptr || !layer_allocs[l].on_device) continue;
+            uintptr_t la_start = reinterpret_cast<uintptr_t>(layer_allocs[l].ptr);
+            uintptr_t la_end   = la_start + layer_allocs[l].size;
+            if (la_start < ab_end && la_end > ab_start) {
+                GGML_LOG_ERROR("[KV-TIER] CRITICAL: layer %u device ptr %p-%p overlaps "
+                               "alloc_base %p-%p! Registry lookup will be wrong.\n",
+                               l, (void*)la_start, (void*)la_end, (void*)ab_start, (void*)ab_end);
+            }
+        }
+        GGML_LOG_INFO("[KV-TIER] alloc_base=%p size=%zu (range %p-%p)\n",
+                      alloc_base, size, (void*)ab_start, (void*)ab_end);
+        for (uint32_t l = 0; l < std::min(n_layers, 4u); l++) {
+            GGML_LOG_INFO("[KV-TIER] layer_allocs[%u]: ptr=%p size=%zu on_device=%d\n",
+                          l, layer_allocs[l].ptr, layer_allocs[l].size, (int)layer_allocs[l].on_device);
+        }
+    }
 
     // Log placement summary
     if (n_device_layers == 0) {
@@ -13361,7 +13422,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     auto * ctx         = new tiered_kv_buffer_context{};
     ctx->layer_allocs  = std::move(layer_allocs);
     ctx->alloc_base      = alloc_base;
-    ctx->alloc_base_size = size;
+    ctx->alloc_base_size = alloc_padded;
     ctx->device_size   = total_device;
     ctx->host_size     = total_host;
     ctx->device        = device;
