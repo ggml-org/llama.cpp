@@ -13,6 +13,7 @@ namespace fs = std::filesystem;
 static std::string glob_to_regex(const std::string & pattern) {
     std::string regex;
     bool in_bracket = false;
+    bool in_brace   = false;
 
     for (size_t i = 0; i < pattern.length(); i++) {
         char c = pattern[i];
@@ -25,6 +26,35 @@ static std::string glob_to_regex(const std::string & pattern) {
                 regex += "\\\\";
             } else {
                 regex += c;
+            }
+            continue;
+        }
+
+        if (in_brace) {
+            if (c == '}') {
+                in_brace = false;
+                regex += ')';
+            } else if (c == ',') {
+                regex += '|';
+            } else if (c == '*') {
+                if (i + 1 < pattern.length() && pattern[i + 1] == '*') {
+                    regex += ".*";
+                    i++;
+                } else {
+                    regex += "[^/]*";
+                }
+            } else if (c == '?') {
+                regex += "[^/]";
+            } else {
+                switch (c) {
+                    case '.': case '(': case ')': case '+':
+                    case '|': case '^': case '$': case '\\':
+                        regex += '\\';
+                        regex += c;
+                        break;
+                    default:
+                        regex += c;
+                }
             }
             continue;
         }
@@ -47,6 +77,10 @@ static std::string glob_to_regex(const std::string & pattern) {
                 in_bracket = true;
                 regex += c;
                 break;
+            case '{':
+                in_brace = true;
+                regex += "(?:";
+                break;
             case '.':
             case '(':
             case ')':
@@ -54,7 +88,6 @@ static std::string glob_to_regex(const std::string & pattern) {
             case '|':
             case '^':
             case '$':
-            case '{':
             case '}':
             case '\\':
                 regex += '\\';

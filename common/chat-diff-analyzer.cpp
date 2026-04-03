@@ -104,10 +104,11 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.function.name_suffix  = "";
               analysis.tools.arguments.start       = "{";
               analysis.tools.arguments.end         = "}";
+              analysis.tools.arguments.name_prefix = "";
               analysis.tools.arguments.name_suffix = ":";
               analysis.tools.arguments.separator   = ",";
               analysis.reasoning.mode              = reasoning_mode::TAG_BASED;
-              analysis.reasoning.start             = "<|channel>thought\n";
+              analysis.reasoning.start             = "<|channel>thought";
               analysis.reasoning.end               = "<channel|>";
               analysis.preserved_tokens.clear();
               analysis.preserved_tokens.push_back("<|tool_call>");

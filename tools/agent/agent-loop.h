@@ -29,7 +29,7 @@ enum class agent_stop_reason {
 
 // Configuration for the agent
 struct agent_config {
-    int max_iterations = 50;
+    int max_iterations = 0;  // 0 = unlimited
     int tool_timeout_ms = 120000;
     std::string working_dir;
     bool verbose = false;

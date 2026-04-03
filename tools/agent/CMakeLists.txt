@@ -15,6 +15,7 @@ set(AGENT_SOURCES
     tools/tool-write.cpp
     tools/tool-edit.cpp
     tools/tool-glob.cpp
+    tools/tool-plan.cpp
 )
 
 # MCP support only available on Unix (uses fork, pipe, poll)
@@ -58,6 +59,7 @@ if(LLAMA_HTTPLIB)
         tools/tool-write.cpp
         tools/tool-edit.cpp
         tools/tool-glob.cpp
+        tools/tool-plan.cpp
         ../server/server-http.cpp
     )
 

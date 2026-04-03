@@ -88,7 +88,7 @@ int main(int argc, char ** argv) {
 
     // Check for custom flags before common_params_parse
     bool yolo_mode = false;
-    int max_iterations = 50;  // Default value
+    int max_iterations = 0;  // 0 = unlimited (default)
     bool enable_skills = true;
     bool enable_agents_md = true;
     bool enable_compaction = true;
@@ -174,8 +174,7 @@ int main(int argc, char ** argv) {
             if (i + 1 < argc) {
                 try {
                     max_iterations = std::stoi(argv[i + 1]);
-                    if (max_iterations < 1) max_iterations = 1;
-                    if (max_iterations > 1000) max_iterations = 1000;
+                    if (max_iterations < 0) max_iterations = 0;  // 0 = unlimited
                 } catch (...) {
                     fprintf(stderr, "Invalid --max-iterations value: %s\n", argv[i + 1]);
                     return 1;

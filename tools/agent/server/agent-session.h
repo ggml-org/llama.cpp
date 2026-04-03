@@ -20,7 +20,7 @@ struct common_params;
 // Configuration for creating a new session
 struct agent_session_config {
     bool yolo_mode = false;               // Skip permission prompts
-    int max_iterations = 50;
+    int max_iterations = 0;
     int tool_timeout_ms = 120000;
     std::string working_dir;
 

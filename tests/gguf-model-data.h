@@ -40,9 +40,11 @@ struct gguf_remote_model {
 std::optional<gguf_remote_model> gguf_fetch_model_meta(
     const std::string & repo,
     const std::string & quant = "Q8_0",
-    const std::string & cache_dir = "");  // empty = default
+    const std::string & cache_dir = "",  // empty = default
+    bool verbose = true);
 
 gguf_context_ptr gguf_fetch_gguf_ctx(
     const std::string & repo,
     const std::string & quant = "Q8_0",
-    const std::string & cache_dir = "");
+    const std::string & cache_dir = "",
+    bool verbose = true);

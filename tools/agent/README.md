@@ -1,8 +1,25 @@
 # llama-agent
 
-A coding agent that runs entirely inside [llama.cpp](https://github.com/ggml-org/llama.cpp): single binary, zero dependencies, native performance.
+A coding agent optimized for local models, built entirely inside [llama.cpp](https://github.com/ggml-org/llama.cpp): single binary, zero dependencies, native performance.
 
 <img width="1536" height="641" alt="image" src="https://github.com/user-attachments/assets/494a5615-2c3a-4aee-ad49-2a89eb862f88" />
+
+> [!NOTE]
+> ## New: Gemma 4 Vision
+>
+> [Gemma 4](https://blog.google/technology/developers/gemma-4/) is Google's latest open model family (Apache 2.0), built for agentic use with native tool calling and multimodal input. The **E4B variant** (4.5B effective params, ~5 GB quantized) runs comfortably on an 8 GB laptop and brings full vision capabilities to llama-agent. The model can read and analyze images, screenshots, diagrams, and documents.
+>
+> ```bash
+> llama-agent -hf unsloth/gemma-4-E4B-it-GGUF:UD-Q8_K_XL
+> ```
+>
+> With vision enabled, the agent can process hundreds of images in a single session, classify animals by family, read text from screenshots, and analyze UI layouts. All locally, all with a 4B model.
+>
+> | Variant | Effective Params | GGUF Size | Vision | Best for |
+> |---------|-----------------|-----------|--------|----------|
+> | [E4B](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) | 4.5B | ~5 GB | Yes | Laptops, on-device |
+> | [26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 3.8B active (MoE) | ~16 GB | Yes | 16 GB+ machines |
+> | [31B](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF) | 30.7B | ~20 GB | Yes | 32 GB+ machines |
 
 ## Table of Contents
 
@@ -112,6 +129,7 @@ The agent can use these tools to interact with your codebase and system.
 | `write` | Create or overwrite files |
 | `edit` | Search and replace in files |
 | `glob` | Find files matching a pattern |
+| `update_plan` | Track and display task progress for multi-step operations |
 
 ## Commands
 
@@ -341,7 +359,7 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 | Flag | Description |
 |------|-------------|
 | `--yolo` | Skip all permission prompts (dangerous!) |
-| `--max-iterations N` | Max agent iterations (default: 50, max: 1000) |
+| `--max-iterations N` | Max agent iterations (default: unlimited) |
 
 ### Safety Features
 
@@ -440,7 +458,7 @@ curl -N http://localhost:8081/v1/agent/session/sess_00000001/chat \
 **Session Options**
 
 - `yolo` (boolean): Skip permission prompts
-- `max_iterations` (int): Max agent iterations (default: 50)
+- `max_iterations` (int): Max agent iterations (default: 0 = unlimited)
 - `working_dir` (string): Working directory for tools
 
 </details>
@@ -465,7 +483,7 @@ curl -N http://localhost:8081/v1/agent/session/sess_00000001/chat \
 
 ```
 event: iteration_start
-data: {"iteration":1,"max_iterations":50}
+data: {"iteration":1,"max_iterations":0}
 
 event: reasoning_delta
 data: {"content":"Let me list the files..."}
@@ -519,6 +537,10 @@ curl -X POST http://localhost:8081/v1/agent/session/sess_00000001/delete
 ```
 
 </details>
+
+## Acknowledgments
+
+Light harness inspired by [Pi](https://github.com/anthropics/pi) by Mario Zechner.
 
 ## License
 
