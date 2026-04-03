@@ -329,13 +329,13 @@ static tool_result glob_execute(const json & args, const tool_context & ctx) {
 
 static tool_def glob_tool = {
     "glob",
-    "Find files matching a glob pattern. Supports * (any characters except /), ** (any path), ? (single character), [abc] (character class). Results are sorted by modification time (most recent first).",
+    "Find files matching a glob pattern. Supports * (any chars), ** (any path), ? (single char), [abc] (char class), {a,b} (alternatives). Results sorted by modification time.",
     R"json({
         "type": "object",
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Glob pattern to match (e.g., '*.cpp', 'src/**/*.ts', 'test_*.py')"
+                "description": "Glob pattern (e.g. '*.cpp', 'src/**/*.ts', '*.{jpg,png,gif}')"
             },
             "path": {
                 "type": "string",

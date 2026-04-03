@@ -157,54 +157,11 @@ When looking for code:
 2. Use `read` to examine promising files
 3. Use `bash` with grep for text search across files
 
-## Code references
-When referring to code, use the format `file_path:line_number` so users can navigate easily.
-
-Example: "The bug is in the `processRequest` function in src/server.cpp:142"
-
 ## update_plan
 For multi-step tasks, use `update_plan` to track progress:
 1. Call it at the start to outline steps (all "pending").
 2. Set each step to "in_progress" then "completed" as you work.
 3. Always follow `update_plan` with the next tool call — never stop after it.
-
-# Examples
-
-<example>
-User: Fix the typo in README.md
-Assistant: Let me read the file first.
-[Tool: read README.md]
-I see the typo on line 15. Let me fix it.
-[Tool: edit README.md - fixes "teh" -> "the"]
-Done. Fixed "teh" to "the" on line 15.
-</example>
-
-<example>
-User: Find where the API routes are defined
-Assistant: Let me search for route definitions.
-[Tool: glob **/*route*.{js,ts}]
-Found src/routes/api.ts and src/routes/auth.ts.
-[Tool: read src/routes/api.ts]
-The API routes are defined in src/routes/api.ts. The main endpoints are:
-- GET /users (line 12)
-- POST /users (line 24)
-- GET /users/:id (line 36)
-</example>
-
-<example>
-User: Run the tests and fix any failures
-Assistant: Running the test suite.
-[Tool: bash npm test]
-3 tests failed. Let me examine each failure:
-1. test/auth.test.js - "should validate token"
-[Tool: read test/auth.test.js]
-[Tool: read src/auth.js]
-The issue is on src/auth.js:45 - the token expiry check is inverted.
-[Tool: edit src/auth.js - fixes the condition]
-Let me run the tests again.
-[Tool: bash npm test]
-All tests passing now.
-</example>
 
 When the task is complete, provide a brief summary of what you did.)";
 
@@ -321,9 +278,21 @@ void agent_loop::clear() {
 json agent_loop::build_oai_request_body(const std::vector<common_chat_tool> & chat_tools,
                                         bool has_vision) {
     // Deep copy messages so we don't mutate the canonical messages_.
+    json messages = messages_;
+
+    // Strip reasoning_content from all but the last assistant message.
+    // Gemma 4 (and similar models) re-summarize prior reasoning on every turn,
+    // causing repetitive and ever-growing chain-of-thought.  Google recommends:
+    // "Thoughts from previous model turns must not be added before the next
+    //  user turn begins."
+    for (int i = (int)messages.size() - 2; i >= 0; --i) {
+        if (messages[i].value("role", "") == "assistant") {
+            messages[i].erase("reasoning_content");
+        }
+    }
+
     // Strip image_url blocks when the model lacks vision support to avoid
     // oaicompat_chat_params_parse throwing "image input is not supported".
-    json messages = messages_;
     if (!has_vision) {
         for (auto & msg : messages) {
             if (!msg.contains("content") || !msg["content"].is_array()) {
@@ -517,7 +486,6 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     if (call.name == "read") ptype = permission_type::FILE_READ;
     else if (call.name == "write") ptype = permission_type::FILE_WRITE;
     else if (call.name == "edit") ptype = permission_type::FILE_EDIT;
-    else if (call.name == "glob") ptype = permission_type::GLOB;
     else if (call.name == "update_plan") ptype = permission_type::GLOB;
 
     // Build permission request
@@ -1092,7 +1060,7 @@ tool_result agent_loop::execute_tool_call_async(
         ptype = permission_type::FILE_WRITE;
     } else if (call.name == "edit") {
         ptype = permission_type::FILE_EDIT;
-    } else if (call.name == "glob" || call.name == "update_plan") {
+    } else if (call.name == "update_plan") {
         ptype = permission_type::GLOB;
     }
 

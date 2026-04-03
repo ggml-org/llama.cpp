@@ -1,4 +1,5 @@
 #include "../tool-registry.h"
+#include "console.h"
 
 #include <sstream>
 #include <string>
@@ -22,6 +23,7 @@ static tool_result plan_execute(const json & args, const tool_context & /* ctx *
 
     std::string explanation = args.value("explanation", "");
 
+    // Build rich display for the user (printed directly to console)
     std::ostringstream out;
     out << ANSI_BOLD << "Plan:" << ANSI_RESET << "\n";
 
@@ -53,7 +55,11 @@ static tool_result plan_execute(const json & args, const tool_context & /* ctx *
         out << "\n" << ANSI_DIM << explanation << ANSI_RESET << "\n";
     }
 
-    return {true, out.str(), ""};
+    // Display the rich plan to the user directly
+    console::log("%s", out.str().c_str());
+
+    // Return terse string to the model to avoid encouraging summarization
+    return {true, "Plan updated.", ""};
 }
 
 static tool_def plan_tool = {
