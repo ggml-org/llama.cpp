@@ -2271,27 +2271,6 @@ struct clip_model_loader {
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
                 }
 
-                if (strcmp(t->name, "a.blk.0.ln2.weight") == 0 || strcmp(t->name, "a.blk.0.conv_norm.weight") == 0) {
-                    fprintf(stderr, "LOAD_DBG %s type=%s ne=[%lld,%lld,%lld,%lld] bytes=%zu first8:",
-                        t->name, ggml_type_name(cur->type),
-                        (long long) cur->ne[0], (long long) cur->ne[1], (long long) cur->ne[2], (long long) cur->ne[3],
-                        num_bytes);
-                    const int n_dbg = (int) std::min<int64_t>(8, ggml_nelements(cur));
-                    if (cur->type == GGML_TYPE_F16) {
-                        auto * p = reinterpret_cast<ggml_fp16_t *>(cur->data);
-                        for (int i = 0; i < n_dbg; ++i) {
-                            fprintf(stderr, " %.4f", ggml_fp16_to_fp32(p[i]));
-                        }
-                    } else if (cur->type == GGML_TYPE_F32) {
-                        auto * p = reinterpret_cast<float *>(cur->data);
-                        for (int i = 0; i < n_dbg; ++i) {
-                            fprintf(stderr, " %.4f", p[i]);
-                        }
-                    } else {
-                        fprintf(stderr, " [unsupported debug type]");
-                    }
-                    fprintf(stderr, "\n");
-                }
             }
             fin.close();
 
@@ -2998,16 +2977,6 @@ static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, co
     auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_F32);
-        if (ggml_nelements(cur) != (int64_t) values.size()) {
-            fprintf(stderr, "G4A_INPUT_MISMATCH name=%s tensor_ne=%lld values=%zu tensor_shape=[%lld,%lld,%lld,%lld]\n",
-                name,
-                (long long) ggml_nelements(cur),
-                values.size(),
-                (long long) cur->ne[0],
-                (long long) cur->ne[1],
-                (long long) cur->ne[2],
-                (long long) cur->ne[3]);
-        }
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
@@ -3015,16 +2984,6 @@ static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, co
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_I32);
-        if (ggml_nelements(cur) != (int64_t) values.size()) {
-            fprintf(stderr, "G4A_INPUT_MISMATCH_I32 name=%s tensor_ne=%lld values=%zu tensor_shape=[%lld,%lld,%lld,%lld]\n",
-                name,
-                (long long) ggml_nelements(cur),
-                values.size(),
-                (long long) cur->ne[0],
-                (long long) cur->ne[1],
-                (long long) cur->ne[2],
-                (long long) cur->ne[3]);
-        }
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
@@ -3485,18 +3444,6 @@ static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, co
         }
     }
 
-    // DEBUG: verify inp_raw BEFORE compute
-    {
-        ggml_tensor * inp = ggml_graph_get_tensor(gf, "inp_raw");
-        if (inp) {
-            float vals[4];
-            ggml_backend_tensor_get(inp, vals, 0, sizeof(vals));
-            fprintf(stderr, "G4A_PRE_COMPUTE inp_raw first 4 vals: %.4f %.4f %.4f %.4f\n",
-                vals[0], vals[1], vals[2], vals[3]);
-        }
-    }
-
-    fprintf(stderr, "G4A_COMPUTE_BEGIN mode=%s\n", use_scheduler ? "sched" : "direct");
     auto status = use_scheduler
         ? ggml_backend_sched_graph_compute(ctx->sched.get(), gf)
         : ggml_backend_graph_compute(ctx->backend_cpu, gf);
@@ -3504,76 +3451,9 @@ static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, co
         LOG_ERR("%s: %s compute failed with error %d\n", __func__, use_scheduler ? "scheduled" : "direct", status);
         return false;
     }
-    fprintf(stderr, "G4A_COMPUTE_OK mode=%s\n", use_scheduler ? "sched" : "direct");
-
-    // DEBUG: dump intermediate tensor values
-    {
-        auto dump_tensor_stats = [&](const char * tensor_name, const char * label) {
-            ggml_tensor * t = ggml_graph_get_tensor(gf, tensor_name);
-            if (!t) {
-                return;
-            }
-            int64_t n = ggml_nelements(t);
-            if (n == 0) {
-                return;
-            }
-            std::vector<float> all(n);
-            ggml_backend_tensor_get(t, all.data(), 0, n * sizeof(float));
-            float vmin = all[0], vmax = all[0];
-            double vsum = 0, vsumsq = 0;
-            for (int64_t i = 0; i < n; i++) {
-                if (all[i] < vmin) vmin = all[i];
-                if (all[i] > vmax) vmax = all[i];
-                vsum += all[i];
-                vsumsq += (double) all[i] * all[i];
-            }
-            double mean = vsum / n;
-            double std_v = sqrt(std::max(0.0, vsumsq / n - mean * mean));
-            fprintf(stderr, "%s ne=[%ld,%ld,%ld,%ld] min=%.4f max=%.4f mean=%.4f std=%.4f\n",
-                label,
-                (long) t->ne[0], (long) t->ne[1], (long) t->ne[2], (long) t->ne[3],
-                vmin, vmax, mean, std_v);
-            fprintf(stderr, "%s first 8:", label);
-            for (int i = 0; i < 8 && i < n; i++) {
-                fprintf(stderr, " %.4f", all[i]);
-            }
-            fprintf(stderr, "\n");
-        };
-
-        dump_tensor_stats("audio_conv2d-0", "G4A_RELU0");
-        dump_tensor_stats("audio_inp_proj", "G4A_SUBSAMPLE");
-        dump_tensor_stats("g4a_l0_ffn1", "G4A_L0_FFN1");
-        dump_tensor_stats("g4a_l0_residual_after_ffn1", "G4A_L0_RESID_FFN1");
-        dump_tensor_stats("g4a_l0_attn_out", "G4A_L0_ATTN");
-        dump_tensor_stats("g4a_l0_residual_after_attn", "G4A_L0_RESID_ATTN");
-        dump_tensor_stats("g4a_l0_conv_out", "G4A_L0_CONV");
-        dump_tensor_stats("g4a_l0_residual_after_conv", "G4A_L0_RESID_CONV");
-        dump_tensor_stats("g4a_l0_out_norm", "G4A_L0_OUT_NORM");
-        dump_tensor_stats("g4a_l0_ln2_w", "G4A_L0_LN2_W");
-        dump_tensor_stats("g4a_l0_ln2_w_rep", "G4A_L0_LN2_W_REP");
-        dump_tensor_stats("g4a_l0_out", "G4A_L0_OUT");
-        dump_tensor_stats("g4a_l1_out", "G4A_L1_OUT");
-        dump_tensor_stats("g4a_conformer_out", "G4A_CONFORMER_OUT");
-        dump_tensor_stats("g4a_pre_encode_out", "G4A_PRE_ENCODE_OUT");
-    }
 
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
-
-    // DEBUG: dump info about the last graph node
-    fprintf(stderr, "G4A_GRAPH last_node name=%s ne=[%ld,%ld,%ld,%ld] op=%d\n",
-        embeddings->name, (long)embeddings->ne[0], (long)embeddings->ne[1],
-        (long)embeddings->ne[2], (long)embeddings->ne[3], (int)embeddings->op);
-    // Also dump the inp_raw tensor to verify it got the mel data
-    {
-        ggml_tensor * inp = ggml_graph_get_tensor(gf, "inp_raw");
-        if (inp) {
-            float vals[4];
-            ggml_backend_tensor_get(inp, vals, 0, sizeof(vals));
-            fprintf(stderr, "G4A_GRAPH inp_raw first 4 vals: %.4f %.4f %.4f %.4f\n",
-                vals[0], vals[1], vals[2], vals[3]);
-        }
-    }
 
     // sanity check (only support batch size of 1 for now)
     const int n_tokens_out = embeddings->ne[1];
@@ -3586,24 +3466,6 @@ static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, co
     // copy the embeddings to the location passed by the user
     if (vec != nullptr) {
         ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
-        // DEBUG: dump directly from vec
-        {
-            int64_t ne0 = embeddings->ne[0], ne1 = embeddings->ne[1];
-            float vmin = vec[0], vmax = vec[0];
-            double vsum = 0, vsumsq = 0;
-            int64_t n = ne0 * ne1;
-            for (int64_t i = 0; i < n; i++) {
-                if (vec[i] < vmin) vmin = vec[i];
-                if (vec[i] > vmax) vmax = vec[i];
-                vsum += vec[i]; vsumsq += (double)vec[i]*vec[i];
-            }
-            double mean = vsum/n, std_v = sqrt(vsumsq/n - mean*mean);
-            fprintf(stderr, "G4A_VEC ne=[%lld,%lld] min=%.4f max=%.4f mean=%.4f std=%.4f\n",
-                (long long)ne0, (long long)ne1, vmin, vmax, mean, std_v);
-            fprintf(stderr, "G4A_VEC first 8:");
-            for (int i = 0; i < 8 && i < ne0; i++) fprintf(stderr, " %.4f", vec[i]);
-            fprintf(stderr, "\n");
-        }
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set

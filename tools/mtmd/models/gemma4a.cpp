@@ -7,89 +7,6 @@
 
 #include "models.h"
 #include <cmath>
-#include <cstring>
-
-// ── CumulativeGroupNorm custom op ────────────────────────────
-// Input layout: args[0] = data [ch, freq, time, 1], args[1] = scale [ch]
-// Computes cumulative mean/var along ne[2] (time) over ne[0]*ne[1] (ch*freq).
-// output[t] = (x[t] - cum_mean[t]) / sqrt(cum_var[t] + eps) * scale
-struct cgn_userdata {
-    float eps;
-};
-
-static void cumulative_group_norm_op(ggml_tensor * dst, int ith, int nth, void * userdata) {
-    (void)nth;
-    if (ith != 0) return; // single-threaded for simplicity
-
-    const auto * ud = (const cgn_userdata *)userdata;
-    const float eps = ud->eps;
-
-    const ggml_tensor * src = dst->src[0]; // [ch, freq, time, 1]
-    const ggml_tensor * scl = dst->src[1]; // [ch]
-
-    const int64_t C  = src->ne[0]; // channels
-    const int64_t F  = src->ne[1]; // freq
-    const int64_t T  = src->ne[2]; // time
-    const int64_t CF = C * F;      // group size per time step
-
-    const float * src_data = (const float *)src->data;
-    const float * scl_data = (const float *)scl->data;
-    float *       dst_data = (float *)dst->data;
-
-    // HF algorithm: cumulative statistics using cumsum of per-step values/squared-diffs
-    // cum_mean[t] = cumsum(sum_per_step) / cumsum(count_per_step)
-    // cum_var[t]  = cumsum(sum_sq_diff_per_step) / cumsum(count_per_step)
-    // where sum_sq_diff_per_step[t] = sum((x[t] - cum_mean[t])^2)
-    //
-    // The key insight: HF computes (x - cum_mean)^2 using the CURRENT cum_mean at each step,
-    // then cumsums those squared diffs. This means the variance estimate is biased but matches HF exactly.
-
-    double cum_sum_vals = 0.0;
-    double cum_sum_sq_diff = 0.0;
-    int64_t cum_n = 0;
-
-    for (int64_t t = 0; t < T; t++) {
-        const float * frame = src_data + t * CF;
-
-        // 1. Compute sum of values at this timestep
-        double sum_at_t = 0.0;
-        for (int64_t i = 0; i < CF; i++) {
-            sum_at_t += (double)frame[i];
-        }
-
-        // 2. Update cumulative sum and count
-        cum_sum_vals += sum_at_t;
-        cum_n += CF;
-        double cum_mean = cum_sum_vals / (double)cum_n;
-
-        // 3. Compute sum of squared deviations from CURRENT cum_mean for THIS step
-        double sq_diff_at_t = 0.0;
-        for (int64_t i = 0; i < CF; i++) {
-            double d = (double)frame[i] - cum_mean;
-            sq_diff_at_t += d * d;
-        }
-
-        // 4. Update cumulative sum of squared diffs
-        cum_sum_sq_diff += sq_diff_at_t;
-        double cum_var = cum_sum_sq_diff / (double)cum_n;
-        double inv_std = 1.0 / sqrt(cum_var + (double)eps);
-
-        // 5. Normalize and apply per-channel scale
-        float * out = dst_data + t * CF;
-        for (int64_t f = 0; f < F; f++) {
-            for (int64_t c = 0; c < C; c++) {
-                int64_t idx = f * C + c; // ggml layout: ne[0]=C is fastest
-                double val = ((double)frame[idx] - cum_mean) * inv_std;
-                out[idx] = (float)(val * (double)scl_data[c]);
-            }
-        }
-    }
-}
-
-#define G4A_DBG(label, t) fprintf(stderr, "G4A_DBG %s: ne=[%ld, %ld, %ld, %ld]\n", label, (long)(t)->ne[0], (long)(t)->ne[1], (long)(t)->ne[2], (long)(t)->ne[3])
-
-// Static userdata for CumulativeGroupNorm (eps = 1e-3 per HF config sscp_conv_group_norm_eps)
-static cgn_userdata g_cgn_ud = { 1e-3f };
 
 ggml_cgraph * clip_graph_gemma4a::build() {
     const float res_weight = 0.5f;
@@ -98,10 +15,8 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     // ── 1. Input: mel spectrogram ────────────────────────────
     // build_inp_raw(1) gives us [mel_bins, n_frames]
     ggml_tensor * inp = build_inp_raw(1);
-    G4A_DBG("inp_raw", inp);
 
     auto * cur = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
-    G4A_DBG("inp_transposed", cur);
     // cur: [n_frames, mel_bins]
 
     // ── 2. Subsampling Conv2D ────────────────────────────────
@@ -124,7 +39,6 @@ ggml_cgraph * clip_graph_gemma4a::build() {
             // ggml_conv_2d(w, x, s0, s1, p0, p1, d0, d1)
             // p0=1 (freq), p1=1 (time) — symmetric padding
             cur = ggml_conv_2d(ctx0, model.audio_conv2d_w[i], cur, 2, 2, 1, 1, 1, 1);
-            G4A_DBG("post_conv2d", cur);
             // Conv2d output: [OW=freq, OH=time, OC=channels, N=1]
             // HF Gemma4: norm(x.permute(0,2,3,1)).permute(0,3,1,2) — LayerNorm over channels
             // In ggml: permute channels (ne[2]) to ne[0], LayerNorm, permute back
@@ -148,16 +62,12 @@ ggml_cgraph * clip_graph_gemma4a::build() {
         // permute(1,2,0,3): ne[1]=freq, ne[2]=time, ne[0]=ch → [ch, freq, time, 1]
         // reshape merges ne[0]*ne[1] → [ch*freq, time]
         cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 2, 0, 3));
-        G4A_DBG("post_permute", cur);
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * cur->ne[1], cur->ne[2]);
-        G4A_DBG("post_flatten", cur);
         cb(cur, "audio_subsample_flat", -1);
 
         // Linear projection: [1024, 1024] x [1024, time_out] → [1024, time_out]
         if (model.audio_inp_proj_w) {
-            G4A_DBG("inp_proj_w", model.audio_inp_proj_w);
             cur = build_mm(model.audio_inp_proj_w, cur);
-            G4A_DBG("post_inp_proj", cur);
             cb(cur, "audio_inp_proj", -1);
         }
     }
@@ -178,36 +88,22 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     ggml_set_input(sin_pos_emb);
 
     // ── 3. Conformer Blocks ──────────────────────────────────
-    fprintf(stderr, "G4A_DBG entering conformer blocks, n_layer=%d\n", hparams.n_layer);
     for (int il = 0; il < hparams.n_layer; il++) {
         const auto & layer = model.layers[il];
         auto * residual = cur;
-        fprintf(stderr, "G4A_DBG layer %d start\n", il);
-        G4A_DBG("residual", residual);
 
         // ── 3a. Feed-Forward 1 (half-step) ───────────────────
         if (layer.ff_norm_w && layer.ff_up_w && layer.ff_down_w) {
-            G4A_DBG("ff_norm_w", layer.ff_norm_w);
             cur = build_norm(cur, layer.ff_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
-            G4A_DBG("post_ff_norm", cur);
-            G4A_DBG("ff_up_w", layer.ff_up_w);
-            G4A_DBG("ff_down_w", layer.ff_down_w);
             cur = build_ffn(cur,
                 layer.ff_up_w, nullptr,
                 nullptr, nullptr,
                 layer.ff_down_w, nullptr,
                 FFN_SILU, il);
-            G4A_DBG("post_ffn1", cur);
             if (layer.ff_post_norm_w) {
                 cur = build_norm(cur, layer.ff_post_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
             }
-            G4A_DBG("post_ffn1_norm", cur);
             residual = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, res_weight));
-            G4A_DBG("residual_after_ffn1", residual);
-            if (il == 0) {
-                cb(cur, "g4a_l0_ffn1", -1);
-                cb(residual, "g4a_l0_residual_after_ffn1", -1);
-            }
         }
 
         // ── 3b. Self-Attention (Gemma4 chunked local + RPE + softcap) ──
@@ -417,31 +313,22 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 cur = build_norm(cur, layer.attn_post_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
             }
             residual = ggml_add(ctx0, residual, cur);
-            if (il == 0) {
-                cb(cur, "g4a_l0_attn_out", -1);
-                cb(residual, "g4a_l0_residual_after_attn", -1);
-            }
         }
 
         // ── 3c. Convolution Module ───────────────────────────
         if (layer.norm_conv_w && layer.conv_pw1_w && layer.conv_dw_w && layer.conv_pw2_w) {
             cur = build_norm(residual, layer.norm_conv_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
-            G4A_DBG("post_conv_norm", cur);
 
             auto * x = build_mm(layer.conv_pw1_w, cur);
-            G4A_DBG("post_conv_pw1", x);
 
             // GLU gating
             {
                 int64_t d = x->ne[0] / 2;
-                fprintf(stderr, "G4A_DBG GLU d=%ld\n", (long)d);
                 ggml_tensor * gate = ggml_sigmoid(ctx0,
                     ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0]));
                 x = ggml_mul(ctx0,
                     ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], 0), gate);
-                G4A_DBG("post_glu", x);
                 x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
-                G4A_DBG("post_glu_transpose", x);
             }
 
             // Depthwise Conv1D (causal pad)
@@ -450,29 +337,16 @@ ggml_cgraph * clip_graph_gemma4a::build() {
             // ssm_conv removes d_conv-1=4 → output time == input time
             x = ggml_pad(ctx0, x, 4, 0, 0, 0);
             x = ggml_roll(ctx0, x, 4, 0, 0, 0);
-            G4A_DBG("pre_ssm_conv", x);
-            G4A_DBG("conv_dw_w", layer.conv_dw_w);
             x = ggml_ssm_conv(ctx0, x, layer.conv_dw_w);
-            G4A_DBG("post_ssm_conv", x);
 
             if (layer.conv_norm_w) {
-                G4A_DBG("conv_norm_w", layer.conv_norm_w);
                 x = ggml_rms_norm(ctx0, x, norm_eps);
-                G4A_DBG("post_rms_norm", x);
                 x = ggml_mul(ctx0, x, layer.conv_norm_w);
-                G4A_DBG("post_conv_norm_mul", x);
             }
             x = ggml_silu(ctx0, x);
-            G4A_DBG("post_silu", x);
             x = build_mm(layer.conv_pw2_w, x);
-            G4A_DBG("post_conv_pw2", x);
 
             residual = ggml_add(ctx0, residual, x);
-            G4A_DBG("residual_after_conv", residual);
-            if (il == 0) {
-                cb(x, "g4a_l0_conv_out", -1);
-                cb(residual, "g4a_l0_residual_after_conv", -1);
-            }
         }
 
         // ── 3d. Feed-Forward 2 (half-step) ───────────────────
@@ -491,42 +365,17 @@ ggml_cgraph * clip_graph_gemma4a::build() {
 
         // ── 3e. Final layer norm ─────────────────────────────
         if (layer.ln_2_w) {
-            if (il == 0) {
-                ggml_tensor * tmp_norm = ggml_rms_norm(ctx0, residual, norm_eps);
-                cb(tmp_norm, "g4a_l0_out_norm", -1);
-                cb(layer.ln_2_w, "g4a_l0_ln2_w", -1);
-                ggml_tensor * ln2_rep = ggml_repeat(ctx0, layer.ln_2_w, tmp_norm);
-                cb(ln2_rep, "g4a_l0_ln2_w_rep", -1);
-                cur = ggml_mul(ctx0, tmp_norm, ln2_rep);
-                cb(cur, "g4a_l0_out", -1);
-            } else {
-                cur = build_norm(residual, layer.ln_2_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
-                if (il == 1) {
-                    cb(cur, "g4a_l1_out", -1);
-                }
-            }
+            cur = build_norm(residual, layer.ln_2_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
         } else {
             cur = residual;
-            if (il == 0) {
-                cb(cur, "g4a_l0_out", -1);
-            } else if (il == 1) {
-                cb(cur, "g4a_l1_out", -1);
-            }
         }
     }
-
-    cb(cur, "g4a_conformer_out", -1);
-
-    // NOTE: Gemma4 does NOT have conf_reduction_factor (that's Gemma3n-specific)
-    // Output all conformer tokens directly.
 
     // ── 4. Output Projection (1024 → 1536) ───────────────────
     cur = build_mm(model.pre_encode_out_w, cur);
     if (model.pre_encode_out_b) {
         cur = ggml_add(ctx0, cur, model.pre_encode_out_b);
     }
-    G4A_DBG("post_out_proj", cur);
-    cb(cur, "g4a_pre_encode_out", -1);
 
     // ── 6. Audio Multimodal Embedder (embed_audio) ───────────
     // Gemma4: embedding_pre_projection_norm (RMSNorm, no scale) → embedding_projection
@@ -534,15 +383,12 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     {
         // embedding_pre_projection_norm: RMSNorm with_scale=False
         cur = ggml_rms_norm(ctx0, cur, norm_eps);
-        G4A_DBG("post_pre_proj_norm", cur);
 
         // embedding_projection: mm.a.input_projection.weight [1536, 1536]
         if (model.mm_audio_input_proj_w) {
             cur = build_mm(model.mm_audio_input_proj_w, cur);
-            G4A_DBG("post_mm_audio_proj", cur);
         }
     }
-    cb(cur, "projected", -1);
 
     ggml_build_forward_expand(gf, cur);
     return gf;

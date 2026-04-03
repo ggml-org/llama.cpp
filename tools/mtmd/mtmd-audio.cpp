@@ -116,20 +116,6 @@ void mtmd_audio_cache::fill_mel_filterbank_matrix(int   n_mel,
     filters.n_fft = n_fft;
     filters.data  = std::move(out);
 
-    // DEBUG: dump filterbank stats
-    {
-        int nfb = n_fft / 2 + 1;
-        fprintf(stderr, "G4A_FB n_mel=%d n_fft_bins=%d total=%zu\n", n_mel, nfb, filters.data.size());
-        // Check mel bin 0
-        double sum0 = 0;
-        for (int k = 0; k < nfb; k++) sum0 += fabs(filters.data[0 * nfb + k]);
-        fprintf(stderr, "G4A_FB mel_bin_0 abs_sum=%.6f\n", sum0);
-        // Check mel bin 1
-        double sum1 = 0;
-        for (int k = 0; k < nfb; k++) sum1 += fabs(filters.data[1 * nfb + k]);
-        fprintf(stderr, "G4A_FB mel_bin_1 abs_sum=%.6f, bin1_val=%.6f\n", sum1, filters.data[1 * nfb + 1]);
-    }
-
     if (DEBUG) {  // debug
         for (size_t i = 0; i < filters.data.size(); ++i) {
             if (filters.data[i] != 0.0f) {
@@ -667,12 +653,6 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
     params.use_magnitude    = use_magnitude;
     params.skip_global_norm = true;  // Gemma4 expects raw log-mel, no Whisper normalization
 
-    fprintf(stderr, "G4A_MEL_PARAMS n_fft=%d window=%d hop=%d preemph=%.4f mel_floor=%.6f "
-        "semicausal=%d fmin=%.1f fmax=%.1f slaney=%d htk=%d magnitude=%d\n",
-        hparams.audio_n_fft, hparams.audio_window_len, hparams.audio_hop_len,
-        preemph_coeff, mel_floor, (int)use_semicausal_pad,
-        mel_fmin, mel_fmax, (int)slaney_norm, (int)use_htk_mel, (int)use_magnitude);
-
     // make sure the cache is initialized
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
@@ -684,18 +664,6 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
                                             params, cache, out_full);
     if (!ok) {
         return false;
-    }
-
-    // DEBUG: dump first few mel values
-    {
-        fprintf(stderr, "G4A_MEL n_len=%d n_mel=%d\n", out_full.n_len, out_full.n_mel);
-        for (int f = 0; f < 5 && f < out_full.n_len; f++) {
-            fprintf(stderr, "G4A_MEL frame %d bins 0-7:", f);
-            for (int j = 0; j < 8 && j < out_full.n_mel; j++) {
-                fprintf(stderr, " %.4f", out_full.data[j * out_full.n_len + f]);
-            }
-            fprintf(stderr, "\n");
-        }
     }
 
     output.push_back(std::move(out_full));

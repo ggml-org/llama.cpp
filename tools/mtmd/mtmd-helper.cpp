@@ -367,32 +367,6 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-
-        // DEBUG: dump output embedding stats and first token values
-        {
-            int nt = (int)mtmd_input_chunk_get_n_tokens(chunk);
-            int ne = 1536; // Gemma4 output_proj_dims — hardcoded for debug
-            float vmin = embd[0], vmax = embd[0];
-            double vsum = 0.0, vsumsq = 0.0;
-            int64_t n = (int64_t)nt * ne;
-            for (int64_t i = 0; i < n; i++) {
-                float v = embd[i];
-                if (v < vmin) vmin = v;
-                if (v > vmax) vmax = v;
-                vsum += v;
-                vsumsq += (double)v * v;
-            }
-            double mean = vsum / n;
-            double std_val = sqrt(vsumsq / n - mean * mean);
-            fprintf(stderr, "G4A_EMBD n_tokens=%d n_embd=%d min=%.4f max=%.4f mean=%.4f std=%.4f\n",
-                nt, ne, vmin, vmax, mean, std_val);
-            fprintf(stderr, "G4A_EMBD token[0] first 8 dims:");
-            for (int i = 0; i < 8 && i < ne; i++) {
-                fprintf(stderr, " %.4f", embd[i]);
-            }
-            fprintf(stderr, "\n");
-        }
-
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
