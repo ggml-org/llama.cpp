@@ -4983,7 +4983,7 @@ class Step3VLVisionModel(MmprojModel):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
 
-        projector_stride = int(self.hparams.get("understand_projector_stride", -1))
+        projector_stride = int(self.global_config.get("understand_projector_stride", -1))
         hidden_size = int(self.hparams_vision.get("hidden_size", self.hparams_vision.get("width", -1)))
         num_layers = int(self.hparams_vision.get("num_hidden_layers", self.hparams_vision.get("layers", -1)))
         assert (projector_stride, int(self.hparams_vision.get("image_size", -1)), hidden_size, num_layers) == (2, 728, 1536, 47), (
