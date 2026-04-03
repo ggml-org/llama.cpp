@@ -2709,9 +2709,9 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
     std::vector<webgpu_encoded_op> commands;
-#    ifdef GGML_WEBGPU_GPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     std::vector<wgpu::FutureWaitInfo> profile_futures;
-#    endif
+#endif
     uint32_t             num_batched_kernels = 0;
     bool                 contains_set_rows   = false;
     wgpu::CommandEncoder batch_encoder       = ctx->global_ctx->device.CreateCommandEncoder();
