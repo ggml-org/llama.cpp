@@ -20,6 +20,35 @@ COPY_EVENT = 1
 
 TYPE_NAMES = {0: "OP", 1: "COPY"}
 
+GGML_TYPE_NAMES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1",
+    # 4, 5 removed
+    6: "Q5_0", 7: "Q5_1", 8: "Q8_0", 9: "Q8_1",
+    10: "Q2_K", 11: "Q3_K", 12: "Q4_K", 13: "Q5_K",
+    14: "Q6_K", 15: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS",
+    18: "IQ3_XXS", 19: "IQ1_S", 20: "IQ4_NL", 21: "IQ3_S",
+    22: "IQ2_S", 23: "IQ4_XS", 24: "I8", 25: "I16", 26: "I32",
+    27: "I64", 28: "F64", 29: "IQ1_M", 30: "BF16",
+    # 31-33 removed
+    34: "TQ1_0", 35: "TQ2_0",
+    # 36-38 removed
+    39: "MXFP4", 40: "NVFP4",
+}
+
+GGML_UNARY_OP_NAMES = {
+    0: "ABS", 1: "SGN", 2: "NEG", 3: "STEP",
+    4: "TANH", 5: "ELU", 6: "RELU", 7: "SIGMOID",
+    8: "GELU", 9: "GELU_QUICK", 10: "SILU", 11: "HARDSWISH",
+    12: "HARDSIGMOID", 13: "EXP", 14: "EXPM1", 15: "SOFTPLUS",
+    16: "GELU_ERF", 17: "XIELU", 18: "FLOOR", 19: "CEIL",
+    20: "ROUND", 21: "TRUNC",
+}
+
+GGML_GLU_OP_NAMES = {
+    0: "REGLU", 1: "GEGLU", 2: "SWIGLU", 3: "GEGLU_ERF",
+    4: "GEGLU_QUICK", 5: "SWIGLU_OAI",
+}
+
 
 @dataclass
 class ProfileRecord:
@@ -34,6 +63,20 @@ class ProfileRecord:
     ne_src0: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     ne_src1: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     ne_src2: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    type_src0: int = -1
+    type_src1: int = -1
+    type_src2: int = -1
+    sub_op: int = -1
+
+    @property
+    def sub_op_name(self) -> str:
+        if self.sub_op < 0:
+            return ""
+        if self.name == "UNARY":
+            return GGML_UNARY_OP_NAMES.get(self.sub_op, f"UNARY_OP({self.sub_op})")
+        if self.name == "GLU":
+            return GGML_GLU_OP_NAMES.get(self.sub_op, f"GLU_OP({self.sub_op})")
+        return str(self.sub_op)
 
     @property
     def type_name(self) -> str:
@@ -64,11 +107,20 @@ class ProfileRecord:
     @property
     def shape_str(self) -> str:
         """Human-readable tensor shapes, e.g. '[4096, 4096] x [4096, 1] x [8, 1]'."""
-        s0 = self._fmt_ne(self.ne_src0)
-        s1 = self._fmt_ne(self.ne_src1)
-        s2 = self._fmt_ne(self.ne_src2)
-        parts = [s for s in (s0, s1, s2) if s]
-        return " x ".join(parts)
+        parts = []
+        for ne, gt in [(self.ne_src0, self.type_src0),
+                        (self.ne_src1, self.type_src1),
+                        (self.ne_src2, self.type_src2)]:
+            s = self._fmt_ne(ne)
+            if s:
+                type_name = GGML_TYPE_NAMES.get(gt, None)
+                if type_name:
+                    s = f"{s} ({type_name})"
+                parts.append(s)
+        result = " x ".join(parts)
+        if self.sub_op_name:
+            result = f"[{self.sub_op_name}] {result}"
+        return result
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +135,10 @@ class ProfileRecord:
             "ne_src0": self.ne_src0,
             "ne_src1": self.ne_src1,
             "ne_src2": self.ne_src2,
+            "type_src0": self.type_src0,
+            "type_src1": self.type_src1,
+            "type_src2": self.type_src2,
+            "sub_op": self.sub_op,
         }
 
 
@@ -175,6 +231,10 @@ class ProfileData:
                 ne_src0=ne_src0,
                 ne_src1=ne_src1,
                 ne_src2=ne_src2,
+                type_src0=r.get("type_src0", -1),
+                type_src1=r.get("type_src1", -1),
+                type_src2=r.get("type_src2", -1),
+                sub_op=r.get("sub_op", -1),
             ))
 
         backends_raw = data.get("backends", [])
