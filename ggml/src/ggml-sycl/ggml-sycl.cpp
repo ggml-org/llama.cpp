@@ -12984,6 +12984,12 @@ struct tiered_kv_buffer_context {
     std::vector<ggml_sycl::layer_region> layer_layout;
     uint32_t  n_layers    = 0;
     size_t    kv_per_layer = 0;
+
+    // Per-layer base offsets from alloc_base — set on first tensor seen per layer.
+    // Using actual allocator offsets avoids cumulative alignment drift from
+    // computing layer_start = layer_id * kv_per_layer.
+    std::vector<size_t> layer_base_offsets;  // [layer_id] -> offset in alloc_base
+    std::vector<bool>   layer_base_set;      // [layer_id] -> true if offset recorded
 };
 
 static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
@@ -13040,12 +13046,21 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
         && static_cast<uint32_t>(layer_id) < ctx->layer_allocs.size()) {
         const auto & la = ctx->layer_allocs[layer_id];
         if (la.ptr) {
-            // Compute the offset within this layer from the allocator's linear layout.
-            size_t    layer_start          = static_cast<size_t>(layer_id) * ctx->kv_per_layer;
+            // Compute the offset of this tensor within alloc_base.
             ptrdiff_t tensor_offset_in_buf = static_cast<char *>(tensor->data)
                                            - static_cast<char *>(ctx->alloc_base);
-            size_t    offset_within_layer  = static_cast<size_t>(tensor_offset_in_buf) - layer_start;
+            size_t    abs_offset           = static_cast<size_t>(tensor_offset_in_buf);
 
+            // Record the first tensor's offset as this layer's base.
+            // The ggml allocator adds alignment padding between tensors, so
+            // computing layer_start = layer_id * kv_per_layer drifts over many
+            // layers.  Track actual offsets to avoid cumulative error.
+            if (!ctx->layer_base_set[layer_id]) {
+                ctx->layer_base_offsets[layer_id] = abs_offset;
+                ctx->layer_base_set[layer_id]     = true;
+            }
+
+            size_t offset_within_layer = abs_offset - ctx->layer_base_offsets[layer_id];
             tensor->data = static_cast<char *>(la.ptr) + offset_within_layer;
             return GGML_STATUS_SUCCESS;
         }
@@ -13351,9 +13366,11 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     ctx->host_size     = total_host;
     ctx->device        = device;
     ctx->stream        = buft_ctx->stream;
-    ctx->layer_layout  = std::move(layout);
-    ctx->n_layers      = n_layers;
-    ctx->kv_per_layer  = kv_per_layer;
+    ctx->layer_layout       = std::move(layout);
+    ctx->n_layers           = n_layers;
+    ctx->kv_per_layer       = kv_per_layer;
+    ctx->layer_base_offsets.resize(n_layers, 0);
+    ctx->layer_base_set.resize(n_layers, false);
     auto * buffer = ggml_backend_buffer_init(buft, tiered_kv_buffer_interface, ctx, size);
     return buffer;
 }
