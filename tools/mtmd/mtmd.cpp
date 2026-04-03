@@ -453,6 +453,23 @@ struct mtmd_context {
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_GEMMA4A:
+                {
+                    aud_beg = "<|audio>";
+                    aud_end = "<audio|>";
+                    auto preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+                    // Gemma4 feature_extraction_gemma4.py (NOT gemma3n!)
+                    preproc->preemph_coeff        = 0.0f;   // no preemphasis
+                    preproc->use_htk_mel          = true;   // HTK mel scale
+                    preproc->use_magnitude        = true;   // |STFT|, not |STFT|^2
+                    preproc->use_semicausal_pad   = true;   // prepend frame_length//2 zeros
+                    preproc->use_norm_per_feature = false;   // no per_bin_mean/stddev
+                    preproc->mel_floor            = 1e-3f;  // Gemma4 default
+                    preproc->slaney_norm          = false;  // norm=None
+                    preproc->mel_fmin             = 0.0f;   // min_frequency=0
+                    preproc->mel_fmax             = 8000.0f; // max_frequency=8000
+                    audio_preproc = std::move(preproc);
+                } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
         }
@@ -1259,16 +1276,19 @@ void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
 // Debugging API (NOT intended for public use)
 //
 
-static void mtmd_debug_encode_impl(mtmd_context * ctx, clip_ctx * ctx_clip, clip_image_f32 & image) {
+static void mtmd_debug_encode_impl(mtmd_context * ctx, clip_ctx * ctx_clip, clip_image_f32 & image, bool use_direct_backend, bool is_audio) {
     clip_set_debug_output_embeddings(ctx_clip, true);
     int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
     int n_tokens = clip_n_output_tokens(ctx_clip, &image);
     std::vector<float> embd_output(n_tokens * n_mmproj_embd, 0.0f);
-    bool ok = clip_image_encode(
-        ctx_clip,
-        ctx->n_threads,
-        &image,
-        embd_output.data());
+    clip_image_f32_batch batch;
+    clip_image_f32_ptr img_copy(clip_image_f32_init());
+    *img_copy = image;
+    batch.entries.push_back(std::move(img_copy));
+    batch.is_audio = is_audio;
+    bool ok = use_direct_backend
+        ? clip_image_batch_encode_direct(ctx_clip, ctx->n_threads, &batch, embd_output.data())
+        : clip_image_batch_encode(ctx_clip, ctx->n_threads, &batch, embd_output.data());
     if (!ok) {
         LOG_ERR("%s: failed to encode image\n", __func__);
     }
@@ -1287,7 +1307,7 @@ void mtmd_debug_encode_image(mtmd_context * ctx, const std::vector<std::vector<f
         inp_image.buf.insert(inp_image.buf.end(), row.begin(), row.end());
     }
     LOG_INF("%s: created input image with nx=%d, ny=%d\n", __func__, inp_image.nx, inp_image.ny);
-    mtmd_debug_encode_impl(ctx, ctx->ctx_v, inp_image);
+    mtmd_debug_encode_impl(ctx, ctx->ctx_v, inp_image, false, false);
 }
 
 void mtmd_debug_encode_audio(mtmd_context * ctx, const std::vector<float> & input) {
@@ -1306,7 +1326,26 @@ void mtmd_debug_encode_audio(mtmd_context * ctx, const std::vector<float> & inpu
         }
     }
     LOG_INF("%s: created input audio with nx=%d, ny=%d\n", __func__, inp_audio.nx, inp_audio.ny);
-    mtmd_debug_encode_impl(ctx, ctx->ctx_a, inp_audio);
+    mtmd_debug_encode_impl(ctx, ctx->ctx_a, inp_audio, false, true);
+}
+
+void mtmd_debug_encode_audio_direct(mtmd_context * ctx, const std::vector<float> & input) {
+    if (!ctx->ctx_a) {
+        LOG_ERR("%s: model does not support audio input\n", __func__);
+        return;
+    }
+    int n_mel = clip_get_hparams(ctx->ctx_a)->n_mel_bins;
+    clip_image_f32 inp_audio;
+    inp_audio.nx = input.size();
+    inp_audio.ny = n_mel;
+    inp_audio.buf.resize(input.size() * n_mel);
+    for (size_t i = 0; i < input.size(); i++) {
+        for (int j = 0; j < n_mel; j++) {
+            inp_audio.buf[j * inp_audio.nx + i] = input[i];
+        }
+    }
+    LOG_INF("%s: created input audio with nx=%d, ny=%d\n", __func__, inp_audio.nx, inp_audio.ny);
+    mtmd_debug_encode_impl(ctx, ctx->ctx_a, inp_audio, true, true);
 }
 
 void mtmd_debug_preprocess_image(mtmd_context * ctx, const std::vector<uint8_t> & rgb_values, int nx, int ny) {

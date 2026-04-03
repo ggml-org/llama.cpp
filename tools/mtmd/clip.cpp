@@ -825,10 +825,12 @@ ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale
     return cur;
 }
 
-static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
-    GGML_ASSERT(imgs.entries.size() == 1 && "n_batch > 1 is not supported");
+struct clip_built_graph {
+    std::unique_ptr<clip_graph> builder;
+    ggml_cgraph * gf = nullptr;
+};
 
-    const clip_image_f32 & img = *imgs.entries[0];
+static std::unique_ptr<clip_graph> clip_make_graph_builder(clip_ctx * ctx, const clip_image_f32 & img) {
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
@@ -918,6 +920,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_conformer>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GEMMA4A:
+            {
+                builder = std::make_unique<clip_graph_gemma4a>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -930,7 +936,21 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             GGML_ABORT("missing cgraph builder");
     }
 
-    return builder->build();
+    return builder;
+}
+
+static clip_built_graph clip_image_build_graph_ex(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
+    GGML_ASSERT(imgs.entries.size() == 1 && "n_batch > 1 is not supported");
+
+    const clip_image_f32 & img = *imgs.entries[0];
+    clip_built_graph built;
+    built.builder = clip_make_graph_builder(ctx, img);
+    built.gf = built.builder->build();
+    return built;
+}
+
+static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
+    return clip_image_build_graph_ex(ctx, imgs).gf;
 }
 
 //
@@ -1417,6 +1437,17 @@ struct clip_model_loader {
                         hparams.audio_window_len       = 400;
                         hparams.audio_hop_len          = 160;
                     } break;
+                case PROJECTOR_TYPE_GEMMA4A:
+                    {
+                        // Gemma4 feature_extraction_gemma4.py:
+                        // frame_length_ms=20 → 320 samples, no fft_overdrive → n_fft=512
+                        // hop_length_ms=10 → 160 samples
+                        hparams.audio_chunk_len        = 0;  // no fixed-length padding
+                        hparams.audio_sample_rate      = 16000;
+                        hparams.audio_n_fft            = 512;  // 2^ceil(log2(320)) = 512
+                        hparams.audio_window_len       = 320;  // 20ms frame
+                        hparams.audio_hop_len          = 160;
+                    } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
                         hparams.image_pad_color   = {127, 127, 127};
@@ -1491,6 +1522,7 @@ struct clip_model_loader {
         auto & model = ctx_clip.model;
         auto & hparams = model.hparams;
         std::map<std::string, size_t> tensor_offset;
+        std::map<std::string, ggml_tensor *> data_tensors;
         std::vector<ggml_tensor *> tensors_to_load;
 
         auto fin = std::ifstream(fname, std::ios::binary);
@@ -1520,6 +1552,10 @@ struct clip_model_loader {
 
         // helper function
         auto get_tensor = [&](const std::string & name, bool required = true) {
+            auto it = data_tensors.find(name);
+            if (it != data_tensors.end()) {
+                return it->second;
+            }
             ggml_tensor * cur = ggml_get_tensor(ctx_meta.get(), name.c_str());
             if (!cur && required) {
                 throw std::runtime_error(string_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
@@ -1529,6 +1565,7 @@ struct clip_model_loader {
                 // add tensors to context
                 ggml_tensor * data_tensor = ggml_dup_tensor(ctx_clip.ctx_data.get(), cur);
                 ggml_set_name(data_tensor, cur->name);
+                data_tensors[name] = data_tensor;
                 cur = data_tensor;
             }
             return cur;
@@ -1789,7 +1826,7 @@ struct clip_model_loader {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
                     model.std_bias  = get_tensor(TN_STD_BIAS,  false);
                     model.std_scale = get_tensor(TN_STD_SCALE, false);
-                    // load scalar for Gemma4ClippableLinear
+                    // load scalar ranges for Gemma4ClippableLinear weights
                     for (auto * tensor : tensors_to_load) {
                         std::string name = tensor->name;
                         if (string_ends_with(name, ".weight")) {
@@ -2131,6 +2168,79 @@ struct clip_model_loader {
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_GEMMA4A:
+                {
+                    // subsampling conv2d weights
+                    for (int i = 0; i < 2; i++) {
+                        model.audio_conv2d_w[i]    = get_tensor(string_format(TN_AUDIO_CONV2D, i, "weight"));
+                        model.audio_conv2d_norm[i]  = get_tensor(string_format(TN_AUDIO_CONV2D, i, "norm.weight"));
+                    }
+                    model.audio_inp_proj_w = get_tensor(TN_AUDIO_INP_PROJ);
+
+                    // output projection (reuse pre_encode_out for the 1024->1536 projection)
+                    model.pre_encode_out_w = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+
+                    // audio multimodal embedder projection (embed_audio)
+                    model.mm_audio_input_proj_w = get_tensor(TN_MM_AUDIO_INP_PROJ);
+
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+
+                        // FFN1 (pre-attention)
+                        layer.ff_norm_w       = get_tensor(string_format(TN_FFN_NORM,       prefix, il, "weight"));
+                        layer.ff_up_w         = get_tensor(string_format(TN_FFN_UP,          prefix, il, "weight"));
+                        layer.ff_down_w       = get_tensor(string_format(TN_FFN_DOWN,        prefix, il, "weight"));
+                        layer.ff_post_norm_w  = get_tensor(string_format(TN_FFN_POST_NORM,   prefix, il, "weight"));
+
+                        // FFN2 (post-conv)
+                        layer.ff_norm_1_w     = get_tensor(string_format(TN_FFN_NORM_1,      prefix, il, "weight"));
+                        layer.ff_up_1_w       = get_tensor(string_format(TN_FFN_UP_1,        prefix, il, "weight"));
+                        layer.ff_down_1_w     = get_tensor(string_format(TN_FFN_DOWN_1,      prefix, il, "weight"));
+                        layer.ff_post_norm_1_w = get_tensor(string_format(TN_FFN_POST_NORM_1, prefix, il, "weight"));
+
+                        // Attention
+                        layer.attn_pre_norm_w = get_tensor(string_format(TN_ATTN_PRE_NORM,   prefix, il, "weight"));
+                        layer.q_w             = get_tensor(string_format(TN_ATTN_Q,          prefix, il, "weight"));
+                        layer.k_w             = get_tensor(string_format(TN_ATTN_K,          prefix, il, "weight"));
+                        layer.v_w             = get_tensor(string_format(TN_ATTN_V,          prefix, il, "weight"));
+                        layer.o_w             = get_tensor(string_format(TN_ATTN_OUTPUT,     prefix, il, "weight"));
+                        layer.k_rel_w         = get_tensor(string_format(TN_ATTN_K_REL,     prefix, il, "weight"));
+                        layer.per_dim_scale_w = get_tensor(string_format(TN_PER_DIM_SCALE,  prefix, il, "weight"));
+                        layer.attn_post_norm_w = get_tensor(string_format(TN_ATTN_POST_NORM, prefix, il, "weight"));
+
+                        // Conv module
+                        layer.norm_conv_w  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.conv_pw1_w   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_dw_w    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_norm_w  = get_tensor(string_format(TN_CONV_NORM,  prefix, il, "weight"));
+                        layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
+
+                        // Final layer norm
+                        layer.ln_2_w = get_tensor(string_format(TN_LN_2, prefix, il, "weight"));
+
+                    }
+                    // load scalar ranges for Gemma4ClippableLinear weights
+                    for (auto * tensor : tensors_to_load) {
+                        std::string name = tensor->name;
+                        if (string_ends_with(name, ".weight")) {
+                            std::string name_inp_max = name;
+                            std::string name_inp_min = name;
+                            std::string name_out_max = name;
+                            std::string name_out_min = name;
+                            string_replace_all(name_inp_max, ".weight", ".input_max");
+                            string_replace_all(name_inp_min, ".weight", ".input_min");
+                            string_replace_all(name_out_max, ".weight", ".output_max");
+                            string_replace_all(name_out_min, ".weight", ".output_min");
+                            model.clamp_info_map[name] = {
+                                get_scalar(name_inp_max, FLT_MAX),
+                                get_scalar(name_inp_min, -FLT_MAX),
+                                get_scalar(name_out_max, FLT_MAX),
+                                get_scalar(name_out_min, -FLT_MAX)
+                            };
+                        }
+                    }
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
@@ -2159,6 +2269,28 @@ struct clip_model_loader {
                     read_buf.resize(num_bytes);
                     fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                }
+
+                if (strcmp(t->name, "a.blk.0.ln2.weight") == 0 || strcmp(t->name, "a.blk.0.conv_norm.weight") == 0) {
+                    fprintf(stderr, "LOAD_DBG %s type=%s ne=[%lld,%lld,%lld,%lld] bytes=%zu first8:",
+                        t->name, ggml_type_name(cur->type),
+                        (long long) cur->ne[0], (long long) cur->ne[1], (long long) cur->ne[2], (long long) cur->ne[3],
+                        num_bytes);
+                    const int n_dbg = (int) std::min<int64_t>(8, ggml_nelements(cur));
+                    if (cur->type == GGML_TYPE_F16) {
+                        auto * p = reinterpret_cast<ggml_fp16_t *>(cur->data);
+                        for (int i = 0; i < n_dbg; ++i) {
+                            fprintf(stderr, " %.4f", ggml_fp16_to_fp32(p[i]));
+                        }
+                    } else if (cur->type == GGML_TYPE_F32) {
+                        auto * p = reinterpret_cast<float *>(cur->data);
+                        for (int i = 0; i < n_dbg; ++i) {
+                            fprintf(stderr, " %.4f", p[i]);
+                        }
+                    } else {
+                        fprintf(stderr, " [unsupported debug type]");
+                    }
+                    fprintf(stderr, "\n");
                 }
             }
             fin.close();
@@ -2437,8 +2569,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
 
             // TODO: we don't support audio for Gemma 3N, but GGUF contains audio tensors
             // we can remove this check when we implement audio support for Gemma 3N
-            skip_audio = ctx_vision->model.proj_type == PROJECTOR_TYPE_GEMMA3NV
-                || ctx_vision->model.proj_type == PROJECTOR_TYPE_GEMMA4V;
+            skip_audio = ctx_vision->model.proj_type == PROJECTOR_TYPE_GEMMA3NV;
         }
 
         if (loader.has_audio && !skip_audio) {
@@ -2772,6 +2903,13 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
             } break;
+        case PROJECTOR_TYPE_GEMMA4A:
+            {
+                // 2x Conv2D with stride 2 each → 4x time reduction
+                // Gemma4 has NO conf_reduction_factor (that's Gemma3n-specific)
+                n_patches = (img->nx + 1) / 2;  // first conv stride 2
+                n_patches = (n_patches + 1) / 2; // second conv stride 2
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -2788,7 +2926,16 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
 }
 
-bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+bool clip_image_encode_direct(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
+    clip_image_f32_batch imgs;
+    clip_image_f32_ptr img_copy(clip_image_f32_init());
+    *img_copy = *img;
+    imgs.entries.push_back(std::move(img_copy));
+
+    return clip_image_batch_encode_direct(ctx, n_threads, &imgs, vec);
+}
+
+static bool clip_image_batch_encode_impl(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec, bool use_scheduler) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -2799,14 +2946,29 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // if buffers are not allocated, we need to do a warmup run to allocate them
-    if (!ctx->is_allocated) {
+    if (use_scheduler && !ctx->is_allocated) {
         clip_model_loader::warmup(*ctx, *imgs_c_ptr);
     }
 
     // build the inference graph
-    ggml_backend_sched_reset(ctx->sched.get());
-    ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    clip_built_graph built = clip_image_build_graph_ex(ctx, imgs);
+    ggml_cgraph * gf = built.gf;
+
+    ggml_backend_buffer_ptr graph_buf;
+    if (use_scheduler) {
+        ggml_backend_sched_reset(ctx->sched.get());
+        ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    } else {
+        if (ctx->backend != ctx->backend_cpu) {
+            LOG_ERR("%s: direct encode requires CPU-backed model weights; re-run with GPU disabled\n", __func__);
+            return false;
+        }
+        graph_buf.reset(ggml_backend_alloc_ctx_tensors(built.builder->ctx0, ctx->backend_cpu));
+        if (!graph_buf) {
+            LOG_ERR("%s: failed to allocate direct graph buffers\n", __func__);
+            return false;
+        }
+    }
 
     // set inputs
     const auto & model   = ctx->model;
@@ -2836,6 +2998,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_F32);
+        if (ggml_nelements(cur) != (int64_t) values.size()) {
+            fprintf(stderr, "G4A_INPUT_MISMATCH name=%s tensor_ne=%lld values=%zu tensor_shape=[%lld,%lld,%lld,%lld]\n",
+                name,
+                (long long) ggml_nelements(cur),
+                values.size(),
+                (long long) cur->ne[0],
+                (long long) cur->ne[1],
+                (long long) cur->ne[2],
+                (long long) cur->ne[3]);
+        }
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
@@ -2843,6 +3015,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_I32);
+        if (ggml_nelements(cur) != (int64_t) values.size()) {
+            fprintf(stderr, "G4A_INPUT_MISMATCH_I32 name=%s tensor_ne=%lld values=%zu tensor_shape=[%lld,%lld,%lld,%lld]\n",
+                name,
+                (long long) ggml_nelements(cur),
+                values.size(),
+                (long long) cur->ne[0],
+                (long long) cur->ne[1],
+                (long long) cur->ne[2],
+                (long long) cur->ne[3]);
+        }
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
@@ -3216,6 +3398,79 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_GEMMA4A:
+            {
+                // Fill per-block causal + validity mask
+                const int chunk_sz = 12;
+                const int max_past = 12;
+                const int ctx_sz   = chunk_sz + max_past; // 24
+                const float neg_inf = -1e9f;
+
+                // Compute n_blocks from the token count
+                const int n_tokens = clip_n_output_tokens(ctx, imgs.entries[0].get());
+                const int n_blocks = (n_tokens + chunk_sz - 1) / chunk_sz;
+                // T_padded tokens exist; anything beyond T is padding
+                const int T_padded = n_blocks * chunk_sz;
+
+                // Mask shape: [ctx_sz, chunk_sz, n_blocks]
+                // Layout: ggml stores ne[0] fastest, so mask[b * chunk_sz * ctx_sz + q * ctx_sz + c]
+                std::vector<float> mask(ctx_sz * chunk_sz * n_blocks);
+                for (int b = 0; b < n_blocks; b++) {
+                    for (int q = 0; q < chunk_sz; q++) {
+                        int q_abs = b * chunk_sz + q; // absolute query position
+                        for (int c = 0; c < ctx_sz; c++) {
+                            // Context position c maps to absolute key position:
+                            // key_abs = b * chunk_sz + c - max_past
+                            int k_abs = b * chunk_sz + c - max_past;
+                            float val = 0.0f;
+
+                            // Invalid if key position doesn't exist (before start or after T)
+                            if (k_abs < 0 || k_abs >= n_tokens) {
+                                val = neg_inf;
+                            }
+                            // Invalid if query position is padding
+                            else if (q_abs >= n_tokens) {
+                                val = neg_inf;
+                            }
+                            // Causal: query can only attend to key <= query
+                            else if (k_abs > q_abs) {
+                                val = neg_inf;
+                            }
+
+                            mask[b * chunk_sz * ctx_sz + q * ctx_sz + c] = val;
+                        }
+                    }
+                }
+                set_input_f32("attn_mask", mask);
+
+                // Fill sinusoidal relative position embeddings
+                // positions: [max_past, max_past-1, ..., 0] → F_span = max_past + 1 = 13
+                // Layout: [channels=1024, F_span=13] (ggml ne[0]=channels, ne[1]=F_span)
+                const int F_span = max_past + 1;  // 13
+                const int ch = ctx->model.hparams.n_embd;  // 1024
+                const int num_timescales = ch / 2;  // 512
+
+                // Precompute inv_timescales: min_ts * exp(i * -log(max_ts/min_ts) / max(num_ts-1, 1))
+                const double min_ts = 1.0, max_ts = 1.0e4;
+                const double log_inc = std::log(max_ts / min_ts) / std::max(num_timescales - 1, 1);
+                std::vector<double> inv_ts(num_timescales);
+                for (int i = 0; i < num_timescales; i++) {
+                    inv_ts[i] = min_ts * std::exp((double)i * -log_inc);
+                }
+
+                // Build sinusoidal embedding: [channels, F_span]
+                std::vector<float> sin_emb(ch * F_span);
+                for (int p = 0; p < F_span; p++) {
+                    double position = (double)(max_past - p);  // positions: [12, 11, ..., 0]
+                    for (int i = 0; i < num_timescales; i++) {
+                        double scaled = position * inv_ts[i];
+                        // Layout: sin_emb[p * ch + i] for ne[0]=ch, ne[1]=F_span
+                        sin_emb[p * ch + i]                  = (float)std::sin(scaled);
+                        sin_emb[p * ch + i + num_timescales] = (float)std::cos(scaled);
+                    }
+                }
+                set_input_f32("sin_pos_emb", sin_emb);
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3230,14 +3485,95 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    // DEBUG: verify inp_raw BEFORE compute
+    {
+        ggml_tensor * inp = ggml_graph_get_tensor(gf, "inp_raw");
+        if (inp) {
+            float vals[4];
+            ggml_backend_tensor_get(inp, vals, 0, sizeof(vals));
+            fprintf(stderr, "G4A_PRE_COMPUTE inp_raw first 4 vals: %.4f %.4f %.4f %.4f\n",
+                vals[0], vals[1], vals[2], vals[3]);
+        }
+    }
+
+    fprintf(stderr, "G4A_COMPUTE_BEGIN mode=%s\n", use_scheduler ? "sched" : "direct");
+    auto status = use_scheduler
+        ? ggml_backend_sched_graph_compute(ctx->sched.get(), gf)
+        : ggml_backend_graph_compute(ctx->backend_cpu, gf);
     if (status != GGML_STATUS_SUCCESS) {
-        LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
+        LOG_ERR("%s: %s compute failed with error %d\n", __func__, use_scheduler ? "scheduled" : "direct", status);
         return false;
+    }
+    fprintf(stderr, "G4A_COMPUTE_OK mode=%s\n", use_scheduler ? "sched" : "direct");
+
+    // DEBUG: dump intermediate tensor values
+    {
+        auto dump_tensor_stats = [&](const char * tensor_name, const char * label) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, tensor_name);
+            if (!t) {
+                return;
+            }
+            int64_t n = ggml_nelements(t);
+            if (n == 0) {
+                return;
+            }
+            std::vector<float> all(n);
+            ggml_backend_tensor_get(t, all.data(), 0, n * sizeof(float));
+            float vmin = all[0], vmax = all[0];
+            double vsum = 0, vsumsq = 0;
+            for (int64_t i = 0; i < n; i++) {
+                if (all[i] < vmin) vmin = all[i];
+                if (all[i] > vmax) vmax = all[i];
+                vsum += all[i];
+                vsumsq += (double) all[i] * all[i];
+            }
+            double mean = vsum / n;
+            double std_v = sqrt(std::max(0.0, vsumsq / n - mean * mean));
+            fprintf(stderr, "%s ne=[%ld,%ld,%ld,%ld] min=%.4f max=%.4f mean=%.4f std=%.4f\n",
+                label,
+                (long) t->ne[0], (long) t->ne[1], (long) t->ne[2], (long) t->ne[3],
+                vmin, vmax, mean, std_v);
+            fprintf(stderr, "%s first 8:", label);
+            for (int i = 0; i < 8 && i < n; i++) {
+                fprintf(stderr, " %.4f", all[i]);
+            }
+            fprintf(stderr, "\n");
+        };
+
+        dump_tensor_stats("audio_conv2d-0", "G4A_RELU0");
+        dump_tensor_stats("audio_inp_proj", "G4A_SUBSAMPLE");
+        dump_tensor_stats("g4a_l0_ffn1", "G4A_L0_FFN1");
+        dump_tensor_stats("g4a_l0_residual_after_ffn1", "G4A_L0_RESID_FFN1");
+        dump_tensor_stats("g4a_l0_attn_out", "G4A_L0_ATTN");
+        dump_tensor_stats("g4a_l0_residual_after_attn", "G4A_L0_RESID_ATTN");
+        dump_tensor_stats("g4a_l0_conv_out", "G4A_L0_CONV");
+        dump_tensor_stats("g4a_l0_residual_after_conv", "G4A_L0_RESID_CONV");
+        dump_tensor_stats("g4a_l0_out_norm", "G4A_L0_OUT_NORM");
+        dump_tensor_stats("g4a_l0_ln2_w", "G4A_L0_LN2_W");
+        dump_tensor_stats("g4a_l0_ln2_w_rep", "G4A_L0_LN2_W_REP");
+        dump_tensor_stats("g4a_l0_out", "G4A_L0_OUT");
+        dump_tensor_stats("g4a_l1_out", "G4A_L1_OUT");
+        dump_tensor_stats("g4a_conformer_out", "G4A_CONFORMER_OUT");
+        dump_tensor_stats("g4a_pre_encode_out", "G4A_PRE_ENCODE_OUT");
     }
 
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
+
+    // DEBUG: dump info about the last graph node
+    fprintf(stderr, "G4A_GRAPH last_node name=%s ne=[%ld,%ld,%ld,%ld] op=%d\n",
+        embeddings->name, (long)embeddings->ne[0], (long)embeddings->ne[1],
+        (long)embeddings->ne[2], (long)embeddings->ne[3], (int)embeddings->op);
+    // Also dump the inp_raw tensor to verify it got the mel data
+    {
+        ggml_tensor * inp = ggml_graph_get_tensor(gf, "inp_raw");
+        if (inp) {
+            float vals[4];
+            ggml_backend_tensor_get(inp, vals, 0, sizeof(vals));
+            fprintf(stderr, "G4A_GRAPH inp_raw first 4 vals: %.4f %.4f %.4f %.4f\n",
+                vals[0], vals[1], vals[2], vals[3]);
+        }
+    }
 
     // sanity check (only support batch size of 1 for now)
     const int n_tokens_out = embeddings->ne[1];
@@ -3250,6 +3586,24 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // copy the embeddings to the location passed by the user
     if (vec != nullptr) {
         ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+        // DEBUG: dump directly from vec
+        {
+            int64_t ne0 = embeddings->ne[0], ne1 = embeddings->ne[1];
+            float vmin = vec[0], vmax = vec[0];
+            double vsum = 0, vsumsq = 0;
+            int64_t n = ne0 * ne1;
+            for (int64_t i = 0; i < n; i++) {
+                if (vec[i] < vmin) vmin = vec[i];
+                if (vec[i] > vmax) vmax = vec[i];
+                vsum += vec[i]; vsumsq += (double)vec[i]*vec[i];
+            }
+            double mean = vsum/n, std_v = sqrt(vsumsq/n - mean*mean);
+            fprintf(stderr, "G4A_VEC ne=[%lld,%lld] min=%.4f max=%.4f mean=%.4f std=%.4f\n",
+                (long long)ne0, (long long)ne1, vmin, vmax, mean, std_v);
+            fprintf(stderr, "G4A_VEC first 8:");
+            for (int i = 0; i < 8 && i < ne0; i++) fprintf(stderr, " %.4f", vec[i]);
+            fprintf(stderr, "\n");
+        }
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set
@@ -3294,6 +3648,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     return true;
+}
+
+bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    return clip_image_batch_encode_impl(ctx, n_threads, imgs_c_ptr, vec, true);
+}
+
+bool clip_image_batch_encode_direct(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    return clip_image_batch_encode_impl(ctx, n_threads, imgs_c_ptr, vec, false);
 }
 
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
@@ -3352,6 +3714,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
+        case PROJECTOR_TYPE_GEMMA4A:
+            return ctx->model.pre_encode_out_w->ne[1]; // output projection dim (1536)
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

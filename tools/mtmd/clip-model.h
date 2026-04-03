@@ -164,6 +164,11 @@ struct clip_layer {
     ggml_tensor * q_norm = nullptr;
 
     ggml_tensor * attn_post_norm_w = nullptr;
+    ggml_tensor * attn_pre_norm_w  = nullptr; // gemma4a conformer
+
+    // gemma4a conformer attention extras
+    ggml_tensor * per_dim_scale_w = nullptr;
+    ggml_tensor * k_rel_w         = nullptr; // relative position key projection
 
     ggml_tensor * ff_up_w = nullptr;
     ggml_tensor * ff_up_b = nullptr;
@@ -176,7 +181,8 @@ struct clip_layer {
     ggml_tensor * ln_2_w = nullptr;
     ggml_tensor * ln_2_b = nullptr;
 
-    ggml_tensor * ff_post_norm_w = nullptr;
+    ggml_tensor * ff_post_norm_w   = nullptr;
+    ggml_tensor * ff_post_norm_1_w = nullptr; // gemma4a conformer FFN2 post-norm
 
     // layer scale (no bias)
     ggml_tensor * ls_1_w   = nullptr;
@@ -379,6 +385,9 @@ struct clip_model {
     ggml_tensor * mm_input_proj_w = nullptr;
     ggml_tensor * mm_soft_emb_norm_w = nullptr;
 
+    // gemma4a audio embedder
+    ggml_tensor * mm_audio_input_proj_w = nullptr;
+
     // mobilenetv5 for gemma3n
     std::vector<mobilenetv5_block> mobilenet_blocks;
     std::vector<int> mobilenet_stage_ends;
@@ -441,6 +450,11 @@ struct clip_model {
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
     ggml_tensor * pre_encode_out_w = nullptr;
     ggml_tensor * pre_encode_out_b = nullptr;
+
+    // gemma4a audio subsampling convolutions
+    std::array<ggml_tensor *, 2> audio_conv2d_w    = {nullptr}; // Conv2D weights [k, k, c_in, c_out]
+    std::array<ggml_tensor *, 2> audio_conv2d_norm = {nullptr}; // CumulativeGroupNorm weights
+    ggml_tensor * audio_inp_proj_w = nullptr; // linear projection after flatten
 
     // gemma4
     ggml_tensor * std_bias = nullptr;

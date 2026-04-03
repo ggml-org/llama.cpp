@@ -28,6 +28,7 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "    -n <size>: number of pixels per edge for image (always square image), or number of samples for audio\n"
         "\n"
         "    -p \"encode\" (debugging encode pass, default case):\n"
+        "    -p \"encode-direct\" (same encode pass, but using direct backend compute without ggml_backend_sched):\n"
         "        --image can be:\n"
         "          \"white\", \"black\", \"gray\": filled 1.0f, 0.0f and 0.5f respectively\n"
         "          \"cb\": checkerboard pattern, alternate 1.0f and 0.0f\n"
@@ -110,9 +111,10 @@ int main(int argc, char ** argv) {
     }
     input = params.image[0];
 
-    if (params.prompt.empty() || params.prompt == "encode") {
+    if (params.prompt.empty() || params.prompt == "encode" || params.prompt == "encode-direct") {
         std::vector<std::vector<float>> image;
         std::vector<float> samples;
+        const bool use_direct = params.prompt == "encode-direct";
 
         if (input == "black") {
             for (int i = 0; i < inp_size; ++i) {
@@ -160,10 +162,14 @@ int main(int argc, char ** argv) {
         }
 
         // run encode pass
-        LOG_INF("Running encode pass for input type: %s\n", input.c_str());
+        LOG_INF("Running %s encode pass for input type: %s\n", use_direct ? "direct" : "scheduled", input.c_str());
         if (samples.size() > 0) {
             LOG_INF("Input audio with %zu samples, type: %s\n", samples.size(), input.c_str());
-            mtmd_debug_encode_audio(ctx_mtmd.get(), samples);
+            if (use_direct) {
+                mtmd_debug_encode_audio_direct(ctx_mtmd.get(), samples);
+            } else {
+                mtmd_debug_encode_audio(ctx_mtmd.get(), samples);
+            }
         } else {
             LOG_INF("Input image with dimensions %d x %d, type: %s\n", inp_size, inp_size, input.c_str());
             mtmd_debug_encode_image(ctx_mtmd.get(), image);
