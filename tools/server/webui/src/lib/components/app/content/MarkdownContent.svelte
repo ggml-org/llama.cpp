@@ -279,26 +279,6 @@ async function transformMdastNode(
 	 * @param index - Node index for hash fallback
 	 * @returns Object containing the HTML string and cache hash
 	 */
-	// async function transformMdastNode(
-	// 	processorInstance: ReturnType<typeof processor>,
-	// 	node: unknown,
-	// 	index: number
-	// ): Promise<{ html: string; hash: string }> {
-	// 	const hash = getMdastNodeHash(node, index);
-
-	// 	const cached = transformCache.get(hash);
-	// 	if (cached) {
-	// 		return { html: cached, hash };
-	// 	}
-
-	// 	const singleNodeRoot = { type: 'root', children: [node] };
-	// 	const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
-	// 	const html = processorInstance.stringify(transformedRoot);
-
-	// 	transformCache.set(hash, html);
-
-	// 	return { html, hash };
-	// }
 
 	/**
 	 * Handles click events on copy buttons within code blocks.
