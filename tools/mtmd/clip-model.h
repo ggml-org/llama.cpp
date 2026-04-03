@@ -419,6 +419,11 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
+    // hunyuanocr perceiver
+    ggml_tensor * mm_pre_norm_w  = nullptr;
+    ggml_tensor * mm_img_begin   = nullptr;
+    ggml_tensor * mm_img_end     = nullptr;
+
     // deepseek ocr sam
     ggml_tensor * patch_embed_proj_w = nullptr;
     ggml_tensor * patch_embed_proj_b = nullptr;
