@@ -12941,59 +12941,68 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
 // Hot region in device memory (fast), cold region in host pinned memory (PCIe via USM).
 // SYCL USM makes both regions accessible from GPU kernels transparently.
 
+// Per-layer KV allocation — each layer has its own device or host pointer.
+// This avoids the monolithic multi-GB sycl::malloc_device that fails with
+// UR_RESULT_ERROR_OUT_OF_RESOURCES when VRAM is fragmented (n_ctx >= 10240).
+struct kv_layer_alloc {
+    void * ptr       = nullptr;  // Device VRAM or host-pinned pointer
+    size_t size      = 0;        // Bytes allocated for this layer
+    bool   on_device = false;    // true = VRAM, false = host-pinned
+};
+
 struct tiered_kv_buffer_context {
-    void *    device_base;  // Single device allocation for all device-placed layers
-    void *    host_base;    // Single host allocation for all host-placed layers
-    size_t    device_size;
-    size_t    host_size;
-    int       device;
-    queue_ptr stream;
+    // Per-layer allocations — one entry per transformer layer.
+    // Replaces the old monolithic device_base/host_base pointers.
+    std::vector<kv_layer_alloc> layer_allocs;
+
+    // Synthetic base pointer for the ggml allocator.
+    // The allocator needs a contiguous address range to compute offsets.
+    // We use sycl::malloc_host to create a thin address-space reservation
+    // that init_tensor remaps to the actual per-layer pointers.
+    void * alloc_base      = nullptr;
+    size_t alloc_base_size = 0;
+
+    // Totals for logging and budget accounting
+    size_t    device_size = 0;   // Sum of on_device layer allocations
+    size_t    host_size   = 0;   // Sum of host layer allocations
+    int       device      = 0;
+    queue_ptr stream      = nullptr;
 
     // Per-layer placement from kv_tier_manager::compute_region_layout()
     std::vector<ggml_sycl::layer_region> layer_layout;
-    uint32_t  n_layers;
-    size_t    kv_per_layer;
+    uint32_t  n_layers    = 0;
+    size_t    kv_per_layer = 0;
 };
-
-// Free a KV buffer pointer using the correct method based on alloc_registry type.
-// sycl::free must NOT be called on regular malloc pointers (MMAP type).
-static void tiered_kv_free_ptr(void * ptr, size_t size, sycl::queue * stream) {
-    if (!ptr) return;
-    const auto * info = ggml_sycl::alloc_registry::instance().lookup(ptr);
-    ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
-    if (info && info->type == ggml_sycl::alloc_type::MMAP) {
-        std::free(ptr);  // Was allocated via aligned_alloc (pinned cap overflow)
-    } else {
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *stream)));
-    }
-    (void)size;
-}
 
 static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
-    if (ctx->device_base) {
-        // device_base may be device VRAM (original) or host memory (after migration)
-        const auto * info = ggml_sycl::alloc_registry::instance().lookup(ctx->device_base);
-        if (info && info->type == ggml_sycl::alloc_type::DEVICE) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(
-                ctx->device, ctx->device_size, ggml_sycl::runtime_category::KV_CACHE);
+
+    // Free per-layer allocations via unified_cache_deallocate.
+    for (auto & la : ctx->layer_allocs) {
+        if (la.ptr) {
+            ggml_sycl::unified_cache_deallocate(ctx->device, la.ptr, la.size,
+                                                ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+            la.ptr = nullptr;
         }
-        tiered_kv_free_ptr(ctx->device_base, ctx->device_size, ctx->stream);
     }
-    if (ctx->host_base) {
-        ggml_sycl::unified_cache_sub_runtime_host_bytes(ctx->host_size);
-        tiered_kv_free_ptr(ctx->host_base, ctx->host_size, ctx->stream);
+
+    // Free the synthetic allocator base (host-pinned address reservation).
+    if (ctx->alloc_base) {
+        ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->alloc_base);
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->alloc_base, *ctx->stream)));
+        ctx->alloc_base = nullptr;
     }
+
     delete ctx;
 }
 
 static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
-    // Return base pointer for allocator offset calculation.
-    // init_tensor remaps tensors to the correct region based on layer placement.
-    // When VRAM is exhausted (all-host mode), device_base is null — use host_base.
+    // Return the synthetic allocator base.  The ggml allocator uses this to
+    // compute per-tensor offsets.  init_tensor remaps each tensor to the
+    // correct per-layer allocation pointer.
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
-    return ctx->device_base ? ctx->device_base : ctx->host_base;
+    return ctx->alloc_base;
 }
 
 static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -13002,57 +13011,36 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
         return GGML_STATUS_SUCCESS;
     }
 
-    // All-host mode: allocator used host_base as base, pointers already correct
-    if (!ctx->device_base || ctx->device_size == 0) {
-        return GGML_STATUS_SUCCESS;
+    // Per-layer remapping: parse layer ID from tensor name and remap to the
+    // actual per-layer allocation pointer (device VRAM or host-pinned).
+    // The allocator placed tensors at offsets from alloc_base (synthetic).
+    int          layer_id = -1;
+    const char * name     = tensor->name;
+    const char * prefix_k = "cache_k_l";
+    const char * prefix_v = "cache_v_l";
+    if (strncmp(name, prefix_k, 9) == 0) {
+        layer_id = atoi(name + 9);
+    } else if (strncmp(name, prefix_v, 9) == 0) {
+        layer_id = atoi(name + 9);
     }
 
-    // Per-layer remapping: parse layer ID from tensor name and remap to the
-    // correct region (device or host) based on the layer placement layout.
-    if (!ctx->layer_layout.empty()) {
-        // Parse layer ID from tensor name (cache_k_l<N> or cache_v_l<N>)
-        int          layer_id = -1;
-        const char * name     = tensor->name;
-        const char * prefix_k = "cache_k_l";
-        const char * prefix_v = "cache_v_l";
-        if (strncmp(name, prefix_k, 9) == 0) {
-            layer_id = atoi(name + 9);
-        } else if (strncmp(name, prefix_v, 9) == 0) {
-            layer_id = atoi(name + 9);
-        }
+    if (layer_id >= 0 && static_cast<uint32_t>(layer_id) < ctx->n_layers
+        && static_cast<uint32_t>(layer_id) < ctx->layer_allocs.size()) {
+        const auto & la = ctx->layer_allocs[layer_id];
+        if (la.ptr) {
+            // Compute the offset within this layer from the allocator's linear layout.
+            size_t    layer_start          = static_cast<size_t>(layer_id) * ctx->kv_per_layer;
+            ptrdiff_t tensor_offset_in_buf = static_cast<char *>(tensor->data)
+                                           - static_cast<char *>(ctx->alloc_base);
+            size_t    offset_within_layer  = static_cast<size_t>(tensor_offset_in_buf) - layer_start;
 
-        if (layer_id >= 0 && static_cast<uint32_t>(layer_id) < ctx->n_layers) {
-            const auto & lr = ctx->layer_layout[layer_id];
-
-            // The allocator placed this tensor at an offset from base (device_base).
-            // Compute the offset within this layer's allocation.
-            void *    base                  = tiered_kv_buffer_get_base(buffer);
-            size_t    layer_start           = static_cast<size_t>(layer_id) * ctx->kv_per_layer;
-            ptrdiff_t tensor_offset_in_buf  = static_cast<char *>(tensor->data) - static_cast<char *>(base);
-            size_t    offset_within_layer   = static_cast<size_t>(tensor_offset_in_buf) - layer_start;
-
-            // Remap to the correct region
-            if (lr.on_device && ctx->device_base) {
-                tensor->data = static_cast<char *>(ctx->device_base) + lr.offset + offset_within_layer;
-            } else if (ctx->host_base) {
-                tensor->data = static_cast<char *>(ctx->host_base) + lr.offset + offset_within_layer;
-            }
-
+            tensor->data = static_cast<char *>(la.ptr) + offset_within_layer;
             return GGML_STATUS_SUCCESS;
         }
     }
 
-    // Fallback: contiguous layout (layers 0..N-1 on device, rest on host)
-    ptrdiff_t offset = static_cast<char *>(tensor->data) - static_cast<char *>(ctx->device_base);
-
-    if (offset >= 0 && static_cast<size_t>(offset) < ctx->device_size) {
-        // Tensor is in device region — pointer already correct
-    } else {
-        // Tensor is in host region — remap to host pinned memory
-        size_t host_offset = static_cast<size_t>(offset) - ctx->device_size;
-        tensor->data       = static_cast<char *>(ctx->host_base) + host_offset;
-    }
-
+    // Fallback for tensors that don't match layer naming: leave pointer as-is
+    // (will point into alloc_base which is host-accessible).
     return GGML_STATUS_SUCCESS;
 }
 
@@ -13064,20 +13052,12 @@ static void tiered_kv_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
     void * dst = static_cast<char *>(tensor->data) + offset;
-    // Detect whether this tensor lives in host memory (host region, or device
-    // region after migration to host).  GPU queue memset fails on host
-    // pointers (UR_RESULT_ERROR_DEVICE_LOST on Level Zero).
-    const bool in_host = ctx->host_base && ctx->host_size > 0
-                         && dst >= ctx->host_base
-                         && dst < static_cast<char *>(ctx->host_base) + ctx->host_size;
-    // After memset-fail migration, device_base is host memory (HOST_PINNED or MMAP)
-    const bool device_is_host = ctx->device_base &&
-        ggml_sycl::alloc_registry::instance().is_host_accessible(ctx->device_base) &&
-        !ggml_sycl::alloc_registry::instance().is_device(ctx->device_base);
-    const bool in_migrated = device_is_host && ctx->device_base && ctx->device_size > 0
-                             && dst >= ctx->device_base
-                             && dst < static_cast<char *>(ctx->device_base) + ctx->device_size;
-    if (in_host || in_migrated) {
+
+    // Detect whether this tensor lives in host or device memory by checking
+    // the alloc_registry.  Per-layer allocations may be on either tier.
+    const bool is_host = ggml_sycl::alloc_registry::instance().is_host_accessible(dst)
+                      && !ggml_sycl::alloc_registry::instance().is_device(dst);
+    if (is_host) {
         ::memset(dst, value, size);
     } else {
         SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(dst, value, size).wait()));
@@ -13129,46 +13109,39 @@ static void tiered_kv_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
-    // Clear device region via GPU queue.
-    // Retry once on DEVICE_LOST — the xe driver may recover after an engine
-    // reset triggered by heavy model loading BCS/CCS traffic.
-    if (ctx->device_base && ctx->device_size > 0) {
-        auto err = CHECK_TRY_ERROR(ctx->stream->memset(ctx->device_base, value, ctx->device_size).wait());
-        if (err != 0) {
-            GGML_LOG_WARN("[KV-TIER] Device %d: memset failed (err=%d), retrying once\n", ctx->device, err);
-            err = CHECK_TRY_ERROR(ctx->stream->memset(ctx->device_base, value, ctx->device_size).wait());
-            if (err != 0) {
-                GGML_LOG_WARN("[KV-TIER] Device %d: memset retry failed (err=%d), zeroing via host\n",
-                              ctx->device, err);
-                // Fallback: migrate device KV to host-pinned memory.
-                // Free the device allocation and replace with host-pinned.
-                // Use ggml_sycl_malloc_host (with pinned cap) to avoid
-                // overflowing GPU page tables on large models.
-                sycl::free(ctx->device_base, *ctx->stream);
-                ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->device_base);
-                ggml_sycl::unified_cache_sub_runtime_bytes(
-                    ctx->device, ctx->device_size, ggml_sycl::runtime_category::KV_CACHE);
-                void * host_replacement = ggml_sycl_malloc_host(
-                    ctx->device_size, *ctx->stream, "kv_tier:device_migrate");
-                if (host_replacement) {
-                    ::memset(host_replacement, value, ctx->device_size);
-                    ctx->device_base = host_replacement;
-                    GGML_LOG_INFO("[KV-TIER] Device %d: device KV migrated to host (%zu bytes)\n",
-                                 ctx->device, ctx->device_size);
-                } else {
-                    // Last resort: host malloc also failed, zero in-place
-                    // (may work for USM device memory on some drivers)
-                    ::memset(ctx->device_base, value, ctx->device_size);
-                }
-            } else {
-                GGML_LOG_INFO("[KV-TIER] Device %d: memset retry succeeded\n", ctx->device);
-            }
+
+    // Clear each per-layer allocation individually.
+    // Device layers use GPU queue memset; host layers use CPU memset.
+    for (auto & la : ctx->layer_allocs) {
+        if (!la.ptr || la.size == 0) {
+            continue;
         }
-    }
-    // Clear host region via CPU memset.
-    // Level Zero GPU queue cannot memset host USM pointers (UR_RESULT_ERROR_DEVICE_LOST).
-    if (ctx->host_base && ctx->host_size > 0) {
-        ::memset(ctx->host_base, value, ctx->host_size);
+        if (la.on_device) {
+            auto err = CHECK_TRY_ERROR(ctx->stream->memset(la.ptr, value, la.size).wait());
+            if (err != 0) {
+                GGML_LOG_WARN("[KV-TIER] Device %d: per-layer memset failed (err=%d), "
+                              "migrating layer to host\n", ctx->device, err);
+                // Migrate this layer from device to host-pinned.
+                ggml_sycl::unified_cache_deallocate(ctx->device, la.ptr, la.size,
+                    ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+                void * host_ptr = ggml_sycl_malloc_host(la.size, *ctx->stream, "kv_tier:migrate");
+                if (host_ptr) {
+                    ::memset(host_ptr, value, la.size);
+                    ggml_sycl::alloc_registry::instance().register_alloc(
+                        host_ptr, la.size, ctx->device, ggml_sycl::alloc_type::HOST_PINNED);
+                    la.ptr       = host_ptr;
+                    la.on_device = false;
+                    ctx->device_size -= la.size;
+                    ctx->host_size   += la.size;
+                } else {
+                    la.ptr = nullptr;
+                    la.size = 0;
+                    GGML_LOG_ERROR("[KV-TIER] Device %d: layer migration failed\n", ctx->device);
+                }
+            }
+        } else {
+            ::memset(la.ptr, value, la.size);
+        }
     }
 }
 
@@ -13203,196 +13176,172 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     size = std::max(size, size_t(1));
 
     // Check env var override: GGML_SYCL_KV_HOST=1 forces all-host KV cache.
-    // Default: KV on device (VRAM) to co-locate with attention weights.
-    // KV placement is based on VRAM budget, NOT model type — even MoE models
-    // benefit from device-side KV when attention weights are already in VRAM.
-    // Expert SOA cache uses LRU eviction and respects runtime budget that
-    // includes KV, so there is no need to force KV to host for MoE.
     static std::atomic<int> cached_kv_host{ -1 };
     int                     kv_host_val = cached_kv_host.load(std::memory_order_acquire);
     if (kv_host_val == -1) {
         const char * env_kv = std::getenv("GGML_SYCL_KV_HOST");
-        if (env_kv) {
-            kv_host_val = std::atoi(env_kv);
-        } else {
-            // Default: attempt device-side KV.  The VRAM cap logic below will
-            // fall back to host if there isn't enough free VRAM after weights.
-            kv_host_val = 0;
-        }
+        kv_host_val = env_kv ? std::atoi(env_kv) : 0;
         cached_kv_host.store(kv_host_val, std::memory_order_release);
     }
 
-    // Determine VRAM available for KV cache by querying the unified cache.
-    // The unified cache is the single authority for all VRAM — it already
-    // accounts for weights pinned by S1-PRELOAD, runtime reservations (compute
-    // buffers, expert staging), and VRAM_BUDGET_PCT.  Using it directly avoids
-    // the stale driver free-memory estimates and double-counted reserves that
-    // previously caused ALL KV to land on host even when per-layer KV would fit.
-    //
-    // For Mistral 7B on B580: weights=3.9GB already pinned, unified cache
-    // reports ~5.5GB available → 4GB KV fits entirely on device.
-    // For 120B MoE: dense weights=2.2GB pinned, KV at -c 256 = 9MB (trivial),
-    // KV at -c 4096 = 288MB → both fit alongside expert LRU cache.
+    // Query VRAM available for KV cache from the unified cache (single VRAM authority).
     size_t kv_vram_cap = 0;
-    if (kv_host_val == 1) {
-        // User explicitly requested host KV — force all-cold
-        kv_vram_cap = 0;
-    } else {
+    if (kv_host_val != 1) {
         kv_vram_cap = ggml_sycl::unified_cache_available_for_compute(device);
     }
 
     GGML_SYCL_DEBUG("[KV-TIER] dev=%d cache_available=%.0f MB kv_req=%.0f MB\n",
                     device, kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
-    // Use kv_tier_manager for per-layer hot/cold split.
-    // When n_layer is known (from inventory), tier by layer so KV lives
-    // alongside its attention weights on the same device/host tier.
+
     uint32_t n_layers = g_model_n_layer;
     if (n_layers == 0) {
-        // Fallback: assume 32 layers (common for 7B models)
-        n_layers = 32;
+        n_layers = 32;  // Fallback: assume 32 layers (common for 7B models)
     }
 
     auto & mgr = ggml_sycl::get_kv_tier_manager(device);
     mgr.configure_with_weights(device, n_layers, kv_vram_cap, size);
 
     const size_t kv_per_layer = (n_layers > 0) ? size / n_layers : size;
+    const size_t aligned_per_layer = (kv_per_layer + 511) & ~size_t(511);
 
-    // Compute per-layer layout and total device/host sizes.
-    // The layout uses 512-byte aligned per-layer sizes from the tier manager.
-    auto   layout       = mgr.compute_region_layout(size);
-    size_t device_size  = 0;
-    size_t host_size    = 0;
+    // Compute per-layer layout from the tier manager.
+    auto layout = mgr.compute_region_layout(size);
 
-    // Check env var override: GGML_SYCL_KV_HOT_PCT=N (percentage of KV to keep in VRAM)
+    // Check env var override: GGML_SYCL_KV_HOT_PCT=N overrides tier manager placement.
     const char * hot_pct_env = std::getenv("GGML_SYCL_KV_HOT_PCT");
     if (hot_pct_env) {
-        int pct     = std::atoi(hot_pct_env);
-        pct         = std::max(0, std::min(100, pct));
-        device_size = static_cast<size_t>(static_cast<double>(size) * pct / 100.0);
-        host_size   = size - device_size;
-    } else {
-        for (const auto & lr : layout) {
-            if (lr.on_device) {
-                device_size += lr.size;
-            } else {
-                host_size += lr.size;
+        int pct = std::max(0, std::min(100, std::atoi(hot_pct_env)));
+        uint32_t n_hot = static_cast<uint32_t>(
+            static_cast<double>(n_layers) * pct / 100.0 + 0.5);
+        for (uint32_t l = 0; l < n_layers && l < layout.size(); l++) {
+            layout[l].on_device = (l < n_hot);
+        }
+    }
+
+    // === Per-layer allocation via unified_cache_allocate() ===
+    // Each layer gets its own allocation (~100MB for Mistral 7B at n_ctx=10240)
+    // instead of one monolithic 3+GB allocation.  This eliminates
+    // UR_RESULT_ERROR_OUT_OF_RESOURCES from VRAM fragmentation.
+    std::vector<kv_layer_alloc> layer_allocs(n_layers);
+    size_t total_device = 0;
+    size_t total_host   = 0;
+    uint32_t n_device_layers = 0;
+    uint32_t n_host_layers   = 0;
+
+    for (uint32_t l = 0; l < n_layers; l++) {
+        const size_t layer_size = aligned_per_layer;
+        char tag[64];
+        snprintf(tag, sizeof(tag), "kv_tier:layer_%u", l);
+
+        if (layout[l].on_device && kv_host_val != 1) {
+            // Try device allocation via unified cache (handles budget + eviction).
+            auto result = ggml_sycl::unified_cache_allocate(
+                device, layer_size,
+                ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT, tag);
+
+            if (result.ptr && result.on_device) {
+                layer_allocs[l].ptr       = result.ptr;
+                layer_allocs[l].size      = layer_size;
+                layer_allocs[l].on_device = true;
+                total_device += layer_size;
+                n_device_layers++;
+                continue;
+            }
+            // Device alloc failed — unified_cache_allocate may have returned
+            // a host-pinned fallback, or nullptr.
+            if (result.ptr) {
+                // Got host-pinned fallback from unified cache.
+                layer_allocs[l].ptr       = result.ptr;
+                layer_allocs[l].size      = layer_size;
+                layer_allocs[l].on_device = false;
+                total_host += layer_size;
+                n_host_layers++;
+                continue;
             }
         }
-    }
 
-    // Align device_size to 512 bytes (device allocation alignment)
-    if (device_size > 0) {
-        device_size = (device_size + 511) & ~size_t(511);
-        if (device_size > size) {
-            device_size = size;
-        }
-    }
-    host_size = size - device_size;
-
-    void * device_base = nullptr;
-    void * host_base   = nullptr;
-
-    // Allocate device region with per-layer fallback.
-    // Instead of falling back to ALL-host on failure, progressively reduce
-    // the device layer count until the allocation succeeds.  This ensures
-    // layers that fit in VRAM stay on device even when the total KV is too big.
-    while (device_size > 0) {
-        auto err = CHECK_TRY_ERROR(device_base = sycl::malloc_device(device_size, *buft_ctx->stream));
-        if (err == 0 && device_base) {
-            ggml_sycl::alloc_registry::instance().register_alloc(device_base, device_size, device,
-                                                                 ggml_sycl::alloc_type::DEVICE);
-            ggml_sycl::unified_cache_add_runtime_bytes(device, device_size, ggml_sycl::runtime_category::KV_CACHE);
-            break;
-        }
-        // Device allocation failed.  Reduce device layer count and retry.
-        device_base = nullptr;
-        uint32_t cur_dev = (kv_per_layer > 0) ? static_cast<uint32_t>(device_size / kv_per_layer) : 0;
-        if (cur_dev <= 1) {
-            // Cannot reduce further — go all-host
-            GGML_LOG_WARN(
-                "[KV-TIER] Device %d: failed to allocate %.1f MB device memory for KV, "
-                "falling back to host-only KV cache\n",
-                device, device_size / (1024.0 * 1024.0));
-            device_size = 0;
-            host_size   = size;
-            break;
-        }
-        // Halve the device layers (binary search) for faster convergence
-        uint32_t new_dev = cur_dev / 2;
-        GGML_LOG_INFO(
-            "[KV-TIER] Device %d: %.1f MB device alloc failed, reducing device layers %u -> %u\n",
-            device, device_size / (1024.0 * 1024.0), cur_dev, new_dev);
-        device_size = static_cast<size_t>(new_dev) * kv_per_layer;
-        device_size = (device_size + 511) & ~size_t(511);
-        if (device_size > size) {
-            device_size = size;
-        }
-        host_size = size - device_size;
-    }
-
-    // Reconcile the tier manager with the actual device/host split achieved by
-    // the allocation loop.  Use set_actual_hot_layers() to bypass any env var
-    // override in configure() — what matters is the actual allocation result.
-    {
-        uint32_t actual_dev = (kv_per_layer > 0 && device_size > 0)
-            ? static_cast<uint32_t>(device_size / kv_per_layer)
-            : 0;
-        if (actual_dev > n_layers) {
-            actual_dev = n_layers;
-        }
-        mgr.set_actual_hot_layers(actual_dev);
-    }
-
-    // Regenerate layout after reconciliation (set_actual_hot_layers may have
-    // trimmed device-placed layers to match the actual allocation).
-    layout = mgr.compute_region_layout(size);
-
-    // Allocate host region (pinned if within cap)
-    // In all-host mode (device_size == 0), this holds the entire KV cache.
-    // Uses ggml_sycl_malloc_host which respects the pinned memory cap to
-    // prevent GPU page table overflow on large models.  Falls back to
-    // aligned_alloc automatically when the cap is exceeded.
-    if (host_size > 0) {
-        host_base = ggml_sycl_malloc_host(host_size, *buft_ctx->stream, "kv_tier:host");
-        if (!host_base) {
-            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host memory for host region\n", host_size);
-            if (device_base) {
-                ggml_sycl::alloc_registry::instance().unregister_alloc(device_base);
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, device_size, ggml_sycl::runtime_category::KV_CACHE);
-                sycl::free(device_base, *buft_ctx->stream);
+        // Host allocation path (cold layers, or device alloc failed completely).
+        auto result = ggml_sycl::unified_cache_allocate(
+            device, layer_size,
+            ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT, tag);
+        if (result.ptr) {
+            layer_allocs[l].ptr       = result.ptr;
+            layer_allocs[l].size      = layer_size;
+            layer_allocs[l].on_device = result.on_device;
+            if (result.on_device) {
+                total_device += layer_size;
+                n_device_layers++;
+            } else {
+                total_host += layer_size;
+                n_host_layers++;
+            }
+        } else {
+            GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate layer %u (%zu bytes)\n",
+                           device, l, layer_size);
+            // Clean up already-allocated layers
+            for (uint32_t j = 0; j < l; j++) {
+                if (layer_allocs[j].ptr) {
+                    ggml_sycl::unified_cache_deallocate(
+                        device, layer_allocs[j].ptr, layer_allocs[j].size,
+                        ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+                }
             }
             return nullptr;
         }
-        ggml_sycl::offload_stats_note_host_alloc("kv_tier:host", host_size);
-        ggml_sycl::unified_cache_add_runtime_host_bytes(host_size);
     }
 
-    if (device_size == 0) {
-        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on host (%.1f MB)%s\n",
+    // Reconcile the tier manager with actual allocation results.
+    mgr.set_actual_hot_layers(n_device_layers);
+    layout = mgr.compute_region_layout(size);
+
+    // Allocate synthetic base pointer for the ggml allocator.
+    // The allocator needs a contiguous address range to compute per-tensor offsets.
+    // init_tensor remaps each tensor from this synthetic space to the actual
+    // per-layer allocation.  Uses sycl::malloc_host for a lightweight reservation.
+    void * alloc_base = sycl::malloc_host(size, *buft_ctx->stream);
+    if (!alloc_base) {
+        GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate %zu bytes for allocator base\n",
+                       device, size);
+        for (auto & la : layer_allocs) {
+            if (la.ptr) {
+                ggml_sycl::unified_cache_deallocate(
+                    device, la.ptr, la.size,
+                    ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+            }
+        }
+        return nullptr;
+    }
+    ggml_sycl::alloc_registry::instance().register_alloc(
+        alloc_base, size, device, ggml_sycl::alloc_type::HOST_PINNED);
+
+    // Log placement summary
+    if (n_device_layers == 0) {
+        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on host (%.1f MB, per-layer alloc)%s\n",
                       device, n_layers, size / (1024.0 * 1024.0),
                       kv_host_val == 1 ? " (KV_HOST=1)" : " (VRAM exhausted)");
-    } else if (host_size == 0) {
-        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on device (%.1f MB)\n",
+    } else if (n_host_layers == 0) {
+        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on device (%.1f MB, per-layer alloc)\n",
                       device, n_layers, size / (1024.0 * 1024.0));
     } else {
         GGML_LOG_INFO(
             "[KV-TIER] Device %d: %u device layers (%.1f MB), "
-            "%u host layers (%.1f MB), %.1f MB total\n",
-            device, mgr.get_device_layer_count(), device_size / (1024.0 * 1024.0),
-            n_layers - mgr.get_device_layer_count(), host_size / (1024.0 * 1024.0),
+            "%u host layers (%.1f MB), %.1f MB total (per-layer alloc)\n",
+            device, n_device_layers, total_device / (1024.0 * 1024.0),
+            n_host_layers, total_host / (1024.0 * 1024.0),
             size / (1024.0 * 1024.0));
     }
 
-    auto * ctx    = new tiered_kv_buffer_context{};
-    ctx->device_base  = device_base;
-    ctx->host_base    = host_base;
-    ctx->device_size  = device_size;
-    ctx->host_size    = host_size;
-    ctx->device       = device;
-    ctx->stream       = buft_ctx->stream;
-    ctx->layer_layout = std::move(layout);
-    ctx->n_layers     = n_layers;
-    ctx->kv_per_layer = kv_per_layer;
+    auto * ctx         = new tiered_kv_buffer_context{};
+    ctx->layer_allocs  = std::move(layer_allocs);
+    ctx->alloc_base      = alloc_base;
+    ctx->alloc_base_size = size;
+    ctx->device_size   = total_device;
+    ctx->host_size     = total_host;
+    ctx->device        = device;
+    ctx->stream        = buft_ctx->stream;
+    ctx->layer_layout  = std::move(layout);
+    ctx->n_layers      = n_layers;
+    ctx->kv_per_layer  = kv_per_layer;
     auto * buffer = ggml_backend_buffer_init(buft, tiered_kv_buffer_interface, ctx, size);
     return buffer;
 }
@@ -28278,21 +28227,77 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         }
                     }
                 } else {
-                    // AOS layout: use unified kernel (existing path)
-                    for (int64_t i0 = 0; i0 < n_batch; ++i0) {
-                        const int64_t src0_batch = i0 / i02_divisor;
-                        const char *  src0_batch_ptr =
-                            static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
-                        const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
-                        float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+                    // AOS layout: for PP batch sizes (M >= 2), use oneDNN FP16
+                    // GEMM which is 11-98x faster than per-row MMVQ dispatch.
+                    // For TG (M == 1), use unified kernel (MMVQ fast-path).
+                    bool used_onednn = false;
+#if GGML_SYCL_DNNL
+                    if (M >= 2) {
+                        // Dequant MXFP4→FP16, convert F32→FP16, oneDNN GEMM
+                        const to_fp16_sycl_t dequant_fn =
+                            ggml_get_to_fp16_sycl(src0->type, dst, /*full_tensor=*/false);
+                        const to_fp16_sycl_t f32_to_fp16 =
+                            ggml_get_to_fp16_sycl(GGML_TYPE_F32, dst, /*full_tensor=*/false);
+                        if (dequant_fn && f32_to_fp16) {
+                            const size_t src0_elems = static_cast<size_t>(N) * static_cast<size_t>(K);
+                            const size_t src1_elems = static_cast<size_t>(M) * static_cast<size_t>(K);
 
-                        for (int64_t m = 0; m < M; ++m) {
+                            ggml_sycl_pool_alloc<sycl::half> src0_f16(ctx.pool());
+                            ggml_sycl_pool_alloc<sycl::half> src1_f16(ctx.pool());
+                            bool alloc_ok = true;
+                            try {
+                                src0_f16.alloc(src0_elems);
+                                src1_f16.alloc(src1_elems);
+                            } catch (...) {
+                                alloc_ok = false;
+                            }
+                            if (alloc_ok) {
+                                for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                                    const int64_t src0_batch = i0 / i02_divisor;
+                                    const char *  src0_batch_ptr =
+                                        static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                                    const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                                    float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
+                                    dequant_fn(src0_batch_ptr, src0_f16.get(), src0_elems, ctx.stream());
+                                    f32_to_fp16(src1_batch_ptr, src1_f16.get(), src1_elems, ctx.stream());
+
+                                    try {
+                                        DnnlGemmWrapper::row_gemm(
+                                            ctx,
+                                            static_cast<int>(N),
+                                            static_cast<int>(M),
+                                            static_cast<int>(K),
+                                            src0_f16.get(), DnnlGemmWrapper::to_dt<sycl::half>(),
+                                            src1_f16.get(), DnnlGemmWrapper::to_dt<sycl::half>(),
+                                            dst_batch_ptr,  DnnlGemmWrapper::to_dt<float>(),
+                                            ctx.stream());
+                                        used_onednn = true;
+                                    } catch (const std::exception & e) {
+                                        GGML_LOG_WARN("[MXFP4-DIRECT] oneDNN PP failed: %s\n", e.what());
+                                        used_onednn = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+#endif  // GGML_SYCL_DNNL
+                    if (!used_onednn) {
+                        // Fallback: unified kernel with full batch M
+                        for (int64_t i0 = 0; i0 < n_batch; ++i0) {
+                            const int64_t src0_batch = i0 / i02_divisor;
+                            const char *  src0_batch_ptr =
+                                static_cast<const char *>(src0_data) + src0_batch * src0_plane_bytes;
+                            const float * src1_batch_ptr = src1_data + i0 * src1_plane_elems;
+                            float *       dst_batch_ptr  = dst_data  + i0 * dst_plane_elems;
+
                             ggml_sycl::ggml_sycl_mul_mat_unified_default(
                                 *ctx.stream(),
                                 src0_batch_ptr,
-                                src1_batch_ptr + m * K,
-                                dst_batch_ptr + m * N,
-                                1, N, K, src0->type, data_layout);
+                                src1_batch_ptr,
+                                dst_batch_ptr,
+                                M, N, K, src0->type, data_layout);
                         }
                     }
                 }
