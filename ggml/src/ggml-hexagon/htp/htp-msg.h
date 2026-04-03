@@ -21,7 +21,7 @@ enum htp_status {
     HTP_STATUS_VTCM_TOO_SMALL = 5,
 };
 
-// The values must match the ggml_type.
+// First set of values must match the ggml_type.
 // Duplicated here because we can't include full ggml.h in the htp build.
 // We have some static_asserts in the cpp code to ensure things are in sync.
 enum htp_data_type {
@@ -33,8 +33,19 @@ enum htp_data_type {
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
     HTP_TYPE_MXFP4  = 39,
+
+    // types used internally for repack, dyn.quant, etc
+    HTP_TYPE_Q4_0x4x2 = 200,
+    HTP_TYPE_Q8_0x4x2,
+    HTP_TYPE_MXFP4x4x2,
+
     HTP_TYPE_INVALID
 };
+
+// Constats for internal types
+#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
+#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
+#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
 
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {
@@ -71,11 +82,6 @@ enum htp_op_code {
     HTP_OP_CUMSUM,
     HTP_OP_INVALID
 };
-
-// Internal types
-#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
-#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
-#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS

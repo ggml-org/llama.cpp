@@ -2825,7 +2825,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     worker_callback_t quant_job_func;
     worker_callback_t matmul_job_func = src1_nrows > 1 ? matmul_2d : matvec_2d;
 
-    bool need_quant = !(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE);
+    bool need_quant = true; // !(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE);
 
     if (src0->type == HTP_TYPE_F16) {
         // Try optimized f16-f16 path first (src1 in VTCM)

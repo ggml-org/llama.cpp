@@ -14,9 +14,9 @@
 
 struct htp_spad {
     uint8_t * data;
-    size_t    stride;
-    size_t    size;
-    size_t    size_per_thread;
+    uint32_t  stride;
+    uint32_t  size;
+    uint32_t  size_per_thread;
 };
 
 struct htp_ops_context {
