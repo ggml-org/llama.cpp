@@ -400,36 +400,26 @@ server_tokens format_prompt_rerank(
 // If n_predict is provided and positive, ensure that target_tokens does not exceed the budget n_ctx - n_predict.
 int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate_max_keep, int32_t n_predict);
 
+// Guard threshold: only fire truncation when prompt exceeds n_ctx - n_predict (or target if n_predict <= 0).
+int32_t chat_truncate_threshold(int32_t n_ctx, int32_t n_predict, int32_t target);
+
 // Count number of tokens in the chat history, based on the provided templates and vocab.
 int32_t chat_n_tokens(
     const common_chat_templates_inputs & inputs,
     const common_chat_templates        * tmpls,
     const struct llama_vocab           * vocab);
 
-// Determine if the chat history needs truncation by checking if the number of tokens exceeds a threshold, which is either:
-// - `n_predict > 0`: `n_ctx - n_predict`
-// - `n_predict <= 0`: fraction of `n_ctx` using the chat_truncate_max_keep param
-bool chat_needs_truncation(
-    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate_max_keep);
-
-// Remove oldest "turns" from the chat history until the number of tokens is within the target_tokens limit
+// Remove oldest "turns" from the chat history until the token/position count is within target.
 // Each "turn" is a sequence of messages starting with `user` and ending just before the next `user` message.
 // The most recent turn is always kept.
-// This guarantees we do not break/pollute the chat template
+// threshold: truncation only fires when current count >= threshold (>= target).
+// For media requests (has_media=true), uses process_mtmd_prompt().
 void chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
-    int32_t                        target_tokens);
-
-// Almost exact-count variant for multimodal requests.
-// Images are decoded and processed exactly ONCE via process_mtmd_prompt() to extract per-image
-// n_pos costs (M-RoPE aware). Subsequent iterations recount using cheap text re-tokenization
-// plus arithmetic over the cached costs — no further image decoding in the loop.
-void chat_truncate_messages_with_media(
-    common_chat_templates_inputs & inputs,
-    const common_chat_templates  * tmpls,
-    const struct llama_vocab     * vocab,
-    mtmd_context                 * mctx,
-    std::vector<raw_buffer>      & out_files,
-    int32_t                        target_pos);
+    int32_t                        target,
+    int32_t                        threshold,
+    bool                           has_media = false,
+    mtmd_context                 * mctx      = nullptr,
+    std::vector<raw_buffer>      * out_files = nullptr);
