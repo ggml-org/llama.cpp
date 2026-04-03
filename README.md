@@ -30,6 +30,86 @@ LLM inference in C/C++
 
 ----
 
+## TurboQuant KV Cache (This Fork)
+
+> **This fork extends [PR #21089](https://github.com/ggerganov/llama.cpp/pull/21089) (elusznik's CPU TurboQuant) with two optimizations that improve speed and quality.**
+
+TurboQuant compresses the KV cache using Householder rotation + Lloyd-Max codebooks, enabling **3.9–5.2× memory compression** with minimal quality loss. On a 96GB Mac Studio, Qwen3-32B goes from **278K → 1.45M token context**.
+
+### Benchmark: Quality (Perplexity)
+
+Qwen3-32B Q4_K_M, wikitext-2, Mac Studio M3 Ultra 96GB, `-ngl 99`, 8 chunks:
+
+| KV Type | Origin | PPL ↓ | vs F16 | Bits/elem | Compression |
+|---------|--------|-------|--------|-----------|-------------|
+| F16 | baseline | 5.798 | — | 16.00 | 1.0× |
+| Q8_0 | baseline | 5.797 | −0.01% | 8.50 | 1.9× |
+| Q4_0 | baseline | 5.857 | +1.0% | 4.50 | 3.6× |
+| **TBQ4_0** | **TurboQuant** | **5.872** | **+1.3%** | **4.06** | **3.9×** |
+| **TBQ3_0** | **TurboQuant** | **6.068** | **+4.7%** | **3.06** | **5.2×** |
+
+### Benchmark: Speed (Prompt Evaluation)
+
+| KV Type | Prompt Eval (t/s) | vs F16 | Notes |
+|---------|-------------------|--------|-------|
+| F16 | 278 | — | baseline |
+| Q8_0 | 269 | −3% | |
+| Q4_0 | 271 | −3% | |
+| **TBQ4_0** | **228** | **−18%** | Householder dequant overhead (CPU) |
+| **TBQ3_0** | **228** | **−18%** | same as TBQ4_0 |
+
+Speed overhead is due to the Householder matrix-vector multiply during dequantization, currently running on CPU via Apple Accelerate. A Metal SET_ROWS kernel would eliminate this penalty.
+
+### Benchmark: Max Context Length (96GB Mac Studio)
+
+| Model | Weights | F16 | Q4_0 | TBQ4_0 | TBQ3_0 |
+|-------|---------|-----|------|--------|--------|
+| Llama-3.1-8B (Q4_K_M) | ~5 GB | 696K | 2.47M | **2.74M** | **3.64M** |
+| Qwen3-32B (Q4_K_M) | ~19 GB | 278K | 988K | **1.10M** | **1.45M** |
+| Llama-3.3-70B (Q4_K_M) | ~40 GB | 164K | 583K | **646K** | **857K** |
+| Qwen2.5-72B (Q4_K_M) | ~43 GB | 154K | 548K | **606K** | **805K** |
+
+### Our Optimizations (On Top of PR #21089)
+
+1. **Apple Accelerate `cblas_sgemv`** (`95fb4fe`) — 2× faster dequant on M-series via AMX coprocessor
+2. **L2 norm correction** (`c2621e3`) — re-normalize unit vector after dequant, halves PPL gap vs F16
+
+### Experimental: QJL Error Correction
+
+See branch [`experimental/qjl-error-correction`](https://github.com/SeKondBrainAILabs/llama.cpp-turboquant/tree/experimental/qjl-error-correction) for TBQP4_0 and TBQP3_0 types that add 1-bit QJL (Quantized Johnson-Lindenstrauss) sign correction. Results: QJL reduces 2-bit PPL by 28%, but straight codebook types (TBQ3_0, TBQ4_0) remain more efficient at equivalent bit-rates.
+
+### Usage
+
+```bash
+cmake -B build -DGGML_METAL=ON
+cmake --build build -j
+
+# Perplexity benchmark
+./build/bin/llama-perplexity \
+    -hf bartowski/Qwen2.5-32B-Instruct-GGUF:Q4_K_M \
+    -f wiki.test.raw -ctk tbq4_0 -ctv tbq4_0 --chunks 8 -ngl 99
+
+# Server with mixed K/V (best quality/compression trade-off)
+./build/bin/llama-server \
+    -hf bartowski/Qwen2.5-32B-Instruct-GGUF:Q4_K_M \
+    -ctk tbq4_0 -ctv tbq3_0 --host 0.0.0.0 --port 8080 -ngl 99
+```
+
+### Known Limitations
+
+- **Speed**: 18% slower prompt eval due to CPU-based Householder dequant. Needs Metal kernel.
+- **CPU-only KV cache**: TBQ types require KV cache on CPU (no Metal SET_ROWS kernel yet).
+- **Model compatibility**: Qwen2.5-VL-7B broken with any KV quant below Q8_0 (upstream issue).
+
+### Roadmap
+
+- [ ] **Metal SET_ROWS kernel**: eliminate speed penalty by moving dequant to GPU
+- [ ] **Cross-architecture validation**: benchmark on Llama, Mistral, Gemma
+- [ ] **Needle-in-a-haystack eval**: verify retrieval quality at 500K+ tokens
+- [ ] **Upstream PR**: submit Accelerate + norm correction to PR #21089
+
+----
+
 ## Quick start
 
 Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
