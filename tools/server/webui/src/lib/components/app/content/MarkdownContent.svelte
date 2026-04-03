@@ -222,53 +222,28 @@
 	}
 
 	/**
- * Adds dir="auto" to all text-containing elements in the generated HTML.
- * This ensures proper bidirectional text support for mixed RTL/LTR content.
- */
-function addDirAutoToTextElements(html: string): string {
-  if (typeof window === 'undefined') return html; // SSR safety
-  
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
-  
-  // Add dir="auto" to all text-containing elements
-  const textElements = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, div, span');
-  textElements.forEach(el => {
-    if (el.textContent?.trim()) {
-      el.setAttribute('dir', 'auto');
-    }
-  });
-  
-  return doc.body.firstElementChild?.innerHTML || html;
-}
+	 * Adds dir="auto" to all text-containing elements in the generated HTML.
+	 * This ensures proper bidirectional text support for mixed RTL/LTR content.
+	 */
+	function addDirAutoToTextElements(html: string): string {
+		if (typeof window === 'undefined') return html; // SSR safety
 
-/**
- * Transforms a single MDAST node to HTML string with caching.
- * ... (existing comment)
- */
-async function transformMdastNode(
-  processorInstance: ReturnType<typeof processor>,
-  node: unknown,
-  index: number
-): Promise<{ html: string; hash: string }> {
-  const hash = getMdastNodeHash(node, index);
+		const parser = new DOMParser();
+		const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
 
-  const cached = transformCache.get(hash);
-  if (cached) {
-    return { html: cached, hash };
-  }
+		// Add dir="auto" to all text-containing elements
+		const textElements = doc.querySelectorAll(
+			'p, h1, h2, h3, h4, h5, h6, li, blockquote, div, span'
+		);
+		textElements.forEach((el) => {
+			if (el.textContent?.trim()) {
+				el.setAttribute('dir', 'auto');
+			}
+		});
 
-  const singleNodeRoot = { type: 'root', children: [node] };
-  const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
-  let html = processorInstance.stringify(transformedRoot);
-  
-  // Add bidirectional text support
-  html = addDirAutoToTextElements(html);
+		return doc.body.firstElementChild?.innerHTML || html;
+	}
 
-  transformCache.set(hash, html);
-
-  return { html, hash };
-}
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
 	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
@@ -279,6 +254,30 @@ async function transformMdastNode(
 	 * @param index - Node index for hash fallback
 	 * @returns Object containing the HTML string and cache hash
 	 */
+	async function transformMdastNode(
+		processorInstance: ReturnType<typeof processor>,
+		node: unknown,
+		index: number
+	): Promise<{ html: string; hash: string }> {
+		const hash = getMdastNodeHash(node, index);
+
+		const cached = transformCache.get(hash);
+		if (cached) {
+			return { html: cached, hash };
+		}
+
+		const singleNodeRoot = { type: 'root', children: [node] };
+		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
+		let html = processorInstance.stringify(transformedRoot);
+
+		// Add bidirectional text support
+		html = addDirAutoToTextElements(html);
+
+		transformCache.set(hash, html);
+
+		return { html, hash };
+	}
+	
 
 	/**
 	 * Handles click events on copy buttons within code blocks.
@@ -628,7 +627,12 @@ async function transformMdastNode(
 	dir="auto"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }} dir="auto">
+		<div
+			class="markdown-block"
+			data-block-id={block.id}
+			use:fadeInView={{ skipIfVisible: true }}
+			dir="auto"
+		>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html block.html}
 		</div>
@@ -767,9 +771,8 @@ async function transformMdastNode(
 		padding: 0.125rem 0.375rem;
 		border-radius: 0.375rem;
 		font-size: 0.875rem;
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+			Consolas, 'Liberation Mono', Menlo, monospace;
 	}
 
 	div :global(pre) {
@@ -971,9 +974,8 @@ async function transformMdastNode(
 	div :global(.code-language) {
 		color: var(--color-foreground);
 		font-weight: 500;
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+			Consolas, 'Liberation Mono', Menlo, monospace;
 		text-transform: uppercase;
 		font-size: 0.75rem;
 		letter-spacing: 0.05em;
