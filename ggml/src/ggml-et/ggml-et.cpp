@@ -965,7 +965,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const int ndims = ((const int32_t *) op->op_params)[1];
                 supported = ((mode == 0x0) ||
                              (((mode & GGML_ROPE_TYPE_NEOX) || mode == GGML_ROPE_TYPE_IMROPE) && ndims % 16 == 0))
-                            && (ndims <= 256);
+                            && (ndims <= 512);
             } else {
                 supported = false;
             }
@@ -1137,8 +1137,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                     op->nb[0] == sizeof(float) &&
                     op->src[0]->ne[0] == op->src[1]->ne[0] &&  // dk matches
                     op->src[2]->ne[0] == op->ne[0] &&           // dv matches
-                    op->src[2]->ne[0] <= 256 &&                 // dv limit
-                    op->src[0]->ne[0] <= 256 &&                 // dk limit
+                    op->src[2]->ne[0] <= 512 &&                 // dv limit
+                    op->src[0]->ne[0] <= 512 &&                 // dk limit
                     nhq % nhk == 0 &&                           // GQA ratio is integer
                     op->src[0]->ne[1] == op->ne[2] &&
                     op->src[0]->ne[2] == op->ne[1] &&

@@ -11,7 +11,7 @@
 //   - Q: F32 (converted to F16 internally)
 //   - K, V: F16
 //   - dk must be a multiple of 32 (TensorFMA16A32 K-tile)
-//   - dv ≤ 256 (accumulator in shire-local L2 SCP)
+//   - dv ≤ 512 (accumulator in shire-local L2 SCP)
 //
 // Parallelization: each minion independently processes one (qpos, head, batch)
 // row, round-robin across all minion hart-0s. Hart 1 assists with K packing.
@@ -37,26 +37,26 @@
 #define B_L1_START 16
 
 // Max head dimensions
-#define FA_DV_MAX 256   // max value head dim (dv)
-#define FA_DK_MAX 256   // max key head dim (dk) - some models use hsk > hsv
+#define FA_DV_MAX 512   // max value head dim (dv)
+#define FA_DK_MAX 512   // max key head dim (dk) - some models use hsk > hsv
 
 typedef uint16_t et_fp16_t;
 
 #define ET_NEG_INF_F (-3.402823466e+38f)
 
 // L2 SCP layout per minion:
-//   [0..1023]       accumulator (FA_DV_MAX * sizeof(float))
-//   [1024..3071]    kpanel buffer 0 (32 × 32 × 2 = 2048 bytes)
-//   [3072..5119]    kpanel buffer 1 (2048 bytes)
+//   [0..2047]       accumulator (FA_DV_MAX * sizeof(float))
+//   [2048..4095]    kpanel buffer 0 (32 × 32 × 2 = 2048 bytes)
+//   [4096..6143]    kpanel buffer 1 (2048 bytes)
 // Sync: ET_BARRIER_MINION per dk_chunk.
 // Double-buffering ensures hart 0 finishes buf[N%2] before hart 1
 // overwrites it at chunk N+2.
 #define SCP_ACC_OFF       0
-#define SCP_ACC_STRIDE    (FA_DV_MAX * sizeof(float))           // 1024
+#define SCP_ACC_STRIDE    (FA_DV_MAX * sizeof(float))           // 2048
 #define SCP_KPANEL_SIZE   (32 * 32 * sizeof(et_fp16_t))         // 2048
-#define SCP_KP0_OFF       SCP_ACC_STRIDE                        // 1024
-#define SCP_KP1_OFF       (SCP_KP0_OFF + SCP_KPANEL_SIZE)       // 3072
-#define SCP_PER_MINION    (SCP_KP1_OFF + SCP_KPANEL_SIZE)       // 5120
+#define SCP_KP0_OFF       SCP_ACC_STRIDE                        // 2048
+#define SCP_KP1_OFF       (SCP_KP0_OFF + SCP_KPANEL_SIZE)       // 4096
+#define SCP_PER_MINION    (SCP_KP1_OFF + SCP_KPANEL_SIZE)       // 6144
 
 struct ggml_et_flash_attn_ext_params {
     struct ggml_tensor src0;     // Q (F32)
