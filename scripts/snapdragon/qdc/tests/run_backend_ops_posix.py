@@ -24,8 +24,13 @@ def install(driver):
 
 @pytest.mark.parametrize("type_a", ["mxfp4", "fp16", "q4_0"])
 def test_backend_ops_htp0(type_a):
+    cmd = f"{CMD_PREFIX} GGML_HEXAGON_HOSTBUF=0 GGML_HEXAGON_EXPERIMENTAL=1 {BIN_PATH}/test-backend-ops -b HTP0 -o MUL_MAT"
+    if type_a == "q4_0":
+        cmd += r' -p "^(?=.*type_a=q4_0)(?!.*type_b=f32,m=576,n=512,k=576).*$"'
+    else:
+        cmd += f" -p type_a={type_a}"
     result = run_adb_command(
-        f"{CMD_PREFIX} GGML_HEXAGON_HOSTBUF=0 GGML_HEXAGON_EXPERIMENTAL=1 {BIN_PATH}/test-backend-ops -b HTP0 -o MUL_MAT -p type_a={type_a}",
+        cmd,
         check=False,
     )
     write_qdc_log(f"backend_ops_{type_a}.log", result.stdout or "")

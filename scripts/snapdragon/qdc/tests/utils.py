@@ -4,11 +4,14 @@
 # ---------------------------------------------------------------------
 """Shared helpers for QDC on-device test runners."""
 
+import logging
 import os
 import subprocess
 import tempfile
 
 from appium.options.common import AppiumOptions
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # On-device paths
@@ -38,6 +41,7 @@ options.set_capability("deviceName", os.getenv("ANDROID_DEVICE_VERSION"))
 # ADB helpers
 # ---------------------------------------------------------------------------
 
+
 def run_adb_command(cmd: str, *, check: bool = True) -> subprocess.CompletedProcess:
     # Append exit-code sentinel because `adb shell` doesn't reliably propagate
     # the on-device exit code (older ADB versions always return 0).
@@ -55,7 +59,7 @@ def run_adb_command(cmd: str, *, check: bool = True) -> subprocess.CompletedProc
                 stdout = "\n".join(lines[:-1]) + "\n"
             except ValueError:
                 pass
-    print(stdout)
+    log.info("%s", stdout)
     result = subprocess.CompletedProcess(raw.args, returncode, stdout=stdout)
     if check:
         assert returncode == 0, f"Command failed (exit {returncode})"

@@ -113,6 +113,7 @@ def build_artifact_zip(
         shutil.copy(_RUN_BACKEND_OPS, tests_dir / "test_backend_ops_posix.py")
 
     shutil.copy(_REQUIREMENTS, stage_dir / "requirements.txt")
+    (stage_dir / "pytest.ini").write_text("[pytest]\naddopts = --junitxml=results.xml\n")
 
     zip_base = str(stage_dir / "artifact")
     shutil.make_archive(zip_base, "zip", stage_dir)
@@ -139,7 +140,7 @@ def wait_for_log_upload(client, job_id: str) -> None:
     elapsed = 0
     while elapsed <= LOG_UPLOAD_TIMEOUT:
         status = (qdc_api.get_job_log_upload_status(client, job_id) or "").lower()
-        if status in {"completed", "nologs", "failed"}:
+        if status in {"completed", "failed"}:
             return
         log.info("Waiting for log upload (status=%s) ...", status)
         time.sleep(POLL_INTERVAL)
@@ -210,9 +211,13 @@ def fetch_logs_and_parse_tests(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for lf in log_files:
+            log.info("Downloading log file: %s", lf.filename)
             zip_path = os.path.join(tmpdir, "log.zip")
             qdc_api.download_job_log_files(client, lf.filename, zip_path)
-            shutil.unpack_archive(zip_path, tmpdir, "zip")
+            try:
+                shutil.unpack_archive(zip_path, tmpdir, "zip")
+            except Exception as e:
+                log.warning("Could not unpack %s as zip: %s", lf.filename, e)
 
         for root_dir, _, files in os.walk(tmpdir):
             for fname in sorted(files):
@@ -231,6 +236,7 @@ def fetch_logs_and_parse_tests(
                     pytest_fallback.update(_parse_pytest_output(content))
 
     return (test_results if test_results else pytest_fallback), raw_logs, failure_details
+
 
 def write_summary(result: JobResult, title: str = "QDC Test Results") -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -286,6 +292,7 @@ def write_summary(result: JobResult, title: str = "QDC Test Results") -> None:
     with open(summary_path, "a") as f:
         f.write("\n".join(lines) + "\n")
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -305,6 +312,7 @@ def parse_args() -> argparse.Namespace:
     if args.test in ("bench", "all") and not args.model_url:
         p.error("--model-url is required when --test bench or --test all")
     return args
+
 
 def main() -> int:
     args = parse_args()
@@ -391,6 +399,7 @@ def main() -> int:
     write_summary(result, title=title)
 
     return 0 if passed else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
