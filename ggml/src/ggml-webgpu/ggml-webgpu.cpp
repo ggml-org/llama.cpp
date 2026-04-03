@@ -447,7 +447,7 @@ EM_JS(int, ggml_webgpu_is_ios_browser, (), {
 static uint32_t ggml_backend_webgpu_get_max_inflight_batches(const wgpu::AdapterInfo & info) {
 #ifdef __EMSCRIPTEN__
     if (ggml_webgpu_is_ios_browser()) {
-        return 2;
+        return 1;
     }
 #else
     GGML_UNUSED(info);
