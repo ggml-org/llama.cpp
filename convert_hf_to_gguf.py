@@ -7464,9 +7464,6 @@ class Gemma4Model(Gemma3Model):
 
         assert len(tokens) == vocab.vocab_size
 
-        # TODO @ngxson : there are some known (rare) issues with the tokenizer during development
-        # but I don't have time to dive into them right now;
-        # using a dedicated tokenizer name so that we can fix later without re-converting GGUF
         self.gguf_writer.add_tokenizer_model("gemma4")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
