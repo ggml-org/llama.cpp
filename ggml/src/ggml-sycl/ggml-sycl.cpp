@@ -2846,6 +2846,13 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                                                   : (total_gpus >= 2);
 
         if (multi_gpu_on && total_gpus >= 2) {
+            // All secondary queues MUST share device 0's sycl::context so that
+            // cross-device depends_on() works on Level Zero.  Without a shared
+            // context each device gets its own ze_context_handle_t and
+            // depends_on(cross_device_event) hard-aborts in L0.
+            auto & dev0       = ggml_sycl_get_gpu_device(0);
+            auto   shared_ctx = dev0.default_queue().get_context();
+
             int n_early_ok = 0;
             for (int gpu_d = 1; gpu_d < total_gpus && gpu_d < GGML_SYCL_MAX_DEVICES; gpu_d++) {
                 try {
@@ -2855,7 +2862,9 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                     // falls back to identity for hidden devices, which is wrong
                     // when non-GPU devices are interleaved in dpct enumeration.
                     auto & dev_d = ggml_sycl_get_gpu_device(gpu_d);
-                    g_secondary_queues[gpu_d] = &dev_d.default_queue();
+                    // Create IOQ with device 0's context for cross-device event compat.
+                    g_secondary_queues[gpu_d] = new sycl::queue(
+                        shared_ctx, dev_d, sycl::property_list{ sycl::property::queue::in_order{} });
                     ggml_sycl::unified_cache_register_for_queue(gpu_d, *g_secondary_queues[gpu_d]);
                     n_early_ok++;
                     GGML_LOG_INFO("[MOE-MULTI-GPU] Device %d registered: %s (dpct_id=%d)\n",
@@ -7302,9 +7311,11 @@ static sycl::queue * get_pipeline_copy_queue(int device) {
     if (g_pipeline_copy_queue[device]) {
         return g_pipeline_copy_queue[device];
     }
+    auto & dev0                   = ggml_sycl_get_gpu_device(0);
     auto & dev                    = ggml_sycl_get_device(device);
-    // Create in-order copy queue on same device as compute queue.
-    g_pipeline_copy_queue[device] = new sycl::queue(dev.default_queue().get_context(), dev.default_queue().get_device(),
+    // Create in-order copy queue with device 0's context so cross-device
+    // depends_on() works on Level Zero (events require matching ze_context).
+    g_pipeline_copy_queue[device] = new sycl::queue(dev0.default_queue().get_context(), dev.default_queue().get_device(),
                                                     sycl::property_list{ sycl::property::queue::in_order{} });
     static std::atomic<int> log_count{ 0 };
     if (log_count.fetch_add(1, std::memory_order_relaxed) < 2) {
@@ -7326,7 +7337,7 @@ static void pipeline_scatter_background(pipeline_scatter_slot * slot) {
             if (e.dst_device && e.out_staging) {
                 if (e.target_queue) {
                     // Cross-device dependency: wait for secondary GPU D2H via depends_on
-                    // (platform default context shared by both queues)
+                    // (secondary queues share device 0's context for L0 compat)
                     slot->copy_queue->submit([&](sycl::handler & cgh) {
                         cgh.depends_on(e.last_event);
                         cgh.memcpy(e.dst_device, e.out_staging, e.bytes);
@@ -7383,8 +7394,9 @@ static void flush_pending_secondary_scatter() {
     if (!g_pending_secondary_scatter.active) return;
 
     try {
-        // Cross-device dependency via depends_on: all queues share the platform
-        // default L0 context, so cross-device event deps work natively.
+        // Cross-device dependency via depends_on: secondary queues are created
+        // with device 0's sycl::context so cross-device events share one
+        // ze_context_handle_t (required by Level Zero).
         if (g_pending_secondary_scatter.stream
             && !g_pending_secondary_scatter.entries.empty()) {
             for (auto & e : g_pending_secondary_scatter.entries) {
