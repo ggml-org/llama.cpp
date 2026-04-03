@@ -74,37 +74,169 @@ static inline float compute_block_dot_product_q8_0(const block_q8_0* a_block, co
     return final_sum * scale;
 }
 
-// Compute full-row dot product: sum over K_blocks Q8_0 blocks against F32 vector.
-// Hoists mask save/restore and gather pattern load outside the block loop.
-// Accumulates scaled partial products in a vector register and does a single
-// horizontal reduce at the end — saves ~1000 instructions per row vs per-block.
-static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
-                                         const float* b_col,
-                                         int64_t K_blocks) {
-    static const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+//******************************************************************************
+// Split-phase Q8_0 dot product API
+//
+//   q8_dot_begin(st)      — save mask, set mask 0xFF
+//   q8_dot_reset()        — zero vector accumulator f20
+//   q8_dot_tile(q, b, n)  — accumulate n Q8_0 blocks into f20
+//   q8_dot_reduce()       — horizontal sum of f20, return scalar float
+//   q8_dot_teardown(st)   — restore original mask
+//
+// Register contract:
+//   f20       — row accumulator (persistent across tiles, reset per row)
+//   f31       — gather pattern (reloaded per q8_dot_tile call)
+//   f10-f12   — scratch within tile
+//   f15       — scale broadcast within tile
+//   f1-f5, t0 — scratch within reduce
+//******************************************************************************
 
-    unsigned long saved_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
-    __asm__ volatile("mov.m.x m0, x0, 0xFF");
-    __asm__ volatile("flw.ps f31, %[g]\n" : : [g] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
-    __asm__ volatile("fbci.pi f20, 0" ::: "f20");  // vector accumulator
+static inline void __attribute__((always_inline))
+q8_dot_reset(void) {
+    __asm__ volatile("fbci.pi f20, 0" ::: "f20");
+}
 
-    for (int64_t kb = 0; kb < K_blocks; kb++) {
+// Accumulate n_blocks Q8_0 blocks into f20.
+// Uses fg32b.ps (fast gather with scalar pattern) for aligned chunks,
+// falls back to fgb.ps for chunks crossing a 32-byte boundary.
+static inline void __attribute__((always_inline))
+q8_dot_tile(const block_q8_0* q_row, const float* b_col, int64_t n_blocks) {
+    const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    const uint64_t gather_0_to_7 = 0x398a418820ULL;
+
+    __asm__ volatile("flw.ps f31, %[g]\n"
+                     : : [g] "m"(*(const int32_t(*)[8])gather_pattern)
+                     : "f31");
+
+    for (int64_t kb = 0; kb < n_blocks; kb++) {
         const block_q8_0* blk = q_row + kb;
         const float* b_ptr = b_col + (kb << 5);
+        const uintptr_t qs_addr = (uintptr_t)blk->qs;
+        const uintptr_t qs_aligned = qs_addr & ~(uintptr_t)31;
+        const uintptr_t qs_low = qs_addr & 31;
+        const int fast_chunks = (int)((32 - qs_low) >> 3);
 
-        __asm__ volatile("fbci.pi f10, 0" ::: "f10");  // per-block accumulator
-
-        for (int chunk = 0; chunk < 4; chunk++) {
-            int off = chunk << 3;
+        if (fast_chunks >= 3) {
             __asm__ volatile(
-                "flw.ps f12, %[bv]\n"
-                "fgb.ps f11, f31(%[ap])\n"
-                "fcvt.ps.pw f11, f11\n"
-                "fmadd.ps f10, f11, f12, f10\n"
+                "fbci.pi     f10, 0\n"
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f11, %[gi](%[ap0])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv1]\n"
+                "fg32b.ps    f11, %[gi](%[ap1])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv2]\n"
+                "fg32b.ps    f11, %[gi](%[ap2])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv3]\n"
+                "fgb.ps      f11, f31(%[ap3])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
                 :
-                : [ap] "r"(&blk->qs[off]),
-                  [bv] "m"(*(const float(*)[8])&b_ptr[off])
+                : [gi]  "r"(gather_0_to_7),
+                  [ap0] "r"(qs_addr),
+                  [ap1] "r"(qs_aligned | ((qs_addr + 8)  & 31)),
+                  [ap2] "r"(qs_aligned | ((qs_addr + 16) & 31)),
+                  [ap3] "r"(&blk->qs[24]),
+                  [bv0] "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1] "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2] "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3] "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12"
+            );
+        } else if (fast_chunks == 2) {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f11, %[gi](%[ap0])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv1]\n"
+                "fg32b.ps    f11, %[gi](%[ap1])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv2]\n"
+                "fgb.ps      f11, f31(%[ap2])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv3]\n"
+                "fgb.ps      f11, f31(%[ap3])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                :
+                : [gi]  "r"(gather_0_to_7),
+                  [ap0] "r"(qs_addr),
+                  [ap1] "r"(qs_aligned | ((qs_addr + 8) & 31)),
+                  [ap2] "r"(&blk->qs[16]),
+                  [ap3] "r"(&blk->qs[24]),
+                  [bv0] "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1] "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2] "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3] "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12"
+            );
+        } else if (fast_chunks == 1) {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f11, %[gi](%[ap0])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv1]\n"
+                "fgb.ps      f11, f31(%[ap1])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv2]\n"
+                "fgb.ps      f11, f31(%[ap2])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv3]\n"
+                "fgb.ps      f11, f31(%[ap3])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                :
+                : [gi]  "r"(gather_0_to_7),
+                  [ap0] "r"(qs_addr),
+                  [ap1] "r"(&blk->qs[8]),
+                  [ap2] "r"(&blk->qs[16]),
+                  [ap3] "r"(&blk->qs[24]),
+                  [bv0] "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1] "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2] "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3] "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12"
+            );
+        } else {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "flw.ps      f12, %[bv0]\n"
+                "fgb.ps      f11, f31(%[ap0])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv1]\n"
+                "fgb.ps      f11, f31(%[ap1])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv2]\n"
+                "fgb.ps      f11, f31(%[ap2])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                "flw.ps      f12, %[bv3]\n"
+                "fgb.ps      f11, f31(%[ap3])\n"
+                "fcvt.ps.pw  f11, f11\n"
+                "fmadd.ps    f10, f11, f12, f10\n"
+                :
+                : [ap0] "r"(&blk->qs[0]),
+                  [ap1] "r"(&blk->qs[8]),
+                  [ap2] "r"(&blk->qs[16]),
+                  [ap3] "r"(&blk->qs[24]),
+                  [bv0] "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1] "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2] "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3] "m"(*(const float(*)[8])&b_ptr[24])
                 : "f10", "f11", "f12"
             );
         }
@@ -120,8 +252,11 @@ static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
             : "f15", "f20"
         );
     }
+}
 
-    // Single horizontal reduce
+// Horizontal sum of 8-element vector accumulator f20.
+static inline float __attribute__((always_inline))
+q8_dot_reduce(void) {
     float result;
     __asm__ __volatile__ (
         "fswizz.ps f1, f20, 0xB1 \n\t"
@@ -134,7 +269,19 @@ static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
         : [vout] "=f" (result)
         :: "t0", "f1", "f2", "f3", "f4", "f5"
     );
+    return result;
+}
 
+// Full-row dot product (convenience wrapper)
+static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
+                                         const float* b_col,
+                                         int64_t K_blocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    q8_dot_reset();
+    q8_dot_tile(q_row, b_col, K_blocks);
+    float result = q8_dot_reduce();
     __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
     return result;
 }
