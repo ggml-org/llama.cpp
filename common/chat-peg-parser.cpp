@@ -75,6 +75,84 @@ static std::string escape_json_string_inner(const std::string & s) {
     return escaped;
 }
 
+static const std::string GEMMA4_QUOTE = "<|\"|>";
+
+static std::string normalize_gemma4_to_json(const std::string & input) {
+    std::string result;
+    result.reserve(input.size() * 2);
+
+    enum Ctx { DICT, ARRAY };
+    std::vector<Ctx> ctx;
+
+    auto is_ws = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+    auto skip_ws = [&](size_t & pos) {
+        while (pos < input.size() && is_ws(input[pos])) {
+            result += input[pos++];
+        }
+    };
+
+    auto quote_unquoted_key = [&](size_t & pos) {
+        if (pos < input.size() && input[pos] != '"' && input[pos] != '}') {
+            result += '"';
+            while (pos < input.size() && input[pos] != ':' && !is_ws(input[pos])) {
+                result += input[pos++];
+            }
+            result += '"';
+            skip_ws(pos);
+        }
+    };
+
+    size_t i = 0;
+    while (i < input.size()) {
+        if (i + GEMMA4_QUOTE.size() <= input.size() &&
+            input.compare(i, GEMMA4_QUOTE.size(), GEMMA4_QUOTE) == 0) {
+            result += '"';
+            i += GEMMA4_QUOTE.size();
+            continue;
+        }
+
+        char c = input[i];
+
+        if (c == '{') {
+            result += c;
+            ctx.push_back(DICT);
+            ++i;
+            skip_ws(i);
+            quote_unquoted_key(i);
+            continue;
+        }
+        if (c == '}') {
+            result += c;
+            if (!ctx.empty()) ctx.pop_back();
+            ++i;
+            continue;
+        }
+        if (c == '[') {
+            result += c;
+            ctx.push_back(ARRAY);
+            ++i;
+            continue;
+        }
+        if (c == ']') {
+            result += c;
+            if (!ctx.empty()) ctx.pop_back();
+            ++i;
+            continue;
+        }
+        if (c == ',' && !ctx.empty() && ctx.back() == DICT) {
+            result += c;
+            ++i;
+            skip_ws(i);
+            quote_unquoted_key(i);
+            continue;
+        }
+
+        result += c;
+        ++i;
+    }
+    return result;
+}
+
 // Convert Python-style single-quoted strings to JSON double-quoted strings
 // Only converts outer string delimiters, properly handling escape sequences:
 // - {'key': 'value'} -> {"key": "value"}
@@ -212,6 +290,14 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
 
 std::string & common_chat_peg_mapper::args_target() {
     return (current_tool && !current_tool->name.empty()) ? current_tool->arguments : args_buffer;
+}
+
+std::string common_chat_peg_mapper::normalize_container_value(const std::string & input) {
+    return normalize_quotes_to_json(input);
+}
+
+std::string common_chat_peg_gemma4_mapper::normalize_container_value(const std::string & input) {
+    return normalize_quotes_to_json(normalize_gemma4_to_json(input));
 }
 
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
@@ -352,7 +438,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             // For potential containers, normalize Python-style single quotes to JSON double quotes
             bool is_potential_container = value_content[0] == '[' || value_content[0] == '{';
             if (is_potential_container) {
-                value_content = normalize_quotes_to_json(value_content);
+                value_content = normalize_container_value(value_content);
             }
 
             // Try to parse as JSON value (number, bool, null, object, array)

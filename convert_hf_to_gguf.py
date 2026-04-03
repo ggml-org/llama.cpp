@@ -1164,7 +1164,7 @@ class TextModel(ModelBase):
         if (n_experts := self.find_hparam(["num_local_experts", "num_experts"], optional=True)) is not None:
             self.gguf_writer.add_expert_count(n_experts)
             logger.info(f"gguf: expert count = {n_experts}")
-        if (n_experts_used := self.find_hparam(["num_experts_per_tok", "num_experts_per_token"], optional=True)) is not None:
+        if (n_experts_used := self.find_hparam(["num_experts_per_tok", "num_experts_per_token", "top_k_experts"], optional=True)) is not None:
             self.gguf_writer.add_expert_used_count(n_experts_used)
             logger.info(f"gguf: experts used count = {n_experts_used}")
         if (n_expert_groups := self.hparams.get("n_group")) is not None:
@@ -6878,7 +6878,9 @@ class Gemma2Model(TextModel):
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
-    norm_shift = 1.0  # Gemma3RMSNorm adds 1.0 to the norm value
+
+    def norm_shift(self, name: str) -> float:
+        return 1.0 if name.endswith("norm.weight") else 0.0  # Gemma3RMSNorm adds 1.0 to the norm value
 
     def set_vocab(self):
         if (self.dir_model / "tokenizer.model").is_file():
@@ -6916,17 +6918,22 @@ class Gemma3Model(TextModel):
 
         # remove OOV (out-of-vocabulary) rows in token_embd
         if "embed_tokens.weight" in name:
+            n_vocab_real = -1
             if (self.dir_model / "tokenizer.model").is_file():
                 tokens = self._create_vocab_sentencepiece()[0]
+                n_vocab_real = len(tokens)
             else:
-                tokens = self.get_vocab_base()[0]
-            data_torch = data_torch[:len(tokens)]
+                with open(self.dir_model / "tokenizer.json", "r", encoding="utf-8") as f:
+                    tokenizer_json = json.load(f)
+                    n_vocab_real = len(tokenizer_json["model"]["vocab"]) + len(tokenizer_json["added_tokens"])
+            data_torch = data_torch[:n_vocab_real]
 
         # ref code in Gemma3RMSNorm
         # output = output * (1.0 + self.weight.float())
         # note: this is not the case on gemma3n
-        if name.endswith("norm.weight"):
-            data_torch = data_torch + self.norm_shift
+        f_shift = self.norm_shift(name)
+        if f_shift != 0.0:
+            data_torch = data_torch + f_shift
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -7100,7 +7107,8 @@ class ConformerAudioModel(MmprojModel):
             assert data_torch.shape[2] == 1
             data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[1])
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
+        yield (mapped_name, data_torch)
 
 
 @ModelBase.register("DeepseekOCRForCausalLM")
@@ -7289,7 +7297,6 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
 @ModelBase.register("Gemma3nForCausalLM", "Gemma3nForConditionalGeneration")
 class Gemma3NModel(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA3N
-    norm_shift = 0.0 # same value with Gemma3p5RMSNorm scale_shift on python code
 
     _altup_proj: list[Tensor] = []
     _altup_unembd: list[Tensor] = []
@@ -7307,6 +7314,10 @@ class Gemma3NModel(Gemma3Model):
             torch.Tensor(), # to be replaced
             torch.Tensor(), # to be replaced
         ]
+
+    def norm_shift(self, name: str) -> float:
+        del name
+        return 0.0 # same value with Gemma3p5RMSNorm scale_shift on python code
 
     def set_vocab(self):
         # For Gemma3n multimodal models, we need the FULL vocab_size (262400)
@@ -7423,6 +7434,209 @@ class Gemma3NModel(Gemma3Model):
                 return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Gemma4ForConditionalGeneration")
+class Gemma4Model(Gemma3Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA4
+
+    def norm_shift(self, name: str) -> float:
+        del name # unused
+        return 0.0
+
+    def set_vocab(self):
+        vocab = gguf.LlamaHfVocab(self.dir_model)
+        tokens = []
+        scores = []
+        toktypes = []
+        visible_tokens = {"<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>", "<|tool_response>", "<tool_response|>", "<|\"|>"}
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            text_str = text.decode()
+            if text_str in visible_tokens:
+                # always render these tokens, so that the chat parser can read them
+                toktypes.append(gguf.TokenType.USER_DEFINED)
+                logger.info(f"Token '{text_str}' is set to USER_DEFINED")
+            else:
+                toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(False) # already added via the chat template
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        num_kv_shared_layers = self.hparams["num_kv_shared_layers"]
+        self.gguf_writer.add_shared_kv_layers(num_kv_shared_layers)
+
+        # per-layer embedding is optional
+        n_pl_embd = self.hparams.get("hidden_size_per_layer_input") or 0
+        self.gguf_writer.add_embedding_length_per_layer_input(n_pl_embd)
+
+        swa_layers = [t == "sliding_attention" for t in self.hparams["layer_types"]]
+        self.gguf_writer.add_sliding_window_pattern(swa_layers)
+
+        head_dim_full = self.hparams["global_head_dim"]
+        head_dim_swa = self.hparams["head_dim"]
+        # correct the head dim for global/swa layers
+        self.gguf_writer.add_key_length(head_dim_full)
+        self.gguf_writer.add_value_length(head_dim_full)
+        self.gguf_writer.add_key_length_swa(head_dim_swa)
+        self.gguf_writer.add_value_length_swa(head_dim_swa)
+
+        expert_intermediate_size = self.find_hparam(["expert_intermediate_size", "moe_intermediate_size"])
+        if expert_intermediate_size is not None:
+            self.gguf_writer.add_expert_feed_forward_length(expert_intermediate_size)
+
+        # if use_double_wide_mlp is set, we need to adjust the value for kv shared layers
+        use_double_wide_mlp = self.hparams.get("use_double_wide_mlp", False)
+        first_kv_shared_layer_idx = self.block_count - num_kv_shared_layers
+        if use_double_wide_mlp:
+            n_ff = self.hparams["intermediate_size"]
+            n_ff_arr = [n_ff if il < first_kv_shared_layer_idx else n_ff * 2 for il in range(self.block_count)]
+            self.gguf_writer.add_feed_forward_length(n_ff_arr)
+
+        # handle num_global_key_value_heads
+        num_key_value_heads_full = self.hparams.get("num_global_key_value_heads")
+        num_key_value_heads_swa = self.hparams.get("num_key_value_heads")
+        if num_key_value_heads_full is not None and num_key_value_heads_swa is not None:
+            value_arr = [num_key_value_heads_swa if is_swa else num_key_value_heads_full for is_swa in swa_layers]
+            self.gguf_writer.add_head_count_kv(value_arr)
+
+        # handle n_rot differently for global vs swa layers
+        partial_rotary_factor_swa = self.hparams.get("partial_rotary_factor", 1.0)
+        n_rot_full = int(head_dim_full) # "proportional" is used, see generate_extra_tensors
+        n_rot_swa = int(head_dim_swa * partial_rotary_factor_swa)
+        self.gguf_writer.add_rope_dimension_count(n_rot_full)
+        self.gguf_writer.add_rope_dimension_count_swa(n_rot_swa)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # full layer uses "proportional" rope with partial_rotary_factor=0.25
+        # the expected ordering is cc000000ss000000 (c = cos, s = sin, 0 = unrotated),
+        # but ggml neox only supports ccss000000000000, and we cannot rearrange the head because that will break use_alternative_attention
+        # solution is to set specific freq_factors for the unrotated dims
+
+        # IMPORTANT: this ROPE_FREQS tensor is ONLY used by the full_attention layers
+        rope_params_full = self.hparams["rope_parameters"]["full_attention"]
+        assert rope_params_full["rope_type"] == "proportional"
+        head_dim_full = (self.hparams["global_head_dim"])
+        partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
+        n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
+        n_unrot_full = int(head_dim_full / 2) - n_rot_full
+        values = [1.0] * n_rot_full + [1e30] * n_unrot_full
+        rope_freqs_full = torch.tensor(values, dtype=torch.float32)
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("per_dim_scale") or name.endswith("layer_scalar"):
+            name = name + ".weight"
+
+        if "language_model." not in name and "rope_freqs" not in name:
+            return # skip non-language model tensors
+
+        name = name.replace("language_model.", "")
+        if name.endswith("router.scale"):
+            name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid, ".scale")
+            yield (name, data_torch)
+            return
+        if ".per_expert_scale" in name:
+            # convert per-expert scale to FFN down scale
+            name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid, ".scale")
+            yield (name, data_torch)
+            return
+        if ".experts." in name and not name.endswith(".weight"):
+            name += ".weight"
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Gemma4ForConditionalGeneration")
+class Gemma4VisionAudioModel(MmprojModel):
+    has_audio_encoder = True
+    has_vision_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.hparams_vision["image_size"] = 224 # unused, but set to avoid error
+
+        # remap audio hparams
+        if self.hparams_audio:
+            self.hparams_audio["feat_in"] = self.hparams_audio.get("input_feat_size", 128)
+            self.hparams_audio["intermediate_size"] = self.hparams_audio["hidden_size"] * 4
+        else:
+            self.has_audio_encoder = False
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # vision params
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4V)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+
+        # audio params
+        if self.hparams_audio:
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4A)
+            self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
+            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+
+    def is_audio_tensor(self, name: str) -> bool:
+        return "audio_tower" in name or "embed_audio" in name
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if self.is_audio_tensor(name):
+            if ".conv" in name or "_conv" in name and ".weight" in name:
+                return gguf.GGMLQuantizationType.F32
+        if "position_embedding_table" in name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
+
+        if name.startswith("model.language_model."):
+            return # skip
+
+        if len(data_torch.shape) == 0:
+            # convert scalar tensors (input/output_mix/max) to 1D tensors
+            data_torch = data_torch.unsqueeze(0)
+
+        if self.is_audio_tensor(name):
+            assert self.hparams_audio is not None
+            name = name.replace("model.audio_tower.", "conformer.")
+            name = name.replace(".linear.", ".")
+            if name.endswith("per_dim_key_scale") or name.endswith("per_dim_scale"):
+                name = name + ".weight"
+                data_torch = torch.nn.functional.softplus(data_torch)
+            if "lconv1d.depthwise_conv1d" in name and name.endswith(".weight"):
+                assert data_torch.shape[1] == 1
+                data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[2])
+            mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
+            yield (mapped_name, data_torch)
+
+        else:
+            name = name.replace("model.vision_tower.encoder.", "vision_model.model.")
+            name = name.replace(".linear.weight", ".weight")
+            if name.endswith("layer_scalar") or name.endswith("position_embedding_table"):
+                name = name + ".weight"
+            if name.endswith("patch_embedder.input_proj.weight"):
+                n_embd, ksize_sq_c = data_torch.shape
+                patch_size = int((ksize_sq_c // 3) ** 0.5)
+                data_torch = data_torch.reshape(n_embd, patch_size, patch_size, 3)
+                data_torch = data_torch.permute(0, 3, 1, 2).contiguous()
+            mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
+            yield (mapped_name, data_torch)
 
 
 @ModelBase.register("Starcoder2ForCausalLM")

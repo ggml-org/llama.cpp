@@ -143,6 +143,10 @@ struct clip_hparams {
 };
 
 struct clip_layer {
+    // layernorm 1 (or layer input norm, or pre-attention norm)
+    ggml_tensor * ln_1_w = nullptr;
+    ggml_tensor * ln_1_b = nullptr;
+
     // attention
     ggml_tensor * k_w = nullptr;
     ggml_tensor * k_b = nullptr;
@@ -159,9 +163,7 @@ struct clip_layer {
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
-    // layernorm 1
-    ggml_tensor * ln_1_w = nullptr;
-    ggml_tensor * ln_1_b = nullptr;
+    ggml_tensor * attn_post_norm_w = nullptr;
 
     ggml_tensor * ff_up_w = nullptr;
     ggml_tensor * ff_up_b = nullptr;
@@ -170,13 +172,16 @@ struct clip_layer {
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
 
-    // layernorm 2
+    // layernorm 2 (or pre-FFN norm)
     ggml_tensor * ln_2_w = nullptr;
     ggml_tensor * ln_2_b = nullptr;
 
+    ggml_tensor * ff_post_norm_w = nullptr;
+
     // layer scale (no bias)
-    ggml_tensor * ls_1_w = nullptr;
-    ggml_tensor * ls_2_w = nullptr;
+    ggml_tensor * ls_1_w   = nullptr;
+    ggml_tensor * ls_2_w   = nullptr;
+    ggml_tensor * ls_out_w = nullptr; // gemma4
 
     // qwen3vl deepstack merger
     ggml_tensor * deepstack_norm_w = nullptr;
@@ -436,6 +441,18 @@ struct clip_model {
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
     ggml_tensor * pre_encode_out_w = nullptr;
     ggml_tensor * pre_encode_out_b = nullptr;
+
+    // gemma4
+    ggml_tensor * std_bias = nullptr;
+    ggml_tensor * std_scale = nullptr;
+    // Gemma4ClippableLinear
+    struct clamp_info {
+        float inp_max;
+        float inp_min;
+        float out_max;
+        float out_min;
+    };
+    std::map<std::string, clamp_info> clamp_info_map;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
