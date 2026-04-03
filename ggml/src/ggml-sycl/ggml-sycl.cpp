@@ -6287,13 +6287,25 @@ static inline void moe_fusion_clear_all() {
 static bool g_moe_profile_enabled = false;
 static bool g_moe_profile_initialized = false;
 
+// PP-specific profile mode: no warmup, profile first graph_compute
+static bool g_moe_pp_profile_enabled = false;
+
 static inline void moe_profile_init() {
     if (g_moe_profile_initialized) return;
     g_moe_profile_initialized = true;
     const char * env = getenv("GGML_SYCL_MOE_PROFILE");
     g_moe_profile_enabled = (env && std::atoi(env) != 0);
+    // GGML_SYCL_MOE_PP_PROFILE=1: zero warmup, profile first graph (for PP)
+    const char * pp_env = getenv("GGML_SYCL_MOE_PP_PROFILE");
+    if (pp_env && std::atoi(pp_env) != 0) {
+        g_moe_profile_enabled = true;
+        g_moe_pp_profile_enabled = true;
+    }
     if (g_moe_profile_enabled) {
-        fprintf(stderr, "[MOE-PROFILE] Enabled: %d warmup + %d profiled tokens\n", 2, 10);
+        int warmup = g_moe_pp_profile_enabled ? 0 : 2;
+        int profile = g_moe_pp_profile_enabled ? 1 : 10;
+        fprintf(stderr, "[MOE-PROFILE] Enabled%s: %d warmup + %d profiled tokens\n",
+                g_moe_pp_profile_enabled ? " (PP mode)" : "", warmup, profile);
     }
 }
 
@@ -6317,6 +6329,15 @@ struct moe_profile_layer {
     int    scatter_n_calls     = 0;  // Number of scatter calls in this layer
     int    scatter_n_entries   = 0;  // Total scatter entries (expert results)
     double scatter_bytes       = 0;  // Total bytes scattered H2D
+
+    // PP profile: cache hit/miss/S1 bailout counters
+    int    cache_hits          = 0;  // Experts found in VRAM cache (device-resident)
+    int    cache_misses        = 0;  // Experts requiring CPU compute or staging
+    int    sec_gpu_experts     = 0;  // Experts dispatched to secondary GPU
+    int    s1_bailout_count    = 0;  // Times fused kernel bailed due to S1 mode
+    int    fused_esimd_count   = 0;  // Times fused ESIMD kernel handled the op
+    int    xmx_sorted_count   = 0;  // Times XMX sorted dispatch handled the op
+    int    host_routing_count  = 0;  // Times host-side routing was used
 };
 
 struct moe_profile_token {
@@ -6361,6 +6382,12 @@ struct moe_profile_state {
     int n_warmup = 2;       // Skip first N tokens
     int n_profile = 10;     // Profile N tokens after warmup
     bool token_active = false;
+
+    // Apply PP profile settings (called once after init)
+    void configure_pp_mode() {
+        n_warmup  = 0;
+        n_profile = 1;  // Single graph_compute call for PP
+    }
 
     // Helper
     static double us(hrc::time_point a, hrc::time_point b) {
@@ -6481,6 +6508,22 @@ struct moe_profile_state {
         op_n_gpu = n_gpu;
     }
     void moe_scatter_done() { if (token_active) scatter_done = hrc::now(); }
+
+    // PP profile: record cache hit/miss counts for current layer
+    void moe_cache_stats(int hits, int misses, int sec_gpu) {
+        if (!token_active) return;
+        cur_layer.cache_hits     += hits;
+        cur_layer.cache_misses   += misses;
+        cur_layer.sec_gpu_experts += sec_gpu;
+    }
+    // PP profile: record dispatch path taken
+    void moe_dispatch_path(int s1_bailout, int fused_esimd, int xmx_sorted, int host_routing) {
+        if (!token_active) return;
+        cur_layer.s1_bailout_count   += s1_bailout;
+        cur_layer.fused_esimd_count  += fused_esimd;
+        cur_layer.xmx_sorted_count  += xmx_sorted;
+        cur_layer.host_routing_count += host_routing;
+    }
 
     // Record scatter decomposition (U6 probes)
     void moe_scatter_detail(double cpu_wait_us, double submit_us, double event_wait_us,
@@ -6707,6 +6750,35 @@ struct moe_profile_state {
                 "Token total", dtok.token_total_us / 1000.0, 100.0);
         fprintf(stderr, "  Experts: %d CPU, %d GPU | MoE layers: %d\n",
                 dtok_cpu_exp, dtok_gpu_exp, dtok.n_moe_layers);
+
+        // PP profile: cache hit/miss and dispatch path breakdown
+        if (g_moe_pp_profile_enabled) {
+            int dtok_hits = 0, dtok_misses = 0, dtok_sec = 0;
+            int dtok_s1 = 0, dtok_fused = 0, dtok_xmx = 0, dtok_host = 0;
+            for (auto & lay : dtok.layers) {
+                dtok_hits   += lay.cache_hits;
+                dtok_misses += lay.cache_misses;
+                dtok_sec    += lay.sec_gpu_experts;
+                dtok_s1     += lay.s1_bailout_count;
+                dtok_fused  += lay.fused_esimd_count;
+                dtok_xmx    += lay.xmx_sorted_count;
+                dtok_host   += lay.host_routing_count;
+            }
+            fprintf(stderr, "\n--- PP Profile: Expert Cache & Dispatch ---\n");
+            int total_routed = dtok_hits + dtok_misses + dtok_sec;
+            fprintf(stderr, "  Cache hits (VRAM):    %d  (%.1f%%)\n",
+                    dtok_hits, total_routed > 0 ? 100.0 * dtok_hits / total_routed : 0);
+            fprintf(stderr, "  Cache misses (CPU):   %d  (%.1f%%)\n",
+                    dtok_misses, total_routed > 0 ? 100.0 * dtok_misses / total_routed : 0);
+            fprintf(stderr, "  Secondary GPU:        %d  (%.1f%%)\n",
+                    dtok_sec, total_routed > 0 ? 100.0 * dtok_sec / total_routed : 0);
+            fprintf(stderr, "  Total routed experts: %d\n", total_routed);
+            fprintf(stderr, "\n  Dispatch paths (MUL_MAT_ID calls):\n");
+            fprintf(stderr, "    S1 fused bailout:   %d\n", dtok_s1);
+            fprintf(stderr, "    Fused ESIMD:        %d\n", dtok_fused);
+            fprintf(stderr, "    XMX sorted:         %d\n", dtok_xmx);
+            fprintf(stderr, "    Host routing:       %d\n", dtok_host);
+        }
 
         // Print averages
         fprintf(stderr, "\n--- Averages across %d profiled tokens ---\n", nt);
@@ -29745,6 +29817,7 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     // Attempting to cache a 500+ MB tensor on-demand here triggers eviction
     // loops that hang graph_compute.  Bail out -- per-expert MMVQ handles S1.
     if (ggml_backend_sycl_all_weights_host()) {
+        if (g_moe_pp_profile_enabled) { g_moe_profile.moe_dispatch_path(1, 0, 0, 0); }
         return false;
     }
     // Early batch size checks - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for common cases
@@ -32012,6 +32085,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                     fusion.n_ids = fusion.cpu_indices.size();
 
+                    // PP profile: record cache hit/miss stats for this routing decision
+                    if (g_moe_pp_profile_enabled) {
+                        g_moe_profile.moe_cache_stats(
+                            static_cast<int>(fusion.gpu0_cached_indices.size()),
+                            static_cast<int>(fusion.cpu_indices.size()),
+                            static_cast<int>(fusion.sec_indices.size()));
+                    }
+
                     if (g_moe_profile_enabled) { g_moe_profile.moe_routing_done(); }
 
                     // Fusion only makes sense when at least one expert is computed on CPU.
@@ -33338,12 +33419,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     if (!early_cpu_expert_tg) {
     if (xmx_layout_allowed() && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
+        if (g_moe_pp_profile_enabled) { g_moe_profile.moe_dispatch_path(0, 0, 1, 0); }
         return;
     }
     // Fused ESIMD kernel for batched prefill (ne12 > 1)
     if ((!has_override || override_layout == GGML_LAYOUT_AOS) &&
         ggml_sycl_mul_mat_id_fused(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] Fused ESIMD dispatch successful for type %d\n", src0->type);
+        if (g_moe_pp_profile_enabled) { g_moe_profile.moe_dispatch_path(0, 1, 0, 0); }
         // Record expert activations for warmup + adaptive prestage (fused PP path)
         {
             const bool in_warmup_e = !g_moe_warmup.warmup_done.load(std::memory_order_acquire);
@@ -33439,6 +33522,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     } // end if (!early_cpu_expert_tg)
     GGML_SYCL_DEBUG("[MoE] All MMVQ layouts failed, falling back to host routing\n");
+    if (g_moe_pp_profile_enabled) { g_moe_profile.moe_dispatch_path(0, 0, 0, 1); }
     if (!early_cpu_expert_tg) {
         GGML_LOG_INFO("[MoE] Falling back to host-side routing for type %d\n", src0->type);
     }
@@ -34278,6 +34362,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
                 }
 
+                // PP profile: record cache hit/miss stats for host routing path
+                if (g_moe_pp_profile_enabled) {
+                    g_moe_profile.moe_cache_stats(
+                        static_cast<int>(gpu_entries.size()),
+                        static_cast<int>(cpu_entries.size()),
+                        static_cast<int>(secondary_count));
+                }
+
                 // Compute sequential layer ID for warmup/stats (CPU-TG path)
                 int seq_layer_id_cputg = -1;
                 {
@@ -34573,6 +34665,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
 
             moe_token_counter.fetch_add(1, std::memory_order_relaxed);
+
+            // PP profile: record cache hit/miss stats for PP host routing path
+            if (g_moe_pp_profile_enabled) {
+                size_t pp_sec_count = 0;
+                for (int d = 1; d < n_gpu_devs; d++) {
+                    pp_sec_count += per_gpu_entries[d].size();
+                }
+                g_moe_profile.moe_cache_stats(
+                    static_cast<int>(gpu_entries.size()),
+                    static_cast<int>(cpu_entries.size()),
+                    static_cast<int>(pp_sec_count));
+            }
 
             // Record expert activations for warmup + adaptive prestage
             {
@@ -37708,6 +37812,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     // MoE per-phase profiling: initialize once, begin token timing
     moe_profile_init();
+    if (g_moe_pp_profile_enabled) {
+        static bool pp_configured = false;
+        if (!pp_configured) {
+            g_moe_profile.configure_pp_mode();
+            pp_configured = true;
+        }
+    }
     if (g_moe_profile_enabled) {
         g_moe_profile.begin_token();
     }
