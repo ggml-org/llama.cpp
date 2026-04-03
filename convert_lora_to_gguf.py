@@ -455,6 +455,62 @@ if __name__ == '__main__':
                     assert tensor.B is not None
                     yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
+            @staticmethod
+            def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
+                """Override V head reordering to handle LoraTorchTensor.
+
+                For regular tensors, delegates to the base implementation.
+                For LoraTorchTensor, computes a permutation index and applies it
+                directly to lora_A (column reorder) or lora_B (row reorder),
+                avoiding the reshape that LoraTorchTensor cannot support when
+                the last dimension changes.
+
+                Math:
+                  W = B @ A
+                  Row reorder (dim=0):  W[perm,:] = B[perm,:] @ A
+                  Col reorder (dim=1):  W[:,perm] = B @ A[:,perm]
+                """
+                if not isinstance(tensor, LoraTorchTensor):
+                    # Delegate to the base-model implementation (reshape-permute-reshape)
+                    shape = list(tensor.shape)
+                    if dim < 0:
+                        dim += len(shape)
+                    new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
+                    tensor = tensor.reshape(*new_shape)
+                    perm_dims = list(range(len(new_shape)))
+                    perm_dims[dim], perm_dims[dim + 1] = perm_dims[dim + 1], perm_dims[dim]
+                    return tensor.permute(*perm_dims).contiguous().reshape(*shape)
+
+                shape = list(tensor.shape)
+                if dim < 0:
+                    dim += len(shape)
+
+                # Build permutation indices:
+                #   grouped [G0_v0..v{r-1}, G1_v0..v{r-1}, ...]
+                #   → tiled  [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...]
+                n = num_k_heads * num_v_per_k * head_dim
+                assert shape[dim] == n, f"Expected dim {dim} to be {n}, got {shape[dim]}"
+                perm = (
+                    torch.arange(n)
+                    .reshape(num_k_heads, num_v_per_k, head_dim)
+                    .permute(1, 0, 2)
+                    .contiguous()
+                    .reshape(n)
+                )
+
+                lora_A, lora_B = tensor.get_lora_A_B()
+
+                if dim == len(shape) - 1:
+                    # Column reorder (e.g. out_proj, dim=1 on 2D tensor → dim=-1)
+                    # W[:,perm] = B @ A[:,perm]
+                    lora_A = lora_A[..., perm]
+                else:
+                    # Row reorder (e.g. in_proj_*, dim=0)
+                    # W[perm,:] = B[perm,:] @ A
+                    lora_B = lora_B.index_select(dim, perm)
+
+                return LoraTorchTensor(lora_A, lora_B)
+
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
                 dest = list(super().modify_tensors(data_torch, name, bid))
                 # some archs may have the same tensor for lm_head and output (tie word embeddings)
