@@ -1557,6 +1557,36 @@ static std::unordered_set<std::string> collect_reachable_rules(
 
 // GBNF generation implementation
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+    auto schema_delegates = [](const common_peg_schema_parser & s) -> bool {
+        if (!s.schema) {
+            return true;
+        }
+        if (s.raw && s.schema->contains("type") && s.schema->at("type").is_string() && s.schema->at("type") == "string") {
+            return true;
+        }
+        return false;
+    };
+
+    // Unwrap the parser so we can properly check if it's a sequence or choice
+    auto effective_parser = [&](common_peg_parser_id id) -> const common_peg_parser_variant & {
+        while (true) {
+            const auto & p = parsers_.at(id);
+            if (const auto * tag = std::get_if<common_peg_tag_parser>(&p)) {
+                id = tag->child;
+            } else if (const auto * atomic = std::get_if<common_peg_atomic_parser>(&p)) {
+                id = atomic->child;
+            } else if (const auto * schema = std::get_if<common_peg_schema_parser>(&p)) {
+                if (schema_delegates(*schema)) {
+                    id = schema->child;
+                } else {
+                    return p;
+                }
+            } else {
+                return p;
+            }
+        }
+    };
+
     // Generate GBNF for a parser
     std::function<std::string(common_peg_parser_id)> to_gbnf = [&](common_peg_parser_id id) -> std::string {
         const auto & parser = parsers_.at(id);
@@ -1577,7 +1607,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                         s += " ";
                     }
                     auto child_gbnf = to_gbnf(child);
-                    const auto & child_parser = parsers_.at(child);
+                    const auto & child_parser = effective_parser(child);
                     if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
                         std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
                         s += "(" + child_gbnf + ")";
@@ -1593,7 +1623,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                         s += " | ";
                     }
                     auto child_gbnf = to_gbnf(child);
-                    const auto & child_parser = parsers_.at(child);
+                    const auto & child_parser = effective_parser(child);
                     if (std::holds_alternative<common_peg_choice_parser>(child_parser)) {
                         s += "(" + child_gbnf + ")";
                     } else {
@@ -1603,7 +1633,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return s;
             } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
                 auto child_gbnf = to_gbnf(p.child);
-                const auto & child_parser = parsers_.at(p.child);
+                const auto & child_parser = effective_parser(p.child);
                 if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
                     std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
                     child_gbnf = "(" + child_gbnf + ")";
@@ -1663,15 +1693,10 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 }
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-                if (p.schema) {
-                    if (p.raw && p.schema->contains("type") && p.schema->at("type").is_string() && p.schema->at("type") == "string") {
-                        // TODO: Implement more comprehensive grammar generation for raw strings.
-                        // For now, use the grammar emitted from the underlying parser.
-                        return to_gbnf(p.child);
-                    }
-                    return builder.add_schema(p.name, *p.schema);
+                if (schema_delegates(p)) {
+                    return to_gbnf(p.child);
                 }
-                return to_gbnf(p.child);
+                return builder.add_schema(p.name, *p.schema);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {

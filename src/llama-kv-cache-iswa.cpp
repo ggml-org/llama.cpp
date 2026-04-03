@@ -66,8 +66,9 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
+    // note: the SWA cache is never quantized because it is relatively small
     kv_swa = std::make_unique<llama_kv_cache>(
-            model, type_k, type_v,
+            model, GGML_TYPE_F16, GGML_TYPE_F16,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, filter_swa, reuse);
 }

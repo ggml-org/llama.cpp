@@ -27,6 +27,11 @@ IBM zDNN:
         - any-glob-to-any-file:
             - ggml/include/ggml-zdnn.h
             - ggml/src/ggml-zdnn/**
+AMD ZenDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zendnn.h
+            - ggml/src/ggml-zendnn/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:

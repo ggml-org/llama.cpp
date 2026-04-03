@@ -184,6 +184,7 @@ enum common_chat_format {
     // These are intended to be parsed by the PEG parser
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
     COMMON_CHAT_FORMAT_PEG_NATIVE,
+    COMMON_CHAT_FORMAT_PEG_GEMMA4,
 
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };

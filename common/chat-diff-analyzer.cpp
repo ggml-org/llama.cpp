@@ -92,6 +92,34 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: Functionary 3.1]\n" ANSI_RESET);
           }
       },
+      // Gemma4 - custom dict format: <|tool_call>call:name{key:<|"|>val<|"|>}<tool_call|>
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("'<|tool_call>call:'") != std::string::npos) {
+              analysis.tools.format.mode           = tool_format::TAG_WITH_GEMMA4_DICT;
+              analysis.tools.format.per_call_start = "<|tool_call>";
+              analysis.tools.format.per_call_end   = "<tool_call|>";
+              analysis.tools.format.section_start  = "";
+              analysis.tools.format.section_end    = "";
+              analysis.tools.function.name_prefix  = "call:";
+              analysis.tools.function.name_suffix  = "";
+              analysis.tools.arguments.start       = "{";
+              analysis.tools.arguments.end         = "}";
+              analysis.tools.arguments.name_prefix = "";
+              analysis.tools.arguments.name_suffix = ":";
+              analysis.tools.arguments.separator   = ",";
+              analysis.reasoning.mode              = reasoning_mode::TAG_BASED;
+              analysis.reasoning.start             = "<|channel>thought";
+              analysis.reasoning.end               = "<channel|>";
+              analysis.preserved_tokens.clear();
+              analysis.preserved_tokens.push_back("<|tool_call>");
+              analysis.preserved_tokens.push_back("<tool_call|>");
+              analysis.preserved_tokens.push_back("<|tool_response>");
+              analysis.preserved_tokens.push_back("<tool_response|>");
+              analysis.preserved_tokens.push_back("<|\"|>");
+              analysis.preserved_tokens.push_back("<|turn>");
+              LOG_DBG(ANSI_ORANGE "[Patch: Gemma4]\n" ANSI_RESET);
+          }
+      },
       // DeepSeek-R1-Distill-Qwen
       [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find(
