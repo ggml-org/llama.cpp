@@ -7562,7 +7562,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
         std::vector<ggml_backend_buffer_ptr> bufs;
-        if (ml.host_ptr && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        if (ml.host_ptr && use_mmap_buffer && buffer_from_host_ptr_supported && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
             GGML_ASSERT(!ml.no_alloc);
             const size_t max_size = ggml_get_max_tensor_size(ctx);
             ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char*)ml.host_ptr + ml.host_ptr_offset, ml.host_ptr_size, max_size);

@@ -13626,6 +13626,12 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
+    // ggml_vk_host_malloc can return nullptr without throwing when HostVisible
+    // check fails. Fall back to cpu buffer to avoid a context=nullptr crash later.
+    if (ptr == nullptr) {
+        GGML_LOG_WARN("ggml_vulkan: host_malloc returned nullptr, falling back to cpu buffer\n");
+        return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+    }
 
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
@@ -15740,6 +15746,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
 }
 
 static bool ggml_backend_vk_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+    // Also accept the Vulkan host buffer type (pinned/UMA memory).
+    // On UMA devices (e.g. Mali) this lets layer tensors live in pinned host
+    // memory so ggml_vk_host_get finds them and the GPU reads zero-copy.
+    if (buft->iface.get_name == ggml_backend_vk_host_buffer_type_name) {
+        return true;
+    }
+
     if (buft->iface.get_name != ggml_backend_vk_buffer_type_name) {
         return false;
     }
