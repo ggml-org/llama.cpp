@@ -30,8 +30,6 @@ def create_server():
     fd, server.log_path = tempfile.mkstemp(suffix='.log')
     os.close(fd)
     yield
-    if os.path.exists(server.log_path):
-        os.unlink(server.log_path)
 
 
 LONG_PROMPT = (
