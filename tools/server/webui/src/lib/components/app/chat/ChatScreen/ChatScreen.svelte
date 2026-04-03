@@ -33,7 +33,7 @@
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
-	import { fade, fly } from 'svelte/transition';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
@@ -65,17 +65,6 @@
 	let showEmptyFileDialog = $state(false);
 
 	let emptyFileNames = $state<string[]>([]);
-
-	// Incremented each time isEmpty transitions false→true, forcing welcome screen remount with transitions
-	let introKey = $state(0);
-	let wasEmpty = false;
-
-	$effect(() => {
-		if (isEmpty && !wasEmpty) {
-			introKey++;
-		}
-		wasEmpty = isEmpty;
-	});
 
 	let initialMessage = $state('');
 
@@ -352,7 +341,10 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if !isEmpty}
+{#if isServerLoading}
+	<!-- Server Loading State -->
+	<ServerLoadingSplash />
+{:else}
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
@@ -365,22 +357,40 @@
 		role="main"
 	>
 		<div class="flex flex-col">
-			<ChatMessages
-				class="mb-16 md:mb-24"
-				messages={activeMessages()}
-				onUserAction={() => {
-					autoScroll.enable();
-					autoScroll.scrollToBottom();
-				}}
-			/>
+			{#if !isEmpty}
+				<ChatMessages
+					class="mb-16 md:mb-24"
+					messages={activeMessages()}
+					onUserAction={() => {
+						autoScroll.enable();
+						autoScroll.scrollToBottom();
+					}}
+				/>
+			{/if}
 
-			<div class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto">
+			<div
+				class="pointer-events-none {isEmpty
+					? 'absolute bottom-[calc(50dvh-7rem)]'
+					: 'sticky bottom-4'} right-0 left-0 my-auto transition-all duration-200"
+			>
+				{#if isEmpty}
+					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
+						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
+
+						<p class="text-muted-foreground md:text-lg">
+							{serverStore.props?.modalities?.audio
+								? 'Record audio, type a message '
+								: 'Type a message'} or upload files to get started
+						</p>
+					</div>
+				{/if}
+
 				<ChatScreenProcessingInfo />
 
 				{#if hasPropsError}
 					<div
 						class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
-						in:fly={{ y: 10, duration: 250 }}
+						use:fadeInView={{ y: 10, duration: 250 }}
 					>
 						<Alert.Root variant="destructive">
 							<AlertTriangle class="h-4 w-4" />
@@ -417,10 +427,7 @@
 			</div>
 		</div>
 	</div>
-{:else if isServerLoading}
-	<!-- Server Loading State -->
-	<ServerLoadingSplash />
-{:else}
+	<!-- {:else}
 	<div
 		aria-label="Welcome screen with file drop zone"
 		class="flex h-full items-center justify-center"
@@ -431,8 +438,8 @@
 		role="main"
 	>
 		{#key introKey}
-			<div class="w-full max-w-[48rem] px-4">
-				<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
+			<div class="w-full max-w-[48rem]">
+				<div class="mb-10 px-4 text-center" use:fadeInView={{ duration: 300 }}>
 					<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
 					<p class="text-muted-foreground md:text-lg">
@@ -443,7 +450,7 @@
 				</div>
 
 				{#if hasPropsError}
-					<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
+					<div class="mb-4" use:fadeInView={{ duration: 250, y: 10 }}>
 						<Alert.Root variant="destructive">
 							<AlertTriangle class="h-4 w-4" />
 
@@ -465,7 +472,7 @@
 					</div>
 				{/if}
 
-				<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
+				<div>
 					<ChatScreenForm
 						disabled={hasPropsError}
 						{initialMessage}
@@ -481,7 +488,7 @@
 				</div>
 			</div>
 		{/key}
-	</div>
+	</div> -->
 {/if}
 
 <!-- File Upload Error Alert Dialog -->
