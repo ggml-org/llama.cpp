@@ -15,7 +15,7 @@
 #define GGML_ROPE_TYPE_NEOX   2
 #define GGML_ROPE_TYPE_MROPE  8
 #define GGML_ROPE_TYPE_IMROPE 40
-#define MAX_ROPE_HALF_DIMS 128  // supports up to n_dims=256
+#define MAX_ROPE_HALF_DIMS 256  // supports up to n_dims=512
 
 #define ROPE_VEC_WIDTH 8
 

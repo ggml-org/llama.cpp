@@ -1370,14 +1370,14 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const gg
         return false;
     }
 
-    if (node->src[2]->ne[0] > 256) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv=%lld exceeds maximum 256\n",
+    if (node->src[2]->ne[0] > 512) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dv=%lld exceeds maximum 512\n",
                        (long long)node->src[2]->ne[0]);
         return false;
     }
 
-    if (node->src[0]->ne[0] > 256) {
-        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dk=%lld exceeds maximum 256\n",
+    if (node->src[0]->ne[0] > 512) {
+        GGML_LOG_ERROR("ET: FLASH_ATTN_EXT dk=%lld exceeds maximum 512\n",
                        (long long)node->src[0]->ne[0]);
         return false;
     }
