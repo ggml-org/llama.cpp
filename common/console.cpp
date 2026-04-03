@@ -1275,6 +1275,10 @@ namespace console {
         va_end(args);
     }
 
+    void output_guard::write_raw(const char * data, size_t len) {
+        fwrite(data, 1, len, out);
+    }
+
     void output_guard::set_display(display_type type) {
         set_display_unlocked(type);
     }

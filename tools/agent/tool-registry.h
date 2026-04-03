@@ -25,6 +25,8 @@ struct tool_result {
     std::string output;
     std::string error;
     json content;  // structured content array (text + image blocks); overrides output when non-empty
+    std::vector<uint8_t> image_bytes;  // raw image data for terminal preview
+    std::string image_mime;            // e.g. "image/jpeg"
 };
 
 // Tool definition

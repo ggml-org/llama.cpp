@@ -31,6 +31,7 @@ target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common ${CMAKE_THR
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 include_directories(../server)
+include_directories(${CMAKE_SOURCE_DIR}/vendor)  # for stb/stb_image.h (terminal image preview)
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)

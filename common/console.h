@@ -60,6 +60,9 @@ namespace console {
         LLAMA_COMMON_ATTRIBUTE_FORMAT(2, 3)
         void write(const char * fmt, ...);
 
+        // Write raw bytes to console (binary-safe, mutex already held)
+        void write_raw(const char * data, size_t len);
+
         // Change display type (mutex already held)
         void set_display(display_type type);
 

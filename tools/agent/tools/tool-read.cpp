@@ -91,8 +91,10 @@ static tool_result read_execute(const json & args, const tool_context & ctx) {
         std::string data_uri = "data:" + mime + ";base64," + b64;
 
         tool_result result;
-        result.success = true;
-        result.output  = label;
+        result.success     = true;
+        result.output      = label;
+        result.image_bytes = std::move(bytes);
+        result.image_mime  = mime;
         result.content = json::array({
             {{"type", "text"}, {"text", label}},
             {{"type", "image_url"}, {"image_url", {{"url", data_uri}}}}

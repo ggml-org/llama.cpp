@@ -1,5 +1,6 @@
 #include "agent-loop.h"
 #include "console.h"
+#include "terminal-image.h"
 
 #include <chrono>
 #include <functional>
@@ -615,6 +616,10 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
             display_output = display_output.substr(0, 500) + "\n... (truncated)";
         }
         console::log("%s\n", display_output.c_str());
+        if (!result.image_bytes.empty()) {
+            render_image_to_terminal(result.image_bytes.data(), result.image_bytes.size(),
+                                     result.image_mime);
+        }
     } else {
         // Show output if available (e.g., bash stderr), plus error if set
         if (!result.output.empty()) {
