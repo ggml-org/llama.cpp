@@ -23,27 +23,27 @@ struct get_rows_context {
 };
 
 #define get_rows_preamble \
-    const uint32_t ne00 = octx->src0.ne[0]; \
-    const uint32_t ne01 = octx->src0.ne[1]; \
-    const uint32_t ne02 = octx->src0.ne[2]; \
-    const uint32_t ne03 = octx->src0.ne[3]; \
-                                            \
-    const uint32_t ne10 = octx->src1.ne[0]; \
-    const uint32_t ne11 = octx->src1.ne[1]; \
-    const uint32_t ne12 = octx->src1.ne[2]; \
-                                            \
-    const uint32_t nb01 = octx->src0.nb[1]; \
-    const uint32_t nb02 = octx->src0.nb[2]; \
-    const uint32_t nb03 = octx->src0.nb[3]; \
-                                            \
-    const uint32_t nb10 = octx->src1.nb[0]; \
-    const uint32_t nb11 = octx->src1.nb[1]; \
-    const uint32_t nb12 = octx->src1.nb[2]; \
-                                            \
-    const uint32_t nb1 = octx->dst.nb[1];   \
-    const uint32_t nb2 = octx->dst.nb[2];   \
-    const uint32_t nb3 = octx->dst.nb[3];   \
-                                            \
+    const uint32_t ne00 = octx->src[0]->ne[0]; \
+    const uint32_t ne01 = octx->src[0]->ne[1]; \
+    const uint32_t ne02 = octx->src[0]->ne[2]; \
+    const uint32_t ne03 = octx->src[0]->ne[3]; \
+                                               \
+    const uint32_t ne10 = octx->src[1]->ne[0]; \
+    const uint32_t ne11 = octx->src[1]->ne[1]; \
+    const uint32_t ne12 = octx->src[1]->ne[2]; \
+                                               \
+    const uint32_t nb01 = octx->src[0]->nb[1]; \
+    const uint32_t nb02 = octx->src[0]->nb[2]; \
+    const uint32_t nb03 = octx->src[0]->nb[3]; \
+                                               \
+    const uint32_t nb10 = octx->src[1]->nb[0]; \
+    const uint32_t nb11 = octx->src[1]->nb[1]; \
+    const uint32_t nb12 = octx->src[1]->nb[2]; \
+                                               \
+    const uint32_t nb1 = octx->dst->nb[1];     \
+    const uint32_t nb2 = octx->dst->nb[2];     \
+    const uint32_t nb3 = octx->dst->nb[3];     \
+                                               \
     const uint32_t nr = ne10 * ne11 * ne12;
 
 static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *data) {
@@ -56,7 +56,7 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = (ir0 + dr < nr) ? (ir0 + dr) : nr;
 
-    const bool is_i32 = (octx->src1.type == HTP_TYPE_I32);
+    const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
 
     for (uint32_t i = ir0; i < ir1; ++i) {
         const uint32_t i12 = fastdiv(i, &grctx->get_rows_div_ne10_ne11);
@@ -64,7 +64,7 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
         const uint32_t i11 = fastdiv(rem, &grctx->get_rows_div_ne10);
         const uint32_t i10 = rem - i11 * ne10;
 
-        const uintptr_t src1_addr = octx->src1.data + i10*nb10 + i11*nb11 + i12*nb12;
+        const uintptr_t src1_addr = octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12;
 
         uint32_t i01 = is_i32 ? *(int32_t *)src1_addr : *(int64_t *)src1_addr;
 
@@ -73,8 +73,8 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
             continue;
         }
 
-        const uintptr_t src0_ptr = octx->src0.data + i01*nb01 + i11*nb02 + i12*nb03;
-        const uintptr_t dst_ptr  = octx->dst.data  + i10*nb1  + i11*nb2  + i12*nb3;
+        const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i11*nb02 + i12*nb03;
+        const uintptr_t dst_ptr  = octx->dst->data    + i10*nb1  + i11*nb2  + i12*nb3;
         hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
     }
 }
@@ -84,15 +84,15 @@ int op_get_rows(struct htp_ops_context * octx) {
 
     const uint32_t n_threads = MIN(nr, octx->n_threads);
 
-    if (octx->src0.type != HTP_TYPE_F32) {
+    if (octx->src[0]->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->dst.type != HTP_TYPE_F32) {
+    if (octx->dst->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->src1.type != HTP_TYPE_I32 && octx->src1.type != HTP_TYPE_I64) {
+    if (octx->src[1]->type != HTP_TYPE_I32 && octx->src[1]->type != HTP_TYPE_I64) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -102,8 +102,8 @@ int op_get_rows(struct htp_ops_context * octx) {
 
     struct get_rows_context grctx;
     grctx.octx = octx;
-    grctx.get_rows_div_ne10      = init_fastdiv_values(octx->src1.ne[0]);
-    grctx.get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src1.ne[0] * octx->src1.ne[1]);
+    grctx.get_rows_div_ne10      = init_fastdiv_values(octx->src[1]->ne[0]);
+    grctx.get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src[1]->ne[0] * octx->src[1]->ne[1]);
 
     grctx.src1_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 

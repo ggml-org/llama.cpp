@@ -278,12 +278,12 @@ static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * 
 static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_fa_context * factx = (struct htp_fa_context *) data;
     const struct htp_ops_context * octx = factx->octx;
-    const struct htp_tensor * q = &octx->src0;
-    const struct htp_tensor * k = &octx->src1;
-    const struct htp_tensor * v = &octx->src2;
-    const struct htp_tensor * mask  = (octx->src3.data) ? &octx->src3 : NULL;
-    const struct htp_tensor * sinks = (octx->src4.data) ? &octx->src4 : NULL;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * q     = octx->src[0];
+    const struct htp_tensor * k     = octx->src[1];
+    const struct htp_tensor * v     = octx->src[2];
+    const struct htp_tensor * mask  = octx->src[3];
+    const struct htp_tensor * sinks = octx->src[4];
+    const struct htp_tensor * dst   = octx->dst;
 
     const uint32_t neq0 = q->ne[0];
     const uint32_t neq1 = q->ne[1];
@@ -610,11 +610,11 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 }
 
 int op_flash_attn_ext(struct htp_ops_context * octx) {
-    const struct htp_tensor * q = &octx->src0;
-    const struct htp_tensor * k = &octx->src1;
-    const struct htp_tensor * v = &octx->src2;
-    const struct htp_tensor * mask = (octx->src3.data) ? &octx->src3 : NULL;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * q    = octx->src[0];
+    const struct htp_tensor * k    = octx->src[1];
+    const struct htp_tensor * v    = octx->src[2];
+    const struct htp_tensor * mask = octx->src[3];
+    const struct htp_tensor * dst  = octx->dst;
 
     // Check support
     if ((q->type != HTP_TYPE_F16 && q->type != HTP_TYPE_F32) || k->type != HTP_TYPE_F16 || v->type != HTP_TYPE_F16) {

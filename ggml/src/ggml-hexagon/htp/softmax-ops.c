@@ -18,35 +18,35 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
-#define htp_softmax_preamble3                              \
-    const uint32_t ne00 = src0->ne[0];                     \
-    const uint32_t ne01 = src0->ne[1];                     \
-    const uint32_t ne02 = src0->ne[2];                     \
-    const uint32_t ne03 = src0->ne[3];                     \
-                                                           \
-    const uint32_t nb00 = src0->nb[0];                     \
-    const uint32_t nb01 = src0->nb[1];                     \
-    const uint32_t nb02 = src0->nb[2];                     \
-    const uint32_t nb03 = src0->nb[3];                     \
-                                                           \
-    const uint32_t ne10 = (src1->ne[0]) ? src1->ne[0] : 1; \
-    const uint32_t ne11 = (src1->ne[0]) ? src1->ne[1] : 1; \
-    const uint32_t ne12 = (src1->ne[0]) ? src1->ne[2] : 1; \
-    const uint32_t ne13 = (src1->ne[0]) ? src1->ne[3] : 1; \
-                                                           \
-    const uint32_t nb10 = (src1->ne[0]) ? src1->nb[0] : 1; \
-    const uint32_t nb11 = (src1->ne[0]) ? src1->nb[1] : 1; \
-    const uint32_t nb12 = (src1->ne[0]) ? src1->nb[2] : 1; \
-    const uint32_t nb13 = (src1->ne[0]) ? src1->nb[3] : 1; \
-                                                           \
-    const uint32_t ne0 = dst->ne[0];                       \
-    const uint32_t ne1 = dst->ne[1];                       \
-    const uint32_t ne2 = dst->ne[2];                       \
-    const uint32_t ne3 = dst->ne[3];                       \
-                                                           \
-    const uint32_t nb0 = dst->nb[0];                       \
-    const uint32_t nb1 = dst->nb[1];                       \
-    const uint32_t nb2 = dst->nb[2];                       \
+#define htp_softmax_preamble3                     \
+    const uint32_t ne00 = src0->ne[0];            \
+    const uint32_t ne01 = src0->ne[1];            \
+    const uint32_t ne02 = src0->ne[2];            \
+    const uint32_t ne03 = src0->ne[3];            \
+                                                  \
+    const uint32_t nb00 = src0->nb[0];            \
+    const uint32_t nb01 = src0->nb[1];            \
+    const uint32_t nb02 = src0->nb[2];            \
+    const uint32_t nb03 = src0->nb[3];            \
+                                                  \
+    const uint32_t ne10 = src1 ? src1->ne[0] : 1; \
+    const uint32_t ne11 = src1 ? src1->ne[1] : 1; \
+    const uint32_t ne12 = src1 ? src1->ne[2] : 1; \
+    const uint32_t ne13 = src1 ? src1->ne[3] : 1; \
+                                                  \
+    const uint32_t nb10 = src1 ? src1->nb[0] : 1; \
+    const uint32_t nb11 = src1 ? src1->nb[1] : 1; \
+    const uint32_t nb12 = src1 ? src1->nb[2] : 1; \
+    const uint32_t nb13 = src1 ? src1->nb[3] : 1; \
+                                                  \
+    const uint32_t ne0 = dst->ne[0];              \
+    const uint32_t ne1 = dst->ne[1];              \
+    const uint32_t ne2 = dst->ne[2];              \
+    const uint32_t ne3 = dst->ne[3];              \
+                                                  \
+    const uint32_t nb0 = dst->nb[0];              \
+    const uint32_t nb1 = dst->nb[1];              \
+    const uint32_t nb2 = dst->nb[2];              \
     const uint32_t nb3 = dst->nb[3];
 
 struct htp_softmax_context {
@@ -71,8 +71,8 @@ struct htp_softmax_context {
 };
 
 static void init_softmax_ctx(struct htp_softmax_context * smctx, struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
 
     memset(smctx, 0, sizeof(struct htp_softmax_context));
 
@@ -85,8 +85,8 @@ static void init_softmax_ctx(struct htp_softmax_context * smctx, struct htp_ops_
     smctx->m0 = powf(2.0f, -(smctx->max_bias) / smctx->n_head_log2);
     smctx->m1 = powf(2.0f, -(smctx->max_bias / 2.0f) / smctx->n_head_log2);
 
-    smctx->use_src1 = (src1->ne[0] != 0);
-    smctx->use_f16  = (src1->ne[0] != 0) && (src1->type == HTP_TYPE_F16);
+    smctx->use_src1 = (src1 != 0);
+    smctx->use_f16  = (src1 != 0) && (src1->type == HTP_TYPE_F16);
 
     smctx->octx = octx;
 
@@ -97,8 +97,8 @@ static void init_softmax_ctx(struct htp_softmax_context * smctx, struct htp_ops_
     if (ne01 > 0) smctx->fastdiv_ne01 = init_fastdiv_values(ne01);
     if (ne02 > 0) smctx->fastdiv_ne02 = init_fastdiv_values(ne02);
 
-    const uint32_t ne12 = (src1->ne[0]) ? src1->ne[2] : 1;
-    const uint32_t ne13 = (src1->ne[0]) ? src1->ne[3] : 1;
+    const uint32_t ne12 = src1 ? src1->ne[2] : 1;
+    const uint32_t ne13 = src1 ? src1->ne[3] : 1;
 
     if (ne12 > 0) smctx->fastdiv_ne12 = init_fastdiv_values(ne12);
     if (ne13 > 0) smctx->fastdiv_ne13 = init_fastdiv_values(ne13);
@@ -206,9 +206,9 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_softmax_context * smctx = (struct htp_softmax_context *) data;
     struct htp_ops_context * octx = smctx->octx;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     htp_softmax_preamble3;
 
@@ -287,20 +287,15 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
             prev_i2 = i2;
         }
 
-        float * sp = (float *) ((char *) octx->src0.data + i1 * nb01 + i2 * nb02 + i3 * nb03);
-        float * dp = (float *) ((char *) octx->dst.data + i1 * nb1 + i2 * nb2 + i3 * nb3);
+        float * sp = (float *) ((char *) octx->src[0]->data + i1 * nb01 + i2 * nb02 + i3 * nb03);
+        float * dp = (float *) ((char *) octx->dst->data    + i1 * nb1  + i2 * nb2  + i3 * nb3);
 
         // broadcast the mask across rows
-        __fp16 * mp_f16 = (smctx->use_src1) ?
-                              (__fp16 *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
-                              NULL;
-        float *  mp_f32 = (smctx->use_src1) ?
-                              (float *) ((char *) octx->src1.data + i11 * nb11 + i12 * nb12 + i13 * nb13) :
-                              NULL;
+        __fp16 * mp_f16 = (smctx->use_src1) ? (__fp16 *) ((char *) octx->src[1]->data + i11 * nb11 + i12 * nb12 + i13 * nb13) : NULL;
+        float *  mp_f32 = (smctx->use_src1) ? (float *) ((char *)  octx->src[1]->data + i11 * nb11 + i12 * nb12 + i13 * nb13) : NULL;
 
         if ((1 == opt_path) && (mp_f32) && !(smctx->use_f16)) {
-            hvx_fast_softmax_prep_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, smctx->scale,
-                                      (const uint8_t *) mp_f32, slope);
+            hvx_fast_softmax_prep_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, smctx->scale, (const uint8_t *) mp_f32, slope);
         } else {
             hvx_scale_f32((uint8_t *) wp0, (const uint8_t *) sp, ne00, smctx->scale);
             if (mp_f32) {
@@ -336,9 +331,9 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
 static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     struct htp_softmax_context smctx;
     const char * op_type = "softmax-f32";
@@ -371,7 +366,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
 
     size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
 
-    if (src1->ne[0]) {
+    if (src1) {
         FARF(HIGH,
              "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n",
              op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
@@ -405,7 +400,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
 int op_softmax(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_softmax_f32(octx);
             break;

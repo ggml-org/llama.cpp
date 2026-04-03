@@ -97,9 +97,9 @@ struct htp_act_context {
 
 static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
+    const struct htp_tensor * src0 = actx->octx->src[0];
+    const struct htp_tensor * src1 = actx->octx->src[1];
+    const struct htp_tensor * dst  = actx->octx->dst;
     htp_act_preamble3;
 
     size_t src0_row_size = actx->src0_row_size;
@@ -207,9 +207,9 @@ static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
+    const struct htp_tensor * src0 = actx->octx->src[0];
+    const struct htp_tensor * src1 = actx->octx->src[1];
+    const struct htp_tensor * dst  = actx->octx->dst;
     htp_act_preamble3;
 
     uint64_t t1, t2;
@@ -332,8 +332,8 @@ static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, vo
 
 static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * dst  = &actx->octx->dst;
+    const struct htp_tensor * src0 = actx->octx->src[0];
+    const struct htp_tensor * dst  = actx->octx->dst;
     htp_act_preamble2;
 
     uint64_t t1, t2;
@@ -433,8 +433,8 @@ static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void unary_silu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * dst  = &actx->octx->dst;
+    const struct htp_tensor * src0 = actx->octx->src[0];
+    const struct htp_tensor * dst  = actx->octx->dst;
     htp_act_preamble2;
 
     uint64_t t1, t2;
@@ -533,9 +533,9 @@ static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
 static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
+    const struct htp_tensor * src0 = actx->octx->src[0];
+    const struct htp_tensor * src1 = actx->octx->src[1];
+    const struct htp_tensor * dst  = actx->octx->dst;
     htp_act_preamble3;
 
     size_t src0_row_size = actx->src0_row_size;
@@ -652,9 +652,9 @@ static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 }
 
 static int execute_op_activations_f32(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     if (((src0->ne[0] * SIZEOF_FP32) != src0->nb[1]) || ((dst->ne[0] * SIZEOF_FP32) != dst->nb[1])) {
         FARF(ERROR, "Non-contiguous tensors are not supported at this time \n");
@@ -799,7 +799,7 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 int op_activations(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_activations_f32(octx);
             break;

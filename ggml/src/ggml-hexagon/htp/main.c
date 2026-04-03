@@ -508,44 +508,6 @@ static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void prep_src_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
-    if (idx == 0xffff) { t->ne[0] = 0; t->data = NULL; return; } // empty
-
-    struct htp_tensor *src = tens + idx;
-
-    // TODO: use pointers in the ops_context instead of copying tensors
-    *t = *src;
-
-    if (!(t->flags & HTP_TENSOR_FLUSHED) && (t->flags & HTP_TENSOR_COMPUTE)) {
-        // invalidate compute buffers on input
-        hex_l2clear((void *) t->data, t->size);
-    }
-
-    FARF(HIGH, "prep-src-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
-        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
-}
-
-static void prep_dst_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
-    struct htp_tensor *dst = tens + idx;
-
-    // TODO: use pointers in the ops_context instead of copying tensors
-    *t = *dst;
-
-    FARF(HIGH, "prep-dst-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
-        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
-}
-
-static void post_dst_tensor(struct htp_tensor *t, struct htp_tensor *tens, uint32_t idx) {
-    struct htp_tensor *dst = tens + idx;
-
-    // flush buffers on output
-    hex_l2flush((void *) dst->data, dst->size);
-    dst->flags |= HTP_TENSOR_FLUSHED;
-
-    FARF(HIGH, "post-dst-tensor #%u: data %p size %u : %u:%u:%u:%u", idx, (void*) t->data, t->size,
-        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
-}
-
 static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_req * op) {
     struct profile_data prof;
     profile_start(&prof);
@@ -556,15 +518,38 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
-    struct htp_tensor *src = &octx->src0;
+    // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
-        prep_src_tensor(&src[i], tens, op->src[i]);
+        struct htp_tensor *src = op->src[i] == 0xffff ? NULL : tens + op->src[i];
+
+        octx->src[i] = src;
+        if (!src) continue;
+
+        if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
+            // invalidate compute buffers on input
+            hex_l2clear((void *) src->data, src->size);
+        }
+
+        FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
+            src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
     }
-    prep_dst_tensor(&octx->dst, tens, op->dst);
+
+    // Prep output tensor
+    struct htp_tensor *dst = tens + op->dst;
+
+    octx->dst = dst;
+
+    FARF(HIGH, "prep-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
+        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
 
     execute_op(octx);
 
-    post_dst_tensor(&octx->dst, tens, op->dst);
+    // flush buffers on output
+    hex_l2flush((void *) dst->data, dst->size);
+    dst->flags |= HTP_TENSOR_FLUSHED;
+
+    FARF(HIGH, "post-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
+        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
 
     profile_stop(&prof);
 }

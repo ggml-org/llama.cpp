@@ -20,10 +20,10 @@
 #include "htp-ops.h"
 #include "hvx-utils.h"
 
-#define htp_ssm_conv_tensors_preamble                        \
-    struct htp_tensor * restrict src0    = &octx->src0;      \
-    struct htp_tensor * restrict src1    = &octx->src1;      \
-    struct htp_tensor * restrict dst     = &octx->dst;       \
+#define htp_ssm_conv_tensors_preamble                          \
+    const struct htp_tensor * restrict src0    = octx->src[0]; \
+    const struct htp_tensor * restrict src1    = octx->src[1]; \
+    const struct htp_tensor * restrict dst     = octx->dst;    \
     struct htp_spad * restrict src0_spad = &octx->src0_spad; \
     struct htp_spad * restrict src1_spad = &octx->src1_spad; \
     struct htp_spad * restrict dst_spad  = &octx->dst_spad;  \
@@ -323,8 +323,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
 }
 
 int op_ssm_conv(struct htp_ops_context * octx) {
-    int                 err = HTP_STATUS_OK;
-    struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * dst = octx->dst;
+
+    int err = HTP_STATUS_OK;
 
     switch (dst->type) {
         case HTP_TYPE_F32:

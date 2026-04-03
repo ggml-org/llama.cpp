@@ -253,10 +253,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * src2 = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * src2 = octx->src[2];
+    const struct htp_tensor * dst  = octx->dst;
 
     htp_rope_preamble;
 
@@ -284,7 +284,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
     const int32_t * pos = (const int32_t *) src1->data;
-    const float * freq_factors = src2->data ? (const float *) src2->data : NULL;
+    const float * freq_factors = src2 ? (const float *) src2->data : NULL;
 
     uint32_t ir = 0;
     uint32_t prev_i2 = (uint32_t) -1;
@@ -384,10 +384,10 @@ done:
 static int execute_op_rope_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * src2 = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * src2 = octx->src[2];
+    const struct htp_tensor * dst  = octx->dst;
 
     const char * op_type = "rope-f32";
 
@@ -483,7 +483,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 int op_rope(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_rope_f32(octx);
             break;

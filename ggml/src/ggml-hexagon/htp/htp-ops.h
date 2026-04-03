@@ -19,21 +19,19 @@ struct htp_spad {
     uint32_t  size_per_thread;
 };
 
+#define HTP_OP_MAX_SPADS (HTP_OP_MAX_INPUTS+1)
+#define HTP_OP_DST_SPAD  (HTP_OP_MAX_INPUTS)
+
 struct htp_ops_context {
     struct htp_context * ctx;
 
-    enum htp_op_code op; // FIXME: rename to opcode
-    int32_t          op_params[HTP_OP_MAX_PARAMS];
+    enum htp_op_code    op; // FIXME: rename to opcode
+    int32_t             op_params[HTP_OP_MAX_PARAMS];
 
-    // FIXME: redo these as an array
-    struct htp_tensor src0;
-    struct htp_tensor src1;
-    struct htp_tensor src2;
-    struct htp_tensor src3;
-    struct htp_tensor src4;
-    struct htp_tensor src5;
-    struct htp_tensor dst;
+    const struct htp_tensor * src[HTP_OP_MAX_INPUTS];
+    const struct htp_tensor * dst;
 
+    // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
     struct htp_spad src2_spad;
