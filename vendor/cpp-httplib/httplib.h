@@ -8,28 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.35.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002300"
-
-/*
- * Platform compatibility check
- */
-
-#if defined(_WIN32) && !defined(_WIN64)
-#if defined(_MSC_VER)
-#pragma message(                                                               \
-    "cpp-httplib doesn't support 32-bit Windows. Please use a 64-bit compiler.")
-#else
-#warning                                                                       \
-    "cpp-httplib doesn't support 32-bit Windows. Please use a 64-bit compiler."
-#endif
-#elif defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ < 8
-#warning                                                                       \
-    "cpp-httplib doesn't support 32-bit platforms. Please use a 64-bit compiler."
-#elif defined(__SIZEOF_SIZE_T__) && __SIZEOF_SIZE_T__ < 8
-#warning                                                                       \
-    "cpp-httplib doesn't support platforms where size_t is less than 64 bits."
-#endif
+#define CPPHTTPLIB_VERSION "0.40.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002800"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -575,6 +555,14 @@ inline unsigned char to_lower(int c) {
   return table[(unsigned char)(char)c];
 }
 
+inline std::string to_lower(const std::string &s) {
+  std::string result = s;
+  std::transform(
+      result.begin(), result.end(), result.begin(),
+      [](unsigned char c) { return static_cast<char>(to_lower(c)); });
+  return result;
+}
+
 inline bool equal(const std::string &a, const std::string &b) {
   return a.size() == b.size() &&
          std::equal(a.begin(), a.end(), b.begin(), [](char ca, char cb) {
@@ -699,6 +687,18 @@ inline from_chars_result<double> from_chars(const char *first, const char *last,
     return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
   }
   return {first + (endptr - s.c_str()), std::errc{}};
+}
+
+inline bool parse_port(const char *s, size_t len, int &port) {
+  int val = 0;
+  auto r = from_chars(s, s + len, val);
+  if (r.ec != std::errc{} || val < 1 || val > 65535) { return false; }
+  port = val;
+  return true;
+}
+
+inline bool parse_port(const std::string &s, int &port) {
+  return parse_port(s.data(), s.size(), port);
 }
 
 } // namespace detail
@@ -1001,8 +1001,8 @@ private:
 
   protected:
     std::streamsize xsputn(const char *s, std::streamsize n) override {
-      sink_.write(s, static_cast<size_t>(n));
-      return n;
+      if (sink_.write(s, static_cast<size_t>(n))) { return n; }
+      return 0;
     }
 
   private:
@@ -1058,9 +1058,12 @@ make_file_provider(const std::string &name, const std::string &filepath,
 
 inline std::pair<size_t, ContentProvider>
 make_file_body(const std::string &filepath) {
-  std::ifstream f(filepath, std::ios::binary | std::ios::ate);
-  if (!f) { return {0, ContentProvider{}}; }
-  auto size = static_cast<size_t>(f.tellg());
+  size_t size = 0;
+  {
+    std::ifstream f(filepath, std::ios::binary | std::ios::ate);
+    if (!f) { return {0, ContentProvider{}}; }
+    size = static_cast<size_t>(f.tellg());
+  }
 
   ContentProvider provider = [filepath](size_t offset, size_t length,
                                         DataSink &sink) -> bool {
@@ -1263,6 +1266,7 @@ struct Request {
   bool is_multipart_form_data() const;
 
   // private members...
+  bool body_consumed_ = false;
   size_t redirect_count_ = CPPHTTPLIB_REDIRECT_MAX_COUNT;
   size_t content_length_ = 0;
   ContentProvider content_provider_;
@@ -1472,6 +1476,8 @@ using SocketOptions = std::function<void(socket_t sock)>;
 
 void default_socket_options(socket_t sock);
 
+bool set_socket_opt(socket_t sock, int level, int optname, int optval);
+
 const char *status_message(int status);
 
 std::string to_string(Error error);
@@ -1560,6 +1566,13 @@ ssize_t write_headers(Stream &strm, const Headers &headers);
 
 bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
                          time_t usec);
+
+size_t get_multipart_content_length(const UploadFormDataItems &items,
+                                    const std::string &boundary);
+
+ContentProvider
+make_multipart_content_provider(const UploadFormDataItems &items,
+                                const std::string &boundary);
 
 } // namespace detail
 
@@ -1666,6 +1679,11 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_websocket_ping_interval(time_t sec);
+  template <class Rep, class Period>
+  Server &set_websocket_ping_interval(
+      const std::chrono::duration<Rep, Period> &duration);
+
   bool bind_to_port(const std::string &host, int port, int socket_flags = 0);
   int bind_to_any_port(const std::string &host, int socket_flags = 0);
   bool listen_after_bind();
@@ -1700,6 +1718,8 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  time_t websocket_ping_interval_sec_ =
+      CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
 
 private:
   using Handlers =
@@ -1769,6 +1789,7 @@ private:
   struct MountPointEntry {
     std::string mount_point;
     std::string base_dir;
+    std::string resolved_base_dir;
     Headers headers;
   };
   std::vector<MountPointEntry> base_dirs_;
@@ -1859,23 +1880,24 @@ public:
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
   Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error, unsigned long ssl_backend_error)
+         int ssl_error, uint64_t ssl_backend_error)
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
         ssl_backend_error_(ssl_backend_error) {}
 
   int ssl_error() const { return ssl_error_; }
-  unsigned long ssl_backend_error() const { return ssl_backend_error_; }
+  uint64_t ssl_backend_error() const { return ssl_backend_error_; }
 
 private:
   int ssl_error_ = 0;
-  unsigned long ssl_backend_error_ = 0;
+  uint64_t ssl_backend_error_ = 0;
 #endif
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use ssl_backend_error() instead")]]
-  unsigned long ssl_openssl_error() const {
+  [[deprecated("Use ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
+  uint64_t ssl_openssl_error() const {
     return ssl_backend_error_;
   }
 #endif
@@ -2186,6 +2208,10 @@ protected:
 
   virtual bool create_and_connect_socket(Socket &socket, Error &error);
   virtual bool ensure_socket_connection(Socket &socket, Error &error);
+  virtual bool setup_proxy_connection(
+      Socket &socket,
+      std::chrono::time_point<std::chrono::steady_clock> start_time,
+      Response &res, bool &success, Error &error);
 
   // All of:
   //   shutdown_ssl
@@ -2345,18 +2371,21 @@ protected:
   bool server_hostname_verification_ = true;
   std::string ca_cert_pem_; // Store CA cert PEM for redirect transfer
   int last_ssl_error_ = 0;
-  unsigned long last_backend_error_ = 0;
+  uint64_t last_backend_error_ = 0;
 #endif
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use load_ca_cert_store() instead")]]
+  [[deprecated("Use load_ca_cert_store() instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_ca_cert_store(X509_STORE *ca_cert_store);
 
-  [[deprecated("Use tls::create_ca_store() instead")]]
+  [[deprecated("Use tls::create_ca_store() instead. "
+               "This function will be removed by v1.0.0.")]]
   X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
 
-  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead")]]
+  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead. "
+               "This function will be removed by v1.0.0.")]]
   virtual void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier);
 #endif
@@ -2585,14 +2614,17 @@ private:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  [[deprecated("Use set_session_verifier(session_t) instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier);
 
-  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  [[deprecated("Use Result::ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
   long get_verify_result() const;
 #endif
 };
@@ -2644,18 +2676,22 @@ private:
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
   [[deprecated("Use SSLServer(PemMemory) or "
-               "SSLServer(ContextSetupCallback) instead")]]
+               "SSLServer(ContextSetupCallback) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   SSLServer(X509 *cert, EVP_PKEY *private_key,
             X509_STORE *client_ca_cert_store = nullptr);
 
-  [[deprecated("Use SSLServer(ContextSetupCallback) instead")]]
+  [[deprecated("Use SSLServer(ContextSetupCallback) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   SSLServer(
       const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
 
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use update_certs_pem() instead")]]
+  [[deprecated("Use update_certs_pem() instead. "
+               "This function will be removed by v1.0.0.")]]
   void update_certs(X509 *cert, EVP_PKEY *private_key,
                     X509_STORE *client_ca_cert_store = nullptr);
 #endif
@@ -2712,6 +2748,10 @@ private:
                  std::function<bool(Stream &strm)> callback) override;
   bool is_ssl() const override;
 
+  bool setup_proxy_connection(
+      Socket &socket,
+      std::chrono::time_point<std::chrono::steady_clock> start_time,
+      Response &res, bool &success, Error &error) override;
   bool connect_with_proxy(
       Socket &sock,
       std::chrono::time_point<std::chrono::steady_clock> start_time,
@@ -2736,18 +2776,22 @@ private:
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 public:
-  [[deprecated("Use SSLClient(host, port, PemMemory) instead")]]
+  [[deprecated("Use SSLClient(host, port, PemMemory) instead. "
+               "This constructor will be removed by v1.0.0.")]]
   explicit SSLClient(const std::string &host, int port, X509 *client_cert,
                      EVP_PKEY *client_key,
                      const std::string &private_key_password = std::string());
 
-  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  [[deprecated("Use Result::ssl_backend_error() instead. "
+               "This function will be removed by v1.0.0.")]]
   long get_verify_result() const;
 
-  [[deprecated("Use tls_context() instead")]]
+  [[deprecated("Use tls_context() instead. "
+               "This function will be removed by v1.0.0.")]]
   SSL_CTX *ssl_context() const;
 
-  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  [[deprecated("Use set_session_verifier(session_t) instead. "
+               "This function will be removed by v1.0.0.")]]
   void set_server_certificate_verifier(
       std::function<SSLVerifierResponse(SSL *ssl)> verifier) override;
 
@@ -2789,7 +2833,7 @@ inline size_t get_header_value_u64(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) {
     if (is_numeric(it->second)) {
-      return std::strtoull(it->second.data(), nullptr, 10);
+      return static_cast<size_t>(std::strtoull(it->second.data(), nullptr, 10));
     } else {
       is_invalid_value = true;
     }
@@ -2910,6 +2954,8 @@ std::string encode_query_component(const std::string &component,
                                    bool space_as_plus = true);
 std::string decode_query_component(const std::string &component,
                                    bool plus_as_space = true);
+
+std::string sanitize_filename(const std::string &filename);
 
 std::string append_query_params(const std::string &path, const Params &params);
 
@@ -3623,6 +3669,9 @@ public:
   SSEClient &set_reconnect_interval(int ms);
   SSEClient &set_max_reconnect_attempts(int n);
 
+  // Update headers (thread-safe)
+  SSEClient &set_headers(const Headers &headers);
+
   // State accessors
   bool is_connected() const;
   const std::string &last_event_id() const;
@@ -3647,6 +3696,7 @@ private:
   Client &client_;
   std::string path_;
   Headers headers_;
+  mutable std::mutex headers_mutex_;
 
   // Callbacks
   MessageHandler on_message_;
@@ -3714,15 +3764,19 @@ private:
   friend class httplib::Server;
   friend class WebSocketClient;
 
-  WebSocket(Stream &strm, const Request &req, bool is_server)
-      : strm_(strm), req_(req), is_server_(is_server) {
+  WebSocket(
+      Stream &strm, const Request &req, bool is_server,
+      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND)
+      : strm_(strm), req_(req), is_server_(is_server),
+        ping_interval_sec_(ping_interval_sec) {
     start_heartbeat();
   }
 
-  WebSocket(std::unique_ptr<Stream> &&owned_strm, const Request &req,
-            bool is_server)
+  WebSocket(
+      std::unique_ptr<Stream> &&owned_strm, const Request &req, bool is_server,
+      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND)
       : strm_(*owned_strm), owned_strm_(std::move(owned_strm)), req_(req),
-        is_server_(is_server) {
+        is_server_(is_server), ping_interval_sec_(ping_interval_sec) {
     start_heartbeat();
   }
 
@@ -3733,6 +3787,7 @@ private:
   std::unique_ptr<Stream> owned_strm_;
   Request req_;
   bool is_server_;
+  time_t ping_interval_sec_;
   std::atomic<bool> closed_{false};
   std::mutex write_mutex_;
   std::thread ping_thread_;
@@ -3761,6 +3816,13 @@ public:
   const std::string &subprotocol() const;
   void set_read_timeout(time_t sec, time_t usec = 0);
   void set_write_timeout(time_t sec, time_t usec = 0);
+  void set_websocket_ping_interval(time_t sec);
+  void set_tcp_nodelay(bool on);
+  void set_address_family(int family);
+  void set_ipv6_v6only(bool on);
+  void set_socket_options(SocketOptions socket_options);
+  void set_connection_timeout(time_t sec, time_t usec = 0);
+  void set_interface(const std::string &intf);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   void set_ca_cert_path(const std::string &path);
@@ -3784,6 +3846,15 @@ private:
   time_t read_timeout_usec_ = 0;
   time_t write_timeout_sec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND;
   time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
+  time_t websocket_ping_interval_sec_ =
+      CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
+  int address_family_ = AF_UNSPEC;
+  bool tcp_nodelay_ = CPPHTTPLIB_TCP_NODELAY;
+  bool ipv6_v6only_ = CPPHTTPLIB_IPV6_V6ONLY;
+  SocketOptions socket_options_ = nullptr;
+  time_t connection_timeout_sec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_SECOND;
+  time_t connection_timeout_usec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_USECOND;
+  std::string interface_;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;

@@ -3,7 +3,7 @@
 llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
     model(model),
-    n_embd_head(model.hparams.n_embd_head_k),
+    n_embd_head(model.hparams.n_embd_head_k()),
     n_embd_altup(model.hparams.n_embd_altup),
     n_altup(model.hparams.n_altup),
     i_altup_act(model.hparams.i_altup_act) {
@@ -12,7 +12,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
 
     inpL = build_inp_embd(model.tok_embd);
 
-    // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
+    // important: do not normalize weights for raw embeddings input (i.e. encoded image embeddings)
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 

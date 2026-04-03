@@ -27,6 +27,11 @@ IBM zDNN:
         - any-glob-to-any-file:
             - ggml/include/ggml-zdnn.h
             - ggml/src/ggml-zdnn/**
+AMD ZenDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zendnn.h
+            - ggml/src/ggml-zendnn/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:
@@ -104,3 +109,20 @@ OpenCL:
         - any-glob-to-any-file:
             - ggml/include/ggml-opencl.h
             - ggml/src/ggml-opencl/**
+            - docs/backend/OPENCL.md
+Hexagon:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-hexagon.h
+            - ggml/src/ggml-hexagon/**
+WebGPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-webgpu.h
+            - ggml/src/ggml-webgpu/**
+OpenVINO:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-openvino.h
+            - ggml/src/ggml-openvino/**
+            - docs/backend/OPENVINO.md

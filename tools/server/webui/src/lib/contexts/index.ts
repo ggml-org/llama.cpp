@@ -11,3 +11,9 @@ export {
 	setChatActionsContext,
 	type ChatActionsContext
 } from './chat-actions.context';
+
+export {
+	getChatSettingsDialogContext,
+	setChatSettingsDialogContext,
+	type ChatSettingsDialogContext
+} from './chat-settings-dialog.context';

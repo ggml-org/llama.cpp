@@ -4,19 +4,22 @@
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { DatabaseService } from '$lib/services';
-	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
-	import { MessageRole } from '$lib/enums';
+	import { DatabaseService } from '$lib/services/database.service';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import { MessageRole, AttachmentType } from '$lib/enums';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
-		ChatMessageSystem
+		ChatMessageSystem,
+		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
@@ -24,6 +27,7 @@
 	let {
 		class: className = '',
 		message,
+		toolMessages = [],
 		isLastAssistantMessage = false,
 		siblingInfo = null
 	}: Props = $props();
@@ -81,6 +85,20 @@
 		saveOnly: handleSaveEditOnly,
 		cancel: handleCancelEdit,
 		startEdit: handleEdit
+	});
+
+	let mcpPromptExtra = $derived.by(() => {
+		if (message.role !== MessageRole.USER) return null;
+		if (message.content.trim()) return null;
+		if (!message.extra || message.extra.length !== 1) return null;
+
+		const extra = message.extra[0];
+
+		if (extra.type === AttachmentType.MCP_PROMPT) {
+			return extra as DatabaseMessageExtraMcpPrompt;
+		}
+
+		return null;
 	});
 
 	$effect(() => {
@@ -164,6 +182,10 @@
 		chatActions.continueAssistantMessage(message);
 	}
 
+	function handleForkConversation(options: { name: string; includeAttachments: boolean }) {
+		chatActions.forkConversation(message, options);
+	}
+
 	function handleNavigateToSibling(siblingId: string) {
 		chatActions.navigateToSibling(siblingId);
 	}
@@ -245,6 +267,21 @@
 		{showDeleteDialog}
 		{siblingInfo}
 	/>
+{:else if mcpPromptExtra}
+	<ChatMessageMcpPrompt
+		class={className}
+		{deletionInfo}
+		{message}
+		mcpPrompt={mcpPromptExtra}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onNavigateToSibling={handleNavigateToSibling}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
 {:else if message.role === MessageRole.USER}
 	<ChatMessageUser
 		class={className}
@@ -254,6 +291,7 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
+		onForkConversation={handleForkConversation}
 		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
@@ -266,12 +304,14 @@
 		{deletionInfo}
 		{isLastAssistantMessage}
 		{message}
+		{toolMessages}
 		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}
 		onContinue={handleContinue}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
+		onForkConversation={handleForkConversation}
 		onNavigateToSibling={handleNavigateToSibling}
 		onRegenerate={handleRegenerate}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}

@@ -4,6 +4,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <clocale>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -15,13 +16,15 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_BENCH, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     int is_pp_shared   = params.is_pp_shared;
     int is_tg_separate = params.is_tg_separate;

@@ -23,17 +23,23 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
     };
     auto build_moe_feed_forward = [&model, this](ggml_tensor * cur, int il) -> ggml_tensor * {
         return build_moe_ffn(cur,
-                            model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
-                            model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                            model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
-                            static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
+                model.layers[il].ffn_gate_inp,
+                model.layers[il].ffn_up_exps,
+                model.layers[il].ffn_gate_exps,
+                model.layers[il].ffn_down_exps,
+                model.layers[il].ffn_exp_probs_b,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true,
+                hparams.expert_weights_scale,
+                static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
+                il);
     };
     auto build_attn_block = [&model, this](ggml_tensor *   cur,
                                            ggml_tensor *   inp_pos,
                                            inp_attn_type * inp_attn,
                                            int             il) -> ggml_tensor * {
         GGML_ASSERT(hparams.n_embd_v_gqa(il) == hparams.n_embd_k_gqa(il));
-        const auto n_embd_head = hparams.n_embd_head_v;
+        const auto n_embd_head = hparams.n_embd_head_v();
         const auto n_head_kv   = hparams.n_head_kv(il);
 
         auto * q = build_lora_mm(model.layers[il].wq, cur);
@@ -171,6 +177,9 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
         cb(ffn_norm_out, "model.layers.{}.ffn_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_out);
+
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
     }
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

@@ -1,9 +1,14 @@
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
-import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES } from '$lib/constants/cache';
+import {
+	MODEL_PROPS_CACHE_TTL_MS,
+	MODEL_PROPS_CACHE_MAX_ENTRIES,
+	FAVORITE_MODELS_LOCALSTORAGE_KEY
+} from '$lib/constants';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -50,7 +55,9 @@ class ModelsStore {
 	selectedModelName = $state<string | null>(null);
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
-	private modelLoadingStates = $state<Map<string, boolean>>(new Map());
+	private modelLoadingStates = new SvelteMap<string, boolean>();
+
+	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 
 	/**
 	 * Model-specific props cache with TTL
@@ -83,7 +90,11 @@ class ModelsStore {
 
 	get loadedModelIds(): string[] {
 		return this.routerModels
-			.filter((m) => m.status.value === ServerModelStatus.LOADED)
+			.filter(
+				(m) =>
+					m.status.value === ServerModelStatus.LOADED ||
+					m.status.value === ServerModelStatus.SLEEPING
+			)
 			.map((m) => m.id);
 	}
 
@@ -208,7 +219,11 @@ class ModelsStore {
 
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
-		return model?.status.value === ServerModelStatus.LOADED || false;
+		return (
+			model?.status.value === ServerModelStatus.LOADED ||
+			model?.status.value === ServerModelStatus.SLEEPING ||
+			false
+		);
 	}
 
 	isModelOperationInProgress(modelId: string): boolean {
@@ -261,15 +276,19 @@ class ModelsStore {
 				const displayNameSource =
 					details?.name && details.name.trim().length > 0 ? details.name : item.id;
 				const displayName = this.toDisplayName(displayNameSource);
+				const modelId = details?.model || item.id;
 
 				return {
 					id: item.id,
 					name: displayName,
-					model: details?.model || item.id,
+					model: modelId,
 					description: details?.description,
 					capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
 					details: details?.details,
-					meta: item.meta ?? null
+					meta: item.meta ?? null,
+					parsedId: ModelsService.parseModelId(modelId),
+					aliases: item.aliases ?? [],
+					tags: item.tags ?? []
 				} satisfies ModelOption;
 			});
 
@@ -446,7 +465,7 @@ class ModelsStore {
 
 	/**
 	 * Select a model by its model name (used for syncing with conversation model)
-	 * @param modelName - Model name to select (e.g., "unsloth/gemma-3-12b-it-GGUF:latest")
+	 * @param modelName - Model name to select (e.g., "ggml-org/GLM-4.7-Flash-GGUF")
 	 */
 	selectModelByName(modelName: string): void {
 		const option = this.models.find((model) => model.model === modelName);
@@ -497,22 +516,21 @@ class ModelsStore {
 
 	/** Polling interval in ms for checking model status */
 	private static readonly STATUS_POLL_INTERVAL = 500;
-	/** Maximum polling attempts before giving up */
-	private static readonly STATUS_POLL_MAX_ATTEMPTS = 60; // 30 seconds max
 
 	/**
 	 * Poll for expected model status after load/unload operation.
-	 * Keeps polling until the model reaches the expected status or max attempts reached.
+	 * Keeps polling indefinitely until the model reaches the expected status or fails.
 	 *
 	 * @param modelId - Model identifier to check
 	 * @param expectedStatus - Expected status to wait for
-	 * @returns Promise that resolves when expected status is reached
+	 * @throws Error if model reaches FAILED status
 	 */
 	private async pollForModelStatus(
 		modelId: string,
 		expectedStatus: ServerModelStatus
 	): Promise<void> {
-		for (let attempt = 0; attempt < ModelsStore.STATUS_POLL_MAX_ATTEMPTS; attempt++) {
+		let attempt = 0;
+		while (true) {
 			await this.fetchRouterModels();
 
 			const currentStatus = this.getModelStatus(modelId);
@@ -520,12 +538,23 @@ class ModelsStore {
 				return;
 			}
 
+			if (currentStatus === ServerModelStatus.FAILED) {
+				throw new Error(
+					`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`
+				);
+			}
+
+			if (
+				expectedStatus === ServerModelStatus.LOADED &&
+				currentStatus === ServerModelStatus.UNLOADED &&
+				attempt > 2
+			) {
+				throw new Error('Model was unloaded unexpectedly during loading');
+			}
+
+			attempt++;
 			await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
 		}
-
-		console.warn(
-			`Model ${modelId} did not reach expected status ${expectedStatus} after ${ModelsStore.STATUS_POLL_MAX_ATTEMPTS} attempts`
-		);
 	}
 
 	/**
@@ -547,8 +576,10 @@ class ModelsStore {
 			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
 
 			await this.updateModelModalities(modelId);
+			toast.success(`Model loaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : 'Failed to load model';
+			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
@@ -573,8 +604,10 @@ class ModelsStore {
 			await ModelsService.unload(modelId);
 
 			await this.pollForModelStatus(modelId, ServerModelStatus.UNLOADED);
+			toast.info(`Model unloaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : 'Failed to unload model';
+			toast.error(`Failed to unload model: ${this.toDisplayName(modelId)}`);
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
@@ -591,6 +624,48 @@ class ModelsStore {
 		}
 
 		await this.loadModel(modelId);
+	}
+
+	/**
+	 *
+	 *
+	 * Favorites
+	 *
+	 *
+	 */
+
+	isFavorite(modelId: string): boolean {
+		return this.favoriteModelIds.has(modelId);
+	}
+
+	toggleFavorite(modelId: string): void {
+		const next = new SvelteSet(this.favoriteModelIds);
+
+		if (next.has(modelId)) {
+			next.delete(modelId);
+		} else {
+			next.add(modelId);
+		}
+
+		this.favoriteModelIds = next;
+
+		try {
+			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save favorite models to local storage');
+		}
+	}
+
+	private loadFavoritesFromStorage(): Set<string> {
+		try {
+			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+
+			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+		} catch {
+			toast.error('Failed to load favorite models from local storage');
+
+			return new Set();
+		}
 	}
 
 	/**
@@ -646,3 +721,4 @@ export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
+export const favoriteModelIds = () => modelsStore.favoriteModelIds;

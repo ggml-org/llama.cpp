@@ -63,6 +63,7 @@ class TensorNameMap:
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
+            "model.embed_positions",           # rugpt3xl
         ),
 
         # Output
@@ -400,6 +401,10 @@ class TensorNameMap:
             "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
         ),
 
+        MODEL_TENSOR.FFN_PRE_NORM_2: (
+            "model.layers.{bid}.pre_feedforward_layernorm_2", # gemma4
+        ),
+
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm",  # gemma2 olmo2
@@ -408,6 +413,14 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_1: (
+            "model.layers.{bid}.post_feedforward_layernorm_1", # gemma4
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_2: (
+            "model.layers.{bid}.post_feedforward_layernorm_2", # gemma4
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -427,6 +440,7 @@ class TensorNameMap:
             "layers.{bid}.gate",                                # mistral-large
             "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
             "model.layers.{bid}.moe.gate",                      # step3.5
+            "model.layers.{bid}.router.proj",                   # gemma4
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -569,6 +583,15 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_GATE_UP_EXP: (
             "model.layers.{bid}.mlp.experts.gate_up_proj",
+            "model.layers.{bid}.experts.gate_up_proj", # gemma4
+        ),
+
+        MODEL_TENSOR.MOE_LATENT_DOWN: (
+            "backbone.layers.{bid}.mixer.fc1_latent_proj",                 # nemotron 3 super
+        ),
+
+        MODEL_TENSOR.MOE_LATENT_UP: (
+            "backbone.layers.{bid}.mixer.fc2_latent_proj",                 # nemotron 3 super
         ),
 
         # Feed-forward down
@@ -620,6 +643,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.experts.mlp.w2",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.down",     # smallthinker
             "model.layers.{bid}.moe.down_proj",                     # step3.5
+            "model.layers.{bid}.experts.down_proj",                 # gemma4
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -682,6 +706,10 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
             "encoder.layer.{bid}.layer_norm_2",             # jina-v2-code
             "model.layers.{bid}.final_layernorm",           # bailingmoe2
+        ),
+
+        MODEL_TENSOR.LAYER_OUT_SCALE: (
+            "model.layers.{bid}.layer_scalar", # gemma4
         ),
 
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
@@ -1336,6 +1364,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
             "model.vision.linear_proj.linear_proj", # cogvlm
+            "model.projector.layers", # Deepseek-OCR
             "visual.merger.proj", # glm4v
         ),
 
@@ -1356,6 +1385,7 @@ class TensorNameMap:
             "vision_model.class_embedding", # llama 4
             "model.vision.patch_embedding.cls_embedding", # cogvlm
             "vision_model.radio_model.model.patch_generator.cls_token.token", # Nemotron Nano v2 VL
+            "model.vision_model.embeddings.class_embedding", # Deepseek-OCR
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -1369,8 +1399,10 @@ class TensorNameMap:
             "visual.patch_embed.proj", # qwen2vl
             "vision_tower.patch_embed.proj", # kimi-vl
             "model.vision.patch_embedding.proj", # cogvlm
+            "model.vision_model.embeddings.patch_embedding", # Deepseek-OCR CLIP
             "siglip2.vision_model.embeddings.patch_embedding",
             "vision_model.radio_model.model.patch_generator.embedder", # Nemotron Nano v2 VL
+            "model.vision_tower.patch_embedder.input_proj", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
@@ -1388,12 +1420,22 @@ class TensorNameMap:
             "model.vision.patch_embedding.position_embedding", # cogvlm
             "visual.embeddings.position_embedding", # glm4v
             "vision_model.radio_model.model.patch_generator.pos_embed", # Nemotron Nano v2 VL
+            "model.vision_tower.patch_embedder.position_embedding_table", # gemma4
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
+            "model.image_newline",  # Deepseek-OCR
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_VSEP: (
+            "model.view_seperator",  # Deepseek-OCR
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
-            "vision_tower.encoder.blocks.{bid}.wqkv", # Kimi-K2.5
+            "model.vision_model.transformer.layers.{bid}.self_attn.qkv_proj", # Deepseek-OCR CLIP
+            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
             "vision_model.radio_model.model.blocks.{bid}.attn.qkv", # Nemotron Nano v2 VL
         ),
 
@@ -1408,12 +1450,15 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
+            "model.vision_model.transformer.layers.{bid}.self_attn.q_proj", # Deepseek-OCR CLIP, generated
+            "vision_model.model.layers.{bid}.self_attn.q_proj.linear", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.q_norm", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.q_norm", # Intern-S1
             "visual.blocks.{bid}.attn.q_norm", # GLM-OCR
+            "vision_model.model.layers.{bid}.self_attn.q_norm", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
@@ -1426,13 +1471,16 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wk", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
+            "model.vision_model.transformer.layers.{bid}.self_attn.k_proj", # Deepseek-OCR CLIP, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "vision_model.model.layers.{bid}.self_attn.k_proj.linear", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.k_norm", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.k_norm", # Intern-S1
             "visual.blocks.{bid}.attn.k_norm", # GLM-OCR
+            "vision_model.model.layers.{bid}.self_attn.k_norm", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
@@ -1446,6 +1494,8 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "model.vision_model.transformer.layers.{bid}.self_attn.v_proj", # Deepseek-OCR CLIP, generated
+            "vision_model.model.layers.{bid}.self_attn.v_proj.linear", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1456,10 +1506,11 @@ class TensorNameMap:
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention_norm", # pixtral
-            "vision_model.model.layers.{bid}.input_layernorm", # llama4
+            "vision_model.model.layers.{bid}.input_layernorm", # llama4, gemma4
             "visual.blocks.{bid}.norm1", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
+            "model.vision_model.transformer.layers.{bid}.layer_norm1", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm1",
             "vision_model.radio_model.model.blocks.{bid}.norm1", # Nemotron Nano v2 VL
         ),
@@ -1477,8 +1528,10 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.proj", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
+            "model.vision_model.transformer.layers.{bid}.self_attn.out_proj", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
             "vision_model.radio_model.model.blocks.{bid}.attn.proj", # Nemotron Nano v2 VL
+            "vision_model.model.layers.{bid}.self_attn.o_proj.linear", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1493,8 +1546,10 @@ class TensorNameMap:
             "visual.blocks.{bid}.norm2", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
+            "model.vision_model.transformer.layers.{bid}.layer_norm2", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm2",
             "vision_model.radio_model.model.blocks.{bid}.norm2", # Nemotron Nano v2 VL
+            "vision_model.model.layers.{bid}.pre_feedforward_layernorm", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1509,15 +1564,18 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
             "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
+            "model.vision_model.transformer.layers.{bid}.mlp.fc1", # Deepseek-OCR CLIP
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc1", # Nemotron Nano v2 VL
+            "vision_model.model.layers.{bid}.mlp.up_proj", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
             "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
+            "vision_model.model.layers.{bid}.mlp.gate_proj", # gemma4
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
@@ -1533,8 +1591,18 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
+            "model.vision_model.transformer.layers.{bid}.mlp.fc2", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc2", # Nemotron Nano v2 VL
+            "vision_model.model.layers.{bid}.mlp.down_proj", # gemma4
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_POST_NORM: (
+            "vision_model.model.layers.{bid}.post_attention_layernorm", # gemma4
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_POST_NORM: (
+            "vision_model.model.layers.{bid}.post_feedforward_layernorm", # gemma4
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
@@ -1547,11 +1615,16 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
         ),
 
+        MODEL_TENSOR.V_LAYER_OUT_SCALE: (
+            "vision_model.model.layers.{bid}.layer_scalar", # gemma4
+        ),
+
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
+            "model.vision_model.pre_layrnorm", # Deepseek-OCR CLIP
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
@@ -1654,6 +1727,58 @@ class TensorNameMap:
             "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
         ),
 
+        MODEL_TENSOR.V_SAM_POS_EMBD: (
+            "model.sam_model.pos_embed",
+        ),
+
+        MODEL_TENSOR.V_SAM_PATCH_EMBD: (
+            "model.sam_model.patch_embed.proj",
+        ),
+
+        MODEL_TENSOR.V_SAM_PRE_NORM: (
+            "model.sam_model.blocks.{bid}.norm1", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_SAM_POST_NORM: (
+            "model.sam_model.blocks.{bid}.norm2", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_SAM_ATTN_POS_H: (
+            "model.sam_model.blocks.{bid}.attn.rel_pos_h",
+        ),
+
+        MODEL_TENSOR.V_SAM_ATTN_POS_W: (
+            "model.sam_model.blocks.{bid}.attn.rel_pos_w",
+        ),
+
+        MODEL_TENSOR.V_SAM_ATTN_QKV: (
+            "model.sam_model.blocks.{bid}.attn.qkv",
+        ),
+
+        MODEL_TENSOR.V_SAM_ATTN_OUT: (
+            "model.sam_model.blocks.{bid}.attn.proj",
+        ),
+
+        MODEL_TENSOR.V_SAM_MLP_LIN_1: (
+            "model.sam_model.blocks.{bid}.mlp.lin1",
+        ),
+
+        MODEL_TENSOR.V_SAM_MLP_LIN_2: (
+            "model.sam_model.blocks.{bid}.mlp.lin2",
+        ),
+
+        MODEL_TENSOR.V_SAM_NECK: (
+            "model.sam_model.neck.{bid}",
+        ),
+
+        MODEL_TENSOR.V_SAM_NET_2: (
+            "model.sam_model.net_2",
+        ),
+
+        MODEL_TENSOR.V_SAM_NET_3: (
+            "model.sam_model.net_3",
+        ),
+
         MODEL_TENSOR.V_MM_POST_FC_NORM: (
             "model.vision.linear_proj.norm1", # cogvlm
         ),
@@ -1681,6 +1806,14 @@ class TensorNameMap:
             "model.vision.eoi", # cogvlm
         ),
 
+        MODEL_TENSOR.V_STD_BIAS: (
+            "model.vision_tower.std_bias", # gemma4
+        ),
+
+        MODEL_TENSOR.V_STD_SCALE: (
+            "model.vision_tower.std_scale", # gemma4
+        ),
+
         # audio (mtmd)
 
         MODEL_TENSOR.A_ENC_EMBD_POS: (
@@ -1700,10 +1833,15 @@ class TensorNameMap:
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
+            "conformer.subsample_conv_projection.layer{bid}.conv", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
-            "model.audio_tower.subsample_conv_projection.conv_{bid}.norm", # gemma3n
+            "conformer.subsample_conv_projection.layer{bid}.norm", # gemma4
+        ),
+
+        MODEL_TENSOR.A_ENC_INP_PROJ: (
+            "conformer.subsample_conv_projection.input_proj_linear", # gemma4
         ),
 
         MODEL_TENSOR.A_PRE_NORM: (),
@@ -1717,22 +1855,38 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
+            "conformer.layers.{bid}.self_attn.q_proj", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
+            "conformer.layers.{bid}.self_attn.k_proj", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
+            "conformer.layers.{bid}.self_attn.v_proj", # gemma4
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_K_REL: (
+            "conformer.layers.{bid}.self_attn.relative_k_proj", # gemma4
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_POST_NORM: (
+            "conformer.layers.{bid}.norm_post_attn", # gemma4
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_PRE_NORM: (
+            "conformer.layers.{bid}.norm_pre_attn", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_PER_DIM_SCALE: (
             "conformer.layers.{bid}.attention.attn.per_dim_scale", # gemma3n
+            "conformer.layers.{bid}.self_attn.per_dim_scale", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_LAYER_PRE_NORM: (
@@ -1749,6 +1903,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
+            "conformer.layers.{bid}.self_attn.post", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
@@ -1760,10 +1915,12 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_FFN_NORM: (
             "conformer.layers.{bid}.norm_feed_forward1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.pre_layer_norm", # gemma3n
+            "conformer.layers.{bid}.feed_forward1.pre_layer_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM: (
             "conformer.layers.{bid}.ffw_layer_start.post_layer_norm", # gemma3n
+            "conformer.layers.{bid}.feed_forward1.post_layer_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_SCALE: (
@@ -1774,6 +1931,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc1", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
+            "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -1782,25 +1940,30 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc2", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
+            "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
             "conformer.layers.{bid}.feed_forward2.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_1", # gemma3n
+            "conformer.layers.{bid}.feed_forward2.ffw_layer_1", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN_1: (
             "conformer.layers.{bid}.feed_forward2.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_2", # gemma3n
+            "conformer.layers.{bid}.feed_forward2.ffw_layer_2", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM_1: (
             "conformer.layers.{bid}.norm_feed_forward2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.pre_layer_norm", # gemma3n
+            "conformer.layers.{bid}.feed_forward2.pre_layer_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: (
             "conformer.layers.{bid}.ffw_layer_end.post_layer_norm", # gemma3n
+            "conformer.layers.{bid}.feed_forward2.post_layer_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_FFN_SCALE_1: (
@@ -1822,7 +1985,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_OUT: (
             "conformer.pre_encode.out", # lfm2
-            "model.audio_tower.subsample_conv_projection.input_proj_linear", # gemma3n
+            "model.audio_tower.subsample_conv_projection.input_proj_linear", # gemma3n (note: it should be A_ENC_INP_PROJ, this is a mistake; it should be corrected in C++ code when it's supported)
+            "conformer.output_proj", # gemma4
         ),
 
         # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
@@ -1836,6 +2000,7 @@ class TensorNameMap:
         MODEL_TENSOR.A_MMPROJ_FC: (
             "audio.multi_modal_projector.linear", # qwen2audio
             "audio_tower.proj", # qwen2omni
+            "model.audio_tower.output_proj" # gemma4
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
@@ -1869,6 +2034,14 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
             "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_PER_DIM_K_SCALE: (
+            "conformer.layers.{bid}.attention.attn.per_dim_key_scale", # gemma4
+        ),
+
+        MODEL_TENSOR.A_PER_DIM_SCALE: (
+            "conformer.layers.{bid}.attention.attn.per_dim_scale", # gemma4
         ),
 
         MODEL_TENSOR.A_MM_EMBEDDING: (

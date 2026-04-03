@@ -2,6 +2,7 @@
 #define HVX_SIGMOID_H
 
 #include "hvx-base.h"
+#include "hvx-inverse.h"
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
 #define FAST_SIGMOID_C1    (0x3d009076)  // 0.03138777

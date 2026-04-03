@@ -213,6 +213,66 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("tagged choice inside sequence gets parenthesized", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.literal("a") + p.tag("t", p.literal("b") | p.literal("c"));
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= "a" ("b" | "c")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("tagged sequence inside choice gets parenthesized", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.tag("t", p.literal("a") + p.literal("b")) | p.literal("c");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= "a" "b" | "c"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("atomic choice inside repetition gets parenthesized", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.one_or_more(p.atomic(p.literal("a") | p.literal("b")));
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= ("a" | "b")+
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("nested transparent wrappers get parenthesized", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.literal("x") + p.tag("outer", p.atomic(p.literal("a") | p.literal("b")));
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= "x" ("a" | "b")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
     t.test("emit only trigger rules (and references)", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             auto rule1 = p.rule("rule-1", p.literal("a") + p.ref("rule-2"));

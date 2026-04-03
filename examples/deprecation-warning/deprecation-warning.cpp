@@ -1,11 +1,14 @@
 // Warns users that this filename was deprecated, and provides a link for more information.
 
+#include <clocale>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
 
 // Main
 int main(int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     std::string filename = "main";
     if (argc >= 1) {
         filename = argv[0];

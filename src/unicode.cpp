@@ -773,7 +773,7 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         // tiny_aya digit grouping pattern from tokenizer.json:
         //   {"type": "Split", "pattern": {"Regex": "\\d{1,3}(?=(?:\\d{3})*\\b)"}, "behavior": "Isolated"}
         // Splits digits into groups of 3 from the right (e.g., 1234567 -> 1, 234, 567)
-        // TODO: Revisit this regex, incase there are any subtle tokenization differences with the original regex.
+        // TODO: Revisit this regex, in case there are any subtle tokenization differences with the original regex.
         bpe_offsets = unicode_regex_split_custom_afmoe(text, offsets);
     }
 
@@ -912,7 +912,7 @@ bool unicode_cpt_is_han(uint32_t cpt) {
     return false;
 }
 
-std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs) {
+std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs, bool byte_encode) {
     // unicode categories
     static const std::map<std::string, int> k_ucat_enum = {
         { "\\p{N}", unicode_cpt_flags::NUMBER },
@@ -1099,5 +1099,9 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
         start += offset;
     }
 
-    return unicode_byte_encoding_process(bpe_words);
+    if (byte_encode) {
+        return unicode_byte_encoding_process(bpe_words);
+    }
+
+    return bpe_words;
 }

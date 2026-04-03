@@ -32,13 +32,14 @@ enum htp_status {
 // Duplicated here because we can't include full ggml.h in the htp build.
 // We have some static_asserts in the cpp code to ensure things are in sync.
 enum htp_data_type {
-    HTP_TYPE_F32   = 0,
-    HTP_TYPE_F16   = 1,
-    HTP_TYPE_Q4_0  = 2,
-    HTP_TYPE_Q8_0  = 8,
-    HTP_TYPE_I32   = 26,
-    HTP_TYPE_I64   = 27,
-    HTP_TYPE_MXFP4 = 39,
+    HTP_TYPE_F32    = 0,
+    HTP_TYPE_F16    = 1,
+    HTP_TYPE_Q4_0   = 2,
+    HTP_TYPE_Q8_0   = 8,
+    HTP_TYPE_IQ4_NL = 20,
+    HTP_TYPE_I32    = 26,
+    HTP_TYPE_I64    = 27,
+    HTP_TYPE_MXFP4  = 39,
     HTP_TYPE_COUNT
 };
 
@@ -53,6 +54,10 @@ enum htp_op {
     HTP_OP_RMS_NORM,
     HTP_OP_UNARY_SILU,
     HTP_OP_UNARY_GELU,
+    HTP_OP_UNARY_SIGMOID,
+    HTP_OP_UNARY_EXP,
+    HTP_OP_UNARY_NEG,
+    HTP_OP_UNARY_SOFTPLUS,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
@@ -68,6 +73,9 @@ enum htp_op {
     HTP_OP_SQR,
     HTP_OP_SQRT,
     HTP_OP_SUM_ROWS,
+    HTP_OP_SSM_CONV,
+    HTP_OP_REPEAT,
+    HTP_OP_CUMSUM,
     INVALID
 };
 
@@ -81,6 +89,8 @@ static inline size_t htp_t_block_size(uint32_t t) {
             return QK4_0;
         case HTP_TYPE_Q8_0:
             return QK8_0;
+        case HTP_TYPE_IQ4_NL:
+            return QK4_NL;
         case HTP_TYPE_MXFP4:
             return QK_MXFP4;
         default:
@@ -99,6 +109,8 @@ static inline size_t htp_type_nbytes(uint32_t t) {
             return sizeof(block_q4_0);
         case HTP_TYPE_Q8_0:
             return sizeof(block_q8_0);
+        case HTP_TYPE_IQ4_NL:
+            return sizeof(block_iq4_nl);
         case HTP_TYPE_MXFP4:
             return sizeof(block_mxfp4);
         default:

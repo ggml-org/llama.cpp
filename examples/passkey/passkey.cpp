@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -16,17 +17,19 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.n_junk = 250;
     params.n_keep = 32;
     params.i_pos  = -1;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PASSKEY, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     int n_junk = params.n_junk;
     int n_keep = params.n_keep;

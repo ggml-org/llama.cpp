@@ -14,17 +14,18 @@
 /**
  * state diagram:
  *
- * UNLOADED ──► LOADING ──► LOADED
- *  ▲            │            │
- *  └───failed───┘            │
- *  ▲                         │
+ * UNLOADED ──► LOADING ──► LOADED ◄──── SLEEPING
+ *  ▲            │            │               ▲
+ *  └───failed───┘            │               │
+ *  ▲                         └──sleeping─────┘
  *  └────────unloaded─────────┘
  */
 enum server_model_status {
     // TODO: also add downloading state when the logic is added
     SERVER_MODEL_STATUS_UNLOADED,
     SERVER_MODEL_STATUS_LOADING,
-    SERVER_MODEL_STATUS_LOADED
+    SERVER_MODEL_STATUS_LOADED,
+    SERVER_MODEL_STATUS_SLEEPING
 };
 
 static server_model_status server_model_status_from_string(const std::string & status_str) {
@@ -37,6 +38,9 @@ static server_model_status server_model_status_from_string(const std::string & s
     if (status_str == "loaded") {
         return SERVER_MODEL_STATUS_LOADED;
     }
+    if (status_str == "sleeping") {
+        return SERVER_MODEL_STATUS_SLEEPING;
+    }
     throw std::runtime_error("invalid server model status");
 }
 
@@ -45,6 +49,7 @@ static std::string server_model_status_to_string(server_model_status status) {
         case SERVER_MODEL_STATUS_UNLOADED: return "unloaded";
         case SERVER_MODEL_STATUS_LOADING:  return "loading";
         case SERVER_MODEL_STATUS_LOADED:   return "loaded";
+        case SERVER_MODEL_STATUS_SLEEPING: return "sleeping";
         default:                           return "unknown";
     }
 }
@@ -61,8 +66,12 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
 
-    bool is_active() const {
-        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING;
+    bool is_ready() const {
+        return status == SERVER_MODEL_STATUS_LOADED;
+    }
+
+    bool is_running() const {
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
     bool is_failed() const {
@@ -130,19 +139,26 @@ public:
     void update_status(const std::string & name, server_model_status status, int exit_code);
 
     // wait until the model instance is fully loaded (thread-safe)
-    // return when the model is loaded or failed to load
-    void wait_until_loaded(const std::string & name);
+    // return when the model no longer in "loading" state
+    void wait_until_loading_finished(const std::string & name);
 
-    // load the model if not loaded, otherwise do nothing (thread-safe)
-    // return false if model is already loaded; return true otherwise (meta may need to be refreshed)
-    bool ensure_model_loaded(const std::string & name);
+    // ensure the model is in ready state (thread-safe)
+    // return false if model is ready
+    // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
+    bool ensure_model_ready(const std::string & name);
 
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
 
+    // return true if the current process is a child server instance
+    static bool is_child_server();
+
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
     static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
+
+    // notify the router server that the sleeping state has changed
+    static void notify_router_sleeping_state(bool sleeping);
 };
 
 struct server_models_routes {
@@ -180,6 +196,7 @@ struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
 public:
     server_http_proxy(const std::string & method,
+                      const std::string & scheme,
                       const std::string & host,
                       int port,
                       const std::string & path,

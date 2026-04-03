@@ -1,45 +1,23 @@
-import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
-import { ATTACHMENT_LABEL_PDF_FILE } from '$lib/constants/attachment-labels';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { formatAttachmentText } from '$lib/utils/formatters';
+import { isAbortError } from '$lib/utils/abort';
+import {
+	ATTACHMENT_LABEL_PDF_FILE,
+	ATTACHMENT_LABEL_MCP_PROMPT,
+	ATTACHMENT_LABEL_MCP_RESOURCE
+} from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
 	MessageRole,
 	ReasoningFormat,
-	UrlPrefix
+	UrlProtocol
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { AGENTIC_REGEX } from '$lib/constants/agentic';
 
 export class ChatService {
-	private static stripReasoningContent(
-		content: ApiChatMessageData['content'] | null | undefined
-	): ApiChatMessageData['content'] | null | undefined {
-		if (!content) {
-			return content;
-		}
-
-		if (typeof content === 'string') {
-			return content
-				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-				.replace(AGENTIC_REGEX.REASONING_OPEN, '');
-		}
-
-		if (!Array.isArray(content)) {
-			return content;
-		}
-
-		return content.map((part: ApiChatMessageContentPart) => {
-			if (part.type !== ContentPartType.TEXT || !part.text) return part;
-			return {
-				...part,
-				text: part.text
-					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
-			};
-		});
-	}
-
 	/**
 	 *
 	 *
@@ -102,7 +80,8 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			disableReasoningParsing,
+			excludeReasoningFromContext
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -150,14 +129,19 @@ export class ChatService {
 		}
 
 		const requestBody: ApiChatCompletionRequest = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
-				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
-				content: ChatService.stripReasoningContent(msg.content),
-				tool_calls: msg.tool_calls,
-				tool_call_id: msg.tool_call_id
-			})),
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: ApiChatCompletionRequest['messages'][0] = {
+					role: msg.role,
+					content: msg.content,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+				// Include reasoning_content from the dedicated field
+				if (!excludeReasoningFromContext && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+				return mapped;
+			}),
 			stream,
 			return_progress: stream ? true : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined
@@ -405,7 +389,7 @@ export class ChatService {
 				for (const line of lines) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith(UrlPrefix.DATA)) {
+					if (line.startsWith(UrlProtocol.DATA)) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
 							streamFinished = true;
@@ -666,6 +650,10 @@ export class ChatService {
 				content: message.content
 			};
 
+			if (message.reasoningContent) {
+				result.reasoning_content = message.reasoningContent;
+			}
+
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
@@ -756,11 +744,50 @@ export class ChatService {
 			}
 		}
 
+		const mcpPrompts = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
+				extra.type === AttachmentType.MCP_PROMPT
+		);
+
+		for (const mcpPrompt of mcpPrompts) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText(
+					ATTACHMENT_LABEL_MCP_PROMPT,
+					mcpPrompt.name,
+					mcpPrompt.content,
+					mcpPrompt.serverName
+				)
+			});
+		}
+
+		const mcpResources = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
+				extra.type === AttachmentType.MCP_RESOURCE
+		);
+
+		for (const mcpResource of mcpResources) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText(
+					ATTACHMENT_LABEL_MCP_RESOURCE,
+					mcpResource.name,
+					mcpResource.content,
+					mcpResource.serverName
+				)
+			});
+		}
+
 		const result: ApiChatMessageData = {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
-
+		if (message.reasoningContent) {
+			result.reasoning_content = message.reasoningContent;
+		}
+		if (toolCalls && toolCalls.length > 0) {
+			result.tool_calls = toolCalls;
+		}
 		return result;
 	}
 

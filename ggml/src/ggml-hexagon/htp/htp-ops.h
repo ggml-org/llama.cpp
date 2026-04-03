@@ -41,9 +41,6 @@ struct htp_ops_context {
     worker_pool_context_t * wpool;      // worker pool
     uint32_t                n_threads;  // num threads
 
-    uint32_t src0_nrows_per_thread;
-    uint32_t src1_nrows_per_thread;
-
     uint32_t flags;
 };
 
@@ -60,6 +57,9 @@ int op_flash_attn_ext(struct htp_ops_context * octx);
 int op_set_rows(struct htp_ops_context * octx);
 int op_get_rows(struct htp_ops_context * octx);
 int op_cpy(struct htp_ops_context * octx);
+int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
+int op_ssm_conv(struct htp_ops_context * octx);
+int op_cumsum(struct htp_ops_context * octx);
 
 #endif /* HTP_OPS_H */
