@@ -392,7 +392,7 @@ int main(int argc, char ** argv) {
         autoparser::generation_params params = prepare_params(opts, tools);
         common_chat_params            parser_data;
         if (std::optional<common_chat_params> spec_tmpl =
-                try_specialized_template(chat_template, template_source, params)) {
+                common_chat_try_specialized_template(chat_template, template_source, params)) {
             LOG_ERR("\n");
             LOG_ERR("This template uses a specialized parser, analysis results will not be available.");
             parser_data = *spec_tmpl;

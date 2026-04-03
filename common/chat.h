@@ -271,7 +271,7 @@ std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);
 
-std::optional<common_chat_params> try_specialized_template(
+std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         const autoparser::generation_params & params);
