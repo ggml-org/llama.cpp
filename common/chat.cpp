@@ -1696,7 +1696,7 @@ static void requires_non_null_content(json & messages) {
 
 // Gemma4 uses a custom tool_responses field instead of role:tool messages.
 //
-// This function will transform a sequence of messages:
+// This will transform a sequence of messages:
 //   assistant(tool_call) -> tool -> assistant(tool_call) -> tool -> assistant(content)
 //
 // Into a single assistant message containing a tool_responses field:
@@ -1704,6 +1704,112 @@ static void requires_non_null_content(json & messages) {
 //
 // This is necessary for the Gemma4 chat template to properly format the prompt.
 // See https://ai.google.dev/gemma/docs/capabilities/text/function-calling-gemma4
+struct gemma4_model_turn_builder {
+    json & messages;
+    size_t pos;
+    json tool_calls = json::array();
+    json tool_responses = json::array();
+    json content;
+
+    void collect() {
+        while (pos < messages.size()) {
+            auto & curr = messages[pos];
+            const auto role = curr.value("role", "");
+
+            if (role == "tool") {
+                collect_result(curr);
+                pos++;
+            } else if (role == "assistant") {
+                // Check if this is the final assistant content message
+                if (!has_tool_calls(curr)) {
+                    if (has_content(curr)) {
+                        content = curr.at("content");
+                    }
+                    pos++;
+                    break;
+                }
+
+                // Collect tool calls
+                for (auto & tc : curr.at("tool_calls")) {
+                    tool_calls.push_back(tc);
+                }
+                pos++;
+            } else {
+                break;
+            }
+        }
+    }
+
+    void collect_result(const json & curr) {
+        json response;
+        if (curr.contains("content")) {
+            const auto & content = curr.at("content");
+            if (content.is_string()) {
+                // Try to parse the content as JSON; fall back to raw string
+                try {
+                    response = json::parse(content.get<std::string>());
+                } catch (...) {
+                    response = content;
+                }
+            } else {
+                response = content;
+            }
+        }
+
+        std::string name;
+
+        // Match name with corresponding tool call
+        size_t idx = tool_responses.size();
+        if (idx < tool_calls.size()) {
+            auto & tc = tool_calls[idx];
+            if (tc.contains("function")) {
+                name = tc.at("function").value("name", "");
+            }
+        }
+
+        // Fallback to the tool call id
+        if (name.empty()) {
+            name = curr.value("tool_call_id", "");
+        }
+
+        tool_responses.push_back({{"name", name}, {"response", response}});
+    }
+
+    json build() {
+        collect();
+
+        json msg = {
+            {"role", "assistant"},
+            {"tool_calls", tool_calls},
+        };
+        if (!tool_responses.empty()) {
+            msg["tool_responses"] = tool_responses;
+        }
+        if (!content.is_null()) {
+            msg["content"] = content;
+        }
+        return msg;
+    }
+
+    static bool has_content(const json & msg) {
+        if (!msg.contains("content") || msg.at("content").is_null()) {
+            return false;
+        }
+        const auto & content = msg.at("content");
+        if (content.is_string() && !content.get<std::string>().empty()) {
+            return true;
+        }
+        if (content.is_array() && !content.empty()) {
+            return true;
+        }
+        return false;
+    }
+
+    static bool has_tool_calls(const json & msg) {
+        return msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty();
+    }
+};
+
 static void convert_tool_responses_gemma4(json & messages) {
     json result = json::array();
     size_t i = 0;
@@ -1718,90 +1824,12 @@ static void convert_tool_responses_gemma4(json & messages) {
             continue;
         }
 
-        json merged_msg = msg;
-        auto merged_tool_calls = json::array();
-        auto merged_tool_responses = json::array();
-
-        size_t j = i;
-
-        while (j < messages.size()) {
-            auto & curr = messages[j];
-
-            if (curr.value("role", "") != "assistant") {
-                break;
-            }
-
-            bool has_content = false;
-            if (curr.contains("content") && !curr.at("content").is_null()) {
-                const auto & content = curr.at("content");
-                has_content =
-                    (content.is_string() && !content.get<std::string>().empty()) ||
-                    (content.is_array() && !content.empty());
-            }
-
-            if (j != i && has_content) {
-                merged_msg["content"] = curr.at("content");
-            }
-
-            if (curr.contains("tool_calls") && curr.at("tool_calls").is_array()) {
-                auto & tool_calls = curr.at("tool_calls");
-                for (auto & tc : tool_calls) {
-                    merged_tool_calls.push_back(tc);
-                }
-
-                size_t k = j + 1;
-                size_t tc_idx = 0;
-
-                while (k < messages.size() && messages[k].value("role", "") == "tool" && tc_idx < tool_calls.size()) {
-                    auto & tool_call = tool_calls[tc_idx];
-                    auto & tool_result = messages[k];
-
-                    if (tool_call.contains("function")) {
-                        auto & function = tool_call.at("function");
-                        auto name = function.value("name", tool_result.value("tool_call_id", ""));
-
-                        json response;
-                        if (tool_result.contains("content")) {
-                            const auto & content = tool_result.at("content");
-                            if (content.is_string()) {
-                                // Try to parse the content as JSON; fall back to raw string
-                                try {
-                                    response = json::parse(content.get<std::string>());
-                                } catch (...) {
-                                    response = content;
-                                }
-                            } else {
-                                response = content;
-                            }
-                        }
-                        merged_tool_responses.push_back({{"name", name}, {"response", response}});
-                    }
-
-                    k++;
-                    tc_idx++;
-                }
-
-                j = k;
-            } else {
-                j++;
-            }
-
-            if (has_content && j != i + 1) {
-                break;
-            }
-        }
-
-        merged_msg["tool_calls"] = merged_tool_calls;
-        if (!merged_tool_responses.empty()) {
-            merged_msg["tool_responses"] = merged_tool_responses;
-        }
-        result.push_back(merged_msg);
-
-        i = j;
+        gemma4_model_turn_builder builder = {messages, i};
+        result.push_back(builder.build());
+        i = builder.pos;
     }
 
     LOG_DBG("New messages: %s\n", result.dump(2).c_str());
-
     messages = result;
 }
 
