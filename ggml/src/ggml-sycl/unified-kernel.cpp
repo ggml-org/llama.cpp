@@ -4361,6 +4361,44 @@ static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from
     sycl::free(ptr, queue);
 }
 
+// Arena-routed device memory allocation helpers.
+// Persistent allocs go to the WEIGHT zone (not reset between tokens).
+// Scratch allocs go to the COMPUTE zone (reset between tokens).
+// When arena is OFF, both fall back to sycl::malloc_device.
+// Callers set from_arena so the matching free routes correctly.
+
+static void * device_alloc_persistent(size_t bytes, sycl::queue & queue, int device_id, bool & from_arena) {
+    from_arena = false;
+    if (bytes == 0) return nullptr;
+    if (vram_arena_enabled() && device_id >= 0) {
+        void * ptr = unified_cache_arena_alloc_weight(device_id, bytes);
+        if (ptr) {
+            from_arena = true;
+            return ptr;
+        }
+    }
+    return sycl::malloc_device(bytes, queue);
+}
+
+static void * device_alloc_scratch(size_t bytes, sycl::queue & queue, int device_id, bool & from_arena) {
+    from_arena = false;
+    if (bytes == 0) return nullptr;
+    if (vram_arena_enabled() && device_id >= 0) {
+        void * ptr = unified_cache_arena_alloc(device_id, bytes);
+        if (ptr) {
+            from_arena = true;
+            return ptr;
+        }
+    }
+    return sycl::malloc_device(bytes, queue);
+}
+
+static void device_free(void * ptr, sycl::queue & queue, bool from_arena) {
+    if (!ptr) return;
+    if (from_arena) return;  // Arena memory freed when arena is destroyed
+    sycl::free(ptr, queue);
+}
+
 static const char * persistent_op_type_name(OperationType type) {
     switch (type) {
         case OperationType::RMS_NORM:       return "RMS_NORM";
@@ -6789,9 +6827,10 @@ UnifiedKernel::~UnifiedKernel() {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, micro_tile_counters_n_ * sizeof(int),
                                                        ggml_sycl::runtime_category::GRAPH);
         }
-        sycl::free(micro_tile_counters_, queue_);
+        device_free(micro_tile_counters_, queue_, arena_micro_tile_counters_);
         micro_tile_counters_ = nullptr;
         micro_tile_counters_n_ = 0;
+        arena_micro_tile_counters_ = false;
     }
     if (micro_generation_) {
         pinned_free(micro_generation_, sizeof(int), queue_, pinned_pool_micro_gen_);
@@ -6805,22 +6844,25 @@ UnifiedKernel::~UnifiedKernel() {
     }
     for (int i = 0; i < 2; i++) {
         if (mmvq_q8_bufs_[i]) {
-            sycl::free(mmvq_q8_bufs_[i], queue_);
+            device_free(mmvq_q8_bufs_[i], queue_, arena_mmvq_q8_bufs_);
             mmvq_q8_bufs_[i] = nullptr;
         }
     }
     mmvq_q8_buf_size_ = 0;
+    arena_mmvq_q8_bufs_ = false;
     if (mmvq_gate_scratch_sz_ > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
                                                    ggml_sycl::runtime_category::GRAPH);
     }
     if (mmvq_gate_scratch_) {
-        sycl::free(mmvq_gate_scratch_, queue_);
+        device_free(mmvq_gate_scratch_, queue_, arena_mmvq_gate_scratch_);
         mmvq_gate_scratch_ = nullptr;
+        arena_mmvq_gate_scratch_ = false;
     }
     if (mmvq_up_scratch_) {
-        sycl::free(mmvq_up_scratch_, queue_);
+        device_free(mmvq_up_scratch_, queue_, arena_mmvq_up_scratch_);
         mmvq_up_scratch_ = nullptr;
+        arena_mmvq_up_scratch_ = false;
     }
     mmvq_gate_scratch_sz_ = 0;
 }
@@ -6976,12 +7018,17 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
 
     free_persistent_buffers();
 
+    arena_persistent_bufs_ = false;
     for (int i = 0; i < 4; i++) {
-        persistent_buffers_[i] = sycl::malloc_device(required_size, queue_);
+        bool arena_i = false;
+        persistent_buffers_[i] = device_alloc_persistent(required_size, queue_, device_id_, arena_i);
+        if (arena_i) arena_persistent_bufs_ = true;
     }
 
     if (!sync_block_) {
-        sync_block_ = sycl::malloc_device<int>(3, queue_);
+        bool arena_sync = false;
+        sync_block_ = static_cast<int *>(device_alloc_persistent(3 * sizeof(int), queue_, device_id_, arena_sync));
+        if (arena_sync) arena_persistent_bufs_ = true;
     }
     tile_counter_    = sync_block_;
     barrier_counter_ = sync_block_ + 1;
@@ -7011,11 +7058,12 @@ void UnifiedKernel::free_persistent_buffers() {
 
     for (int i = 0; i < 4; i++) {
         if (persistent_buffers_[i]) {
-            sycl::free(persistent_buffers_[i], queue_);
+            device_free(persistent_buffers_[i], queue_, arena_persistent_bufs_);
             persistent_buffers_[i] = nullptr;
         }
     }
-    if (sync_block_) { sycl::free(sync_block_, queue_); sync_block_ = nullptr; }
+    if (sync_block_) { device_free(sync_block_, queue_, arena_persistent_bufs_); sync_block_ = nullptr; }
+    arena_persistent_bufs_ = false;
     tile_counter_    = nullptr;
     barrier_counter_ = nullptr;
     barrier_sense_   = nullptr;
@@ -7025,28 +7073,30 @@ void UnifiedKernel::free_persistent_buffers() {
             if (slot.size > 0 && device_id_ >= 0) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
             }
-            sycl::free(slot.ptr, queue_);
+            device_free(slot.ptr, queue_, arena_get_rows_);
             slot.ptr  = nullptr;
             slot.size = 0;
         }
     }
     get_rows_slots_.clear();
+    arena_get_rows_ = false;
     // Free scratch output pool
     free_scratch_pool();
     // Free DAG allocations
     if (dag_allocated_) {
-        if (dag_state_.ready_counter)    sycl::free(dag_state_.ready_counter, queue_);
-        if (dag_state_.tile_claimed)     sycl::free(dag_state_.tile_claimed, queue_);
-        if (dag_state_.tiles_done)       sycl::free(dag_state_.tiles_done, queue_);
+        if (dag_state_.ready_counter)    device_free(dag_state_.ready_counter, queue_, arena_dag_device_);
+        if (dag_state_.tile_claimed)     device_free(dag_state_.tile_claimed, queue_, arena_dag_device_);
+        if (dag_state_.tiles_done)       device_free(dag_state_.tiles_done, queue_, arena_dag_device_);
         if (dag_state_.successor_offset) pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
         if (dag_state_.successor_list)   pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
         if (dag_state_.n_tiles)          pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
-        if (dag_state_.completed_count)  sycl::free(dag_state_.completed_count, queue_);
+        if (dag_state_.completed_count)  device_free(dag_state_.completed_count, queue_, arena_dag_device_);
         dag_state_          = {};
         dag_allocated_      = false;
         dag_pool_n_ops_     = 0;
         dag_pool_n_edges_   = 0;
         pinned_pool_dag_    = false;
+        arena_dag_device_   = false;
     }
     // Free phase schedule allocations
     if (phase_allocated_) {
@@ -7063,9 +7113,10 @@ void UnifiedKernel::free_persistent_buffers() {
     }
     // Free light barrier flags
     if (light_flags_) {
-        sycl::free(light_flags_, queue_);
-        light_flags_      = nullptr;
-        light_flags_size_ = 0;
+        device_free(light_flags_, queue_, arena_light_flags_);
+        light_flags_        = nullptr;
+        light_flags_size_   = 0;
+        arena_light_flags_  = false;
     }
     // Free role schedule allocations
     if (role_allocated_) {
@@ -7073,7 +7124,7 @@ void UnifiedKernel::free_persistent_buffers() {
         if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
         // sync_flags is the base of a single contiguous allocation that includes
         // role_tile_counter, elem_barrier_cnt/sense, mm_barrier_cnt/sense
-        if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
+        if (role_schedule_.sync_flags)       device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
 
         role_schedule_       = {};
         role_allocated_      = false;
@@ -7081,6 +7132,7 @@ void UnifiedKernel::free_persistent_buffers() {
         role_pool_n_matmul_  = 0;
         role_pool_n_sync_    = 0;
         pinned_pool_role_    = false;
+        arena_role_sync_     = false;
     }
     invalidate_plan_cache();
     host_ops_ = {};  // Release heap memory (invalidate_plan_cache only clears, keeps capacity)
@@ -7110,27 +7162,33 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
         }
         // Free old allocations
         if (dag_allocated_) {
-            sycl::free(dag_state_.ready_counter, queue_);
-            sycl::free(dag_state_.tile_claimed, queue_);
-            sycl::free(dag_state_.tiles_done, queue_);
+            device_free(dag_state_.ready_counter, queue_, arena_dag_device_);
+            device_free(dag_state_.tile_claimed, queue_, arena_dag_device_);
+            device_free(dag_state_.tiles_done, queue_, arena_dag_device_);
             pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
             pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
             pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
-            sycl::free(dag_state_.completed_count, queue_);
+            device_free(dag_state_.completed_count, queue_, arena_dag_device_);
+            arena_dag_device_ = false;
         }
         // Allocate new with some headroom
         const int alloc_ops   = n_ops + 64;
         const int alloc_edges = n_edges + 128;
-        dag_state_.ready_counter    = sycl::malloc_device<int>(alloc_ops, queue_);
-        dag_state_.tile_claimed     = sycl::malloc_device<int>(alloc_ops, queue_);
-        dag_state_.tiles_done       = sycl::malloc_device<int>(alloc_ops, queue_);
+        bool arena_tmp = false;
+        dag_state_.ready_counter    = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        arena_dag_device_ = arena_tmp;
+        dag_state_.tile_claimed     = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) arena_dag_device_ = true;
+        dag_state_.tiles_done       = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) arena_dag_device_ = true;
         pinned_dag_successor_offset_bytes_ = (alloc_ops + 1) * sizeof(int);
         pinned_dag_successor_list_bytes_   = std::max(alloc_edges, 1) * sizeof(int);
         pinned_dag_n_tiles_bytes_          = alloc_ops * sizeof(int);
         dag_state_.successor_offset = static_cast<int *>(pinned_alloc(pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_));
         dag_state_.successor_list   = static_cast<int *>(pinned_alloc(pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_));
         dag_state_.n_tiles          = static_cast<int *>(pinned_alloc(pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_));
-        dag_state_.completed_count  = sycl::malloc_device<int>(1, queue_);
+        dag_state_.completed_count  = static_cast<int *>(device_alloc_persistent(1 * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) arena_dag_device_ = true;
         dag_pool_n_ops_   = alloc_ops;
         dag_pool_n_edges_ = alloc_edges;
         // Track new DAG device bytes (3 arrays of alloc_ops + 1 completed_count)
@@ -7486,8 +7544,10 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         if (role_allocated_) {
             if (role_schedule_.elem_segments)    pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments),   pinned_role_elem_bytes_,   queue_, pinned_pool_role_);
             if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
-            if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
-            if (role_schedule_.role_tile_counter) sycl::free(role_schedule_.role_tile_counter, queue_);
+            // sync_flags is the base of a single contiguous device allocation;
+            // role_tile_counter and barrier counters are offsets within it.
+            if (role_schedule_.sync_flags)       device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
+            arena_role_sync_ = false;
             // Barrier counters are within the sync_flags allocation (contiguous block)
             // Actually let's use a single allocation for all sync ints
         }
@@ -7509,7 +7569,7 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         // and barrier malfunction with 3+ elementwise WGs.
         constexpr int CL_INTS = 16;  // 64 bytes / 4 bytes per int
         const int total_ints = alloc_sync * 2 + CL_INTS * 5;  // sync_flags + 5 padded slots
-        int * sync_block = sycl::malloc_device<int>(total_ints, queue_);
+        int * sync_block = static_cast<int *>(device_alloc_persistent(total_ints * sizeof(int), queue_, device_id_, arena_role_sync_));
         role_schedule_.sync_flags        = sync_block;                                    // [0..2*alloc_sync)
         role_schedule_.role_tile_counter = sync_block + alloc_sync * 2;                   // CL-aligned slot 0
         role_schedule_.elem_barrier_cnt  = sync_block + alloc_sync * 2 + CL_INTS;         // CL-aligned slot 1
@@ -8207,12 +8267,14 @@ void * UnifiedKernel::get_rows_stable_ptr(int get_rows_index, size_t bytes) {
     }
     // Free old buffer and untrack
     if (slot.ptr) {
-        sycl::free(slot.ptr, queue_);
+        device_free(slot.ptr, queue_, arena_get_rows_);
         if (slot.size > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
         }
     }
-    slot.ptr  = sycl::malloc_device(bytes, queue_);
+    bool arena_tmp = false;
+    slot.ptr  = device_alloc_scratch(bytes, queue_, device_id_, arena_tmp);
+    if (arena_tmp) arena_get_rows_ = true;
     slot.size = slot.ptr ? bytes : 0;
     if (slot.size > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
@@ -8269,7 +8331,7 @@ void UnifiedKernel::build_scratch_pool() {
     // Phase 2: grow-on-demand allocation
     if (total_bytes > scratch_pool_size_ || !scratch_pool_) {
         free_scratch_pool();
-        scratch_pool_      = sycl::malloc_device(total_bytes, queue_);
+        scratch_pool_      = device_alloc_scratch(total_bytes, queue_, device_id_, arena_scratch_pool_);
         scratch_pool_size_ = scratch_pool_ ? total_bytes : 0;
         if (scratch_pool_size_ > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_add_runtime_bytes(device_id_, scratch_pool_size_,
@@ -8426,9 +8488,10 @@ void UnifiedKernel::free_scratch_pool() {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_pool_size_,
                                                        ggml_sycl::runtime_category::GRAPH);
         }
-        sycl::free(scratch_pool_, queue_);
-        scratch_pool_      = nullptr;
-        scratch_pool_size_ = 0;
+        device_free(scratch_pool_, queue_, arena_scratch_pool_);
+        scratch_pool_       = nullptr;
+        scratch_pool_size_  = 0;
+        arena_scratch_pool_ = false;
     }
     scratch_outputs_.clear();
 }
@@ -9543,8 +9606,8 @@ void UnifiedKernel::record_micro_graph() {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, micro_tile_counters_n_ * sizeof(int),
                                                        ggml_sycl::runtime_category::GRAPH);
         }
-        if (micro_tile_counters_) sycl::free(micro_tile_counters_, queue_);
-        micro_tile_counters_   = sycl::malloc_device<int>(n_counters_needed, queue_);
+        if (micro_tile_counters_) device_free(micro_tile_counters_, queue_, arena_micro_tile_counters_);
+        micro_tile_counters_   = static_cast<int *>(device_alloc_scratch(n_counters_needed * sizeof(int), queue_, device_id_, arena_micro_tile_counters_));
         micro_tile_counters_n_ = n_counters_needed;
         // Track new allocation
         if (device_id_ >= 0) {
@@ -9591,8 +9654,10 @@ void UnifiedKernel::record_micro_graph() {
                                                            ggml_sycl::runtime_category::GRAPH);
             }
             for (int i = 0; i < 2; i++) {
-                if (mmvq_q8_bufs_[i]) sycl::free(mmvq_q8_bufs_[i], queue_);
-                mmvq_q8_bufs_[i] = sycl::malloc_device(q8_size, queue_);
+                if (mmvq_q8_bufs_[i]) device_free(mmvq_q8_bufs_[i], queue_, arena_mmvq_q8_bufs_);
+                bool arena_tmp = false;
+                mmvq_q8_bufs_[i] = device_alloc_scratch(q8_size, queue_, device_id_, arena_tmp);
+                if (arena_tmp) arena_mmvq_q8_bufs_ = true;
             }
             mmvq_q8_buf_size_ = q8_size;
             // Track new allocations
@@ -9609,10 +9674,10 @@ void UnifiedKernel::record_micro_graph() {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
                                                            ggml_sycl::runtime_category::GRAPH);
             }
-            if (mmvq_gate_scratch_) sycl::free(mmvq_gate_scratch_, queue_);
-            if (mmvq_up_scratch_)   sycl::free(mmvq_up_scratch_, queue_);
-            mmvq_gate_scratch_ = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
-            mmvq_up_scratch_   = static_cast<float *>(sycl::malloc_device(gate_scratch_sz, queue_));
+            if (mmvq_gate_scratch_) device_free(mmvq_gate_scratch_, queue_, arena_mmvq_gate_scratch_);
+            if (mmvq_up_scratch_)   device_free(mmvq_up_scratch_, queue_, arena_mmvq_up_scratch_);
+            mmvq_gate_scratch_ = static_cast<float *>(device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_gate_scratch_));
+            mmvq_up_scratch_   = static_cast<float *>(device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_up_scratch_));
             mmvq_gate_scratch_sz_ = gate_scratch_sz;
             // Track new allocations
             if (device_id_ >= 0) {
@@ -11229,9 +11294,9 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                                                            ggml_sycl::runtime_category::GRAPH);
                 runtime_tracked_bytes_ -= light_flags_size_ * sizeof(int);
             }
-            if (light_flags_) sycl::free(light_flags_, queue_);
+            if (light_flags_) device_free(light_flags_, queue_, arena_light_flags_);
             const int alloc_size = n_final_phases + 16;
-            light_flags_      = sycl::malloc_device<int>(alloc_size, queue_);
+            light_flags_      = static_cast<int *>(device_alloc_persistent(alloc_size * sizeof(int), queue_, device_id_, arena_light_flags_));
             light_flags_size_ = alloc_size;
             // Track new allocation
             if (device_id_ >= 0) {
