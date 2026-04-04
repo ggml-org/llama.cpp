@@ -3034,6 +3034,19 @@ private:
     bool pinned_pool_micro_gen_ = false;  // micro_generation_ host-pinned counter
     bool pinned_pool_ops_       = false;  // d_ops_pool_ host-pinned ops table
 
+    // VRAM arena routing flags for device allocations.
+    // When true, the allocation came from the VRAM arena and must NOT be sycl::free'd.
+    bool arena_persistent_bufs_     = false;  // persistent_buffers_[4] + sync_block_
+    bool arena_dag_device_          = false;  // dag_state_ device buffers (ready_counter, tile_claimed, tiles_done, completed_count)
+    bool arena_scratch_pool_        = false;  // scratch_pool_
+    bool arena_get_rows_            = false;  // get_rows_slots_ device buffers
+    bool arena_role_sync_           = false;  // role_schedule_.sync_flags block
+    bool arena_micro_tile_counters_ = false;  // micro_tile_counters_
+    bool arena_mmvq_q8_bufs_        = false;  // mmvq_q8_bufs_[2]
+    bool arena_mmvq_gate_scratch_   = false;  // mmvq_gate_scratch_
+    bool arena_mmvq_up_scratch_     = false;  // mmvq_up_scratch_
+    bool arena_light_flags_         = false;  // light_flags_
+
     // Size tracking for pinned pool deallocation (need exact sizes for free)
     size_t pinned_dag_successor_offset_bytes_ = 0;
     size_t pinned_dag_successor_list_bytes_   = 0;
