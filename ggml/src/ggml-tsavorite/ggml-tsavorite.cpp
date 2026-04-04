@@ -37,12 +37,19 @@
 
 #include <thread>
 #include <vector>
+#include  <mutex>
+#include <condition_variable>
 
 
 using namespace tsi::runtime;
 
 
 std::vector<std::thread> workers;
+static std::mutex device_mutex;
+static std::condition_variable device_cv;
+
+// device availability table
+static bool device_free[NUM_OF_TXES] = { true, true };
 
 static bool multi_thread_enable = false;
 
@@ -125,40 +132,47 @@ bool runtime_initialized = false;
 uint64_t num_of_op;
 
 
-static TSI_DeviceIdType deviceId_1 = 0, deviceId_2 = 1;
-static void *loadResult_add, *loadResult_mult, *loadResult_rms_norm;
-static BlobDescriptor *blobDescriptor_add, *blobDescriptor_mult, *blobDescriptor_rms_norm;
+//static TSI_DeviceIdType deviceId_1 = 0, deviceId_2 = 1;
+
+static void *loadResult_add[NUM_OF_TXES], *loadResult_mult[NUM_OF_TXES], *loadResult_rms_norm[NUM_OF_TXES];
+static BlobDescriptor *blobDescriptor_add[NUM_OF_TXES], *blobDescriptor_mult[NUM_OF_TXES], *blobDescriptor_rms_norm[NUM_OF_TXES];
 
 void tsi_load_all_blobs() {
-  loadResult_add = tsi_load_blob(
-      deviceId_1,
+
+for (int i=0; i < NUM_OF_TXES; ++i) {
+printf("\n ANOOP Loading Blobs \n");
+  loadResult_add[i] = tsi_load_blob(
+      i,
       "txe_add",
       ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"));
 
-  blobDescriptor_add = static_cast<BlobDescriptor *>(loadResult_add);
+  blobDescriptor_add[i] = static_cast<BlobDescriptor *>(loadResult_add[i]);
 
-  loadResult_mult = tsi_load_blob(
-      deviceId_1,
+  loadResult_mult[i] = tsi_load_blob(
+      i,
       "txe_mult",
       ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"));
 
-  blobDescriptor_mult = static_cast<BlobDescriptor *>(loadResult_mult);
-  
-  loadResult_rms_norm = tsi_load_blob(
-      deviceId_2,
+  blobDescriptor_mult[i] = static_cast<BlobDescriptor *>(loadResult_mult[i]);
+
+  loadResult_rms_norm[i] = tsi_load_blob(
+      i,
       "txe_rms_norm",
       ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"));
 
-  blobDescriptor_rms_norm = static_cast<BlobDescriptor *>(loadResult_rms_norm);
+  blobDescriptor_rms_norm[i] = static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
+
+}
 
   return;
 }
 
 static void tsi_unload_all_blobs() {
-  tsi_unload_blob(blobDescriptor_add);
-  tsi_unload_blob(blobDescriptor_mult);
-  tsi_unload_blob(blobDescriptor_rms_norm);
-
+for (int i=0; i < NUM_OF_TXES; ++i) {
+  tsi_unload_blob(blobDescriptor_add[i]);
+  tsi_unload_blob(blobDescriptor_mult[i]);
+  tsi_unload_blob(blobDescriptor_rms_norm[i]);
+}
   return;
 }
 
@@ -168,8 +182,7 @@ static void ensure_tsi_runtime_initialized() {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
     // TSI Run time Initalization
-    //tsi_initialize(NUM_OF_TXES, NULL);
-    tsi_initialize(2, NULL);
+    tsi_initialize(NUM_OF_TXES, NULL);
 
     tsi_load_all_blobs();
 
@@ -558,29 +571,67 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
 // Total = 3 args * 3 int64 = 9 int64 = 72 bytes.)
 
 
-static uint32_t anoop_add_test=0;
+// ============================================================
+// DEVICE ACQUIRE / RELEASE
+// ============================================================
 
+static inline int acquire_device_blocking() {
+    std::unique_lock<std::mutex> lock(device_mutex);
 
-static void _mlir_ciface_txe_add_host_internal(void *a, void *b, void *res) {
-  //TSI_DeviceIdType deviceId = 0;
+    device_cv.wait(lock, [] {
+        for (int i = 0; i < NUM_OF_TXES; ++i)
+            if (device_free[i])
+                return true;
+        return false;
+    });
+
+    for (int i = 0; i < NUM_OF_TXES; ++i) {
+        if (device_free[i]) {
+            device_free[i] = false;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static inline void release_device(int deviceId) {
+    std::lock_guard<std::mutex> lock(device_mutex);
+    device_free[deviceId] = true;
+    device_cv.notify_one();
+}
+
+// ============================================================
+// FINAL JOIN — CALL AT END OF ggml_tsavorite_graph_compute()
+// ============================================================
+
+static inline void join_all_workers() {
+    for (auto &t : workers) {
+        if (t.joinable())
+            t.join();
+    }
+    workers.clear();
+
+    {
+        std::lock_guard<std::mutex> lock(device_mutex);
+        for (int i = 0; i < NUM_OF_TXES; ++i)
+            device_free[i] = true;
+    }
+    device_cv.notify_all();
+}
+
+static void tsi_blob_execution_internal(void *commandList) {
+  // Enqueue & run
+  tsi_finalize_command_list(commandList);
+  tsi_wait(commandList);
+  return;
+}
+
+static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
   constexpr int64_t kPackedArgsI64  = 9;
   constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  ++anoop_add_test;
-  //if (anoop_add_test <= 2)
-    printf("\n Called _mlir_ciface_txe_add_host_new %d \n", anoop_add_test);
-
-#if 0
-  void *loadResult_add = tsi_load_blob(
-      deviceId,
-      "txe_add",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"));
-
-  BlobDescriptor *blobDescriptor_add = static_cast<BlobDescriptor *>(loadResult_add);
-#endif
-
   // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId_1);
+  void *commandList = tsi_create_command_list(deviceId);
 
   // Allocate packed args buffer in shared DRAM
   void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
@@ -619,52 +670,37 @@ static void _mlir_ciface_txe_add_host_internal(void *a, void *b, void *res) {
 
   const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
 
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add, /*packedArgs*/ packedHandle);
+  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], /*packedArgs*/ packedHandle);
   tsi_add_command_to_list(commandList, blobExecuteCmd);
 
-  // Enqueue & run
-  tsi_finalize_command_list(commandList);
-  tsi_wait(commandList);
-
-#if 0
-  tsi_unload_blob(blobDescriptor_add);
-#endif
-  return;
+  return commandList;
 }
 
 static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
-   if(multi_thread_enable) {
-      printf("\n ANOP we are calling thread for ADD \n");
-      workers.emplace_back(_mlir_ciface_txe_add_host_internal, a, b, res);
-   } else {
-       _mlir_ciface_txe_add_host_internal(a, b, res);
-   }
-   return;
+    if (!multi_thread_enable) {
+       void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
+        tsi_blob_execution_internal(commandList);
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+printf("\n ANOOP ADD device ID %d", deviceId);
+
+    workers.emplace_back([=]() {
+        void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+        printf("\n ANOOP Release ADD device ID %d", deviceId);
+    });
 }
 
-static uint32_t anoop_mult_test=0;
 
-
-static void _mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res) {
-  //TSI_DeviceIdType deviceId = 0;
+static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
   constexpr int64_t kPackedArgsI64  = 9;
   constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  ++anoop_mult_test;
-  //if (anoop_mult_test <= 2)
-    printf("\n Called _mlir_ciface_txe_mult_host_new %d \n", anoop_mult_test);
-
-#if 0
-  void *loadResult_mult = tsi_load_blob(
-      deviceId,
-      "txe_mult",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"));
-
-  BlobDescriptor *blobDescriptor_mult = static_cast<BlobDescriptor *>(loadResult_mult);
-#endif
-
   // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId_1);
+  void *commandList = tsi_create_command_list(deviceId);
 
   // Allocate packed args buffer in shared DRAM
   void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
@@ -703,53 +739,37 @@ static void _mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res) {
 
   const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
 
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult, /*packedArgs*/ packedHandle);
+  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], /*packedArgs*/ packedHandle);
   tsi_add_command_to_list(commandList, blobExecuteCmd);
 
-  // Enqueue & run
-  tsi_finalize_command_list(commandList);
-  tsi_wait(commandList);
-
-#if 0
-  tsi_unload_blob(blobDescriptor_mult);
-#endif
-  return;
+  return commandList;
 }
 
 static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
-   if(multi_thread_enable) {
-      printf("\n ANOP we are calling thread for MULT \n");
-      workers.emplace_back(_mlir_ciface_txe_mult_host_internal, a, b, res);
-   } else {
-       _mlir_ciface_txe_mult_host_internal(a, b, res);
-   }
-   return;
+    if (!multi_thread_enable) {
+        void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
+        tsi_blob_execution_internal(commandList);
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+
+printf("\n ANOOP MUL device ID %d", deviceId);
+    workers.emplace_back([=]() {
+        void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+        printf("\n ANOOP Release MUL device ID %d", deviceId);
+    });
 }
 
 
-static uint32_t anoop_rms_norm_test=0;
-
-
-static void _mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf) {
-  //TSI_DeviceIdType deviceId = 1;
+static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf, TSI_DeviceIdType deviceId) {
   constexpr int64_t kPackedArgsI64  = 20;
   constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  ++anoop_rms_norm_test;
-  //if (anoop_rms_norm_test <= 2)
-    printf("\n Called _mlir_ciface_txe_rms_norm_host_new %d \n", anoop_rms_norm_test);
-
-#if 0
-  void *loadResult_rms_norm = tsi_load_blob(
-      deviceId,
-      "txe_rms_norm",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"));
-
-  BlobDescriptor *blobDescriptor_rms_norm = static_cast<BlobDescriptor *>(loadResult_rms_norm);
-#endif
-
   // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId_2);
+  void *commandList = tsi_create_command_list(deviceId);
 
   // Allocate packed args buffer in shared DRAM
   void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
@@ -800,30 +820,28 @@ static void _mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf)
 
   const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
 
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm, /*packedArgs*/ packedHandle);
+  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], /*packedArgs*/ packedHandle);
   tsi_add_command_to_list(commandList, blobExecuteCmd);
-
-  // Enqueue & run
-  tsi_finalize_command_list(commandList);
-  tsi_wait(commandList);
-
-#if 0
-  tsi_unload_blob(blobDescriptor_rms_norm);
-#endif
-  return;
+  return commandList;
 }
 
 static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
-   if(multi_thread_enable) {
-      printf("\n ANOP we are calling thread for RMS NORM \n");
-      workers.emplace_back(_mlir_ciface_txe_rms_norm_host_internal, a, b, buf);
-   } else {
-       _mlir_ciface_txe_rms_norm_host_internal(a, b, buf);
-   }
-   return;
+    if (!multi_thread_enable) {
+        void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
+        tsi_blob_execution_internal(commandList);
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+printf("\n ANOOP RMS_NORM device ID %d", deviceId);
+
+    workers.emplace_back([=]() {
+        void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+       printf("\n ANOOP RMS_NORM Releasing device ID %d", deviceId);
+    });
 }
-
-
 
 
 static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_type kernel_type) {
@@ -2046,31 +2064,20 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
   enum ggml_tsavorite_input_tensors_count num_of_input_tensors;
   tensor_log log_data;
 
-bool skip_multi_threading = false;
-    if (cgraph->n_nodes == 2) {
-          printf("\n ANOOP graph nodes %d \n",cgraph->n_nodes);
-          for (int i = 0; i < cgraph->n_nodes; i++) {
-             node = cgraph->nodes[i];
-             if (node->op == GGML_OP_UNARY) {
-                enum ggml_unary_op subop = ggml_get_unary_op(node);
-                printf ("     OPS:  UNARY(%s)\n", ggml_unary_op_name(subop));
-             } else {
-                printf ("     OPS:  (%s)\n", ggml_op_name(node->op));
+
+multi_thread_enable = false;
+if (cgraph->n_nodes == 2) {
+             node = cgraph->nodes[0];
+             if (node->op == GGML_OP_MUL)  {
+                 multi_thread_enable = true;
+                 printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn going to start");
              }
-             if (node->op == GGML_OP_ADD) 
-                skip_multi_threading = true;
-          }
-          
-    }
-    if (cgraph->n_nodes == 2 && !skip_multi_threading) {
-        multi_thread_enable = true;
-       anoop_test();
-    } else {
-        multi_thread_enable = false;
-    }
-
-
-//multi_thread_enable = false;
+             node = cgraph->nodes[1];
+             if (node->op == GGML_OP_MUL)  {
+                 multi_thread_enable = true;
+                 printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn going to start");
+             }
+}
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
      int32_t kernel_sub_type=-1;
@@ -2551,15 +2558,11 @@ bool skip_multi_threading = false;
 #endif /* GGML_PERF-related flags */
   } /* this is main for loop */
 
-if (cgraph->n_nodes == 2) {
-printf("\n ANOOP WE are joinin the thread\n");
-// join back to main thread
-    for (auto &t : workers) {
-        t.join();
-    }
-    workers.clear();
-    anoop_test();
-}
+  if (multi_thread_enable) {
+    printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn Completed");
+    join_all_workers();
+   }
+  anoop_test();
 
 
   // This this need to implement correctly when we have mixture of CPU and accelerator operation
