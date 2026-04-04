@@ -10743,6 +10743,30 @@ static void ggml_sycl_preload_model_weights() {
             items_by_device[items[i].device].push_back(i);
         }
 
+        // P4/P4.5: Sort each device's items by Unsloth priority from placement plan.
+        // The plan's entries[] are pre-sorted by priority.  Build a name→rank map
+        // and use it to order the per-device index lists so high-priority weights
+        // (attention, embedding, output) fill the arena weight zone first.
+        if (g_has_placement_plan && !g_placement_plan.entries.empty()) {
+            std::unordered_map<std::string, size_t> plan_rank;
+            plan_rank.reserve(g_placement_plan.entries.size());
+            for (size_t r = 0; r < g_placement_plan.entries.size(); ++r) {
+                plan_rank[g_placement_plan.entries[r].name] = r;
+            }
+            const size_t unranked = plan_rank.size();  // sentinel: after all ranked entries
+            for (auto & [dev, indices] : items_by_device) {
+                std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+                    const char * na = items[a].tensor->name;
+                    const char * nb = items[b].tensor->name;
+                    auto ia = plan_rank.find(na);
+                    auto ib = plan_rank.find(nb);
+                    size_t ra = (ia != plan_rank.end()) ? ia->second : unranked;
+                    size_t rb = (ib != plan_rank.end()) ? ib->second : unranked;
+                    return ra < rb;
+                });
+            }
+        }
+
         const auto t_start = std::chrono::steady_clock::now();
 
         for (auto & [device, indices] : items_by_device) {
@@ -10863,8 +10887,31 @@ static void ggml_sycl_preload_model_weights() {
                     }
 
                     // P4/P4.5: Skip upload if placement plan says host or different device.
+                    // Register host-placed weights with host_cache so the cache tracks
+                    // ALL weights (both VRAM/SOA and host/AOS).  Without registration,
+                    // resolve_weight falls through to the raw pointer path.
                     if (cache->has_placement_plan() && tensor->name[0] != '\0') {
                         if (!cache->plan_on_this_device(std::string(tensor->name), device)) {
+                            // Register as HOST_PINNED AOS entry in host cache
+                            auto * hcache = ggml_sycl::try_get_host_cache();
+                            if (hcache && tensor->data) {
+                                ggml_sycl_cache_id host_key =
+                                    ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                                if (host_key.valid) {
+                                    const size_t nbytes   = ggml_nbytes(tensor);
+                                    const int    layer_id = ggml_sycl_tp_extract_layer_number(tensor->name);
+                                    bool         needs_fill = false;
+                                    hcache->ensure_cached_alloc(
+                                        host_key, tensor->data, nbytes, nbytes,
+                                        ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                        layer_id, /*expert_id=*/ -1,
+                                        GGML_LAYOUT_AOS, /*validate_content=*/ false,
+                                        &needs_fill, nullptr, nullptr, nullptr);
+                                    GGML_SYCL_DEBUG(
+                                        "[S1-PRELOAD] registered host-placed weight: %s (%.1f MB)\n",
+                                        tensor->name, nbytes / (1024.0f * 1024.0f));
+                                }
+                            }
                             dense_host_placed++;
                             continue;
                         }
