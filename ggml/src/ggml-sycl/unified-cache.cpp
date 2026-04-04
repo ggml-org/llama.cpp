@@ -943,8 +943,10 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         size_t onednn_zone = 256 * 1024 * 1024;
 
         if (arena_.reserve(queue_, budget_bytes, max_alloc, compute_zone, onednn_zone)) {
-            // Mark all arena bytes as used in the cache budget.
-            used_.fetch_add(arena_.total_size(), std::memory_order_relaxed);
+            // Do NOT mark arena total as "used" — the weight zone is capacity for
+            // S1-PRELOAD to fill.  used_ grows as actual cache entries are placed.
+            // Only non-weight zones (compute, oneDNN) are tracked separately via
+            // reserve_compute_arena() which correctly adds to used_.
             GGML_LOG_INFO("[VRAM-ARENA] Active on device %d: %d chunk(s), %.1f MB total\n",
                           dev_id, arena_.chunk_count(), arena_.total_size() / (1024.0 * 1024.0));
             // Bind layout pool to the arena so new layout allocations come from the
