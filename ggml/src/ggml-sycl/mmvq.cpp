@@ -4225,6 +4225,29 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                     // Verify: is_soa should imply is_reordered
                     GGML_ASSERT(x_is_reordered && "X is_soa but not is_reordered - flag inconsistency");
 
+                    // Validate expert pointers: SOA/Coalesced dispatch requires all
+                    // active expert pointers to be device-accessible SOA/Coalesced data.
+                    // When experts are host-resident and SOA staging was skipped (cache
+                    // miss or degradation), the pointer table may contain null entries
+                    // or AOS host pointers.  Fall back to AOS dispatch in that case.
+                    if (use_ptr_table && host_weights && src0_extra) {
+                        const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
+                        bool ptrs_ok = true;
+                        for (size_t ep = 0; ep < host_ptrs.size() && ptrs_ok; ep++) {
+                            if (!host_ptrs[ep]) {
+                                continue;  // null = expert not active this token
+                            }
+                            auto alloc = ggml_sycl_get_alloc_type(host_ptrs[ep]);
+                            if (alloc != sycl::usm::alloc::device) {
+                                ptrs_ok = false;
+                            }
+                        }
+                        if (!ptrs_ok) {
+                            GGML_SYCL_DEBUG("[MMVQ-MXFP4] SOA dispatch rejected: non-device expert ptrs, falling back\n");
+                            return false;  // Fall back to AOS dispatch
+                        }
+                    }
+
                     // DEBUG: Verify actual data layout on GPU
                     if (g_ggml_sycl_debug >= 2 && !host_weights) {
                         // For MXFP4 SoA: qs region at offset 0, scales at offset (ncols/2)*total_rows

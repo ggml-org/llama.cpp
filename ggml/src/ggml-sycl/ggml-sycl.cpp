@@ -6096,6 +6096,7 @@ struct moe_layer_ids_cache_entry {
     // Avoids redundant placement table lookups, cache queries, and stats tracking.
     std::vector<void *> expert_ptrs;     // Resolved host-side pointer table (indexed by expert_id)
     bool                ptrs_valid = false;  // Set after GATE resolves pointers
+    layout_mode         ptrs_layout = GGML_LAYOUT_AOS;  // Layout used when pointers were cached
 
     // Task 1E: Cached expert partitioning from first sub-op for fusion path reuse.
     // Avoids redundant placement table lookups at subsequent sub-ops (~1ms/token).
@@ -17346,16 +17347,9 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
 
     std::vector<fallback_host_copy> host_copies;
     host_copies.reserve(static_cast<size_t>(graph->n_nodes + graph->n_leafs));
-    std::unordered_set<ggml_tensor *> leafs;
-    leafs.reserve(static_cast<size_t>(graph->n_leafs) * 2);
-    for (int i = 0; i < graph->n_leafs; ++i) {
-        if (graph->leafs[i]) {
-            leafs.insert(graph->leafs[i]);
-        }
-    }
     std::unordered_set<ggml_tensor *> seen;
     seen.reserve(static_cast<size_t>(graph->n_nodes + graph->n_leafs));
-    auto stage_tensor = [&](ggml_tensor * t) {
+    auto stage_tensor = [&](ggml_tensor * t, bool is_output) {
         if (!t || !t->data) {
             return;
         }
@@ -17371,17 +17365,22 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
         }
         fallback_host_copy entry{ t, t->data, {} };
         entry.host.resize(bytes);
-        if (leafs.find(t) != leafs.end()) {
+        // Copy existing data for ALL input tensors (leafs AND intermediate
+        // view/reshape nodes).  View-like ops share their data pointer with
+        // view_src; if only the leaf is staged, the view node's data pointer
+        // still points to device memory → segfault in CPU compute.
+        // Output-only nodes (dst) don't need a pre-copy.
+        if (!is_output) {
             stream->memcpy(entry.host.data(), entry.orig, bytes).wait();
         }
         t->data = entry.host.data();
         host_copies.push_back(std::move(entry));
     };
     for (int i = 0; i < graph->n_leafs; ++i) {
-        stage_tensor(graph->leafs[i]);
+        stage_tensor(graph->leafs[i], false);
     }
     for (int i = 0; i < graph->n_nodes; ++i) {
-        stage_tensor(graph->nodes[i]);
+        stage_tensor(graph->nodes[i], graph->nodes[i] == dst);
     }
     auto restore_host_copies = [&]() {
         for (auto & entry : host_copies) {
@@ -18945,6 +18944,27 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                     dev[i].src0_layout_ptr_source = "unified_cache_resolve";
                     src0_layout                   = resolved.layout;
                     exc_ctx.src0_layout           = resolved.layout;
+                } else if (resolved && resolved.ptr && !resolved.on_device &&
+                           ggml_backend_sycl_all_weights_host() &&
+                           src0_layout == GGML_LAYOUT_AOS) {
+                    // S1 zero-copy fallback: weight is host-pinned USM but not
+                    // cached in VRAM (e.g. output.weight too large for cache).
+                    // Host-pinned memory (sycl::malloc_host) is GPU-accessible
+                    // via PCIe zero-copy — use it directly for AOS MMVQ.
+                    const sycl::usm::alloc alloc = ggml_sycl_get_alloc_type(resolved.ptr);
+                    if (alloc == sycl::usm::alloc::host) {
+                        dev[i].src0_dd                = (char *) resolved.ptr;
+                        dev[i].src0_ptr_origin        = "s1_host_pinned_zerocopy";
+                        dev[i].src0_layout_ptr_source = "unified_cache_host_pinned";
+                        // Keep AOS layout — host-pinned data hasn't been reordered
+                        GGML_SYCL_DEBUG("[MUL_MAT] S1 zero-copy for %s on device %d ptr=%p\n",
+                                        src0->name ? src0->name : "?", i, resolved.ptr);
+                    } else {
+                        // Non-host-pinned (e.g. mmap) — fall through to layout_ptr chain
+                        dev[i].src0_ptr_origin = "layout_ptr";
+                        dev[i].src0_dd =
+                            (char *) ggml_sycl_get_layout_ptr_for(src0, i, src0_layout, &dev[i].src0_layout_ptr_source);
+                    }
                 } else {
                     // resolve_weight miss: S1-PRELOAD should have cached all dense
                     // weights in VRAM.  A miss here means either:
@@ -25532,6 +25552,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                     // the entire function — skip placement table lookups, cache queries,
                     // stats tracking, prediction, and hotset updates.
                     if (it->second.ptrs_valid &&
+                        it->second.ptrs_layout == layout &&
                         it->second.expert_ptrs.size() == static_cast<size_t>(n_experts)) {
                         auto & cached_ptrs = it->second.expert_ptrs;
                         std::copy(cached_ptrs.begin(), cached_ptrs.end(),
@@ -26105,9 +26126,10 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             bool all_resolved = (stats_miss == 0);
             auto & entry = g_moe_layer_ids_cache[blk_id];
             entry.expert_ptrs.assign(host_ptrs.begin(), host_ptrs.end());
-            entry.ptrs_valid = all_resolved;
-            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d (ptrs_valid=%d, misses=%d)\n",
-                            host_ptrs.size(), blk_id, all_resolved, stats_miss);
+            entry.ptrs_valid  = all_resolved;
+            entry.ptrs_layout = layout;
+            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d (ptrs_valid=%d, misses=%d, layout=%d)\n",
+                            host_ptrs.size(), blk_id, all_resolved, stats_miss, (int)layout);
         }
     }
 
@@ -29135,16 +29157,24 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+reorder for %s (type=%d layout=%d%s)\n",
                                 src0->name ? src0->name : "?", src0->type, static_cast<int>(soa_layout),
                                 has_reorder ? " cache" : "");
-                ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
-                                                                    soa_layout);
-                return;
+                if (ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
+                                                                    soa_layout)) {
+                    return;
+                }
+                // Reorder MMVQ failed — fall through to full dispatch
+                GGML_SYCL_DEBUG("[TG-FAST] MMVQ+reorder failed for %s, falling through\n",
+                                src0->name ? src0->name : "?");
             } else if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
                 // MMVQ with AOS layout
                 split_merge_drain();
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+AOS for %s (type=%d)\n", src0->name ? src0->name : "?",
                                 src0->type);
-                ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, GGML_LAYOUT_AOS);
-                return;
+                if (ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, GGML_LAYOUT_AOS)) {
+                    return;
+                }
+                // MMVQ+AOS failed (e.g. weight unavailable) — fall through to full dispatch
+                GGML_SYCL_DEBUG("[TG-FAST] MMVQ+AOS failed for %s, falling through\n",
+                                src0->name ? src0->name : "?");
             } else {
                 // DMMV fallback for types not supported by MMVQ
                 split_merge_drain();
@@ -32335,6 +32365,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+
     // MoE profiling: instrument entry with layer ID from tensor name
     if (g_moe_profile_enabled) {
         const int prof_layer = parse_layer_id_from_name(src0->name ? src0->name : "");
@@ -33876,6 +33907,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     act_d2h_pending = false;
                 }
                 ggml_sycl_cpu_expert_mul_mat_batched(tasks_ptr, n_tasks);
+
 
                 // Renormalize non-skipped expert outputs so the downstream
                 // weighted sum preserves the original magnitude.
