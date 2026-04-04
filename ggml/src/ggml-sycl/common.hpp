@@ -2280,6 +2280,38 @@ inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
     return result;
 }
 
+// Location-transparent allocation query for ANY tensor (weights, KV, activations).
+// Returns memory_location with tier, layout, arena zone, and device info.
+// For weights: resolves via unified cache (best available layout).
+// For non-weights: resolves via data_device/alloc_registry fast path.
+// O(1) — no SYCL runtime locks.  Safe at graph build time.
+inline ggml_sycl::memory_location resolve_allocation(
+    const ggml_tensor * tensor, int device) {
+    ggml_sycl::memory_location loc{};
+    if (!tensor) {
+        return loc;
+    }
+
+    // Weight tensors: try unified cache for best layout
+    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled()) {
+        auto resolved = ggml_sycl_resolve_weight(tensor, device);
+        if (resolved) {
+            loc = ggml_sycl::query_location(resolved.ptr, device);
+            loc.layout = resolved.layout;
+            loc.role   = ggml_sycl::alloc_role::WEIGHT;
+            return loc;
+        }
+    }
+
+    // Non-weight tensors (KV cache, activations, dst): fast path
+    void * ptr = ggml_sycl_get_data_ptr(tensor, device);
+    if (ptr) {
+        loc = ggml_sycl::query_location(ptr, device);
+        loc.layout = GGML_LAYOUT_AOS;  // Non-weight tensors are always AOS
+    }
+    return loc;
+}
+
 // Legacy name — redirects to resolve_tensor_ptr which handles both
 // weight tensors (layout resolution) and non-weight tensors (KV cache,
 // activations) transparently.  All callers get correct behavior for
