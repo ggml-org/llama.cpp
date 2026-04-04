@@ -13,10 +13,11 @@
 // ggml-common.h must be included prior to this header
 
 struct htp_spad {
-    uint8_t * data;
-    uint32_t  stride;
-    uint32_t  size;
-    uint32_t  size_per_thread;
+    const struct htp_tensor * src;             // original src of the data (for reuse)
+    uint8_t *                 data;            // pointer to an area in vtcm
+    uint32_t                  stride;          // stride used inside this spad
+    uint32_t                  size;            // total size
+    uint32_t                  size_per_thread; // size per thread
 };
 
 #define HTP_OP_MAX_SPADS (HTP_OP_MAX_INPUTS+1)

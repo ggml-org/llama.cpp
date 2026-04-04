@@ -2825,7 +2825,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     worker_callback_t quant_job_func;
     worker_callback_t matmul_job_func = src1_nrows > 1 ? matmul_2d : matvec_2d;
 
-    bool need_quant = true; // !(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE);
+    bool need_quant = true;
 
     if (src0->type == HTP_TYPE_F16) {
         // Try optimized f16-f16 path first (src1 in VTCM)
@@ -2921,19 +2921,25 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
     octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
 
+    octx->src0_spad.src  = NULL;
+    octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->dst_spad.src   = NULL;
+
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
 
-    if (need_quant) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
+        return HTP_STATUS_OK;
+
+    if (need_quant && !octx->src1_spad.src) {
         const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+        octx->src1_spad.src = src1;
     }
 
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        const uint32_t n_matmul_jobs = octx->n_threads;
-        worker_pool_run_func(octx->ctx->worker_pool, matmul_job_func, mmctx, n_matmul_jobs);
-    }
+    const uint32_t n_matmul_jobs = octx->n_threads;
+    worker_pool_run_func(octx->ctx->worker_pool, matmul_job_func, mmctx, n_matmul_jobs);
 
     return HTP_STATUS_OK;
 }
@@ -3038,7 +3044,7 @@ int op_matmul(struct htp_ops_context * octx) {
 
     if (ret != 0) {
         FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
-        octx->flags &= ~HTP_OPFLAGS_SKIP_QUANTIZE;
+        octx->src1_spad.src = NULL; // force requant
         return op_matmul(octx);
     }
 
@@ -3056,11 +3062,12 @@ int op_matmul(struct htp_ops_context * octx) {
         src1_tail.data += (uint32_t) m_hmx * src1->nb[1];
         dst_tail.data  += (uint32_t) m_hmx * dst->nb[1];
 
-        // Always re-quantize tail src1: HMX Phase 1 overwrites VTCM,
-        // so any previously cached quantized data (SKIP_QUANTIZE pipeline) is invalid.
-        octx->flags &= ~HTP_OPFLAGS_SKIP_QUANTIZE;
         octx->src[1] = &src1_tail;
         octx->dst    = &dst_tail;
+
+        // Always re-quantize tail src1: HMX Phase 1 overwrites VTCM,
+        // so any previously cached quantized data is invalid.
+        octx->src1_spad.src = NULL;
 
         FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1_tail.data, (void *) dst_tail.data);
         return op_matmul_hvx(octx);
@@ -3130,11 +3137,16 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    // Place src1 spad first.  We use it for dyn.quant and may reuse in subseq ops
+    // Place src1 spad first. We use it for dyn.quant and may reuse in subseq ops.
     octx->src1_spad.data = octx->ctx->vtcm_base;
     octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
     octx->src2_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src2_spad.data + octx->src2_spad.size;
+
+    octx->src0_spad.src  = NULL;
+    octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->src2_spad.src  = NULL;
+    octx->dst_spad.src   = NULL;
 
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
@@ -3159,17 +3171,18 @@ int op_matmul_id(struct htp_ops_context * octx) {
         }
     }
 
-    // Setup worker pool callbacks
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE)) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
+        return HTP_STATUS_OK;
+
+    if (octx->src1_spad.src != src1) {
         const uint32_t n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+        octx->src1_spad.src = src1;
     }
 
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        const uint32_t n_matmul_jobs = octx->n_threads;
-        worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, n_matmul_jobs);
-    }
+    const uint32_t n_matmul_jobs = octx->n_threads;
+    worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, n_matmul_jobs);
 
     return HTP_STATUS_OK;
 }

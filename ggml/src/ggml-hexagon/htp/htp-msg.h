@@ -9,8 +9,7 @@
 // Used for debugging and profiling.
 enum htp_op_mask {
     HTP_OPMASK_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into the DSP)
-    HTP_OPMASK_QUANTIZE = (1 << 1),  // Enable Quantize
-    HTP_OPMASK_COMPUTE  = (1 << 2),  // Enable Compute
+    HTP_OPMASK_COMPUTE  = (1 << 1),  // Enable Compute
 };
 
 enum htp_status {
@@ -113,14 +112,12 @@ struct htp_op_buf {
 };
 
 enum htp_op_flags {
-    HTP_OPFLAGS_SKIP_QUANTIZE = (1U << 0),  // Skip dynamic quantization (reuse quantized tensors)
-    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 1),  // Skip actual computation   (used for profiling)
-    HTP_OPFLAGS_EARLY_WAKEUP  = (1U << 2)   // Send early wakeup notification
+    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
 };
 
 struct htp_op_req {
-    uint32_t opcode; // GGML/HTP Op
-    uint32_t flags;  // OPFLAGS
+    uint32_t opcode;                    // GGML/HTP Op
+    uint32_t flags;                     // Op flags
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst;                       // Output tensor index

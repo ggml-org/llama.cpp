@@ -289,9 +289,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             // Compute gather scratchpad size for src0 and src1
             const size_t gather_spad_size = n_threads * VLEN * 2;
 
-            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;
-            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;     octx->src0_spad.src = NULL;
+            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size; octx->dst_spad.src  = NULL;
 
             FARF(HIGH, "ssm_conv-f32: gather-spad:%zu spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
                 gather_spad_size, octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread,

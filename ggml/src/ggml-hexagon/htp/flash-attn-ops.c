@@ -701,13 +701,11 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size;
-    octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size;
-    octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size;
-
-    // FARF(ERROR, "fa: qrows-per-thread %u", factx.qrows_per_thread);
+    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size; octx->src2_spad.src = NULL;
+    octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size; octx->src3_spad.src = NULL;
+    octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size; octx->dst_spad.src  = NULL;
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         worker_pool_run_func(octx->ctx->worker_pool, flash_attn_ext_f16_thread, &factx, octx->n_threads);

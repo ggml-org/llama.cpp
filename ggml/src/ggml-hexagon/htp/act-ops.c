@@ -708,14 +708,14 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
     const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+
     // VTCM scratchpads for all tensors
     // N rows per thread, padded to HVX vector size
-
     size_t spad_size_per_row   = (src0_row_size_aligned + src1_row_size_aligned) + dst_row_size_aligned;
     size_t vtcm_row_per_thread = (octx->ctx->vtcm_size)/ (n_threads* spad_size_per_row);
 
     // Make sure the reserved vtcm size is sufficient
-    if(vtcm_row_per_thread ==0){
+    if (vtcm_row_per_thread == 0) {
         FARF(ERROR, "act-%s : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", op_type, octx->ctx->vtcm_size,
              spad_size_per_row * n_threads);
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -732,6 +732,10 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     octx->src0_spad.data = octx->ctx->vtcm_base;
     octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
 
     if (src1->ne[0]) {
         FARF(HIGH, "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n",

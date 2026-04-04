@@ -424,19 +424,16 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    // Assign sizes
     octx->src0_spad.size_per_thread = src0_spad_per_thread;
     octx->dst_spad.size_per_thread  = dst_spad_per_thread;
     octx->src0_spad.size = n_threads * src0_spad_per_thread;
     octx->dst_spad.size  = n_threads * dst_spad_per_thread;
     octx->src1_spad.size = 0;
 
-    // Assign pointers
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = NULL;
-    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->src1_spad.data = NULL;                                        octx->src1_spad.src = NULL;
+    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size; octx->dst_spad.src  = NULL;
 
-    // Fill context
     struct htp_rope_context rctx;
     memset(&rctx, 0, sizeof(struct htp_rope_context));
 

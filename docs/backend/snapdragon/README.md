@@ -259,11 +259,9 @@ build: 6a8cf8914 (6733)
   Allows enabling specific stages of the processing pipeline:
 
   - `0x1` Enable Op Queue (i.e., queuing Ops into NPU)
-  - `0x2` Enable Dynamic Quantizer (if needed for the Op)
-  - `0x4` Enable Op Compute (MUL_MAT, etc.)
+  - `0x2` Enable Op Compute (MUL_MAT, etc.)
 
   Examples:
 
       `GGML_HEXAGON_OPMASK=0x1 llama-completion ...` - Ops are enqueued but NPU-side processing is stubbed out
-      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - NPU performs dynamic quantization and skips the rest
-      `GGML_HEXAGON_OPMASK=0x7 llama-completion ...` - Full queuing and processing of Ops (default)
+      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - Full queuing and processing of Ops (default)

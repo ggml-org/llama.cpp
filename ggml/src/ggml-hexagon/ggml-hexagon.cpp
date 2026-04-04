@@ -51,7 +51,7 @@ static int    opt_experimental = 0;
 static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
 
 // Enable all stages by default
-static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_QUANTIZE | HTP_OPMASK_COMPUTE;
+static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
 static int opt_opsync = 0;  // synchronous ops
 
 #define HEX_VERBOSE(...) \
@@ -2254,22 +2254,6 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     delete backend;
 }
 
-// Map weight type to its activation quantization family.
-// Types in the same family produce identical Q8 formats in VTCM and can
-// safely share quantized activation data via SKIP_QUANTIZE.
-// When adding a new quantized type, assign it the correct family here.
-static inline int act_quant_family(enum ggml_type wtype) {
-    switch (wtype) {
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_MXFP4:
-            return 1;  // Q8x4x2
-        default:
-            return 0;  // unknown / not quantized
-    }
-}
-
 static uint32_t op_remap_to_htp(const ggml_tensor * t) {
     switch (t->op) {
         case GGML_OP_FLASH_ATTN_EXT: return HTP_OP_FLASH_ATTN_EXT;
@@ -2324,12 +2308,6 @@ static uint32_t op_remap_to_htp(const ggml_tensor * t) {
     return HTP_OP_INVALID;
 }
 
-static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1] &&
-            act_quant_family(op0->src[0]->type) == act_quant_family(op1->src[0]->type) &&
-            act_quant_family(op0->src[0]->type) != 0);
-}
-
 static inline bool op_is_compute(ggml_tensor *node)
 {
     return !ggml_op_is_empty(node->op) && !ggml_is_empty(node) && (node->flags & GGML_TENSOR_FLAG_COMPUTE);
@@ -2351,11 +2329,7 @@ struct op_request_batch {
 
     unsigned int n_reqs_max;
 
-    const struct ggml_tensor * prev_op; // prev batched op
-
     void reset() {
-        prev_op = nullptr;
-
         n_bufs = 0;
         n_tens = 0;
         n_ops  = 0;
@@ -2430,18 +2404,9 @@ struct op_request_batch {
         o->opcode = op_remap_to_htp(t);
         o->flags  = 0;
 
-        if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
-            o->flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
-        }
         if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
             o->flags |= HTP_OPFLAGS_SKIP_COMPUTE;
         }
-
-        // skip quantizer if src1 is reused
-        if (op_reuse_src1(t, prev_op)) {
-            o->flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
-        }
-        prev_op = t;
 
         ggml_hexagon_dump_op_exec(sess->name, t, o->flags);
 
