@@ -10800,10 +10800,11 @@ static void ggml_sycl_preload_model_weights() {
                 }
             }
 
-            // Track dense weight cache keys for pinning after finalize
+            // Track dense weight cache keys for pinning + data_device update after finalize
             struct dense_pin_info {
-                ggml_sycl_cache_id key;
-                layout_mode        layout;
+                ggml_sycl_cache_id  key;
+                layout_mode         layout;
+                const ggml_tensor * tensor;
             };
             std::vector<dense_pin_info> dense_pin_keys;
             dense_pin_keys.reserve(indices.size());
@@ -11010,8 +11011,8 @@ static void ggml_sycl_preload_model_weights() {
                         result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                         dense_cached++;
                         total_bytes += dst_size;
-                        // Track for pinning after finalize
-                        dense_pin_keys.push_back({ cache_key, preload_layout });
+                        // Track for pinning + data_device update after finalize
+                        dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
                         // Register layout choice so inference dispatch uses the
                         // same layout we uploaded.  Without this, the dispatch
                         // derives a fallback that may differ from preload_layout,
@@ -11056,6 +11057,20 @@ static void ggml_sycl_preload_model_weights() {
             // Mark all IN_PROGRESS entries as READY now that DMA is complete
             cache->finalize_pending_fills();
             cache->process_deferred_frees_public();
+
+            // Update each tensor's fast-path data_device pointer to the VRAM
+            // location returned by the cache.  Without this, data_device_ptr()
+            // still points to host-pinned memory and inference falls back to
+            // host-resident paths (~100x slower).
+            for (const auto & pin_info : dense_pin_keys) {
+                auto cached = cache->get_weight_ptr(pin_info.key);
+                if (cached && cached.ptr && cached.on_device && pin_info.tensor) {
+                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(pin_info.tensor->extra);
+                    if (extra) {
+                        extra->set_data_device(device, cached.ptr, cached.layout, true);
+                    }
+                }
+            }
 
             // Pin all successfully cached dense weights — never evict during inference.
             // MoE experts are NOT pinned — they compete for remaining VRAM via LRU.
