@@ -1211,6 +1211,7 @@ class unified_cache {
     // (between graph_compute calls, during finalize_pending_fills).
     // Returns number of entries finalized.
     size_t finalize_evictions();
+    size_t finalize_evictions_locked();  // Caller must hold rw_mutex_ (unique)
 
     // Re-promote a weight from host cache back to device VRAM.
     // Looks up the key in host_cache; if found with preserved layout,

@@ -5304,16 +5304,11 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
     return evicted_bytes;
 }
 
-size_t unified_cache::finalize_evictions() {
-    // Poll in-flight async D2H evictions.  For each completed one:
-    // 1. Adopt the host-pinned buffer into host_cache (preserves layout)
-    // 2. Reclaim VRAM (arena weight_reclaim or deferred free)
-    // 3. Remove entry from device cache
+// Internal: caller MUST already hold rw_mutex_ (unique).
+size_t unified_cache::finalize_evictions_locked() {
     if (evictions_in_flight_.load(std::memory_order_relaxed) == 0) {
         return 0;
     }
-
-    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
     std::vector<unified_cache_key> finalized_keys;
     finalized_keys.reserve(4);
@@ -5378,6 +5373,19 @@ size_t unified_cache::finalize_evictions() {
     }
 
     return finalized_keys.size();
+}
+
+size_t unified_cache::finalize_evictions() {
+    // Poll in-flight async D2H evictions.  For each completed one:
+    // 1. Adopt the host-pinned buffer into host_cache (preserves layout)
+    // 2. Reclaim VRAM (arena weight_reclaim or deferred free)
+    // 3. Remove entry from device cache
+    if (evictions_in_flight_.load(std::memory_order_relaxed) == 0) {
+        return 0;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    return finalize_evictions_locked();
 }
 
 void * unified_cache::promote_to_device(const unified_cache_key & key, size_t size) {
@@ -5833,8 +5841,9 @@ void unified_cache::defer_host_free(void * ptr, size_t size, const sycl::event &
 void unified_cache::process_deferred_frees() {
     // P7: finalize any completed async D2H evictions first.
     // This reclaims VRAM from entries whose D2H copies have completed.
+    // NOTE: Use _locked variant — caller already holds rw_mutex_.
     if (evictions_in_flight_.load(std::memory_order_relaxed) > 0) {
-        finalize_evictions();
+        finalize_evictions_locked();
     }
 
     auto it = deferred_frees_.begin();
@@ -10304,8 +10313,31 @@ placement_plan compute_placement_plan(
             return a.dst_size > b.dst_size;
         });
 
-    // Greedy bin-packing: fill VRAM up to budget, spill the rest to host
+    // Greedy bin-packing: fill VRAM up to budget, spill the rest to host.
+    // When the VRAM arena is active, subtract compute scratch and oneDNN
+    // scratch zone capacities from the budget BEFORE packing weights.
+    // Without this, weights fill all available VRAM and leave zero space
+    // for compute scratch → "VRAM exhaustion" abort on large models.
     size_t remaining = vram_budget;
+    if (vram_arena_enabled()) {
+        auto * cache = get_unified_cache_for_device(device_id);
+        if (cache && cache->get_arena().active()) {
+            const size_t compute_reserve = cache->get_arena().zone_capacity(vram_zone_id::COMPUTE);
+            const size_t onednn_reserve  = cache->get_arena().zone_capacity(vram_zone_id::ONEDNN);
+            const size_t total_reserve   = compute_reserve + onednn_reserve;
+            if (remaining > total_reserve) {
+                remaining -= total_reserve;
+            } else {
+                remaining = 0;
+            }
+            GGML_LOG_INFO("[PLACEMENT] Scratch reservation: compute=%.1f MB + oneDNN=%.1f MB = %.1f MB "
+                          "(weight budget=%.1f MB)\n",
+                          compute_reserve / (1024.0 * 1024.0),
+                          onednn_reserve / (1024.0 * 1024.0),
+                          total_reserve / (1024.0 * 1024.0),
+                          remaining / (1024.0 * 1024.0));
+        }
+    }
     for (auto & entry : plan.entries) {
         if (entry.dst_size <= remaining) {
             entry.on_device     = true;
@@ -10415,6 +10447,18 @@ placement_plan compute_multi_device_plan(
     for (size_t d = 0; d < n_devs; d++) {
         plan.devices[d]    = device_budgets[d].device_id;
         remaining[d]       = device_budgets[d].vram_budget;
+
+        // Subtract arena compute + oneDNN zone reservations from per-device budget
+        // so weights don't fill space needed for compute scratch.
+        if (vram_arena_enabled()) {
+            auto * cache = get_unified_cache_for_device(device_budgets[d].device_id);
+            if (cache && cache->get_arena().active()) {
+                const size_t reserve = cache->get_arena().zone_capacity(vram_zone_id::COMPUTE)
+                                     + cache->get_arena().zone_capacity(vram_zone_id::ONEDNN);
+                remaining[d] = remaining[d] > reserve ? remaining[d] - reserve : 0;
+            }
+        }
+
         plan.vram_budget  += device_budgets[d].vram_budget;
     }
 
