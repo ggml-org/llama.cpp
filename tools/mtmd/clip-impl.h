@@ -181,6 +181,21 @@
 #define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
 #define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
 
+// gemma4 audio conformer
+#define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
+#define TN_A_MM_SOFT_EMB_N   "mm.a.soft_emb_norm.%s"
+#define TN_A_INP_PROJ        "a.input_projection.%s"
+#define TN_A_CONV1D          "a.conv1d.%d.%s"
+#define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
+#define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
+#define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
+#define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
+#define TN_A_ATTN_K_REL      "%s.blk.%d.attn_k_rel.%s"
+#define TN_A_PER_DIM_SCALE   "%s.blk.%d.per_dim_scale.%s"
+#define TN_A_PER_DIM_K_SCALE "%s.blk.%d.per_dim_k_scale.%s"
+#define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
+#define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
+
 // mobilenetv5 (gemma3n) definitions
 #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
 #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
