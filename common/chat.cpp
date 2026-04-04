@@ -1119,14 +1119,14 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Gemma4 tool calling syntax
             // Rules should match traversal logic in gemma4_to_json()
-            auto gemma4_string_content = p.rule("gemma4-string-content", p.until("<|\"|>"));
-            auto gemma4_string = p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
-            auto gemma4_bool = p.rule("gemma4-bool", p.json_bool());
-            auto gemma4_null = p.rule("gemma4-null", p.json_null());
-            auto gemma4_number = p.rule("gemma4-number", p.json_number());
-            auto gemma4_dict_key = p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
-            auto gemma4_dict_kv = p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
-            auto gemma4_dict = p.rule("gemma4-dict", [&]() {
+            p.rule("gemma4-string-content", p.until("<|\"|>"));
+            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
+            p.rule("gemma4-bool", p.json_bool());
+            p.rule("gemma4-null", p.json_null());
+            p.rule("gemma4-number", p.json_number());
+            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
+            p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
+            p.rule("gemma4-dict", [&]() {
                 auto ws = p.space();
                 auto member = p.ref("gemma4-dict-kv");
                 auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
@@ -1135,7 +1135,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                     p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
                 });
             });
-            auto gemma4_array = p.rule("gemma4-array", [&]() {
+            p.rule("gemma4-array", [&]() {
                 auto ws = p.space();
                 auto value = p.ref("gemma4-value");
                 auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
@@ -1144,7 +1144,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                     p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
                 });
             });
-            auto gemma4_value = p.rule("gemma4-value", [&]() {
+            p.rule("gemma4-value", [&]() {
                 return p.choice({
                     p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
                     p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
@@ -1161,7 +1161,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
 
                 tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
                     p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
-                    p.tool_args(gemma4_value),
+                    p.tool_args(p.ref("gemma4-dict")),
                 })));
             });
 
