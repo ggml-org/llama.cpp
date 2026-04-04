@@ -9402,6 +9402,14 @@ void * unified_cache_arena_alloc(int device_id, size_t size) {
     return cache->arena_alloc(size);
 }
 
+void * unified_cache_arena_alloc_weight(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !cache->get_arena().active()) {
+        return nullptr;
+    }
+    return cache->get_arena().zone_alloc(vram_zone_id::WEIGHT, size, 64);
+}
+
 void unified_cache_arena_reset(int device_id) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (cache) {

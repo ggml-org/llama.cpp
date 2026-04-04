@@ -2454,6 +2454,10 @@ bool unified_cache_reserve_compute_arena(int device_id, size_t arena_bytes);
 // Returns nullptr if arena is not reserved or has insufficient space.
 void * unified_cache_arena_alloc(int device_id, size_t size);
 
+// Sub-allocate from the weight zone (persistent, NOT reset between tokens).
+// Use for kernel infrastructure that persists for model lifetime.
+void * unified_cache_arena_alloc_weight(int device_id, size_t size);
+
 // Reset the arena bump pointer (call between graph_compute invocations).
 void unified_cache_arena_reset(int device_id);
 
