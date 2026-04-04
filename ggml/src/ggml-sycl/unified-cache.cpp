@@ -2002,6 +2002,68 @@ void host_cache::remove(const ggml_sycl_cache_id & key_id,
     entries_.erase(it);
 }
 
+bool host_cache::adopt_evicted(const ggml_sycl_cache_id &    key_id,
+                               void *                        host_ptr,
+                               size_t                        size,
+                               cache_entry_type              type,
+                               int                           layer_id,
+                               int                           expert_id,
+                               ggml_layout_mode              layout,
+                               const cache_layout_xmx_info * xmx_info) {
+    if (!key_id.valid || !host_ptr || size == 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (entries_.bucket_count() == 0) {
+        entries_.rehash(1);
+    }
+
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+
+    // Remove any existing entry for this key
+    auto it = entries_.find(key);
+    if (it != entries_.end()) {
+        free_entry(it->second);
+        entries_.erase(it);
+    }
+
+    // Evict host entries if needed to make room
+    while (used_.load() + size > budget_) {
+        if (evict_one() == 0) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] host_cache adopt_evicted: cannot make room for %zu bytes\n", size);
+            return false;
+        }
+    }
+
+    host_cache_entry entry{};
+    entry.host_ptr     = host_ptr;
+    entry.src_ptr      = nullptr;  // No original source — this is preserved device data
+    entry.content_hash = 0;
+    entry.size         = size;
+    entry.type         = type;
+    entry.layer_id     = layer_id;
+    entry.expert_id    = expert_id;
+    entry.layout       = layout;
+    entry.access_count = 1;
+    entry.last_access  = time_++;
+    entry.pinned       = false;
+    entry.owns_ptr     = true;
+    entry.pinned_alloc = true;   // Was allocated via sycl::malloc_host
+    entry.location     = cache_location::HOST_PINNED;
+    if (xmx_info) {
+        entry.xmx_info = *xmx_info;
+    }
+
+    entries_.emplace(key, std::move(entry));
+    used_.fetch_add(size, std::memory_order_relaxed);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] host_cache adopted evicted: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+                    (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
+                    (int) layout, size);
+    return true;
+}
+
 void host_cache::pin(const ggml_sycl_cache_id & key_id,
                      cache_entry_type           type,
                      int                        layer_id,
@@ -5051,6 +5113,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
 
     for (auto & pair : entries_) {
         auto & entry = pair.second;
+        if (entry.state == cache_entry_state::EVICTING) {
+            continue;  // Already being evicted asynchronously
+        }
         if (entry.state == cache_entry_state::IN_PROGRESS) {
             if (entry.has_ready_event && event_complete(entry.ready_event)) {
                 entry.state           = cache_entry_state::READY;
@@ -5121,6 +5186,64 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                         (int) it->second.layout, entry_size, host_resident ? 1 : 0);
 
         if (!host_resident) {
+            // Check if async D2H eviction is available: device entry with a
+            // transformed layout (SOA/COALESCED/XMX) worth preserving.
+            const bool has_transformed_layout =
+                it->second.layout != GGML_LAYOUT_AOS && it->second.layout != GGML_LAYOUT_DEFAULT;
+            const bool async_evict_enabled = async_evict_enabled_ && has_transformed_layout;
+
+            if (async_evict_enabled) {
+                // P7: Async D2H eviction — preserve transformed layout in host-pinned memory
+                void * host_dst = nullptr;
+                try {
+                    host_dst = sycl::malloc_host(entry_size, queue_.get_context());
+                } catch (...) {
+                    host_dst = nullptr;
+                }
+
+                if (host_dst) {
+                    // Issue async D2H copy via DMA queue
+                    sycl::queue & dq = get_dma_queue();
+                    sycl::event   evt;
+                    try {
+                        evt = dq.memcpy(host_dst, ptr, entry_size);
+                    } catch (...) {
+                        sycl::free(host_dst, queue_.get_context());
+                        host_dst = nullptr;
+                    }
+
+                    if (host_dst) {
+                        // Mark entry as EVICTING — VRAM stays occupied until finalize
+                        it->second.state              = cache_entry_state::EVICTING;
+                        it->second.eviction_event     = evt;
+                        it->second.has_eviction_event = true;
+                        it->second.eviction_host_ptr  = host_dst;
+                        it->second.pinned             = true;  // Prevent re-eviction
+
+                        GGML_SYCL_DEBUG(
+                            "[UNIFIED-CACHE] async evict started: model=%llu name_hash=0x%llx layout=%d "
+                            "size=%zu\n",
+                            (unsigned long long) evict_key.id.model_id,
+                            (unsigned long long) evict_key.id.name_hash,
+                            entry_layout, entry_size);
+
+                        // Return 0: VRAM not yet freed. Caller should call finalize_evictions()
+                        // or retry with another entry. VRAM is reclaimed asynchronously.
+                        // We still report success so the caller knows progress was made.
+                        evicted_bytes = 0;
+                        // Increment eviction counter so callers can poll finalize
+                        evictions_in_flight_++;
+                        has_evictions_.store(true, std::memory_order_release);
+
+                        // Return entry_size to indicate the eviction is in progress
+                        // even though VRAM hasn't been freed yet. The caller can
+                        // call finalize_evictions() to reclaim after DMA completes.
+                        return entry_size;
+                    }
+                }
+            }
+
+            // Synchronous eviction fallback (original path)
             // Always defer device memory frees.  Direct sycl::free inside evict_one
             // causes BCS CAT errors: eviction during prestage unmaps VRAM pages
             // while concurrent BCS copies (from stage_expert_group in the same
@@ -10216,10 +10339,46 @@ placement_plan compute_multi_device_plan(
 
     plan.build_index();
 
+    // Build runtime query maps for multi-device inference routing.
+
+    // device_layers: per-device contiguous layer range
+    for (size_t d = 0; d < n_devs; d++) {
+        int dev_id = device_budgets[d].device_id;
+        int first  = n_layers, last = -1;
+        for (int l = 0; l < n_layers; l++) {
+            if (layer_owner[l] == static_cast<int>(d)) {
+                first = std::min(first, l);
+                last  = std::max(last, l);
+            }
+        }
+        if (first <= last) {
+            plan.device_layers[dev_id] = { first, last };
+        }
+    }
+
+    // kv_device: KV cache for each layer co-located with its dense weight device
+    for (int l = 0; l < n_layers; l++) {
+        int owner_idx = layer_owner[l];
+        plan.kv_device[l] = device_budgets[owner_idx].device_id;
+    }
+
+    // expert_device: per-layer per-expert device assignment (from entry target_device).
+    // MoE expert tensors contain ALL experts for a layer in one blob.
+    // The plan assigns the whole tensor to one device, so all experts in that
+    // tensor share the same target.  Individual expert routing is handled
+    // at runtime by the unified cache's per-expert caching.
+    for (const auto & entry : plan.entries) {
+        if (!is_moe_priority(entry.priority)) continue;
+        if (entry.layer_id < 0) continue;
+        // All experts within this tensor go to target_device
+        plan.expert_device[entry.layer_id][0] = entry.target_device;
+    }
+
     // Log multi-device placement summary
     GGML_LOG_INFO("[PLACEMENT-MULTI] %zu devices, %d layers, hybrid parallelism\n",
                   n_devs, n_layers);
     for (size_t d = 0; d < n_devs; d++) {
+        int dev_id      = device_budgets[d].device_id;
         int first_layer = n_layers, last_layer = -1;
         for (int l = 0; l < n_layers; l++) {
             if (layer_owner[l] == static_cast<int>(d)) {

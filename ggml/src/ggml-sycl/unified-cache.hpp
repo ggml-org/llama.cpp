@@ -224,6 +224,22 @@ struct placement_plan {
     std::vector<int>    devices;          // Device IDs participating in this plan
     std::vector<size_t> per_device_vram;  // VRAM bytes used per device
 
+    // --- Multi-device runtime query maps (populated by compute_multi_device_plan) ---
+
+    // device_layers[device_id] = {layer_start, layer_end} (inclusive range).
+    // Dense layers in [start, end] are owned by this device.
+    struct layer_range { int start = -1; int end = -1; };
+    std::unordered_map<int, layer_range> device_layers;
+
+    // expert_device[layer_id][expert_id] = device_id (-1 = host/CPU).
+    // For MoE models: maps each expert to its target device.
+    // Empty for dense-only models.
+    std::unordered_map<int, std::unordered_map<int, int>> expert_device;
+
+    // kv_location[layer_id] = device_id for KV cache co-location.
+    // KV cache for a layer lives on the same device as its dense weights.
+    std::unordered_map<int, int> kv_device;
+
     // Quick lookup: is this tensor on any device?
     // Returns true if tensor with given name is planned for VRAM (any GPU).
     bool is_on_device(const std::string & name) const {
@@ -490,6 +506,7 @@ enum class cache_entry_state {
     READY,
     IN_PROGRESS,
     FAILED,
+    EVICTING,  // Async D2H eviction in flight — VRAM still occupied, host copy pending
 };
 
 // Memory location for cached pointers/buffers
@@ -631,6 +648,10 @@ struct unified_cache_entry {
     bool                  pool_allocated;   // True if device_ptr was sub-allocated from layout_pool_
     sycl::event           last_write_event; // Event from last fill/reorder that wrote to device_ptr
     bool                  has_write_event = false;  // Whether last_write_event is valid
+    // Async eviction state (P7): set when state == EVICTING
+    sycl::event           eviction_event;            // D2H copy completion event
+    bool                  has_eviction_event = false; // True if eviction_event is valid
+    void *                eviction_host_ptr  = nullptr; // Host-pinned destination for D2H copy
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
@@ -721,6 +742,19 @@ class host_cache {
                           int                        layer_id,
                           int                        expert_id,
                           ggml_layout_mode           layout);
+
+    // Adopt a pre-filled host-pinned buffer from async D2H eviction.
+    // The buffer was allocated via sycl::malloc_host and already contains
+    // the transformed layout data copied from device.  The host_cache takes
+    // ownership of the pointer (will free it on eviction/destruction).
+    bool adopt_evicted(const ggml_sycl_cache_id &    key_id,
+                       void *                        host_ptr,
+                       size_t                        size,
+                       cache_entry_type              type,
+                       int                           layer_id,
+                       int                           expert_id,
+                       ggml_layout_mode              layout,
+                       const cache_layout_xmx_info * xmx_info = nullptr);
 
     void pin(const ggml_sycl_cache_id & key,
              cache_entry_type           type,
@@ -1168,6 +1202,22 @@ class unified_cache {
     // waits on the queue and processes deferred frees before returning.
     // Used by unified_alloc() to make room for runtime allocations.
     size_t evict_and_flush(size_t bytes_needed);
+
+    // --- Async DMA eviction (P7) ---
+
+    // Poll in-flight D2H evictions and finalize completed ones.
+    // Reclaims arena/device space, removes device entry, host_cache entry
+    // now holds the preserved layout data.  Call at safe sync points
+    // (between graph_compute calls, during finalize_pending_fills).
+    // Returns number of entries finalized.
+    size_t finalize_evictions();
+
+    // Re-promote a weight from host cache back to device VRAM.
+    // Looks up the key in host_cache; if found with preserved layout,
+    // issues async H2D copy via DMA queue.  Returns device pointer
+    // on success (entry transitions to IN_PROGRESS with ready_event),
+    // or nullptr if host data not available or VRAM insufficient.
+    void * promote_to_device(const unified_cache_key & key, size_t size);
 
     // === Stats ===
 
