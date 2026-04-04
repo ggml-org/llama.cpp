@@ -129,6 +129,7 @@ static dnnl::memory::data_type ggml_sycl_onednn_dtype(ggml_type type);
 #include "ggml-sycl/sycl-profiling.hpp"
 #include "ggml-sycl/tensor-types.hpp"
 #include "ggml-sycl/unified-cache.hpp"
+#include "ggml-sycl/vmem-kv.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded          = false;
@@ -13181,8 +13182,16 @@ struct tiered_kv_buffer_context {
     // The allocator needs a contiguous address range to compute offsets.
     // We use sycl::malloc_host to create a thin address-space reservation
     // that init_tensor remaps to the actual per-layer pointers.
+    // NOTE: When vmem_pool is active, alloc_base IS the vmem virtual address
+    // (no synthetic base needed — the vmem range is contiguous device memory).
     void * alloc_base      = nullptr;
     size_t alloc_base_size = 0;
+
+    // L0 virtual memory pool for KV cache (Phase 9).
+    // When active, provides a contiguous virtual address range backed by
+    // demand-paged physical memory.  Eliminates synthetic alloc_base hack
+    // and per-layer remapping for the all-on-device case.
+    std::unique_ptr<ggml_sycl::vmem_kv_pool> vmem_pool;
 
     // Totals for logging and budget accounting
     size_t    device_size = 0;   // Sum of on_device layer allocations
@@ -13205,6 +13214,21 @@ struct tiered_kv_buffer_context {
 static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
+
+    // P9: If vmem pool is active, destroy it (unmaps all physical pages + frees virtual range).
+    // Per-layer allocs from vmem are sub-ranges of the virtual address space and must NOT
+    // be individually freed.
+    if (ctx->vmem_pool) {
+        ctx->vmem_pool->destroy();
+        ctx->vmem_pool.reset();
+        // alloc_base was the vmem virtual address — already freed by vmem_pool.destroy()
+        if (ctx->alloc_base) {
+            ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->alloc_base);
+            ctx->alloc_base = nullptr;
+        }
+        delete ctx;
+        return;
+    }
 
     // Free per-layer allocations via unified_cache_deallocate.
     // Arena-sourced layers (from_arena=true) are sub-allocations from the VRAM
@@ -13254,6 +13278,17 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
                 extra->data_device[ctx->device] = tensor->data;
             }
         }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    // P9: When vmem is active, alloc_base IS the vmem virtual range — tensor
+    // data pointers are already correct.  Just set data_device for the fast path.
+    if (ctx->vmem_pool && ctx->vmem_pool->active()) {
+        if (!tensor->extra) {
+            tensor->extra = new ggml_tensor_extra_gpu{};
+        }
+        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+        extra->data_device[ctx->device] = tensor->data;
         return GGML_STATUS_SUCCESS;
     }
 
@@ -13403,6 +13438,13 @@ static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) 
     auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
     ggml_sycl_set_device(ctx->device);
 
+    // P9: vmem path — single contiguous memset across all layers.
+    if (ctx->vmem_pool && ctx->vmem_pool->active()) {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            ctx->stream->memset(ctx->vmem_pool->base(), value, ctx->alloc_base_size).wait()));
+        return;
+    }
+
     // Clear each per-layer allocation individually.
     // Device layers use GPU queue memset; host layers use CPU memset.
     for (auto & la : ctx->layer_allocs) {
@@ -13531,6 +13573,74 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
                       device, total_avail / (1024.0 * 1024.0),
                       compute_scratch_reserve / (1024.0 * 1024.0),
                       kv_device_budget / (1024.0 * 1024.0));
+    }
+
+    // === P9: L0 Virtual Memory fast path ===
+    // When L0 vmem is available and all KV fits on device, use a single contiguous
+    // virtual address range with demand-paged physical backing.  This eliminates:
+    //   - Per-layer sycl::malloc_device calls
+    //   - Synthetic alloc_base hack
+    //   - Per-layer pointer remapping in init_tensor (for all-device case)
+    if (kv_host_val != 1 && size <= kv_device_budget
+        && ggml_sycl::vmem_kv_available(*buft_ctx->stream)) {
+
+        auto vmem = std::make_unique<ggml_sycl::vmem_kv_pool>();
+        // Reserve for the larger of: requested size vs actual per-layer total
+        // (per-layer alignment can push total above size).
+        const size_t vmem_total = std::max(size, static_cast<size_t>(n_layers) * aligned_per_layer);
+        if (vmem->init(*buft_ctx->stream, vmem_total)) {
+            // Map physical pages for each layer (demand-paged)
+            bool all_mapped = true;
+            std::vector<kv_layer_alloc> vmem_layer_allocs(n_layers);
+            for (uint32_t l = 0; l < n_layers; l++) {
+                size_t layer_offset = l * aligned_per_layer;
+                void * ptr = vmem->map_layer(layer_offset, aligned_per_layer, true);
+                if (!ptr) {
+                    GGML_LOG_WARN("[KV-TIER] vmem map_layer failed at layer %u, falling back\n", l);
+                    all_mapped = false;
+                    break;
+                }
+                vmem_layer_allocs[l].ptr       = ptr;
+                vmem_layer_allocs[l].size      = aligned_per_layer;
+                vmem_layer_allocs[l].on_device = true;
+                vmem_layer_allocs[l].from_arena = true;  // do NOT free individually
+            }
+
+            if (all_mapped) {
+                // vmem base IS the contiguous device address — use it directly as alloc_base.
+                void * vmem_base = vmem->base();
+
+                // Register with alloc_registry so pointer lookups resolve correctly.
+                ggml_sycl::alloc_registry::instance().register_alloc(
+                    vmem_base, vmem->reserved_size(), device, ggml_sycl::alloc_type::DEVICE);
+
+                mgr.set_actual_hot_layers(n_layers);
+
+                GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers via L0 vmem "
+                              "(%.1f MB, %zu pages, page_size=%zu KB)\n",
+                              device, n_layers, size / (1024.0 * 1024.0),
+                              vmem->mapped_page_count(), vmem->page_size() / 1024);
+
+                auto * ctx         = new tiered_kv_buffer_context{};
+                ctx->vmem_pool     = std::move(vmem);
+                ctx->layer_allocs  = std::move(vmem_layer_allocs);
+                ctx->alloc_base      = vmem_base;
+                ctx->alloc_base_size = size;
+                ctx->device_size   = size;
+                ctx->host_size     = 0;
+                ctx->device        = device;
+                ctx->stream        = buft_ctx->stream;
+                ctx->layer_layout       = mgr.compute_region_layout(size);
+                ctx->n_layers           = n_layers;
+                ctx->kv_per_layer       = kv_per_layer;
+                ctx->layer_base_offsets.resize(n_layers, 0);
+                ctx->layer_base_set.resize(n_layers, false);
+                return ggml_backend_buffer_init(buft, tiered_kv_buffer_interface, ctx, size);
+            }
+
+            // vmem mapping partially failed — destroy and fall through to legacy path
+            vmem->destroy();
+        }
     }
 
     std::vector<kv_layer_alloc> layer_allocs(n_layers);
