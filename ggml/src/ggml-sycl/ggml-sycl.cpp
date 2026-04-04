@@ -6238,6 +6238,66 @@ struct cpu_dispatch_result {
 //   FUSED_READY  — gate+up+SiLU fused; fused_output ready for DOWN
 // ---------------------------------------------------------------------------
 
+// =============================================================================
+// Arena-Routed Allocation Helpers (local to ggml-sycl.cpp)
+// =============================================================================
+// Mirror of the helpers in unified-kernel.cpp.  When GGML_SYCL_VRAM_ARENA=1,
+// host-pinned allocations route through the pinned_chunk_pool (via host_cache).
+// When arena is OFF, fall back to direct sycl::malloc_host / sycl::free.
+
+static void * arena_pinned_alloc(size_t bytes, sycl::queue & queue, bool & from_pool) {
+    from_pool = false;
+    if (bytes == 0) return nullptr;
+    if (ggml_sycl::vram_arena_enabled()) {
+        auto * hcache = ggml_sycl::try_get_host_cache();
+        if (hcache) {
+            void * ptr = hcache->allocate_pinned_runtime(bytes, 64);
+            if (ptr) {
+                from_pool = true;
+                return ptr;
+            }
+        }
+    }
+    return sycl::malloc_host(bytes, queue);
+}
+
+static void arena_pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from_pool) {
+    if (!ptr) return;
+    if (from_pool) {
+        auto * hcache = ggml_sycl::try_get_host_cache();
+        if (hcache) {
+            hcache->free_pinned_runtime(ptr, bytes);
+            return;
+        }
+    }
+    sycl::free(ptr, queue);
+}
+
+// Device allocation through VRAM arena compute zone when available.
+static void * arena_device_alloc(size_t bytes, int device_id, sycl::queue & queue, bool & from_arena) {
+    from_arena = false;
+    if (bytes == 0) return nullptr;
+    if (ggml_sycl::vram_arena_enabled() && device_id >= 0) {
+        void * ptr = ggml_sycl::unified_cache_arena_alloc(device_id, bytes);
+        if (ptr) {
+            from_arena = true;
+            return ptr;
+        }
+    }
+    return sycl::malloc_device(bytes, queue);
+}
+
+static void arena_device_free(void * ptr, size_t bytes, int device_id, sycl::queue & queue, bool from_arena) {
+    if (!ptr) return;
+    if (from_arena) {
+        // Arena memory is freed by zone_reset, not individually.
+        return;
+    }
+    sycl::free(ptr, queue);
+    (void) bytes;
+    (void) device_id;
+}
+
 enum moe_fusion_phase : int {
     MOE_FUSE_IDLE        = 0,
     MOE_FUSE_FIRST_SAVED = 1,
@@ -6269,6 +6329,8 @@ struct moe_fusion_state {
     float *       fused_output = nullptr;  // Pinned buffer: SiLU(gate*act) * (up*act)
     sycl::queue * fused_q      = nullptr;  // Queue that owns fused_output
     size_t        fused_cap    = 0;        // Capacity of fused_output in floats
+    size_t        fused_bytes  = 0;        // Allocation size in bytes (for pinned pool free)
+    bool          fused_from_pool = false; // True if allocated from pinned pool
 
     // Expert routing — resolved ONCE on first arrival, reused for up and down
     std::vector<size_t> cpu_indices;  // CPU-dispatched expert indices
@@ -6300,7 +6362,7 @@ struct moe_fusion_state {
 
     ~moe_fusion_state() {
         if (fused_output && fused_q) {
-            sycl::free(fused_output, *fused_q);
+            arena_pinned_free(fused_output, fused_bytes, *fused_q, fused_from_pool);
         }
     }
 
@@ -6309,9 +6371,10 @@ struct moe_fusion_state {
             return;
         }
         if (fused_output) {
-            sycl::free(fused_output, q);
+            arena_pinned_free(fused_output, fused_bytes, q, fused_from_pool);
         }
-        fused_output = sycl::malloc_host<float>(n, q);
+        fused_bytes  = n * sizeof(float);
+        fused_output = static_cast<float *>(arena_pinned_alloc(fused_bytes, q, fused_from_pool));
         fused_cap    = n;
         fused_q      = &q;
     }
@@ -9239,10 +9302,11 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
     if (ctx->prealloc_temp && ctx->prealloc_temp_size >= src_size) {
         temp_vram = ctx->prealloc_temp;
     } else {
+        const int dev_id = ggml_sycl_get_device_id_from_queue(queue);
         try {
-            temp_vram = sycl::malloc_device(src_size, queue);
-            if (temp_vram) {
-                const int dev_id = ggml_sycl_get_device_id_from_queue(queue);
+            bool from_arena = false;
+            temp_vram = arena_device_alloc(src_size, dev_id, queue, from_arena);
+            if (temp_vram && !from_arena) {
                 ggml_sycl::unified_cache_add_runtime_bytes(
                     dev_id, src_size, ggml_sycl::runtime_category::OTHER);
             }
@@ -9257,7 +9321,8 @@ static sycl::event ggml_sycl_fill_reordered_gpu(sycl::queue &                   
             return queue.ext_oneapi_submit_barrier(deps);
         }
         // Track dynamically allocated temp buffer for deferred free
-        if (ctx->temp_bufs) {
+        // (arena-owned buffers are freed by zone_reset, not individually)
+        if (ctx->temp_bufs && !ggml_sycl::unified_cache_arena_owns(dev_id, temp_vram)) {
             ctx->temp_bufs->push_back(temp_vram);
         }
     }
