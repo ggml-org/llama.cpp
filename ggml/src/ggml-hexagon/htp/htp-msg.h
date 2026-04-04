@@ -123,7 +123,7 @@ struct htp_op_req {
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst;                       // Output tensor index
 
-    // the rest is filled in plance by the NPU
+    // the rest is filled in-place by the NPU
     uint32_t prof_usecs;                // Number of usec per request
     uint32_t prof_cycles;               // Number of cycles per request
     uint32_t prof_pkts;                 // Number of instruction packets per request
@@ -131,10 +131,10 @@ struct htp_op_req {
 };
 
 struct htp_general_req {
-    uint16_t n_bufs;     // Number of buffers
-    uint16_t n_tensors;  // Number of tensors
-    uint16_t n_ops;      // Number of ops
-    uint16_t flags;      // unused
+    uint32_t n_bufs;      // Number of buffers
+    uint32_t n_tensors;   // Number of tensors
+    uint32_t n_ops;       // Number of ops
+    uint32_t flags;       // unused
     // struct htp_op_buf bufs[];    -- dspqueue buf 0
     // struct htp_tensor tensors[]; -- dspqueue buf 1
     // struct htp_op_req ops[];     -- dspqueue buf 2

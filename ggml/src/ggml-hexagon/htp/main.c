@@ -117,6 +117,9 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         if (ctx->mmap[i].size) {
             HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+            ctx->mmap[i].size = 0;
+            ctx->mmap[i].base = NULL;
+            ctx->mmap[i].fd   = -1;
         }
     }
 
@@ -148,21 +151,51 @@ AEEResult htp_iface_disable_etm(remote_handle64 handle) {
     return err;
 }
 
-AEEResult htp_iface_unmap_buffers(remote_handle64 handle) {
+AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t pinned) {
     struct htp_context * ctx = (struct htp_context *) handle;
-
     if (!ctx) {
         return AEE_EBADPARM;
     }
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
-        if (m->size) {
+        if (!m->size) {
+            FARF(HIGH, "mmap : fd %u size %u pinned %u", m->fd, size, pinned);
+
+            void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+            if (va == (void*)-1) {
+                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, fd, (uint32_t) size);
+                return AEE_EFAILED;
+            }
+
+            m->base   = (uint64_t) va;
+            m->fd     = fd;
+            m->size   = size;
+            m->age    = 0;
+            m->pinned = pinned;
+
+            return AEE_SUCCESS;
+        }
+    }
+
+    return AEE_ENOMEMORY;
+}
+
+AEEResult htp_iface_munmap(remote_handle64 handle, int fd) {
+    struct htp_context * ctx = (struct htp_context *) handle;
+    if (!ctx) {
+        return AEE_EBADPARM;
+    }
+
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+        struct htp_mmap *m = &ctx->mmap[i];
+        if (fd < 0 || m->fd == fd) {
             FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
             HAP_munmap2((void *) m->base, m->size);
-            m->size = 0;
-            m->base = NULL;
-            m->fd   = -1;
+            m->size   = 0;
+            m->base   = NULL;
+            m->fd     = -1;
+            m->pinned = 0;
         }
     }
 
@@ -468,7 +501,7 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
             b->base = m->base;
             m->age  = 0;
         } else {
-            if (++m->age > o_age) {
+            if (!m->pinned && ++m->age > o_age) {
                 o_age = m->age;
                 o_mm  = m;
             }
@@ -480,9 +513,10 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
         struct htp_mmap *m = o_mm;
         if (m->size) {
             // Replacing an older entry, unmap first
-            FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
             HAP_munmap2((void *) m->base, m->size);
         }
+
+        FARF(HIGH, "mmap : fd %u size %u", b->fd, (uint32_t) b->size);
 
         void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
         if (va == (void*)-1) {
@@ -490,10 +524,11 @@ static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf
             abort(); // can't do much else at this point
         }
 
-        m->base = b->base = (uint64_t) va;
-        m->fd   = b->fd;
-        m->size = b->size;
-        m->age  = 0;
+        m->base   = b->base = (uint64_t) va;
+        m->fd     = b->fd;
+        m->size   = b->size;
+        m->age    = 0;
+        m->pinned = 0;
     }
 }
 

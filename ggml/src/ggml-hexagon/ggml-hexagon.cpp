@@ -113,6 +113,7 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
 // ** backend sessions
 
 struct op_request_batch;
+struct op_shared_mem;
 
 struct ggml_hexagon_session {
     ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
@@ -143,6 +144,7 @@ struct ggml_hexagon_session {
 
     std::atomic<int> op_pending;
     op_request_batch *orb;
+    op_shared_mem    *oshm;
 };
 
 // ** backend buffers
@@ -162,10 +164,46 @@ struct ggml_backend_hexagon_buffer_context {
     uint8_t *              base;
     size_t                 size;
     int                    fd;
-    bool                   repack;
     bool                   mapped;
+    bool                   pinned;
 
-    void alloc(size_t size) {
+    void mmap(bool pinned = false) {
+        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD_DELAYED);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->name.c_str(),
+                    sess->domain_id, this->size, this->fd, (unsigned) err);
+            throw std::runtime_error("ggml-hex: fastrpc_mmap failed (see log for details)");
+        }
+
+        if (pinned) {
+            err = htp_iface_mmap(sess->handle, this->fd, this->size, pinned);
+            if (err != 0) {
+                GGML_LOG_ERROR("ggml-hex: %s buffer pinning failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->name.c_str(),
+                        sess->domain_id, this->size, this->fd, (unsigned) err);
+                throw std::runtime_error("ggml-hex: htp_iface_mmap failed (see log for details)");
+            }
+        }
+
+        this->mapped = true;
+        this->pinned = pinned;
+        HEX_VERBOSE("ggml-hex: %s mapped buffer: base %p size %zu fd %d pinned %u\n",
+                sess->name.c_str(), (void *) this->base, this->size, this->fd, pinned);
+    }
+
+    void unmap() {
+        if (!this->mapped) return;
+
+        htp_iface_munmap(sess->handle, this->fd);
+        fastrpc_munmap(sess->domain_id, this->fd, (void *) this->base, this->size);
+
+        HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->name.c_str(),
+                (void *) this->base, size, this->fd);
+
+        this->mapped = false;
+        this->fd     = -1;
+    }
+
+    void alloc(size_t size, bool pinned) {
         if (this->base) return;
 
         this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, size);
@@ -179,14 +217,18 @@ struct ggml_backend_hexagon_buffer_context {
             GGML_LOG_ERROR("ggml-hex: %s failed to get FD for buffer %p\n", sess->name.c_str(), (void *) this->base);
             throw std::runtime_error("ggml-hex: rpcmem_to_fd failed (see log for details)");
         }
+        this->size = size;
 
-        HEX_VERBOSE("ggml-hex: %s allocated buffer: base %p size %zu fd %d repack %d\n", sess->name.c_str(),
-                    (void *) this->base, size, this->fd, (int) repack);
+        HEX_VERBOSE("ggml-hex: %s allocated buffer: base %p size %zu fd %d pinned %d\n", sess->name.c_str(),
+                    (void *) this->base, this->size, this->fd, (int) pinned);
+
+        mmap(pinned);
     }
 
     void free() {
         if (!this->base) return;
 
+        unmap();
         rpcmem_free(this->base);
 
         HEX_VERBOSE("ggml-hex: %s freed buffer: base %p size %zu fd %d\n", sess->name.c_str(),
@@ -195,48 +237,19 @@ struct ggml_backend_hexagon_buffer_context {
         this->base = NULL;
     }
 
-    void mmap() {
-        if (this->mapped) return;
-
-        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD_DELAYED);
-        if (err != 0) {
-            GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->name.c_str(),
-                    sess->domain_id, this->size, this->fd, (unsigned) err);
-            throw std::runtime_error("ggml-hex: fastrpc_mmap failed (see log for details)");
-        }
-
-        this->mapped = true;
-        HEX_VERBOSE("ggml-hex: %s mapped buffer: base %p size %zu fd %d\n", sess->name.c_str(), (void *) this->base, this->size, this->fd);
-    }
-
-    void unmap() {
-        if (!this->mapped) return;
-
-        htp_iface_unmap_buffers(sess->handle);
-        fastrpc_munmap(sess->domain_id, this->fd, (void *) this->base, this->size);
-
-        HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->name.c_str(),
-                (void *) this->base, size, this->fd);
-
-        this->mapped = false;
-        this->fd     = -1;
-    }
-
-    ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
+    ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool pinned) {
         size += 4 * 1024;  // extra page for padding
 
         this->sess   = sess;
-        this->size   = size;
+        this->size   = 0;
         this->base   = nullptr;
-        this->mapped = false;
         this->fd     = -1;
-        this->repack = repack;
+        this->mapped = false;
 
-        alloc(size);
+        alloc(size, pinned);
     }
 
     ~ggml_backend_hexagon_buffer_context() {
-        unmap();
         free();
     }
 };
@@ -259,15 +272,12 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
     auto ctx  = static_cast<ggml_backend_hexagon_buffer_context *>(buffer->context);
     auto sess = ctx->sess;
 
-    HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu usage %d repack %d\n", sess->name.c_str(),
-                tensor->name, (void *) ctx->base, tensor->data, ggml_nbytes(tensor), (int) buffer->usage,
-                (int) ctx->repack);
+    HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu usage %d\n", sess->name.c_str(),
+                tensor->name, (void *) ctx->base, tensor->data, ggml_nbytes(tensor), (int) buffer->usage);
 
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         return GGML_STATUS_SUCCESS; // nothing to do for the view
     }
-
-    ctx->mmap();
 
     return GGML_STATUS_SUCCESS;
 }
@@ -1505,7 +1515,15 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
     /* .is_host          = */ ggml_backend_hexagon_repack_buffer_type_is_host,
 };
 
-// Backed session implementation
+// Backend session implementation
+
+// struct op_shared_mem : public ggml_backend_hexagon_buffer_context {
+//     uint32_t  chunk_size;
+//     uint32_t  chunk_mask;
+// 
+//     op_shared_mem(, 
+// 
+// };
 
 struct op_request_batch {
     const char* name;

@@ -20,6 +20,7 @@ struct htp_mmap {
     uint64_t base;
     uint32_t fd;
     uint32_t age;
+    uint32_t pinned;
 };
 
 // Main context for htp DSP backend
