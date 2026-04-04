@@ -120,7 +120,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     offset_wg_m = wg_m * WORKGROUP_SIZE_M * TILE_M;
     offset_wg_n = wg_n * WORKGROUP_SIZE_N * TILE_N;
 
-    if (is_valid) {    
+    if (is_valid) {
         rest_token_n = gathered_count_ids[expert_idx] - offset_wg_n;
         let global_gathered_base = expert_idx * params.n_tokens + offset_wg_n;
         for (var i = thread_id; i < TILE_N * WORKGROUP_SIZE_N && offset_wg_n + i < gathered_count_ids[expert_idx]; i += TOTAL_WORKGROUP_SIZE) {
