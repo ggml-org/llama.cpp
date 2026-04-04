@@ -11685,17 +11685,11 @@ class HunyuanOCRVisionModel(MmprojModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith("vit."):
             return  # skip text tensors
-
-        # perceiver projector: non-standard numbering (proj.0 -> mm.0, proj.2 -> mm.1)
-        name = name.replace("vit.perceive.proj.0.", "mm.0.")
-        name = name.replace("vit.perceive.proj.2.", "mm.1.")
-        name = name.replace("vit.perceive.mlp.", "mm.2.")
-
         yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         # force conv weights to F16 to avoid bf16 IM2COL issues on Metal
-        if "mm.0." in new_name or "mm.1." in new_name:
+        if "mm.0." in new_name or "mm.2." in new_name:
             return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 

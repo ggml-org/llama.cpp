@@ -734,6 +734,7 @@ class MODEL_TENSOR(IntEnum):
     V_LAYER_OUT_SCALE    = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
+    V_MM_PRE_NORM        = auto() # hunyuanocr
     V_MM_POST_NORM       = auto()
     V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
@@ -769,7 +770,6 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
-    V_MM_PRE_NORM        = auto() # hunyuanocr
     V_TOK_IMG_BEGIN      = auto() # hunyuanocr
     V_TOK_IMG_END        = auto() # hunyuanocr
     V_STD_BIAS           = auto() # gemma4

@@ -56,9 +56,9 @@ ggml_cgraph * clip_graph_hunyuanocr::build() {
     cur = ggml_cont_2d(ctx0, cur, idim, (ow + 1) * oh);
 
     // project to LLM hidden size
-    cur = build_mm(model.mm_2_w, cur);
-    if (model.mm_2_b) {
-        cur = ggml_add(ctx0, cur, model.mm_2_b);
+    cur = build_mm(model.mm_model_proj, cur);
+    if (model.mm_model_proj_b) {
+        cur = ggml_add(ctx0, cur, model.mm_model_proj_b);
     }
 
     // wrap with begin/end tokens

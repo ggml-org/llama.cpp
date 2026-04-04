@@ -2052,12 +2052,13 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_HUNYUANOCR:
                 {
+                    // proj.0 -> mm.0 (conv1), proj.2 -> mm.2 (conv2), mlp -> mm.model.fc (linear)
                     model.mm_0_w            = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b            = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w            = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b            = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_model_proj     = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_model_proj_b   = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
                     model.mm_pre_norm_w     = get_tensor(string_format(TN_MM_PRE_NORM, "weight"));
                     model.mm_post_norm_w    = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
                     model.mm_img_begin      = get_tensor(TN_TOK_IMG_BEGIN);
@@ -3384,8 +3385,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
-        case PROJECTOR_TYPE_HUNYUANOCR:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_HUNYUANOCR:
+            return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
         case PROJECTOR_TYPE_DEEPSEEKOCR:

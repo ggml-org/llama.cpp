@@ -358,7 +358,8 @@ struct clip_model {
     // MINICPMV projection
     ggml_tensor * mm_model_pos_embed_k = nullptr;
     ggml_tensor * mm_model_query = nullptr;
-    ggml_tensor * mm_model_proj = nullptr;
+    ggml_tensor * mm_model_proj   = nullptr;
+    ggml_tensor * mm_model_proj_b = nullptr;
     ggml_tensor * mm_model_kv_proj = nullptr;
     ggml_tensor * mm_model_attn_q_w = nullptr;
     ggml_tensor * mm_model_attn_q_b = nullptr;

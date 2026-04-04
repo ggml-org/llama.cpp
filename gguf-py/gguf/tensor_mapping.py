@@ -1360,6 +1360,7 @@ class TensorNameMap:
             "mlp_AR.linear_{bid}", # PaddleOCR-VL
             "merger.mlp.{bid}",
             "mm.{bid}",  # HunyuanOCR perceiver projector
+            "vit.perceive.proj.{bid}", # HunyuanOCR (proj.0 = conv1, proj.2 = conv2)
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
@@ -1367,6 +1368,7 @@ class TensorNameMap:
             "model.vision.linear_proj.linear_proj", # cogvlm
             "model.projector.layers", # Deepseek-OCR
             "visual.merger.proj", # glm4v
+            "vit.perceive.mlp", # HunyuanOCR
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
