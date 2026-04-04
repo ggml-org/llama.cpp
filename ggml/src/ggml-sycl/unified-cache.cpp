@@ -6455,7 +6455,7 @@ host_cache * get_host_cache_for_device(int device_id) {
 }
 
 host_cache * try_get_host_cache() {
-    // Lock-free read: g_host_cache_shared is set exactly once and never cleared.
+    // Lock-free read: g_host_cache_shared is set once, cleared only at shutdown when no inference is active.
     // Pointer read is atomic on x86_64. No mutex needed for the fast path.
     return g_host_cache_shared.get();
 }
@@ -6708,9 +6708,13 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
             uses_pinned_pool = (ptr != nullptr);
         }
         if (!ptr) {
-            GGML_LOG_ERROR("[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes — "
-                           "all host-pinned memory should be pre-allocated at init\n",
-                           alloc_size);
+            // Pinned pool exhausted — fall back to raw malloc_host.
+            // After pre_allocate_all this should not happen during inference;
+            // log a warning so we can identify any remaining leak paths.
+            GGML_LOG_WARN("[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes, "
+                          "falling back to malloc_host (should not happen during inference)\n",
+                          alloc_size);
+            ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:host");
         }
     }
 
@@ -9551,6 +9555,7 @@ void * vram_arena::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
 
         if (n_chunks_ == 1) {
             // Collision check: KV used + weight used must not exceed shared zone.
+            // Safe: KV allocation (context creation) and weight allocation (model load) never overlap in practice.
             const auto & kz = zones_[static_cast<int>(vram_zone_id::KV)];
             size_t prev = z.used.fetch_add(aligned_size, std::memory_order_relaxed);
             size_t kv_used = kz.used.load(std::memory_order_relaxed);
@@ -9732,6 +9737,143 @@ void vram_arena::abandon() {
         zones_[i].used.store(0, std::memory_order_relaxed);
         zones_[i].free_list.clear();
     }
+}
+
+// === P4: Priority-based static placement planner ===
+
+// Map tensor_usage + name to placement priority.
+// For MoE experts, name sub-classification distinguishes gate/down/up.
+static placement_priority tensor_to_placement_priority(tensor_usage usage, const char * name) {
+    switch (usage) {
+        case tensor_usage::NORM:
+        case tensor_usage::EMBEDDING:
+            return placement_priority::NORM_EMBED;
+        case tensor_usage::ATTENTION_WEIGHT:
+            return placement_priority::ATTENTION;
+        case tensor_usage::FFN_WEIGHT:
+            return placement_priority::FFN;
+        case tensor_usage::MOE_GATE:
+            return placement_priority::MOE_GATE;
+        case tensor_usage::MOE_EXPERT_WEIGHT:
+            // Unsloth-informed sub-classification: down > up > gate
+            if (name && strstr(name, "ffn_down_exps")) {
+                return placement_priority::MOE_DOWN;
+            }
+            if (name && strstr(name, "ffn_up_exps")) {
+                return placement_priority::MOE_UP;
+            }
+            // ffn_gate_exps or unknown expert pattern
+            return placement_priority::MOE_GATE_PROJ;
+        case tensor_usage::MOE_INTERMEDIATE:
+            return placement_priority::NORM_EMBED;  // Small, treat like norms
+        case tensor_usage::UNKNOWN:
+        default:
+            // Unknown tensors get FFN priority (middle of the pack)
+            return placement_priority::FFN;
+    }
+}
+
+// Extract layer number from tensor name (e.g. "blk.5.attn_q" -> 5).
+static int p4_extract_layer_id(const char * name) {
+    if (!name) return -1;
+    const char * blk = strstr(name, "blk.");
+    if (!blk) return -1;
+    return std::atoi(blk + 4);
+}
+
+placement_plan compute_placement_plan(
+    const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
+    size_t vram_budget,
+    int    device_id) {
+
+    placement_plan plan;
+    plan.vram_budget = vram_budget;
+    plan.device_id   = device_id;
+    plan.vram_bytes  = 0;
+    plan.host_bytes  = 0;
+
+    // Build entries with priority classification
+    plan.entries.reserve(tensor_inventory.size());
+    for (const auto & [name, src_size] : tensor_inventory) {
+        placement_entry entry;
+        entry.name     = name;
+        entry.src_size = src_size;
+        entry.dst_size = src_size;  // Default: same as source (AOS)
+        entry.layer_id = p4_extract_layer_id(name.c_str());
+
+        // Classify usage and map to priority
+        const tensor_usage usage = infer_tensor_usage(name.c_str());
+        entry.priority = tensor_to_placement_priority(usage, name.c_str());
+
+        // MoE expert tensors are composite (contain all experts for a layer).
+        // They compete for VRAM at the full tensor level during S1-PRELOAD.
+        entry.on_device = false;  // Will be set during packing below
+        plan.entries.push_back(std::move(entry));
+    }
+
+    // Sort by (priority ASC, layer_id ASC, dst_size DESC).
+    // This ensures highest-priority weights fill VRAM first, earlier layers
+    // before later ones, and larger weights before smaller within the same
+    // priority+layer (to minimize fragmentation from small leftovers).
+    std::sort(plan.entries.begin(), plan.entries.end(),
+        [](const placement_entry & a, const placement_entry & b) {
+            if (a.priority != b.priority) {
+                return static_cast<uint8_t>(a.priority) < static_cast<uint8_t>(b.priority);
+            }
+            if (a.layer_id != b.layer_id) {
+                return a.layer_id < b.layer_id;
+            }
+            return a.dst_size > b.dst_size;
+        });
+
+    // Greedy bin-packing: fill VRAM up to budget, spill the rest to host
+    size_t remaining = vram_budget;
+    for (auto & entry : plan.entries) {
+        if (entry.dst_size <= remaining) {
+            entry.on_device = true;
+            remaining -= entry.dst_size;
+            plan.vram_bytes += entry.dst_size;
+        } else {
+            entry.on_device = false;
+            plan.host_bytes += entry.dst_size;
+        }
+    }
+
+    // Build the name->index lookup for O(1) queries
+    plan.build_index();
+
+    // Log placement summary per priority level
+    static const char * priority_names[] = {
+        "NORM/EMBED", "ATTENTION", "FFN", "MOE_GATE",
+        "MOE_DOWN", "MOE_UP", "MOE_GATE_PROJ"
+    };
+    for (int p = 0; p < static_cast<int>(placement_priority::COUNT); ++p) {
+        size_t device_count = 0, host_count = 0;
+        size_t device_bytes = 0, host_bytes = 0;
+        for (const auto & e : plan.entries) {
+            if (static_cast<int>(e.priority) == p) {
+                if (e.on_device) {
+                    device_count++;
+                    device_bytes += e.dst_size;
+                } else {
+                    host_count++;
+                    host_bytes += e.dst_size;
+                }
+            }
+        }
+        if (device_count + host_count > 0) {
+            GGML_LOG_INFO("[PLACEMENT] %-14s  device=%3zu (%.1f MB)  host=%3zu (%.1f MB)\n",
+                          priority_names[p],
+                          device_count, device_bytes / (1024.0 * 1024.0),
+                          host_count, host_bytes / (1024.0 * 1024.0));
+        }
+    }
+    GGML_LOG_INFO("[PLACEMENT] Total: %.1f MB device + %.1f MB host (budget=%.1f MB)\n",
+                  plan.vram_bytes / (1024.0 * 1024.0),
+                  plan.host_bytes / (1024.0 * 1024.0),
+                  vram_budget / (1024.0 * 1024.0));
+
+    return plan;
 }
 
 }  // namespace ggml_sycl
