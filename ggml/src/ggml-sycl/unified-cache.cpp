@@ -6592,6 +6592,19 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
             budget_capped_to_free = true;
         }
 
+        // Reserve headroom for compute scratch (FP16 dequant buffers for oneDNN
+        // attention GEMM, kernel temporaries, etc.).  Without this, models that
+        // barely fit in VRAM fill it completely with weights, leaving zero space
+        // for compute scratch → GGML_ABORT in batched mul_mat.
+        constexpr size_t compute_scratch_headroom = 512ull * 1024ull * 1024ull;
+        if (budget > compute_scratch_headroom) {
+            budget -= compute_scratch_headroom;
+            GGML_LOG_INFO("[UNIFIED-CACHE] Compute scratch headroom: %.0f MB reserved "
+                          "(weight budget=%.1f MB)\n",
+                          compute_scratch_headroom / (1024.0 * 1024.0),
+                          budget / (1024.0 * 1024.0));
+        }
+
         char desc[256] = { 0 };
         ggml_backend_sycl_get_device_description(device_id, desc, sizeof(desc));
         GGML_LOG_INFO(

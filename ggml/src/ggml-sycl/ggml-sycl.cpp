@@ -29438,9 +29438,33 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
             } catch (const std::exception & e) {
-                GGML_LOG_ERROR("[SYCL] oneDNN batched mul_mat failed: %s\n", e.what());
-                GGML_ABORT("[SYCL] batched F16 mul_mat failed — likely VRAM exhaustion. "
-                           "The per-layer KV allocator should leave headroom for compute scratch.");
+                // Batched path failed — likely VRAM exhaustion from internal
+                // sycl::malloc_device for FP16 temporaries.  Try evicting
+                // cold cache entries to free space, then retry once.
+                GGML_LOG_WARN("[SYCL] batched F16 mul_mat failed: %s — evicting cache and retrying\n", e.what());
+                bool recovered = false;
+                auto * cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
+                if (cache) {
+                    // Evict 256 MB chunks up to 3 times to free VRAM for
+                    // the FP16 temporary buffers needed by batched mul_mat.
+                    constexpr size_t evict_chunk = 256ull * 1024ull * 1024ull;
+                    for (int attempt = 0; attempt < 3 && !recovered; ++attempt) {
+                        size_t freed = cache->evict_and_flush(evict_chunk);
+                        if (freed == 0) break;  // Nothing evictable
+                        GGML_LOG_INFO("[SYCL] Evicted %.1f MB for compute scratch (attempt %d)\n",
+                                      freed / (1024.0 * 1024.0), attempt + 1);
+                        try {
+                            ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+                            recovered = true;
+                        } catch (...) {
+                            // Retry after more eviction
+                        }
+                    }
+                }
+                if (!recovered) {
+                    GGML_ABORT("[SYCL] batched F16 mul_mat failed after eviction — VRAM exhaustion. "
+                               "The per-layer KV allocator should leave headroom for compute scratch.");
+                }
             }
         } else {
             GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
@@ -38312,6 +38336,29 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 if (cache) {
                     try { cache->get_bcs_queue().wait(); } catch (...) {}
                     try { cache->get_dma_queue().wait(); } catch (...) {}
+                }
+            }
+
+            // Ensure minimum VRAM headroom for compute scratch (oneDNN workspace,
+            // FP16 conversion buffers) BEFORE activating the eviction guard.
+            // Once the guard is active, eviction is blocked and weights can't be
+            // freed.  Without this pre-eviction, models that barely fit in VRAM
+            // leave zero room for compute scratch → ABORT in batched mul_mat.
+            {
+                auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+                if (cache) {
+                    constexpr size_t min_scratch_headroom = 512ull * 1024ull * 1024ull;
+                    size_t free_vram = 0, total_vram = 0;
+                    ggml_backend_sycl_get_device_memory(device, &free_vram, &total_vram);
+                    GGML_LOG_INFO("[GRAPH-COMPUTE] device %d: free=%.1f MB / total=%.1f MB (used=%.1f MB)\n",
+                                  device, free_vram / (1024.0 * 1024.0), total_vram / (1024.0 * 1024.0),
+                                  (total_vram - free_vram) / (1024.0 * 1024.0));
+                    if (free_vram < min_scratch_headroom) {
+                        size_t need = min_scratch_headroom - free_vram;
+                        size_t freed = cache->evict_and_flush(need);
+                        GGML_LOG_INFO("[GRAPH-COMPUTE] Pre-eviction: needed %.1f MB, freed %.1f MB\n",
+                                      need / (1024.0 * 1024.0), freed / (1024.0 * 1024.0));
+                    }
                 }
             }
 
