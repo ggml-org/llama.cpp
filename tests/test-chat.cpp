@@ -1976,7 +1976,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         // Google Gemma 4 (tool calling with Gemma4 dict format)
-        auto tst = peg_tester("models/templates/gemma4.jinja");
+        auto tst = peg_tester("models/templates/google-gemma-4-31B-it.jinja");
 
         tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).run();
 
