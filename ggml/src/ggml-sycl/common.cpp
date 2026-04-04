@@ -21,7 +21,6 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
-#include <future>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
