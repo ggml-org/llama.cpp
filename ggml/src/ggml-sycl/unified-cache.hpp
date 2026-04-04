@@ -1651,6 +1651,9 @@ class unified_cache {
     bool                 budget_exceeded_ = false;  // Set when used > budget after eviction
     std::atomic<size_t>  used_{ 0 };                // Current usage
     std::atomic<int64_t> time_{ 0 };                // Monotonic counter
+    // P7: async DMA eviction state
+    bool                 async_evict_enabled_ = false;  // Set during init from env var
+    std::atomic<int>     evictions_in_flight_{ 0 };     // Count of EVICTING entries
 
     // Cache storage: (identity, type, layer/expert) -> entry
     std::unordered_map<unified_cache_key,
