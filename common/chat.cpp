@@ -1077,16 +1077,11 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
-// Gemma 4
 static common_chat_params common_chat_params_init_gemma4(const common_chat_template &    tmpl,
                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    // TODO: Move workaround here, maybe?
-
-    auto prompt = common_chat_template_direct_apply_impl(tmpl, inputs);
-
-    data.prompt            = prompt;
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking = true;
 
@@ -1126,19 +1121,9 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             // Rules should match traversal logic in gemma4_to_json()
             auto gemma4_string_content = p.rule("gemma4-string-content", p.until("<|\"|>"));
             auto gemma4_string = p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
-            auto gemma4_bool = p.rule("gemma4-bool", p.literal("true") | p.literal("false"));
-            auto gemma4_null = p.rule("gemma4-null", p.literal("null"));
-            auto gemma4_number = p.rule("gemma4-number", [&]() {
-                auto digit1_9 = p.chars("[1-9]", 1, 1);
-                auto digits   = p.chars("[0-9]");
-                auto int_part = p.choice({p.literal("0"), p.sequence({digit1_9, p.chars("[0-9]", 0, -1)})});
-                auto frac     = p.sequence({p.literal("."), digits});
-                auto exp      = p.sequence({p.choice({p.literal("e"), p.literal("E")}),
-                                             p.optional(p.chars("[+-]", 1, 1)), digits});
-                auto not_number_continuation = p.negate(p.chars("[0-9.eE+-]", 1, 1));
-                return p.sequence({p.optional(p.literal("-")), int_part, p.optional(frac),
-                                    p.optional(exp), not_number_continuation});
-            });
+            auto gemma4_bool = p.rule("gemma4-bool", p.json_bool());
+            auto gemma4_null = p.rule("gemma4-null", p.json_null());
+            auto gemma4_number = p.rule("gemma4-number", p.json_number());
             auto gemma4_dict_key = p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
             auto gemma4_dict_kv = p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
             auto gemma4_dict = p.rule("gemma4-dict", [&]() {
