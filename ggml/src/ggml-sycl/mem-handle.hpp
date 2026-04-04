@@ -91,6 +91,9 @@ public:
     // Access the handle kind.
     mem_handle_kind kind() const { return kind_; }
 
+    // True if this is a cache-managed WEIGHT handle (not a raw DIRECT pointer).
+    bool is_weight() const { return kind_ == mem_handle_kind::WEIGHT; }
+
 private:
     // Slow path: re-query the unified cache for the current pointer.
     resolved_ptr resolve_slow() const;

@@ -6023,10 +6023,13 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     }
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
     if (extra && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
-        if (tier == ggml_sycl::memory_tier::VRAM && alloc == sycl::usm::alloc::device) {
-            extra->set_data_device(device, cached_ptr);
-        } else {
-            extra->set_data_device(device, nullptr);
+        // Don't overwrite WEIGHT handles — they resolve through the cache
+        if (!extra->data_handle[device].is_weight()) {
+            if (tier == ggml_sycl::memory_tier::VRAM && alloc == sycl::usm::alloc::device) {
+                extra->set_data_device(device, cached_ptr);
+            } else {
+                extra->set_data_device(device, nullptr);
+            }
         }
         if (extra->layout.mode == GGML_LAYOUT_AOS) {
             extra->layout.data_ptr  = cached_ptr;
@@ -7854,7 +7857,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             if (ptr_type == sycl::usm::alloc::device) {
                 if (tensor->extra != nullptr) {
                     auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                    if (extra->data_device_ptr(device) == nullptr) {
+                    if (extra->data_device_ptr(device) == nullptr && !extra->data_handle[device].is_weight()) {
                         extra->set_data_device(device, tensor->data);
                     }
                 }
@@ -9010,7 +9013,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         // Pre-populate data_device to avoid get_pointer_type() driver round-trips
         // in ggml_sycl_get_data_ptr during dispatch.
         // Note: TP guard is unnecessary here — we're in the else-if of the TP check at line 3039.
-        if (tensor->data != nullptr) {
+        if (tensor->data != nullptr && !extra->data_handle[ctx->device].is_weight()) {
             extra->set_data_device(ctx->device, tensor->data);
         }
 
@@ -9031,7 +9034,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
             tensor->extra = extra;
             ctx->tensor_extras.push_back({ tensor, extra });
         }
-        if (extra->data_device_ptr(ctx->device) == nullptr) {
+        if (extra->data_device_ptr(ctx->device) == nullptr && !extra->data_handle[ctx->device].is_weight()) {
             extra->set_data_device(ctx->device, tensor->data);
         }
     }
@@ -19718,6 +19721,11 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
 
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
     if (!extra) {
+        return;
+    }
+
+    // WEIGHT handles resolve through the cache — skip legacy resolution
+    if (extra->data_handle[device].is_weight()) {
         return;
     }
 
@@ -41792,6 +41800,11 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
 
         if (tensor->extra) {
             auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            // WEIGHT handles resolve through the cache (arena VRAM pointer)
+            if (extra->data_handle[ctx.device].is_weight()) {
+                auto resolved = ggml_sycl_resolve(tensor, ctx.device);
+                return resolved.ptr;
+            }
             if (extra->data_device_ptr(ctx.device) != nullptr) {
                 return extra->data_device_ptr(ctx.device);
             }
