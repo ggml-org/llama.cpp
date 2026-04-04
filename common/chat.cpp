@@ -1857,7 +1857,7 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-static std::optional<common_chat_params> common_chat_try_specialized_template(
+std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         autoparser::generation_params & params) {
