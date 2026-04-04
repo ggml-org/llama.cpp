@@ -2699,7 +2699,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!ggml_metal_op_flash_attn_ext_use_vec(op)) {
         // half8x8 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        const bool is_f16_head72 =
+                op->src[1]->type == GGML_TYPE_F16 &&
+                ne00 == 72;
+        const int nqptg = is_f16_head72 ? OP_FLASH_ATTN_EXT_NQPSG_16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -2808,7 +2811,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         // simdgroups per threadgroup (a.k.a. warps)
         //nsg = ne01 <= nqptg ? MAX(4, MIN(nsgmax, MIN(ne11/ncpsg, (int64_t) pipeline.maxTotalThreadsPerThreadgroup/32))) : 4;
-        int32_t nsg = ne00 >= 512 ? 8 : 4;
+        int32_t nsg = (ne00 >= 512 || is_f16_head72) ? 8 : 4;
 
         const size_t smem = FATTN_SMEM(nsg);
 
