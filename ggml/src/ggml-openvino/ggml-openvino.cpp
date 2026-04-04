@@ -598,6 +598,15 @@ bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
 
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
+
+    if (ctx->runtime_context) {
+        auto r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
+        r_ctx->backend_count--;
+        if (r_ctx->backend_count == 0) {
+            r_ctx->clear_caches();
+        }
+    }
+
     delete ctx;
     delete backend;
 }
@@ -667,6 +676,7 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
     std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
     r_ctx->device = ggml_openvino_get_device_name();
     r_ctx->stateful = getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !ggml_openvino_is_npu();
+    r_ctx->backend_count++;
 
     ggml_backend_t openvino_backend = new ggml_backend{
         /* .guid      = */ ggml_backend_openvino_guid(),

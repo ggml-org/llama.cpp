@@ -53,11 +53,21 @@ struct ov_runtime_context {
     //      Simultanous stateful inference request support to be added.
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
+    int backend_count;
 
     ov_runtime_context() :
         device("CPU"),
         stateful(false),
-        stateful_kv_size(0) {}
+        stateful_kv_size(0),
+        backend_count(0) {}
+
+    void clear_caches() {
+        decoder_cache.clear();
+        infer_request_cache.clear();
+        infer_request_cache_prefill.clear();
+        ov_input_names_cache.clear();
+        ov_output_names_cache.clear();
+    }
 };
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
