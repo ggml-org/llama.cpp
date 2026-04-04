@@ -1689,17 +1689,23 @@ static void requires_non_null_content(json & messages) {
 //   assistant(content + tool_call + tool_responses)
 //
 // This is necessary for the Gemma4 chat template to properly format the prompt.
-// See https://ai.google.dev/gemma/docs/capabilities/text/function-calling-gemma4
+// See https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4
 struct gemma4_model_turn_builder {
     json & messages;
     size_t pos;
     json tool_calls = json::array();
     json tool_responses = json::array();
     json content;
+    json reasoning_content;
 
     void collect() {
         // Collect the first assistant message
         auto & msg = messages[pos];
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            // According to the prompt formatting guide, we need to preserve reasoning_content
+            // between function calls. The current chat templates do not support this, but we will do it anyway.
+            reasoning_content = msg.at("reasoning_content");
+        }
         for (auto & tc : msg.at("tool_calls")) {
             tool_calls.push_back(tc);
         }
@@ -1768,6 +1774,9 @@ struct gemma4_model_turn_builder {
         }
         if (!content.is_null()) {
             msg["content"] = content;
+        }
+        if (!reasoning_content.is_null()) {
+            msg["reasoning_content"] = reasoning_content;
         }
         return msg;
     }
