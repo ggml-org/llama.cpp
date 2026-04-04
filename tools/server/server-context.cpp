@@ -155,8 +155,8 @@ struct server_slot {
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
 
-    double t_prompt_processing; // ms
-    double t_token_generation;  // ms
+    double t_prompt_processing = 0.0; // ms
+    double t_token_generation = 0.0;  // ms
 
     std::function<void(int /* id_slot */)> callback_on_release;
 
