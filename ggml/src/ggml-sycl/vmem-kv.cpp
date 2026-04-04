@@ -295,10 +295,10 @@ bool vmem_kv_available(sycl::queue & queue) {
         return val != 0;
     }
 
-    // Check env var gate: GGML_SYCL_VMEM_KV=0 to disable
+    // Check env var gate: GGML_SYCL_VMEM_KV=1 required (opt-in)
     const char * env = std::getenv("GGML_SYCL_VMEM_KV");
-    if (env && std::atoi(env) == 0) {
-        GGML_LOG_INFO("[VMEM-KV] Disabled via GGML_SYCL_VMEM_KV=0\n");
+    if (!env || std::atoi(env) != 1) {
+        GGML_LOG_DEBUG("[VMEM-KV] Not enabled (set GGML_SYCL_VMEM_KV=1 to enable)\n");
         cached.store(0, std::memory_order_release);
         return false;
     }

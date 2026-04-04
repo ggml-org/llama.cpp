@@ -13582,6 +13582,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     //   - Synthetic alloc_base hack
     //   - Per-layer pointer remapping in init_tensor (for all-device case)
     if (kv_host_val != 1 && size <= kv_device_budget
+        && ggml_sycl::vram_arena_enabled()
         && ggml_sycl::vmem_kv_available(*buft_ctx->stream)) {
 
         auto vmem = std::make_unique<ggml_sycl::vmem_kv_pool>();
