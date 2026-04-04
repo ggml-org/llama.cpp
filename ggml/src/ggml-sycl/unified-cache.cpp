@@ -991,6 +991,17 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         bcs_queue_.reset();
     }
 
+    // P7: async DMA eviction — default ON when arena is active.
+    // Env var GGML_SYCL_ASYNC_EVICT=0 disables.
+    {
+        const char * env  = std::getenv("GGML_SYCL_ASYNC_EVICT");
+        bool         dflt = arena_.active();  // Default ON when arena active
+        async_evict_enabled_ = env ? (std::string(env) != "0") : dflt;
+        if (async_evict_enabled_) {
+            GGML_LOG_INFO("[UNIFIED-CACHE] Async DMA eviction enabled (preserves layouts during migration)\n");
+        }
+    }
+
     // Ensure unordered_map has buckets before any find() calls.
     entries_.rehash(1);
     id_to_key_.rehash(1);
@@ -4590,6 +4601,11 @@ cache_ptr_view unified_cache::get_view(const ggml_sycl_cache_id & key_id, ggml_l
     if (entry.layout != layout) {
         return view;
     }
+    if (entry.state == cache_entry_state::EVICTING) {
+        // Entry is being async-evicted to host — device pointer is stale-bound.
+        // Return empty view so caller falls back to host_cache / mmap.
+        return view;
+    }
     if (entry.state == cache_entry_state::IN_PROGRESS) {
         if (entry.has_ready_event && event_complete(entry.ready_event)) {
             entry.state           = cache_entry_state::READY;
@@ -5189,7 +5205,7 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
             // Check if async D2H eviction is available: device entry with a
             // transformed layout (SOA/COALESCED/XMX) worth preserving.
             const bool has_transformed_layout =
-                it->second.layout != GGML_LAYOUT_AOS && it->second.layout != GGML_LAYOUT_DEFAULT;
+                it->second.layout != GGML_LAYOUT_AOS;
             const bool async_evict_enabled = async_evict_enabled_ && has_transformed_layout;
 
             if (async_evict_enabled) {
@@ -5286,6 +5302,186 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
     }
 
     return evicted_bytes;
+}
+
+size_t unified_cache::finalize_evictions() {
+    // Poll in-flight async D2H evictions.  For each completed one:
+    // 1. Adopt the host-pinned buffer into host_cache (preserves layout)
+    // 2. Reclaim VRAM (arena weight_reclaim or deferred free)
+    // 3. Remove entry from device cache
+    if (evictions_in_flight_.load(std::memory_order_relaxed) == 0) {
+        return 0;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    std::vector<unified_cache_key> finalized_keys;
+    finalized_keys.reserve(4);
+
+    for (auto & pair : entries_) {
+        auto & entry = pair.second;
+        if (entry.state != cache_entry_state::EVICTING || !entry.has_eviction_event) {
+            continue;
+        }
+
+        // Check if D2H copy is complete
+        if (!event_complete(entry.eviction_event)) {
+            continue;
+        }
+
+        // DMA complete — adopt into host_cache
+        auto * hcache = try_get_host_cache();
+        if (hcache && entry.eviction_host_ptr) {
+            const cache_layout_xmx_info * xmx_ptr =
+                (entry.xmx_info.tile_n > 0) ? &entry.xmx_info : nullptr;
+            bool adopted = hcache->adopt_evicted(
+                pair.first.id, entry.eviction_host_ptr, entry.size,
+                entry.type, entry.layer_id, entry.expert_id,
+                entry.layout, xmx_ptr);
+            if (!adopted) {
+                // Host cache full — free the buffer
+                try { sycl::free(entry.eviction_host_ptr, queue_.get_context()); } catch (...) {}
+            }
+        } else if (entry.eviction_host_ptr) {
+            try { sycl::free(entry.eviction_host_ptr, queue_.get_context()); } catch (...) {}
+        }
+
+        // Reclaim device VRAM
+        void * ptr        = entry.device_ptr;
+        size_t entry_size = entry.size;
+        const bool is_arena = arena_.owns(ptr);
+        const bool is_pool  = !is_arena && layout_pool_ && layout_pool_->owns(ptr);
+        if (is_arena) {
+            size_t offset = arena_.ptr_to_offset(ptr);
+            if (offset != SIZE_MAX) {
+                arena_.weight_reclaim(offset, entry_size);
+            }
+        } else if (!is_pool) {
+            enqueue_deferred_free(ptr, entry_size);
+        } else {
+            saturating_sub_used(entry_size);
+        }
+
+        GGML_SYCL_DEBUG(
+            "[UNIFIED-CACHE] async evict finalized: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+            (unsigned long long) pair.first.id.model_id, (unsigned long long) pair.first.id.name_hash,
+            (int) entry.layout, entry_size);
+
+        finalized_keys.push_back(pair.first);
+    }
+
+    // Remove finalized entries
+    for (const auto & key : finalized_keys) {
+        id_to_key_.erase(key.id);
+        entries_.erase(key);
+        evictions_in_flight_--;
+    }
+
+    return finalized_keys.size();
+}
+
+void * unified_cache::promote_to_device(const unified_cache_key & key, size_t size) {
+    // Re-promote a weight from host cache back to device VRAM.
+    // The host_cache holds a preserved copy with the original transformed layout.
+    auto * hcache = try_get_host_cache();
+    if (!hcache) {
+        return nullptr;
+    }
+
+    // Look up in host cache
+    void * host_ptr = hcache->get(key.id, key.type, key.layer_id, key.expert_id,
+                                  GGML_LAYOUT_AOS);  // Try AOS first
+    ggml_layout_mode found_layout = GGML_LAYOUT_AOS;
+
+    // Try transformed layouts if AOS not found
+    if (!host_ptr) {
+        const ggml_layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED };
+        for (auto layout : layouts) {
+            host_ptr = hcache->get(key.id, key.type, key.layer_id, key.expert_id, layout);
+            if (host_ptr) {
+                found_layout = layout;
+                break;
+            }
+        }
+    }
+
+    if (!host_ptr) {
+        return nullptr;  // Not in host cache
+    }
+
+    // Ensure VRAM is available
+    if (used_.load() + size > budget_) {
+        size_t freed = evict(size - available());
+        if (freed == 0 && used_.load() + size > budget_) {
+            return nullptr;  // Cannot make room
+        }
+    }
+
+    // Allocate device memory (arena or direct)
+    void * device_ptr = nullptr;
+    bool   from_arena = false;
+    if (arena_.active()) {
+        device_ptr = arena_.zone_alloc(vram_zone_id::WEIGHT, size);
+        from_arena = (device_ptr != nullptr);
+    }
+    if (!device_ptr) {
+        try {
+            device_ptr = sycl::malloc_device(size, queue_);
+        } catch (...) {
+            return nullptr;
+        }
+        if (device_ptr) {
+            used_.fetch_add(size, std::memory_order_relaxed);
+        }
+    }
+
+    if (!device_ptr) {
+        return nullptr;
+    }
+
+    // Issue async H2D copy via DMA queue
+    sycl::queue & dq = get_dma_queue();
+    sycl::event   evt;
+    try {
+        evt = dq.memcpy(device_ptr, host_ptr, size);
+    } catch (...) {
+        if (!from_arena) {
+            enqueue_deferred_free(device_ptr, size);
+        }
+        return nullptr;
+    }
+
+    // Create cache entry as IN_PROGRESS
+    unified_cache_entry entry{};
+    entry.device_ptr      = device_ptr;
+    entry.src_ptr         = nullptr;
+    entry.content_hash    = 0;
+    entry.size            = size;
+    entry.type            = key.type;
+    entry.layer_id        = key.layer_id;
+    entry.expert_id       = key.expert_id;
+    entry.layout          = found_layout;
+    entry.access_count    = 1;
+    entry.last_access     = time_++;
+    entry.pinned          = false;
+    entry.hot             = false;
+    entry.state           = cache_entry_state::IN_PROGRESS;
+    entry.has_ready_event = true;
+    entry.ready_event     = evt;
+    entry.host_resident   = false;
+    entry.location        = cache_location::DEVICE;
+    entry.pool_allocated  = false;
+
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    entries_[key]       = std::move(entry);
+    id_to_key_[key.id] = key;
+
+    GGML_SYCL_DEBUG(
+        "[UNIFIED-CACHE] promote_to_device: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+        (unsigned long long) key.id.model_id, (unsigned long long) key.id.name_hash,
+        (int) found_layout, size);
+
+    return device_ptr;
 }
 
 float unified_cache::compute_score(const unified_cache_entry & entry) const {
@@ -5635,6 +5831,12 @@ void unified_cache::defer_host_free(void * ptr, size_t size, const sycl::event &
 }
 
 void unified_cache::process_deferred_frees() {
+    // P7: finalize any completed async D2H evictions first.
+    // This reclaims VRAM from entries whose D2H copies have completed.
+    if (evictions_in_flight_.load(std::memory_order_relaxed) > 0) {
+        finalize_evictions();
+    }
+
     auto it = deferred_frees_.begin();
     while (it != deferred_frees_.end()) {
         const bool ready = !it->has_event || event_complete(it->event);
