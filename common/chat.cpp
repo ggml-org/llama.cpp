@@ -1698,6 +1698,8 @@ struct gemma4_model_turn_builder {
     json content;
     json reasoning_content;
 
+    gemma4_model_turn_builder(json & msgs, size_t pos) : messages(msgs), pos(pos) {}
+
     void collect() {
         // Collect the first assistant message
         auto & msg = messages[pos];
@@ -1814,7 +1816,7 @@ static void convert_tool_responses_gemma4(json & messages) {
             continue;
         }
 
-        gemma4_model_turn_builder builder = {messages, i};
+        gemma4_model_turn_builder builder(messages, i);
         result.push_back(builder.build());
         i = builder.pos;
     }
