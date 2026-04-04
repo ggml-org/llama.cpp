@@ -3,7 +3,6 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 
-#include "rknpu2-allocation.h"
 #include "rknpu2-quantization.h"
 #include "rknpu2-calibration.h"
 #include "rknpu2-configuration.h"
@@ -11,24 +10,86 @@
 #include <rknn_api.h>
 #include <rknn_matmul_api.h>
 
-#include <arm_neon.h>
 #include <omp.h>
 
-#include <chrono>
 #include <cassert>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
-#include <map>
 #include <tuple>
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <random>
 #include <limits>
+#include <sys/mman.h>
 
 #define UNUSED(x) (void)(x)
+
+// --- IOMMU Domain Manager ---
+
+struct IOMMUDomainManager {
+    std::mutex mutex;
+
+    // Max domain size for assigning
+    const size_t max_domain_size = ((size_t) std::numeric_limits<int32_t>::max() - 65536);
+
+    // Storage for domains and their sizes
+    std::unordered_map<int32_t, size_t> domain_sizes;
+    std::unordered_map<int32_t, rknn_matmul_ctx> allocator_contexts;
+
+    // Function for assigning the domain for the tensor of given size
+    int32_t assign_domain_memory(size_t size) {
+        std::lock_guard<std::mutex> lock(mutex);
+
+        for (int32_t i = 0; ; ++i) {
+            if (domain_sizes[i] + size <= max_domain_size) {
+                domain_sizes[i] += size;
+                ensure_allocator_context(i);
+                return i;
+            }
+        }
+    }
+
+    // Function for releasing the given size of the domain memory
+    void release_domain_memory(int32_t domain_id, size_t size) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = domain_sizes.find(domain_id);
+        if (it != domain_sizes.end()) {
+            if (it->second >= size) {
+                it->second -= size;
+            } else {
+                it->second = 0;
+            }
+        }
+    }
+
+    // Function for getting a new dummy context in the required domain
+    rknn_matmul_ctx get_allocator_context(int32_t domain_id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ensure_allocator_context(domain_id);
+        return allocator_contexts[domain_id];
+    }
+
+private:
+    // Function for ensuring a dummy context existence in the required domain
+    void ensure_allocator_context(int32_t domain_id) {
+        if (allocator_contexts.find(domain_id) == allocator_contexts.end()) {
+            rknn_matmul_info info;
+            memset(&info, 0, sizeof(info));
+            info.M = 32; info.K = 32; info.N = 32;
+            info.type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32;
+            info.iommu_domain_id = domain_id;
+
+            rknn_matmul_io_attr io_attr;
+            rknn_matmul_ctx ctx = 0;
+            rknn_matmul_create(&ctx, &info, &io_attr);
+            allocator_contexts[domain_id] = ctx;
+        }
+    }
+};
+static IOMMUDomainManager g_domain_manager;
 
 // Macro for RKNN API calls
 #define RKNN_CHECK(stmt, msg)                                           \
@@ -75,35 +136,59 @@ struct TupleHasher {
 
 // --- Segmenters ---
 
-// Matrix segment information
-struct MatrixSegment {
-    int offset_n;  // Segment offset
-    int size_n;    // Segment size
-    int core_id;   // Segment core ID
+// Matrix segment information for N dimension
+struct MatrixSegmentN {
+    int offset_n;
+    int size_n;
+    int core_id;
 };
 
-// Split B-matrix into segments
-static std::vector<MatrixSegment> compute_matrix_segments(int N, int num_cores, int alignment) {
-    std::vector<MatrixSegment> segments;
+// Matrix segment information for K dimension
+struct MatrixSegmentK {
+    int offset_k;
+    int size_k;
+};
+
+// Split B-matrix into N-segments for cores
+static std::vector<MatrixSegmentN> compute_n_segments(int N, int num_cores, int alignment) {
+    std::vector<MatrixSegmentN> segments;
 
     int base_segment_size = (N / num_cores / alignment) * alignment;
     int remaining = N - (base_segment_size * num_cores);
-    
+
     int offset = 0;
     for (int i = 0; i < num_cores; i++) {
-        MatrixSegment seg;
+        MatrixSegmentN seg;
         seg.offset_n = offset;
         seg.size_n = base_segment_size;
         seg.core_id = i;
-        
+
         if (i < remaining / alignment) {
             seg.size_n += alignment;
         }
-        
+
         offset += seg.size_n;
         segments.push_back(seg);
     }
-    
+    return segments;
+}
+
+// Split B-matrix into K-segments for hardware limit
+static std::vector<MatrixSegmentK> compute_k_segments(int K_op, int k_limit, int alignment) {
+    std::vector<MatrixSegmentK> segments;
+
+    if (k_limit <= 0 || K_op <= k_limit) {
+        segments.push_back({0, K_op});
+        return segments;
+    }
+
+    int k_limit_aligned = (k_limit / alignment) * alignment;
+    int offset = 0;
+    while (offset < K_op) {
+        int size = std::min(k_limit_aligned, K_op - offset);
+        segments.push_back({offset, size});
+        offset += size;
+    }
     return segments;
 }
 
@@ -111,17 +196,63 @@ static std::vector<MatrixSegment> compute_matrix_segments(int N, int num_cores, 
 
 // RKNN buffer context
 struct ggml_backend_rknpu_buffer_context {
-    rknpu2_allocation::DmaBuffer dma_buf;
+    void* virtual_base;
+    size_t total_size;
     std::string name;
 
-    // Per-tensor scale for weights
-    std::unordered_map<const struct ggml_tensor *, float> quantized_tensor_scales;
+    // RKNN buffers allocations for each tensor
+    struct TensorAllocation {
+        rknn_tensor_mem* mem = nullptr;
+        size_t size = 0;
+        int32_t iommu_domain_id = 0;
+    };
+    std::unordered_map<size_t, TensorAllocation> tensor_allocs;
+
+    // Per-block scaling factors for quantized weights
+    std::unordered_map<const struct ggml_tensor *, std::vector<float>> quantized_tensor_scales;
 
     // Per-tensor random sign vector for Hadamard Transform
     std::unordered_map<const struct ggml_tensor *, std::vector<float>> hadamard_s_vectors;
 
     std::mutex mutex;
+
+    // Function for the allocation of a RKNN buffer for the individual tensor
+    TensorAllocation get_tensor_allocation(size_t tensor_offset, size_t size) {
+        std::lock_guard<std::mutex> lock(mutex);
+
+        // Trying to find an existing buffer
+        auto it = tensor_allocs.find(tensor_offset);
+        if (it != tensor_allocs.end()) {
+            if (it->second.size < size) {
+                rknn_matmul_ctx old_ctx = g_domain_manager.get_allocator_context(it->second.iommu_domain_id);
+                rknn_destroy_mem(old_ctx, it->second.mem);
+                g_domain_manager.release_domain_memory(it->second.iommu_domain_id, it->second.size);
+
+                it->second.iommu_domain_id = g_domain_manager.assign_domain_memory(size);
+                rknn_matmul_ctx new_ctx = g_domain_manager.get_allocator_context(it->second.iommu_domain_id);
+                it->second.mem = rknn_create_mem(new_ctx, size);
+                it->second.size = size;
+            }
+            return it->second;
+        }
+
+        // Acquiring a domain for allocation
+        int32_t domain_id = g_domain_manager.assign_domain_memory(size);
+        rknn_matmul_ctx alloc_ctx = g_domain_manager.get_allocator_context(domain_id);
+
+        // Allocating a new buffer for the tensor
+        TensorAllocation alloc;
+        alloc.mem = rknn_create_mem(alloc_ctx, size);
+        alloc.size = size;
+        alloc.iommu_domain_id = domain_id;
+
+        GGML_ASSERT(alloc.mem != nullptr && "Failed to allocate tensor memory via RKNN API");
+        tensor_allocs[tensor_offset] = alloc;
+
+        return alloc;
+    }
 };
+
 
 // RKNN matmul operation context
 struct rknpu_matmul_context {
@@ -129,7 +260,10 @@ struct rknpu_matmul_context {
     rknn_matmul_io_attr io_attr;
     rknn_matmul_ctx ctx = 0;
 
-    rknpu_matmul_context(int M, int K, int N, rknn_matmul_type type) {
+    bool b_bound = false;
+    std::shared_ptr<rknn_tensor_mem> mem_B;
+
+    rknpu_matmul_context(int M, int K, int N, rknn_matmul_type type, int32_t domain_id) {
         memset(&info, 0, sizeof(info));
         info.M = M;
         info.K = K;
@@ -137,42 +271,45 @@ struct rknpu_matmul_context {
         info.type = type;
         info.B_layout = RKNN_MM_LAYOUT_NATIVE;
         info.AC_layout = RKNN_MM_LAYOUT_NORM;
+        info.iommu_domain_id = domain_id;
 
         int ret = rknn_matmul_create(&ctx, &info, &io_attr);
         if (ret < 0) ctx = 0;
     }
 
     ~rknpu_matmul_context() {
+        mem_B.reset();
+
         if (ctx != 0) {
             rknn_matmul_destroy(ctx);
         }
     }
 };
 
-
 // Backend main context
 struct ggml_backend_rknpu_context {
     std::string name;
     std::mutex mutex;
 
-    // RKNN matmul contexts cache
-    std::unordered_map<std::tuple<int, int, int, int, int>, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
+    // RKNN matmul contexts cache (tensor_fd, offset, M, K, N, core_id, type, domain_id)
+    std::unordered_map<std::tuple<uintptr_t, size_t, int, int, int, int, int, int>, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
 
-    // B-matrices handle cache (from fd)
-    std::unordered_map<std::pair<ggml_backend_buffer_t, size_t>, std::shared_ptr<rknn_tensor_mem>, PairHasher> b_mem_handle_cache;
+    // A-matrices cache (M, K, npu_type_a, domain_id)
+    std::unordered_map<std::tuple<int, int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> a_buffer_cache;
 
-    // A- and C-matrices cache (from create_mem)
-    std::unordered_map<std::tuple<int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> a_buffer_cache;
-    std::unordered_map<std::tuple<int, int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> c_buffer_cache;
+    // C-matrices cache (M, N, core_id, npu_type_c, domain_id)
+    std::unordered_map<std::tuple<int, int, int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> c_buffer_cache;
 
-    std::shared_ptr<rknpu_matmul_context> get_matmul_ctx(int M, int K, int N, int core_id, rknn_matmul_type type) {
+    std::shared_ptr<rknpu_matmul_context> get_matmul_ctx(uintptr_t tensor_id, size_t offset, int M, int K, int N, int core_id, rknn_matmul_type type, int32_t domain_id) {
         std::lock_guard<std::mutex> lock(mutex);
-        auto key = std::make_tuple(M, K, N, core_id, (int)type);
+
+        auto key = std::make_tuple(tensor_id, offset, M, K, N, core_id, (int)type, (int)domain_id);
         auto it = matmul_ctx_cache.find(key);
         if (it != matmul_ctx_cache.end()) {
             return it->second;
         }
-        auto ctx = std::make_shared<rknpu_matmul_context>(M, K, N, type);
+
+        auto ctx = std::make_shared<rknpu_matmul_context>(M, K, N, type, domain_id);
         if (ctx->ctx == 0) {
             return nullptr;
         }
@@ -195,41 +332,6 @@ struct ggml_backend_rknpu_context {
     }
 };
 
-// RKNN memory global context
-struct rknpu_memory_context {
-    rknn_matmul_ctx mem_ctx = 0;
-    std::mutex mutex;
-
-    rknpu_memory_context() {
-        rknn_matmul_info dummy_info;
-        memset(&dummy_info, 0, sizeof(dummy_info));
-        dummy_info.M = 32;
-        dummy_info.K = 32;
-        dummy_info.N = 32;
-        dummy_info.type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32;
-
-        rknn_matmul_io_attr dummy_io_attr;
-        int ret = rknn_matmul_create(&mem_ctx, &dummy_info, &dummy_io_attr);
-        if (ret < 0) mem_ctx = 0;
-    }
-
-    ~rknpu_memory_context() {
-        if (mem_ctx != 0) {
-            rknn_matmul_destroy(mem_ctx);
-        }
-    }
-
-    rknn_matmul_ctx get_ctx() {
-        std::lock_guard<std::mutex> lock(mutex);
-        return mem_ctx;
-    }
-};
-
-static rknpu_memory_context & get_rknpu_memory_context() {
-    static rknpu_memory_context g_mem_ctx;
-    return g_mem_ctx;
-}
-
 
 //
 // Backend
@@ -246,9 +348,30 @@ static void ggml_backend_rknpu_free(ggml_backend_t backend) {
     delete backend;
 }
 
+// Function for acquiring a pointer for tensor data
+static void* get_tensor_real_ptr(const struct ggml_tensor* tensor) {
+    if (!tensor || !tensor->data) return nullptr;
+
+    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
+    const auto* pipeline = config.resolve_op_support(tensor);
+
+    if (pipeline && pipeline->pack_func) {
+        auto* ctx = (ggml_backend_rknpu_buffer_context*)tensor->buffer->context;
+        size_t offset = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
+
+        std::lock_guard<std::mutex> lock(ctx->mutex);
+        auto it = ctx->tensor_allocs.find(offset);
+        if (it != ctx->tensor_allocs.end()) {
+            return it->second.mem->virt_addr;
+        }
+    }
+
+    return tensor->data;
+}
+
 // Function for getting buffer from cache or creating new one
 template <typename CacheKeyType>
-static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
+static std::shared_ptr<rknn_tensor_mem> get_tensor_buffer(
     ggml_backend_rknpu_context* backend_ctx,
     rknn_matmul_ctx matmul_ctx,
     size_t size,
@@ -266,10 +389,9 @@ static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
     rknn_tensor_mem* mem = rknn_create_mem(matmul_ctx, size);
     if (!mem) { return nullptr; }
 
-    auto mem_ctx_for_deleter = get_rknpu_memory_context().get_ctx();
-    auto deleter = [mem_ctx_for_deleter](rknn_tensor_mem* m) {
-        if (m && mem_ctx_for_deleter != 0) {
-            rknn_destroy_mem(mem_ctx_for_deleter, m);
+    auto deleter = [matmul_ctx](rknn_tensor_mem* m) {
+        if (m != 0) {
+            rknn_destroy_mem(matmul_ctx, m);
         }
     };
 
@@ -295,7 +417,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         const int M = (int)src1->ne[1];
         const int K = (int)src0->ne[0];
         const int N = (int)src0->ne[1];
-        
+
         // Skipping zero-dimension matmuls
         if (M == 0 || K == 0 || N == 0) {
             continue;
@@ -304,252 +426,295 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         const auto* pipeline = config.resolve_op_support(src0);
         if (!pipeline) continue;
 
+        // Initializing Hadamard Transform Logic
         const bool is_hadamard = (pipeline->use_hadamard);
         const int K_op = is_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
         const rknn_matmul_type matmul_type = pipeline->mm_type;
         const int alignment = pipeline->n_align;
 
-        auto all_segments = compute_matrix_segments(N, config.core_count, alignment);
+        // Computing specific hardware segments
+        int k_limit = config.max_k_limit;
+        if (pipeline->effective_k > 0) {
+            k_limit = (k_limit > 0) ? std::min(k_limit, pipeline->effective_k) : pipeline->effective_k;
+        }
+        auto all_k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
+        auto all_n_segments = compute_n_segments(N, config.core_count, alignment);
 
-        std::vector<MatrixSegment> active_segments;
-        for (const auto& seg : all_segments) {
-            if (seg.size_n > 0) {
-                active_segments.push_back(seg);
-            }
+        std::vector<MatrixSegmentN> active_n_segments;
+        for (const auto& seg : all_n_segments) {
+            if (seg.size_n > 0) active_n_segments.push_back(seg);
         }
 
-        if (active_segments.empty()) continue;
+        if (active_n_segments.empty()) continue;
 
-        const size_t num_active_segments = active_segments.size();
+        // Initializing variables
+        const size_t num_active_segments = active_n_segments.size();
         std::vector<std::shared_ptr<rknpu_matmul_context>> matmul_ctxs(num_active_segments);
-        std::vector<std::shared_ptr<rknn_tensor_mem>> mem_B_segments(num_active_segments);
         std::shared_ptr<rknn_tensor_mem> mem_A_shared;
         std::vector<std::shared_ptr<rknn_tensor_mem>> mem_C_segments(num_active_segments);
 
-        // ===========================================
-        // ========== 1. Preparing contexts ==========
-        // ===========================================
+        // Acquiring the B-matrix buffer
+        ggml_backend_buffer_t src0_buffer = src0->buffer;
+        auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0_buffer->context;
+        size_t tensor_offset_in_virtual = (uintptr_t)src0->data - (uintptr_t)src0_buf_ctx->virtual_base;
+
+        int32_t b_domain_id = 0;
+        int tensor_fd = -1;
+        void* tensor_virt_addr = nullptr;
         {
-            for (size_t idx = 0; idx < num_active_segments; ++idx) {
-                const auto& seg = active_segments[idx];
-                matmul_ctxs[idx] = backend_ctx->get_matmul_ctx(M, K_op, seg.size_n, seg.core_id, matmul_type);
-                if (!matmul_ctxs[idx] || matmul_ctxs[idx]->ctx == 0) return GGML_STATUS_FAILED;
-            }
+            std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+            auto it = src0_buf_ctx->tensor_allocs.find(tensor_offset_in_virtual);
+            GGML_ASSERT(it != src0_buf_ctx->tensor_allocs.end() && "B-matrix RKNN buffer not found");
+
+            tensor_fd = it->second.mem->fd;
+            tensor_virt_addr = it->second.mem->virt_addr;
+            b_domain_id = it->second.iommu_domain_id;
         }
 
-        // ===========================================
-        // ========== 2. Preparing B-matrix ==========
-        // ===========================================
-        {
-            ggml_backend_buffer_t src0_buffer = src0->buffer;
-            auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0_buffer->context;
-            size_t src0_base_offset_in_dma = (uintptr_t)src0->data - (uintptr_t)ggml_backend_buffer_get_base(src0_buffer);
+        // Cleaning the C-matrix buffer
+        float* dst_data = (float*)get_tensor_real_ptr(dst);
+        memset(dst_data, 0, (size_t)M * N * sizeof(float));
 
-            size_t type_size_packed;
-            if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) type_size_packed = 2;
-            else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) type_size_packed = 1;
-            else type_size_packed = 0;
+        // Acquiring the Hadamard vector
+        std::vector<float> s_vec;
+        if (is_hadamard) {
+            std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+            auto it = src0_buf_ctx->hadamard_s_vectors.find(src0);
+            GGML_ASSERT(it != src0_buf_ctx->hadamard_s_vectors.end() && "Hadamard 's' vector not found");
+            s_vec = it->second;
+        }
 
-            size_t current_offset_in_tensor = 0;
-            for (const auto& seg : all_segments) {
+        // Calculating the B-matrix scale
+        std::vector<float> scales_B_grid;
+        if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8 || pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+            std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+            auto it = src0_buf_ctx->quantized_tensor_scales.find(src0);
+            GGML_ASSERT(it != src0_buf_ctx->quantized_tensor_scales.end() && "Quantized scales grid not found");
+            scales_B_grid = it->second;
+        }
+
+        // Calculating tensor packed size
+        size_t type_size_packed = 0;
+        if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) type_size_packed = 2;
+        else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) type_size_packed = 1;
+
+        // Computing K dimensions segments
+        size_t current_offset_in_tensor = 0;
+        for (size_t k_idx = 0; k_idx < all_k_segments.size(); ++k_idx) {
+            const auto& k_seg = all_k_segments[k_idx];
+            const int K_seg_op = k_seg.size_k;
+
+            // ===========================================
+            // ========== 1. Preparing Contexts ==========
+            // ===========================================
+            for (const auto& n_seg : all_n_segments) {
                 for (size_t idx = 0; idx < num_active_segments; ++idx) {
-                    if (active_segments[idx].offset_n == seg.offset_n) {
+                    if (active_n_segments[idx].offset_n == n_seg.offset_n) {
+                        size_t offset_in_dma = current_offset_in_tensor;
+
+                        // Getting matmul context from cache
+                        matmul_ctxs[idx] = backend_ctx->get_matmul_ctx(
+                            (uintptr_t)tensor_virt_addr, offset_in_dma, M, K_seg_op, n_seg.size_n,
+                            n_seg.core_id, matmul_type, b_domain_id
+                        );
+                        if (!matmul_ctxs[idx] || matmul_ctxs[idx]->ctx == 0) return GGML_STATUS_FAILED;
+
                         auto& matmul_ctx = matmul_ctxs[idx];
-                        size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
-                        size_t total_offset = src0_base_offset_in_dma + current_offset_in_tensor;
-                        
-                        auto cache_key = std::make_pair(src0_buffer, total_offset);
-                        std::lock_guard<std::mutex> lock(backend_ctx->mutex);
-                        auto it = backend_ctx->b_mem_handle_cache.find(cache_key);
 
-                        if (it != backend_ctx->b_mem_handle_cache.end()) {
-                            mem_B_segments[idx] = it->second;
-                        } else {
-                            rknn_tensor_mem* mem = rknn_create_mem_from_fd(matmul_ctx->ctx, src0_buf_ctx->dma_buf.fd, src0_buf_ctx->dma_buf.virt_addr, segment_size_bytes, total_offset);
+                        // Assigning B-matrix only once to reduce computation overhead
+                        if (!matmul_ctx->b_bound) {
+                            size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
+
+                            rknn_tensor_mem* mem = rknn_create_mem_from_fd(
+                                matmul_ctx->ctx,
+                                tensor_fd,
+                                tensor_virt_addr,
+                                segment_size_bytes,
+                                offset_in_dma
+                            );
                             if (!mem) return GGML_STATUS_FAILED;
+
                             auto deleter = [ctx = matmul_ctx->ctx](rknn_tensor_mem* m) { if (m) rknn_destroy_mem(ctx, m); };
-                            mem_B_segments[idx] = std::shared_ptr<rknn_tensor_mem>(mem, deleter);
-                            backend_ctx->b_mem_handle_cache[cache_key] = mem_B_segments[idx];
+                            matmul_ctx->mem_B = std::shared_ptr<rknn_tensor_mem>(mem, deleter);
+
+                            RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, matmul_ctx->mem_B.get(), &matmul_ctx->io_attr.B), "set_io_mem B segment");
+
+                            matmul_ctx->b_bound = true;
                         }
-                        RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B), "set_io_mem B segment");
                         break;
                     }
                 }
-                current_offset_in_tensor += type_size_packed > 0 ? (size_t)seg.size_n * K_op * type_size_packed : (size_t)seg.size_n * K_op / 2;
-            }
-        }
 
-        // ===========================================
-        // ========== 3. Preparing A-matrix ==========
-        // ===========================================
-        std::vector<float> scales_A(M);
-        float scale_B = 1.0f;
-        {
-            auto cache_key = std::make_tuple(M, K_op, (int)pipeline->npu_type_a);
-            auto& matmul_ctx_0 = matmul_ctxs[0];
-
-            mem_A_shared = get_or_create_npu_buffer(backend_ctx, matmul_ctx_0->ctx, matmul_ctx_0->io_attr.A.size, cache_key, backend_ctx->a_buffer_cache);
-            if (!mem_A_shared) return GGML_STATUS_FAILED;
-
-            const float* x = (const float*)src1->data;
-            const int row_stride = (int)(src1->nb[1] / sizeof(float));
-            void* dst_base = mem_A_shared->virt_addr;
-
-            std::vector<float> s_vec;
-            if (is_hadamard) {
-                auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0->buffer->context;
-                std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
-                auto it = src0_buf_ctx->hadamard_s_vectors.find(src0);
-                GGML_ASSERT(it != src0_buf_ctx->hadamard_s_vectors.end() && "Hadamard 's' vector not found");
-                s_vec = it->second;
-            }
-
-            #pragma omp parallel for
-            for (int m = 0; m < M; ++m) {
-                const float* src_row = x + (size_t)m * row_stride;
-                std::vector<float> ready_row(K_op);
-
-                if (is_hadamard) {
-                    std::vector<float> signed_row(K);
-                    for(int k=0; k<K; ++k) signed_row[k] = src_row[k] * s_vec[k];
-                    rknpu2_calibration::hadamard_transform(ready_row.data(), signed_row.data(), K, K_op);
-                } else {
-                    memcpy(ready_row.data(), src_row, K * sizeof(float));
-                }
-
-                if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
-                    uint16_t* dst_ptr = (uint16_t*)dst_base;
-                    uint16_t* dst_row = dst_ptr + (size_t)m * K_op;
-                    rknpu2_quantization::convert_fp32_to_fp16(ready_row.data(), dst_row, K_op);
-                } 
-                else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
-                    float amax_m = 0.0f;
-                    for (int k = 0; k < K_op; ++k) amax_m = std::max(amax_m, std::abs(ready_row[k]));
-                    scales_A[m] = amax_m / 127.0f;
-
-                    int8_t* dst_ptr = (int8_t*)dst_base;
-                    int8_t* dst_row = dst_ptr + (size_t)m * K_op;
-                    rknpu2_quantization::quantize_fp32_to_int8(ready_row.data(), dst_row, K_op, scales_A[m]);
-                } 
-                else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
-                    float amax_m = 0.0f;
-                    for (int k = 0; k < K_op; ++k) amax_m = std::max(amax_m, std::abs(ready_row[k]));
-                    scales_A[m] = amax_m / 7.0f;
-
-                    uint8_t* dst_ptr = (uint8_t*)dst_base;
-                    uint8_t* dst_row = dst_ptr + (size_t)m * (K_op / 2);
-                    rknpu2_quantization::quantize_fp32_to_int4_packed(ready_row.data(), dst_row, K_op, scales_A[m]);
+                if (n_seg.size_n > 0) {
+                    current_offset_in_tensor += type_size_packed > 0 ? (size_t)n_seg.size_n * K_seg_op * type_size_packed : (size_t)n_seg.size_n * K_seg_op / 2;
                 }
             }
 
-            if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8 || pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
-                ggml_backend_buffer_t src0_buffer = src0->buffer;
-                auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0_buffer->context;
-                {
-                    std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
-                    auto it = src0_buf_ctx->quantized_tensor_scales.find(src0);
-                    GGML_ASSERT(it != src0_buf_ctx->quantized_tensor_scales.end() && "Quantized scale not found");
-                    scale_B = it->second;
+            // ===========================================
+            // ========== 2. Preparing A-matrix ==========
+            // ===========================================
+            std::vector<float> scales_A(M);
+            {
+                auto cache_key = std::make_tuple(M, K_seg_op, (int)pipeline->npu_type_a, b_domain_id);
+                auto& matmul_ctx_0 = matmul_ctxs[0];
+
+                // Getting A-buffer from cache
+                mem_A_shared = get_tensor_buffer(backend_ctx, matmul_ctx_0->ctx, matmul_ctx_0->io_attr.A.size, cache_key, backend_ctx->a_buffer_cache);
+                if (!mem_A_shared) return GGML_STATUS_FAILED;
+
+                const float* x = (const float*)get_tensor_real_ptr(src1);
+                const int row_stride = (int)(src1->nb[1] / sizeof(float));
+                void* dst_base = mem_A_shared->virt_addr;
+
+                #pragma omp parallel for
+                for (int m = 0; m < M; ++m) {
+                    const float* src_row = x + (size_t)m * row_stride;
+                    std::vector<float> ready_row(K_seg_op);
+
+                    // Applying Hadamard Transform
+                    if (is_hadamard) {
+                        std::vector<float> signed_row(K);
+                        std::vector<float> full_hadamard_row(K_op);
+                        for(int k=0; k<K; ++k) signed_row[k] = src_row[k] * s_vec[k];
+                        rknpu2_calibration::hadamard_transform(full_hadamard_row.data(), signed_row.data(), K, K_op);
+
+                        memcpy(ready_row.data(), full_hadamard_row.data() + k_seg.offset_k, K_seg_op * sizeof(float));
+                    } else {
+                        memcpy(ready_row.data(), src_row + k_seg.offset_k, K_seg_op * sizeof(float));
+                    }
+
+                    // Handling types and quantizations
+                    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+                        uint16_t* dst_ptr = (uint16_t*)dst_base;
+                        uint16_t* dst_row = dst_ptr + (size_t)m * K_seg_op;
+                        rknpu2_quantization::convert_fp32_to_fp16(ready_row.data(), dst_row, K_seg_op);
+                    }
+                    else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+                        float amax_m = 0.0f;
+                        for (int k = 0; k < K_seg_op; ++k) amax_m = std::max(amax_m, std::abs(ready_row[k]));
+                        scales_A[m] = amax_m / 127.0f;
+
+                        int8_t* dst_ptr = (int8_t*)dst_base;
+                        int8_t* dst_row = dst_ptr + (size_t)m * K_seg_op;
+                        rknpu2_quantization::quantize_fp32_to_int8(ready_row.data(), dst_row, K_seg_op, scales_A[m]);
+                    }
+                    else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+                        float amax_m = 0.0f;
+                        for (int k = 0; k < K_seg_op; ++k) amax_m = std::max(amax_m, std::abs(ready_row[k]));
+                        scales_A[m] = amax_m / 7.0f;
+
+                        uint8_t* dst_ptr = (uint8_t*)dst_base;
+                        uint8_t* dst_row = dst_ptr + (size_t)m * (K_seg_op / 2);
+                        rknpu2_quantization::quantize_fp32_to_int4_packed(ready_row.data(), dst_row, K_seg_op, scales_A[m]);
+                    }
+                }
+
+                // Assigning A-matrix to all contexts for the parallel execution
+                for (size_t idx = 0; idx < num_active_segments; idx++) {
+                    RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctxs[idx]->ctx, mem_A_shared.get(), &matmul_ctxs[idx]->io_attr.A), "set_io_mem A for core");
+                }
+
+                RKNN_CHECK(rknn_mem_sync(matmul_ctxs[0]->ctx, mem_A_shared.get(), RKNN_MEMORY_SYNC_TO_DEVICE), "sync A TO_DEVICE");
+            }
+
+            // ===========================================
+            // ========== 3. Preparing C-matrix ==========
+            // ===========================================
+            {
+                for (size_t idx = 0; idx < num_active_segments; idx++) {
+                    auto& matmul_ctx = matmul_ctxs[idx];
+                    auto cache_key = std::make_tuple(M, active_n_segments[idx].size_n, active_n_segments[idx].core_id, (int)pipeline->npu_type_c, b_domain_id);
+
+                    // Getting C-buffer from cache
+                    mem_C_segments[idx] = get_tensor_buffer(backend_ctx, matmul_ctx->ctx, matmul_ctx->io_attr.C.size, cache_key, backend_ctx->c_buffer_cache);
+                    if (!mem_C_segments[idx]) return GGML_STATUS_FAILED;
+
+                    // Assigning C-matrix to current context for the parallel execution
+                    RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_C_segments[idx].get(), &matmul_ctx->io_attr.C), "set_io_mem C");
                 }
             }
 
-            RKNN_CHECK(rknn_mem_sync(matmul_ctx_0->ctx, mem_A_shared.get(), RKNN_MEMORY_SYNC_TO_DEVICE), "sync A TO_DEVICE");
-
-            for (size_t idx = 0; idx < num_active_segments; idx++) {
-                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctxs[idx]->ctx, mem_A_shared.get(), &matmul_ctxs[idx]->io_attr.A), "set_io_mem A for core");
-            }
-        }
-
-        // ===========================================
-        // ========== 4. Preparing C-matrix ==========
-        // ===========================================
-        {            
-            for (size_t idx = 0; idx < num_active_segments; idx++) {
-                auto& matmul_ctx = matmul_ctxs[idx];
-                auto cache_key = std::make_tuple(M, active_segments[idx].size_n, active_segments[idx].core_id, (int)pipeline->npu_type_c);
-                mem_C_segments[idx] = get_or_create_npu_buffer(backend_ctx, matmul_ctx->ctx, matmul_ctx->io_attr.C.size, cache_key, backend_ctx->c_buffer_cache);
-                if (!mem_C_segments[idx]) return GGML_STATUS_FAILED;
-                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_C_segments[idx].get(), &matmul_ctx->io_attr.C), "set_io_mem C");
-            }
-        }
-
-        // ==========================================
-        // ========== 5. Running operation ==========
-        // ==========================================
-        {            
-            #pragma omp parallel for num_threads(num_active_segments)
-            for (size_t idx = 0; idx < num_active_segments; idx++) {
-                int ret = rknn_matmul_run(matmul_ctxs[idx]->ctx);
-                if (ret != RKNN_SUCC) {
-                    // Handle error
+            // ==========================================
+            // ========== 4. Running operation ==========
+            // ==========================================
+            {
+                #pragma omp parallel for num_threads(num_active_segments)
+                for (size_t idx = 0; idx < num_active_segments; idx++) {
+                    int ret = rknn_matmul_run(matmul_ctxs[idx]->ctx);
+                    if (ret != RKNN_SUCC) {
+                        // Handle error
+                    }
                 }
             }
-        }
 
-        // ===========================================
-        // ========== 6. Collecting results ==========
-        // ===========================================
-        {
-            float* dst_data = (float*)dst->data;
+            // ===========================================
+            // ========== 5. Collecting results ==========
+            // ===========================================
+            {
+                for (size_t idx = 0; idx < num_active_segments; idx++) {
+                    RKNN_CHECK(rknn_mem_sync(matmul_ctxs[idx]->ctx, mem_C_segments[idx].get(), RKNN_MEMORY_SYNC_FROM_DEVICE), "sync C FROM_DEVICE");
+                }
 
-            for (size_t idx = 0; idx < num_active_segments; idx++) {
-                RKNN_CHECK(rknn_mem_sync(matmul_ctxs[idx]->ctx, mem_C_segments[idx].get(), RKNN_MEMORY_SYNC_FROM_DEVICE), "sync C FROM_DEVICE");
-            }
+                const float hadamard_divisor = pipeline->use_hadamard ? (float)K_op : 1.0f;
 
-            const float hadamard_divisor = pipeline->use_hadamard ? (float)K_op : 1.0f;
+                #pragma omp parallel for
+                for (int m = 0; m < M; m++) {
+                    // Handling types and quantizations
+                    switch (pipeline->npu_type_c) {
+                        case rknpu2_configuration::NPU_TYPE_FP32: {
+                            for (size_t idx = 0; idx < num_active_segments; idx++) {
+                                int N_offset = active_n_segments[idx].offset_n;
+                                int N_segment = active_n_segments[idx].size_n;
+                                float* src_segment_base = (float*)mem_C_segments[idx]->virt_addr;
+                                float* dst_ptr = dst_data + (size_t)m * N + N_offset;
+                                float* src_ptr = src_segment_base + (size_t)m * N_segment;
 
-            #pragma omp parallel for
-            for (int m = 0; m < M; m++) {
-                switch (pipeline->npu_type_c) {
-                    case rknpu2_configuration::NPU_TYPE_FP32: {
-                        for (size_t idx = 0; idx < num_active_segments; idx++) {
-                            int N_offset = active_segments[idx].offset_n;
-                            int N_segment = active_segments[idx].size_n;
-                            float* src_segment_base = (float*)mem_C_segments[idx]->virt_addr;
-                            float* dst_ptr = dst_data + (size_t)m * N + N_offset;
-                            float* src_ptr = src_segment_base + (size_t)m * N_segment;
-
-                            if (pipeline->use_hadamard) {
-                                for(int n=0; n<N_segment; ++n) dst_ptr[n] = src_ptr[n] / hadamard_divisor;
-                            } else {
-                                memcpy(dst_ptr, src_ptr, N_segment * sizeof(float));
+                                for(int n=0; n<N_segment; ++n) {
+                                    dst_ptr[n] += src_ptr[n] / hadamard_divisor;
+                                }
                             }
+                            break;
                         }
-                        break;
-                    }
 
-                    case rknpu2_configuration::NPU_TYPE_INT32: {
-                        float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
-                        
-                        for (size_t idx = 0; idx < num_active_segments; idx++) {
-                            int N_offset = active_segments[idx].offset_n;
-                            int N_segment = active_segments[idx].size_n;
-                            float* dst_ptr = dst_data + (size_t)m * N + N_offset;
-                            int32_t* src_segment_base = (int32_t*)mem_C_segments[idx]->virt_addr;
-                            int32_t* src_ptr = src_segment_base + (size_t)m * N_segment;
-                            rknpu2_quantization::dequantize_int32_to_fp32(src_ptr, dst_ptr, N_segment, dequant_scale);
+                        case rknpu2_configuration::NPU_TYPE_INT32: {
+                            for (size_t idx = 0; idx < num_active_segments; idx++) {
+                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
+                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
+
+                                int N_offset = active_n_segments[idx].offset_n;
+                                int N_segment = active_n_segments[idx].size_n;
+                                float* dst_ptr = dst_data + (size_t)m * N + N_offset;
+                                int32_t* src_ptr = (int32_t*)mem_C_segments[idx]->virt_addr + (size_t)m * N_segment;
+
+                                for(int n=0; n<N_segment; ++n) {
+                                    dst_ptr[n] += (float)src_ptr[n] * dequant_scale;
+                                }
+                            }
+                            break;
                         }
-                        break;
-                    }
 
-                    case rknpu2_configuration::NPU_TYPE_INT16: {
-                        float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
+                        case rknpu2_configuration::NPU_TYPE_INT16: {
+                            for (size_t idx = 0; idx < num_active_segments; idx++) {
+                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
+                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
 
-                        for (size_t idx = 0; idx < num_active_segments; idx++) {
-                            int N_offset = active_segments[idx].offset_n;
-                            int N_segment = active_segments[idx].size_n;
-                            float* dst_ptr = dst_data + (size_t)m * N + N_offset;
-                            int16_t* src_segment_base = (int16_t*)mem_C_segments[idx]->virt_addr;
-                            int16_t* src_ptr = src_segment_base + (size_t)m * N_segment;
-                            rknpu2_quantization::dequantize_int16_to_fp32(src_ptr, dst_ptr, N_segment, dequant_scale);
+                                int N_offset = active_n_segments[idx].offset_n;
+                                int N_segment = active_n_segments[idx].size_n;
+                                float* dst_ptr = dst_data + (size_t)m * N + N_offset;
+                                int16_t* src_ptr = (int16_t*)mem_C_segments[idx]->virt_addr + (size_t)m * N_segment;
+
+                                for(int n=0; n<N_segment; ++n) {
+                                    dst_ptr[n] += (float)src_ptr[n] * dequant_scale;
+                                }
+                            }
+                            break;
                         }
-                        break;
-                    }
 
-                    default:
-                        // This should not be reached if config is correct
-                        break;
+                        default:
+                            // This should not be reached if config is correct
+                            break;
+                    }
                 }
             }
         }
@@ -563,220 +728,331 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 // Buffer
 //
 
-static void ggml_backend_rknpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    rknpu2_allocation::free(ctx->dma_buf);
-    delete ctx;
-}
-
-static void * ggml_backend_rknpu_buffer_get_base(ggml_backend_buffer_t buffer) {
-    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    return ctx->dma_buf.virt_addr;
-}
-
-static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
-    UNUSED(buffer);
-    UNUSED(tensor);
-    return GGML_STATUS_SUCCESS;
-}
-
-// Function for dequantizing GGUF format to FP32 and optionally applying Hadamard transform
-static std::vector<float> dequantize_tensor(
-    const struct ggml_tensor * tensor,
-    ggml_backend_rknpu_buffer_context * ctx,
-    const void * raw_data,
-    int K, int N, int K_op, bool use_hadamard
-) {
-    std::vector<float> fp32_matrix((size_t)N * K_op);
-
-    auto dequantize_row = [&](int n, float* row_out) {
-        if (tensor->type == GGML_TYPE_F32) {
-            const float* src = (const float*)raw_data;
-            memcpy(row_out, src + (size_t)n * K, K * sizeof(float));
-        } else if (tensor->type == GGML_TYPE_F16) {
-            const ggml_fp16_t* src = (const ggml_fp16_t*)raw_data;
-            const ggml_fp16_t* src_row = src + (size_t)n * K;
-            for (int k = 0; k < K; ++k) row_out[k] = ggml_fp16_to_fp32(src_row[k]);
-        } else if (tensor->type == GGML_TYPE_Q8_0) {
-            const block_q8_0* src = (const block_q8_0*)raw_data;
-            dequantize_row_q8_0(src + (size_t)n * (K / QK8_0), row_out, K);
-        } else if (tensor->type == GGML_TYPE_Q6_K) {
-            const block_q6_K* src = (const block_q6_K*)raw_data;
-            dequantize_row_q6_K(src + (size_t)n * (K / QK_K), row_out, K);
-        } else if (tensor->type == GGML_TYPE_Q4_0) {
-            const block_q4_0* src = (const block_q4_0*)raw_data;
-            dequantize_row_q4_0(src + (size_t)n * (K / QK4_0), row_out, K);
-        } else {
-            GGML_ASSERT(false && "Unsupported weight type for NPU pipeline");
-        }
-    };
-
-    if (use_hadamard) {
-        std::vector<float> s_vec(K_op, 1.0f);
-        std::mt19937 gen(reinterpret_cast<uintptr_t>(tensor));
-        std::uniform_int_distribution<int> distrib(0, 1);
-        for(int k = 0; k < K_op; ++k) {
-            s_vec[k] = (distrib(gen) == 0) ? -1.0f : 1.0f;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(ctx->mutex);
-            ctx->hadamard_s_vectors[tensor] = s_vec;
-        }
-
-        #pragma omp parallel for
-        for (int n = 0; n < N; ++n) {
-            std::vector<float> raw_row(K);
-            dequantize_row(n, raw_row.data());
-
-            std::vector<float> signed_row(K);
-            for(int k=0; k<K; ++k) signed_row[k] = raw_row[k] * s_vec[k];
-
-            rknpu2_calibration::hadamard_transform(fp32_matrix.data() + (size_t)n * K_op, signed_row.data(), K, K_op);
-        }
-    } else {
-        #pragma omp parallel for
-        for (int n = 0; n < N; ++n) {
-            dequantize_row(n, fp32_matrix.data() + (size_t)n * K);
-        }
-    }
-
-    return fp32_matrix;
-}
-
-// Function for quantizing FP32 matrix to target NPU format
-static std::vector<uint8_t> quantize_tensor(
-    const struct ggml_tensor * tensor,
-    ggml_backend_rknpu_buffer_context * ctx,
-    const std::vector<float>& fp32_matrix,
-    int K_op, int N,
-    rknpu2_configuration::Rknpu2NpuType npu_type
-) {
-    size_t n_elements = (size_t)N * K_op;
-
-    // FP16
-    if (npu_type == rknpu2_configuration::NPU_TYPE_FP16) {
-        std::vector<uint8_t> npu_bytes(n_elements * sizeof(uint16_t));
-        uint16_t* fp16_ptr = (uint16_t*)npu_bytes.data();
-
-        #pragma omp parallel for
-        for (int n = 0; n < N; ++n) {
-            rknpu2_quantization::convert_fp32_to_fp16(
-                fp32_matrix.data() + (size_t)n * K_op, 
-                fp16_ptr + (size_t)n * K_op, 
-                K_op);
-        }
-        return npu_bytes;
-    }
-
-    float amax = 0.0f;
-    if (npu_type == rknpu2_configuration::NPU_TYPE_INT4) {
-        amax = rknpu2_calibration::calculate_entropy_amax(fp32_matrix.data(), n_elements);
-    } else {
-        #pragma omp parallel for reduction(max:amax)
-        for (size_t i = 0; i < n_elements; ++i) {
-            amax = std::max(amax, std::abs(fp32_matrix[i]));
-        }
-    }
-
-    float quant_divisor = (npu_type == rknpu2_configuration::NPU_TYPE_INT4) ? 7.0f : 127.0f;
-    float global_scale_b = amax / quant_divisor;
-
-    {
-        std::lock_guard<std::mutex> lock(ctx->mutex);
-        ctx->quantized_tensor_scales[tensor] = global_scale_b;
-    }
-
-    // INT8
-    if (npu_type == rknpu2_configuration::NPU_TYPE_INT8) {
-        std::vector<uint8_t> npu_bytes(n_elements);
-        int8_t* int8_ptr = (int8_t*)npu_bytes.data();
-
-        #pragma omp parallel for
-        for (int n = 0; n < N; ++n) {
-            rknpu2_quantization::quantize_fp32_to_int8(
-                fp32_matrix.data() + (size_t)n * K_op, 
-                int8_ptr + (size_t)n * K_op, 
-                K_op, global_scale_b);
-        }
-        return npu_bytes;
-    } 
-
-    // INT4
-    std::vector<uint8_t> npu_bytes(n_elements / 2);
-    #pragma omp parallel for
-    for (int n = 0; n < N; ++n) {
-        rknpu2_quantization::quantize_fp32_to_int4_packed(
-            fp32_matrix.data() + (size_t)n * K_op, 
-            npu_bytes.data() + (size_t)n * (K_op / 2), 
-            K_op, global_scale_b);
-    }
-    return npu_bytes;
-}
-
-// Function for splitting into NPU-native layout segments and writing to DMA buffer
-static void pack_tensor(
-    const uint8_t* src_data,
-    uint8_t* dst_dma_ptr,
-    int K_op, int N, int core_count,
-    const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline
-) {
-    auto segments = compute_matrix_segments(N, core_count, pipeline->n_align);
-    uint8_t* current_write_ptr = dst_dma_ptr;
-    std::vector<uint8_t> packed_temp;
-
-    for (const auto& seg : segments) {
-        if (seg.size_n == 0) continue;
-
-        size_t segment_packed_size = 0;
-        if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
-            segment_packed_size = (size_t)seg.size_n * K_op * 2;
-        } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
-            segment_packed_size = (size_t)seg.size_n * K_op;
-        } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
-            segment_packed_size = (size_t)seg.size_n * K_op / 2;
-        }
-
-        packed_temp.resize(segment_packed_size);
-        pipeline->pack_func(packed_temp.data(), src_data, K_op, N, seg.offset_n, seg.size_n);
-
-        memcpy(current_write_ptr, packed_temp.data(), segment_packed_size);
-        current_write_ptr += segment_packed_size;
-    }
-}
-
-static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    auto * ctx = (ggml_backend_rknpu_buffer_context *) buffer->context;
-    uint8_t* dma_base = (uint8_t*)ctx->dma_buf.virt_addr;
-    uint8_t* tensor_dma_ptr = dma_base + ((uintptr_t)tensor->data - (uintptr_t)ggml_backend_buffer_get_base(buffer));
-
+// Function for calculating a real tensor size for the NPU
+static size_t get_tensor_packed_size(const struct ggml_tensor * tensor) {
     const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
     const auto* pipeline = config.resolve_op_support(tensor);
 
-    if (pipeline && pipeline->pack_func) {
+    if (pipeline) {
         const int K = (int)tensor->ne[0];
         const int N = (int)tensor->ne[1];
 
         const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
-        std::vector<float> fp32_matrix = dequantize_tensor(tensor, ctx, data, K, N, K_op, pipeline->use_hadamard);
-        std::vector<uint8_t> npu_matrix = quantize_tensor(tensor, ctx, fp32_matrix, K_op, N, pipeline->npu_type_a);
-        pack_tensor(npu_matrix.data(), tensor_dma_ptr, K_op, N, config.core_count, pipeline);
+        int k_limit = config.max_k_limit;
+        if (pipeline->effective_k > 0) {
+            k_limit = (k_limit > 0) ? std::min(k_limit, pipeline->effective_k) : pipeline->effective_k;
+        }
+
+        auto k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
+        auto n_segments = compute_n_segments(N, config.core_count, pipeline->n_align);
+
+        size_t total_size = 0;
+        for (const auto& k_seg : k_segments) {
+            for (const auto& seg : n_segments) {
+                if (seg.size_n > 0) {
+                    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+                        total_size += (size_t)seg.size_n * k_seg.size_k / 2;
+                    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+                        total_size += (size_t)seg.size_n * k_seg.size_k;
+                    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+                        total_size += (size_t)seg.size_n * k_seg.size_k * 2;
+                    }
+                }
+            }
+        }
+        return total_size;
+    }
+    return ggml_nbytes(tensor);
+}
+
+static void ggml_backend_rknpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
+
+    // Freeing an every individual RKNN buffer using the allocator context
+    for (auto& pair : ctx->tensor_allocs) {
+        if (pair.second.mem) {
+            rknn_matmul_ctx alloc_ctx = g_domain_manager.get_allocator_context(pair.second.iommu_domain_id);
+            rknn_destroy_mem(alloc_ctx, pair.second.mem);
+            g_domain_manager.release_domain_memory(pair.second.iommu_domain_id, pair.second.size);
+        }
+    }
+
+    // Freeing the virtual memory block
+    munmap(ctx->virtual_base, ctx->total_size);
+
+    delete ctx;
+}
+
+static void * ggml_backend_rknpu_buffer_get_base(ggml_backend_buffer_t buffer) {
+    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
+    return ctx->virtual_base;
+}
+
+static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+    auto * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
+
+    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
+    const auto* pipeline = config.resolve_op_support(tensor);
+
+    // Initialize tensor only if it is supported by the pipeline
+    if (pipeline && pipeline->pack_func) {
+        size_t offset = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
+        size_t size = get_tensor_packed_size(tensor);
+        ctx->get_tensor_allocation(offset, size);
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+// Function for dequantizing a single row from GGUF format to FP32
+static void dequantize_row(
+    const struct ggml_tensor * tensor,
+    const void * raw_data,
+    int n, int K,
+    float * row_out)
+{
+    if (tensor->type == GGML_TYPE_F32) {
+        const float* src = (const float*)raw_data;
+        memcpy(row_out, src + (size_t)n * K, K * sizeof(float));
+    } else if (tensor->type == GGML_TYPE_F16) {
+        const ggml_fp16_t* src = (const ggml_fp16_t*)raw_data;
+        const ggml_fp16_t* src_row = src + (size_t)n * K;
+        for (int k = 0; k < K; ++k) row_out[k] = ggml_fp16_to_fp32(src_row[k]);
+    } else if (tensor->type == GGML_TYPE_Q8_0) {
+        const block_q8_0* src = (const block_q8_0*)raw_data;
+        dequantize_row_q8_0(src + (size_t)n * (K / QK8_0), row_out, K);
+    } else if (tensor->type == GGML_TYPE_Q6_K) {
+        const block_q6_K* src = (const block_q6_K*)raw_data;
+        dequantize_row_q6_K(src + (size_t)n * (K / QK_K), row_out, K);
+    } else if (tensor->type == GGML_TYPE_Q4_0) {
+        const block_q4_0* src = (const block_q4_0*)raw_data;
+        dequantize_row_q4_0(src + (size_t)n * (K / QK4_0), row_out, K);
     } else {
-        memcpy(tensor_dma_ptr + offset, data, size);
+        GGML_ASSERT(false && "Unsupported weight type for NPU pipeline");
+    }
+}
+
+// Function for extracting a specific tensor segment and converting it to FP32
+static void dequantize_tensor_segment(
+    std::vector<float>& out_segment,
+    const struct ggml_tensor * tensor,
+    ggml_backend_rknpu_buffer_context * ctx,
+    const void * raw_data,
+    int K, int N, int K_op,
+    const MatrixSegmentK & k_seg,
+    const MatrixSegmentN & n_seg,
+    bool use_hadamard)
+{
+    size_t seg_elements = (size_t)n_seg.size_n * k_seg.size_k;
+    out_segment.resize(seg_elements);
+
+    std::vector<float> s_vec;
+    if (use_hadamard) {
+        std::lock_guard<std::mutex> lock(ctx->mutex);
+        s_vec = ctx->hadamard_s_vectors[tensor];
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < n_seg.size_n; ++i) {
+        int global_n = n_seg.offset_n + i;
+
+        if (global_n < N) {
+            std::vector<float> row_raw(K);
+            std::vector<float> row_processed(K_op, 0.0f);
+
+            dequantize_row(tensor, raw_data, global_n, K, row_raw.data());
+
+            if (use_hadamard) {
+                std::vector<float> signed_row(K);
+                for (int k = 0; k < K; ++k) signed_row[k] = row_raw[k] * s_vec[k];
+                rknpu2_calibration::hadamard_transform(row_processed.data(), signed_row.data(), K, K_op);
+            } else {
+                memcpy(row_processed.data(), row_raw.data(), K * sizeof(float));
+            }
+
+            memcpy(&out_segment[i * k_seg.size_k], &row_processed[k_seg.offset_k], k_seg.size_k * sizeof(float));
+        } else {
+            memset(&out_segment[i * k_seg.size_k], 0, k_seg.size_k * sizeof(float));
+        }
+    }
+}
+
+// Function for quantizing the FP32 segment to the target NPU format
+static void quantize_tensor_segment(
+    const std::vector<float>& fp32_segment,
+    std::vector<uint8_t>& out_quantized,
+    const MatrixSegmentK & k_seg,
+    const MatrixSegmentN & n_seg,
+    float scale,
+    rknpu2_configuration::Rknpu2NpuType npu_type)
+{
+    size_t seg_elements = (size_t)n_seg.size_n * k_seg.size_k;
+
+    if (npu_type == rknpu2_configuration::NPU_TYPE_FP16) {
+        out_quantized.resize(seg_elements * 2);
+        rknpu2_quantization::convert_fp32_to_fp16(
+            fp32_segment.data(),
+            (uint16_t*)out_quantized.data(),
+            seg_elements);
+    }
+    else if (npu_type == rknpu2_configuration::NPU_TYPE_INT8) {
+        out_quantized.resize(seg_elements);
+        rknpu2_quantization::quantize_fp32_to_int8(
+            fp32_segment.data(),
+            (int8_t*)out_quantized.data(),
+            seg_elements,
+            scale);
+    }
+    else if (npu_type == rknpu2_configuration::NPU_TYPE_INT4) {
+        out_quantized.resize(seg_elements / 2);
+        rknpu2_quantization::quantize_fp32_to_int4_packed(
+            fp32_segment.data(),
+            out_quantized.data(),
+            seg_elements,
+            scale);
+    }
+}
+
+// Function for packing the quantized segment into the native NPU layout and writing to DMA
+static size_t pack_tensor_segment(
+    const std::vector<uint8_t>& quantized_segment,
+    uint8_t * dst_dma_ptr,
+    const MatrixSegmentK & k_seg,
+    const MatrixSegmentN & n_seg,
+    const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline)
+{
+    size_t segment_packed_size = 0;
+
+    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+        segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k * 2;
+    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+        segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k;
+    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+        segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k / 2;
+    }
+
+    pipeline->pack_func(dst_dma_ptr, quantized_segment.data(),
+                        k_seg.size_k, 0, k_seg.size_k,
+                        n_seg.size_n, 0, n_seg.size_n);
+
+    return segment_packed_size;
+}
+
+static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    auto * ctx = (ggml_backend_rknpu_buffer_context *) buffer->context;
+
+    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
+    const auto* pipeline = config.resolve_op_support(tensor);
+
+    size_t tensor_offset_in_virtual = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
+
+    if (pipeline && pipeline->pack_func) {
+        const int K = (int)tensor->ne[0];
+        const int N = (int)tensor->ne[1];
+        const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
+
+        // Initializing Hadamard Transform Logic
+        if (pipeline->use_hadamard) {
+            std::vector<float> s_vec(K_op, 1.0f);
+            std::mt19937 gen(reinterpret_cast<uintptr_t>(tensor));
+            std::uniform_int_distribution<int> distrib(0, 1);
+
+            for(int k = 0; k < K_op; ++k) {
+                s_vec[k] = (distrib(gen) == 0) ? -1.0f : 1.0f;
+            }
+
+            std::lock_guard<std::mutex> lock(ctx->mutex);
+            ctx->hadamard_s_vectors[tensor] = s_vec;
+        }
+
+        // Computing global scale
+        int k_limit = config.max_k_limit;
+        if (pipeline->effective_k > 0) {
+            k_limit = (k_limit > 0) ? std::min(k_limit, pipeline->effective_k) : pipeline->effective_k;
+        }
+
+        // Allocating a new buffer for a tensor
+        size_t required_size = get_tensor_packed_size(tensor);
+        auto alloc = ctx->get_tensor_allocation(tensor_offset_in_virtual, required_size);
+        uint8_t* tensor_dma_ptr = (uint8_t*)alloc.mem->virt_addr;
+
+        // Computing specific hardware segments
+        auto k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
+        auto n_segments = compute_n_segments(N, config.core_count, pipeline->n_align);
+
+        std::vector<float> seg_fp32;
+        std::vector<uint8_t> seg_npu;
+        uint8_t* current_write_ptr = tensor_dma_ptr + offset;
+
+        std::vector<float> tensor_block_scales;
+
+        // Processing individual segments block-by-block
+        for (const auto& k_seg : k_segments) {
+            for (const auto& n_seg : n_segments) {
+                if (n_seg.size_n == 0) continue;
+
+                // Dequantizing the block
+                dequantize_tensor_segment(seg_fp32, tensor, ctx, data, K, N, K_op, k_seg, n_seg, pipeline->use_hadamard);
+
+                // Calculating local scale of the block
+                float block_scale = 1.0f;
+                if (pipeline->npu_type_a != rknpu2_configuration::NPU_TYPE_FP16) {
+                    float amax = 0.0f;
+                    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+                        amax = rknpu2_calibration::calculate_entropy_amax(seg_fp32.data(), seg_fp32.size());
+                    } else {
+                        for (float val : seg_fp32) {
+                            amax = std::max(amax, std::abs(val));
+                        }
+                    }
+                    float quant_divisor = (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) ? 7.0f : 127.0f;
+                    block_scale = (amax == 0.0f) ? 1.0f : amax / quant_divisor;
+                }
+                tensor_block_scales.push_back(block_scale);
+
+                // Quantizing
+                quantize_tensor_segment(seg_fp32, seg_npu, k_seg, n_seg, block_scale, pipeline->npu_type_a);
+
+                // Packing into chip native layout
+                size_t bytes_written = pack_tensor_segment(seg_npu, current_write_ptr, k_seg, n_seg, pipeline);
+
+                current_write_ptr += bytes_written;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(ctx->mutex);
+            ctx->quantized_tensor_scales[tensor] = tensor_block_scales;
+        }
+
+        rknn_matmul_ctx sync_ctx = g_domain_manager.get_allocator_context(alloc.iommu_domain_id);
+        RKNN_CHECK(rknn_mem_sync(sync_ctx, alloc.mem, RKNN_MEMORY_SYNC_TO_DEVICE), "sync B TO_DEVICE");
+    } else {
+        memcpy((uint8_t*)tensor->data + offset, data, size);
     }
 }
 
 static void ggml_backend_rknpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    uint8_t* dma_base = (uint8_t*)ctx->dma_buf.virt_addr;
-    uint8_t* tensor_dma_ptr = dma_base + ((uintptr_t)tensor->data - (uintptr_t)ggml_backend_buffer_get_base(buffer));
-    memcpy(data, tensor_dma_ptr + offset, size);
+    auto * ctx = (ggml_backend_rknpu_buffer_context*)buffer->context;
+    size_t tensor_offset_in_virtual = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
+
+    std::lock_guard<std::mutex> lock(ctx->mutex);
+    auto it = ctx->tensor_allocs.find(tensor_offset_in_virtual);
+    if (it != ctx->tensor_allocs.end()) {
+        memcpy(data, (uint8_t*)it->second.mem->virt_addr + offset, size);
+    } else {
+        memcpy(data, (uint8_t*)tensor->data + offset, size);
+    }
 }
 
 static void ggml_backend_rknpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    memset(ctx->dma_buf.virt_addr, value, ctx->dma_buf.size);
+    auto * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
+    std::lock_guard<std::mutex> lock(ctx->mutex);
+
+    for (auto& pair : ctx->tensor_allocs) {
+        memset((uint8_t*)pair.second.mem->virt_addr, value, pair.second.size);
+    }
 }
 
 
@@ -792,14 +1068,17 @@ static const char * ggml_backend_rknpu_buffer_type_get_name(ggml_backend_buffer_
 static ggml_backend_buffer_t ggml_backend_rknpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     UNUSED(buft);
 
-    rknpu2_allocation::DmaBuffer dma_buf = rknpu2_allocation::alloc(size);
-    if (dma_buf.fd < 0) {
+    // Reserving virtual memory block
+    void* virtual_base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (virtual_base == MAP_FAILED) {
         return NULL;
     }
 
-    ggml_backend_rknpu_buffer_context * ctx = new ggml_backend_rknpu_buffer_context{
-        dma_buf, "rknpu_dma_buffer", {}, {}, {}
-    };
+    // Initializing buffer context
+    ggml_backend_rknpu_buffer_context * ctx = new ggml_backend_rknpu_buffer_context();
+    ctx->virtual_base = virtual_base;
+    ctx->total_size = size;
+    ctx->name = "rknpu_virtual_buffer";
 
     static const ggml_backend_buffer_i rknpu_buffer_interface = {
         /* .free_buffer   = */ ggml_backend_rknpu_buffer_free_buffer,
@@ -823,37 +1102,7 @@ static size_t ggml_backend_rknpu_buffer_type_get_alignment(ggml_backend_buffer_t
 
 static size_t ggml_backend_rknpu_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     UNUSED(buft);
-
-    // Getting the current device configuration
-    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
-
-    // Defining hardware pipeline for the tensor
-    const auto* pipeline = config.resolve_op_support(tensor);
-
-    if (pipeline) {
-        const int K = (int)tensor->ne[0];
-        const int N = (int)tensor->ne[1];
-        auto segments = compute_matrix_segments(N, config.core_count, pipeline->n_align);
-
-        const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
-
-        size_t total_size = 0;
-        for (const auto& seg : segments) {
-            if (seg.size_n > 0) {
-                if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
-                    total_size += (size_t)seg.size_n * K_op / 2;
-                } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
-                    total_size += (size_t)seg.size_n * K_op;
-                } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
-                    total_size += (size_t)seg.size_n * K_op * 2;
-                }
-            }
-        }
-        return total_size;
-    }
-
-    // Fallback to default size calculation for other types.
-    return ggml_nbytes(tensor);
+    return get_tensor_packed_size(tensor);
 }
 
 
@@ -999,10 +1248,7 @@ static const char * ggml_backend_rknpu_reg_get_name(ggml_backend_reg_t reg) {
 
 static size_t ggml_backend_rknpu_reg_get_device_count(ggml_backend_reg_t reg) {
     UNUSED(reg);
-    if (get_rknpu_memory_context().get_ctx() != 0) {
-        return 1;
-    }
-    return 0;
+    return 1;
 }
 
 static ggml_backend_dev_t ggml_backend_rknpu_reg_get_device(ggml_backend_reg_t reg, size_t index) {

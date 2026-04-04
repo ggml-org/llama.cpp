@@ -21,9 +21,6 @@ All backend-specific code is contained within the `ggml/src/ggml-rknpu2` directo
 *   **`rknpu2-calibration.cpp`**
     Provides statistical methods for finding optimal quantization parameters (e.g., KL-Divergence, Min-MSE) and matrix transformations (like the Fast Walsh-Hadamard Transform).
 
-*   **`rknpu2-allocation.cpp`**
-    A lightweight wrapper for allocating and freeing physically contiguous, zero-copy memory via the Linux DMA-Heap subsystem.
-
 ## Future Directions
 
 This section outlines the roadmap for future contributions and improvements.

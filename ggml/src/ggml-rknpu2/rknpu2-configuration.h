@@ -21,7 +21,9 @@ namespace rknpu2_configuration {
  *
  * @param dst Pointer to the destination buffer for the packed data.
  * @param src Pointer to the source data in row-major layout (ggml format).
- * @param K The number of columns in the source matrix (inner dimension).
+ * @param K_total Total original columns in source matrix.
+ * @param k_offset The column offset from which to start packing.
+ * @param k_segment The number of columns to pack for this segment.
  * @param N_total The total number of rows in the source matrix.
  * @param n_offset The row offset from which to start packing.
  * @param n_segment The number of rows to pack.
@@ -29,7 +31,9 @@ namespace rknpu2_configuration {
 using PackingFunction = std::function<void(
     uint8_t* dst,
     const uint8_t* src,
-    int K,
+    int K_total,
+    int k_offset,
+    int k_segment,
     int N_total,
     int n_offset,
     int n_segment
@@ -51,9 +55,9 @@ enum Rknpu2NpuType {
 /**
  * @brief Describes a single supported hardware pipeline available on the NPU.
  *
- * This struct encapsulates the specific constraints and capabilities of a 
- * hardware execution path, including required data types, memory alignment 
- * rules, and the specific packing function needed to prepare tensor for 
+ * This struct encapsulates the specific constraints and capabilities of a
+ * hardware execution path, including required data types, memory alignment
+ * rules, and the specific packing function needed to prepare tensor for
  * the underlying matrix multiplication operation.
  */
 struct Rknpu2HardwarePipeline {
@@ -67,6 +71,7 @@ struct Rknpu2HardwarePipeline {
     int n_align;                // Required alignment for the N dimension
     PackingFunction pack_func;  // Function to pack the weight matrix for this op
 
+    int effective_k;            // Specific K limit for matrix tiling
     bool use_hadamard;          // Flag for using Hadamard Transform
 };
 
@@ -79,6 +84,7 @@ struct Rknpu2HardwarePipeline {
 struct Rknpu2DeviceConfig {
     std::string device_name;
     int core_count;
+    int max_k_limit = 0;
     std::vector<Rknpu2HardwarePipeline> hardware_pipelines;
 
     // Type-specific default patterns mapping
@@ -86,7 +92,7 @@ struct Rknpu2DeviceConfig {
 
     // Custom global pattern
     bool use_custom_pattern = false;
-    std::vector<std::string> custom_hybrid_pattern; 
+    std::vector<std::string> custom_hybrid_pattern;
 
     // Tensor-Quantization mapping
     mutable std::shared_ptr<std::mutex> pattern_mutex = std::make_shared<std::mutex>();

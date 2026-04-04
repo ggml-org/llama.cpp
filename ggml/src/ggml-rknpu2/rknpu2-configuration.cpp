@@ -13,25 +13,26 @@ namespace {
 // Packing KxN FP16 (row-major: idx [k,n] -> k*N + n) into native RKNN for RK3588: (N/16, K/32, 16, 32)
 void pack_B_rk3588_fp16(
     uint8_t* dst_u8, const uint8_t* src_u8,
-    int K, int N_total, int n_offset, int n_segment) {
+    int K_total, int k_offset, int k_segment,
+    int N_total, int n_offset, int n_segment) {
 
     auto dst = reinterpret_cast<uint16_t*>(dst_u8);
     auto src = reinterpret_cast<const uint16_t*>(src_u8);
 
-    GGML_ASSERT(K % 32 == 0 && N_total > 0 && K > 0);
+    GGML_ASSERT(k_segment % 32 == 0 && N_total > 0 && K_total > 0);
     GGML_ASSERT(n_offset % 16 == 0 && n_segment % 16 == 0 && n_offset + n_segment <= N_total);
 
-    const size_t s0 = (size_t)(K / 32) * 16 * 32;
+    const size_t s0 = (size_t)(k_segment / 32) * 16 * 32;
     const size_t s1 = 16 * 32;
     const size_t s2 = 32;
 
     for (int i = 0; i < n_segment / 16; ++i) {
-        for (int j = 0; j < K / 32; ++j) {
+        for (int j = 0; j < k_segment / 32; ++j) {
             const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
             for (int ii = 0; ii < 16; ++ii) {
                 const size_t n_global = (size_t)n_offset + (size_t)i * 16 + (size_t)ii;
-                
-                const uint16_t * src_ptr = src + n_global * K + j * 32;
+
+                const uint16_t * src_ptr = src + n_global * K_total + k_offset + j * 32;
                 uint16_t * dst_ptr = dst + dst_block + ii * s2;
 
                 uint16x8_t d0 = vld1q_u16(src_ptr + 0);
@@ -51,25 +52,26 @@ void pack_B_rk3588_fp16(
 // Packing KxN INT8 (row-major) into native RKNN for RK3588: (N/32, K/32, 32, 32)
 void pack_B_rk3588_int8(
     uint8_t* dst_u8, const uint8_t* src_u8,
-    int K, int N_total, int n_offset, int n_segment) {
+    int K_total, int k_offset, int k_segment,
+    int N_total, int n_offset, int n_segment) {
 
     auto dst = reinterpret_cast<int8_t*>(dst_u8);
     auto src = reinterpret_cast<const int8_t*>(src_u8);
 
-    GGML_ASSERT(K % 32 == 0 && N_total > 0 && K > 0);
+    GGML_ASSERT(k_segment % 32 == 0 && N_total > 0 && K_total > 0);
     GGML_ASSERT(n_offset % 32 == 0 && n_segment % 32 == 0 && n_offset + n_segment <= N_total);
 
-    const size_t s0 = (size_t)(K / 32) * 32 * 32;
+    const size_t s0 = (size_t)(k_segment / 32) * 32 * 32;
     const size_t s1 = 32 * 32;
     const size_t s2 = 32;
 
     for (int i = 0; i < n_segment / 32; ++i) {
-        for (int j = 0; j < K / 32; ++j) {
+        for (int j = 0; j < k_segment / 32; ++j) {
             const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
             for (int ii = 0; ii < 32; ++ii) {
                 const size_t n_global = (size_t)n_offset + (size_t)i * 32 + (size_t)ii;
 
-                const int8_t* src_ptr = src + n_global * K + j * 32;
+                const int8_t* src_ptr = src + n_global * K_total + k_offset + j * 32;
                 int8_t* dst_ptr = dst + dst_block + ii * s2;
 
                 int8x16_t d0 = vld1q_s8(src_ptr);
@@ -85,24 +87,25 @@ void pack_B_rk3588_int8(
 // Packing KxN INT4 (row-major) into native RKNN for RK3588: (N/64, K/32, 64, 32)
 void pack_B_rk3588_int4(
     uint8_t * dst, const uint8_t * src,
-    int K, int N_total, int n_offset, int n_segment) {
+    int K_total, int k_offset, int k_segment,
+    int N_total, int n_offset, int n_segment) {
 
-    GGML_ASSERT(K % 32 == 0 && N_total > 0 && K > 0);
+    GGML_ASSERT(k_segment % 32 == 0 && N_total > 0 && K_total > 0);
     GGML_ASSERT(n_offset % 64 == 0 && n_segment % 64 == 0 && n_offset + n_segment <= N_total);
 
-    const size_t s0 = (size_t)(K / 32) * 64 * (32 / 2);
+    const size_t s0 = (size_t)(k_segment / 32) * 64 * (32 / 2);
     const size_t s1 = 64 * (32 / 2);
-    const size_t s2 = (32 / 2); 
+    const size_t s2 = (32 / 2);
 
-    const size_t src_row_stride_bytes = (size_t)K / 2;
+    const size_t src_row_stride_bytes = (size_t)K_total / 2;
 
     for (int i = 0; i < n_segment / 64; ++i) {
-        for (int j = 0; j < K / 32; ++j) {
+        for (int j = 0; j < k_segment / 32; ++j) {
             const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
             for (int ii = 0; ii < 64; ++ii) {
                 const size_t n_global = (size_t)n_offset + (size_t)i * 64 + (size_t)ii;
 
-                const uint8_t* src_ptr = src + n_global * src_row_stride_bytes + (j * 32) / 2;
+                const uint8_t* src_ptr = src + n_global * src_row_stride_bytes + (k_offset + j * 32) / 2;
                 uint8_t* dst_ptr = dst + dst_block + ii * s2;
 
                 uint8x16_t d0 = vld1q_u8(src_ptr);
@@ -139,11 +142,11 @@ const std::vector<std::string>* Rknpu2DeviceConfig::get_active_pattern(int tenso
     if (it == default_patterns.end()) {
         return nullptr;
     }
-    
+
     if (use_custom_pattern && !custom_hybrid_pattern.empty()) {
         return &custom_hybrid_pattern;
     }
-    
+
     return &it->second;
 }
 
@@ -159,7 +162,7 @@ const Rknpu2HardwarePipeline* Rknpu2DeviceConfig::resolve_op_support(const struc
 
     // Retrieve active quantization pattern based on tensor type (or custom ENV variable)
     const std::vector<std::string>* pattern_ptr = get_active_pattern((int)w_tensor->type);
-    
+
     // If no pattern is registered for this type and no global override exists, reject operation
     if (!pattern_ptr || pattern_ptr->empty()) {
         return nullptr;
@@ -211,6 +214,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
     Rknpu2DeviceConfig rk3588_config;
     rk3588_config.device_name = "RK3588";
     rk3588_config.core_count = 3;
+    rk3588_config.max_k_limit = 8192;
     rk3588_config.hardware_pipelines = {
         {
             /* .pipeline_name = */ "FP16_STANDARD",
@@ -220,6 +224,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 16,
             /* .pack_func     = */ pack_B_rk3588_fp16,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ false
         },
         {
@@ -230,6 +235,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 16,
             /* .pack_func     = */ pack_B_rk3588_fp16,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ true
         },
         {
@@ -240,6 +246,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 32,
             /* .pack_func     = */ pack_B_rk3588_int8,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ false
         },
         {
@@ -250,6 +257,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 32,
             /* .pack_func     = */ pack_B_rk3588_int8,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ true
         },
         {
@@ -260,6 +268,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 64,
             /* .pack_func     = */ pack_B_rk3588_int4,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ false
         },
         {
@@ -270,10 +279,11 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             /* .k_align       = */ 32,
             /* .n_align       = */ 64,
             /* .pack_func     = */ pack_B_rk3588_int4,
+            /* .effective_k   = */ 0,
             /* .use_hadamard  = */ true
         }
     };
-    
+
     // Assigning custom variables
     rk3588_config.use_custom_pattern = use_custom_pattern;
     rk3588_config.custom_hybrid_pattern = custom_pattern;

@@ -32,16 +32,18 @@ make -j4
 3. Run inference
 
 ```sh
-# For Dense models
-./build/bin/llama-cli -m ./gemma-3-1b-it-Q8_0.gguf
+# Set new max limit for open files
+ulimit -n 65536
 
-# For MoE models
-./build/bin/llama-cli -m ./LFM2-8B-A1B-Q4_0.gguf --cpu-moe
+# Start chat with the model
+./build/bin/llama-cli -m ./gemma-3-1b-it-Q8_0.gguf
 ```
 
 ## Benchmarks
 
 The following benchmarks were conducted on an RK3588, comparing the performance, accuracy, and power consumption of the NPU backend against the standard CPU (NEON) backend.
+
+### Dense Models
 
 | Model | Type | Backend | Perplexity | PP (tok/s) | TG (tok/s) | Power (W) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -61,14 +63,31 @@ The following benchmarks were conducted on an RK3588, comparing the performance,
 | | | NPU | 🟡 38.46±1.68 | 🟢 209.4±3.2 | 🟡 16.6±0.2 | 🟢 3.0±0.2 |
 | | Q4_0 | CPU | 🟢 30.77±1.31 | 🟢 164.7±0.2 | 🟢 28.3±0.1 | 🔴 7.0±0.4 |
 | | | NPU | 🔴 55.53±2.30 | 🔴 51.4±0.1 | 🔴 16.7±0.3 | 🟢 3.0±0.2 |
+| **Ministral3 3B** | Q8_0 | CPU | 🟢 7.67±0.21 | 🔴 17.5±0.1 | 🟡 6.1±0.1 | 🔴 7.2±0.6 |
+| | | NPU | 🟢 7.84±0.22 | 🟢 120.9±0.6 | 🟢 6.9±0.1 | 🟢 3.2±0.2 |
+| | Q4_0 | CPU | 🟢 7.93±0.22 | 🟢 15.1±0.1 | 🟢 8.3±0.2 | 🔴 7.8±0.6 |
+| | | NPU | 🔴 32.37±1.16 | 🟡 13.8±0.1 | 🟡 7.2±0.1 | 🟢 3.2±0.2 |
+| **Qwen3.5 9B** | Q8_0 | CPU | 🟢 6.82±0.19 | 🔴 7.2±0.1 | 🟡 2.5±0.1 | 🔴 7.4±0.6 |
+| | | NPU | 🟢 7.14±0.20 | 🟢 44.6±0.1 | 🟢 3.2±0.1 | 🟢 3.2±0.2 |
+| | Q4_0 | CPU | 🟢 7.10±0.20 | 🟡 6.5±0.1 | 🟡 3.6±0.1 | 🔴 8.0±0.6 |
+| | | NPU | 🟡 14.67±0.48 | 🟢 7.3±0.1 | 🟢 4.4±0.1 | 🟢 4.0±0.2 |
+
+### MoE Models
+
+| Model | Type | Backend | Perplexity | PP (tok/s) | TG (tok/s) | Power (W) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **LFM2 8B A1B** | F16 | CPU | 🟢 15.79±0.58 | 🟡 31.1±2.9 | 🟢 6.8±0.2 | 🟡 7.0±0.6 |
 | | | NPU | 🟢 15.82±0.58 | 🟢 38.3±3.2 | 🟢 6.3±0.4 | 🟢 5.8±0.4 |
 | | Q8_0 | CPU | 🟢 15.92±0.59 | 🟡 31.7±0.1 | 🟢 12.9±0.1 | 🟡 7.4±0.6 |
 | | | NPU | 🟡 16.76±0.62 | 🟢 40.7±0.7 | 🟢 12.5±0.3 | 🟢 5.8±0.4 |
-| | Q6_K | CPU | 🟢 15.91±0.58 | 🟡 16.4±0.1 | 🟡 12.9±0.1 | 🟡 7.4±0.6 |
+| | Q6_K | CPU | 🟢 15.91±0.58 | 🟡 16.4±0.1 | 🟢 12.9±0.1 | 🟡 7.4±0.6 |
 | | | NPU | 🟡 21.16±0.83 | 🟢 21.4±0.1 | 🟢 13.7±0.1 | 🟢 5.8±0.4 |
 | | Q4_0 | CPU | 🟢 18.24±0.53 | 🟢 62.2±0.1 | 🟢 22.7±0.1 | 🟡 7.4±0.6 |
-| | | NPU | 🟡 26.09±1.06 | 🟡 47.5±0.1 | 🟢 19.0±0.1 | 🟢 5.8±0.4 |
+| | | NPU | 🟡 26.09±1.06 | 🟡 47.5±0.1 | 🟡 19.0±0.1 | 🟢 5.8±0.4 |
+| **Gemma4 26B A4B** | Q8_0 | CPU | 🟢 169.08±10.50 | 🟡 9.8±0.4 | 🟢 4.1±0.2 | 🔴 7.2±0.6 |
+| | | NPU | 🟢 215.18±13.84 | 🟢 13.4±0.4 | 🟡 2.9±0.1 | 🟢 4.2±0.4 |
+| | Q4_0 | CPU | 🟢 201.44±12.77 | 🟢 11.3±0.4 | 🟢 6.1±0.1 | 🔴 7.4±0.6 |
+| | | NPU | 🟡 635.77±44.36 | 🟢 12.9±0.5 | 🟡 5.6±0.1 | 🟢 4.4±0.4 |
 
 **Legend**: 🟢 Excellent | 🟡 Acceptable | 🔴 Poor
 
@@ -142,8 +161,8 @@ The **Perplexity** metrics were measured on the `Granite-4.0-350M-F16` model to 
 | `FP16_HADAMARD` | FP16xFP16 | 20.74 ± 0.74 | Hadamard Transform\* |
 | `FP16_STANDARD` | FP16xFP16 | 20.74 ± 0.74 | - |
 | `INT8_HADAMARD` | INT8xINT8 | 20.85 ± 0.74 | Hadamard Transform\* |
-| `INT8_STANDARD` | INT8xINT8 | 22.91 ± 0.83 | - |
-| `INT4_HADAMARD` | INT4xINT4 | 109.15 ± 4.46 | Hadamard\*, KL-Div\*\* |
+| `INT8_STANDARD` | INT8xINT8 | 22.50 ± 0.81 | - |
+| `INT4_HADAMARD` | INT4xINT4 | 86.16 ± 3.42 | Hadamard\*, KL-Div\*\* |
 | `INT4_STANDARD` | INT4xINT4 | 240048.97 ± 9261.03 | KL-Divergence\*\* |
 
 \* **Hadamard Transform:** Applies a randomized Fast Walsh-Hadamard Transform to smooth out activation outliers before quantization (see [2404.00456](https://arxiv.org/abs/2404.00456)).<br>
