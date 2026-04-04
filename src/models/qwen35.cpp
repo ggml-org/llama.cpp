@@ -26,6 +26,17 @@ llm_build_qwen35::llm_build_qwen35(const llama_model & model, const llm_graph_pa
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
+        // EAGLE3: Extract intermediate layer features from target model at layer INPUT
+        if (eagle3 && cparams.eagle3_extract_enabled && !eagle3->extract_layer_indices.empty()) {
+                static const char * eagle3_extract_names[] = {"eagle3_extract_0", "eagle3_extract_1", "eagle3_extract_2"};
+                for (size_t i = 0; i < eagle3->extract_layer_indices.size() && i < 3; ++i) {
+                    if (eagle3->extract_layer_indices[i] == il) {
+                        cb(inpL, eagle3_extract_names[i], il);
+                        break;
+                    }
+                }
+            }
+
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
@@ -240,6 +251,41 @@ ggml_tensor * llm_build_qwen35::build_layer_attn_linear(
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
+    std::vector<int32_t> eagle3_round_cells;
+    bool has_eagle3_round = n_seq_tokens > 1;
+    if (has_eagle3_round) {
+        eagle3_round_cells.assign(n_seq_tokens * n_seqs, -1);
+
+        for (int64_t s = 0; s < n_seqs && has_eagle3_round; ++s) {
+            const uint32_t i = s * n_seq_tokens;
+            const llama_seq_id live_seq_id = ubatch.seq_id[i][0];
+
+            has_eagle3_round = mctx_cur->has_eagle3_round(live_seq_id);
+            if (!has_eagle3_round) {
+                break;
+            }
+
+            for (int64_t t = 0; t < n_seq_tokens; ++t) {
+                const int32_t cell_id = mctx_cur->get_eagle3_round_cell(live_seq_id, t + 1);
+                if (cell_id < 0) {
+                    has_eagle3_round = false;
+                    break;
+                }
+                eagle3_round_cells[s * n_seq_tokens + t] = cell_id;
+            }
+        }
+    }
+
+    auto view_token_4d = [&](ggml_tensor * t, int64_t token_idx) {
+        return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
+                t->nb[1], t->nb[2], t->nb[3], token_idx * t->nb[2]);
+    };
+
+    auto view_seq_4d = [&](ggml_tensor * t, int64_t seq_idx) {
+        return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], t->ne[2], 1,
+                t->nb[1], t->nb[2], t->nb[3], seq_idx * t->nb[3]);
+    };
+
     // Build the convolution states tensor
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     cb(conv_states, "conv_states", il);
@@ -270,7 +316,25 @@ ggml_tensor * llm_build_qwen35::build_layer_attn_linear(
                      kv_head * (conv_kernel_size - 1) * conv_channels * ggml_element_size(conv_states_all));
     cb(state_update_target, "state_update_target", il);
 
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv_states, state_update_target));
+    if (has_eagle3_round) {
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            for (int64_t t = 0; t < n_seq_tokens; ++t) {
+                const int32_t cell_id = eagle3_round_cells[s * n_seq_tokens + t];
+                ggml_tensor * round_conv_state = ggml_view_3d(ctx0, conv_input,
+                        conv_kernel_size - 1, conv_channels, 1,
+                        conv_input->nb[1], conv_input->nb[2],
+                        (t + 1) * ggml_element_size(conv_input) + s * conv_input->nb[2]);
+                ggml_tensor * round_conv_dst = ggml_view_3d(ctx0, conv_states_all,
+                        conv_kernel_size - 1, conv_channels, 1,
+                        (conv_kernel_size - 1) * ggml_element_size(conv_states_all),
+                        (conv_kernel_size - 1) * conv_channels * ggml_element_size(conv_states_all),
+                        cell_id * (conv_kernel_size - 1) * conv_channels * ggml_element_size(conv_states_all));
+                ggml_build_forward_expand(gf, ggml_cpy(ctx0, round_conv_state, round_conv_dst));
+            }
+        }
+    } else {
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv_states, state_update_target));
+    }
 
     ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -332,18 +396,53 @@ ggml_tensor * llm_build_qwen35::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    auto attn_out = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il);
+    ggml_tensor * output    = nullptr;
+    ggml_tensor * new_state = nullptr;
 
-    ggml_tensor * output    = attn_out.first;
-    ggml_tensor * new_state = attn_out.second;
+    if (has_eagle3_round) {
+        ggml_tensor * state_cur = state;
+
+        for (int64_t t = 0; t < n_seq_tokens; ++t) {
+            auto attn_out = build_delta_net(
+                    view_token_4d(q_conv, t),
+                    view_token_4d(k_conv, t),
+                    view_token_4d(v_conv, t),
+                    view_token_4d(gate, t),
+                    view_token_4d(beta, t),
+                    state_cur,
+                    il);
+
+            state_cur = attn_out.second;
+            output = output == nullptr ? attn_out.first : ggml_concat(ctx0, output, attn_out.first, 2);
+
+            for (int64_t s = 0; s < n_seqs; ++s) {
+                const int32_t cell_id = eagle3_round_cells[s * n_seq_tokens + t];
+                ggml_tensor * round_state = view_seq_4d(state_cur, s);
+                ggml_tensor * round_state_dst = ggml_view_4d(ctx0, ssm_states_all,
+                        state_cur->ne[0], state_cur->ne[1], state_cur->ne[2], 1,
+                        state_cur->nb[1], state_cur->nb[2], state_cur->nb[3],
+                        cell_id * hparams.n_embd_s() * ggml_element_size(ssm_states_all));
+                ggml_build_forward_expand(gf, ggml_cpy(ctx0, round_state, round_state_dst));
+            }
+        }
+
+        new_state = state_cur;
+    } else {
+        auto attn_out = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il);
+        output    = attn_out.first;
+        new_state = attn_out.second;
+    }
+
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
 
     // Update the recurrent states
-    ggml_build_forward_expand(gf,
-            ggml_cpy(ctx0, new_state,
-                ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
-                    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
+    if (!has_eagle3_round) {
+        ggml_build_forward_expand(gf,
+                ggml_cpy(ctx0, new_state,
+                    ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
+                        kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
+    }
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
     ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);

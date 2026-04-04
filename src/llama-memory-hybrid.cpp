@@ -176,6 +176,18 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_hybrid::memory_breakdo
     return mb;
 }
 
+bool llama_memory_hybrid::eagle3_recurrent_round_begin(llama_seq_id live_seq_id, uint32_t n_depth, llama_pos p0) {
+    return mem_recr->eagle3_recurrent_round_begin(live_seq_id, n_depth, p0);
+}
+
+bool llama_memory_hybrid::eagle3_recurrent_round_promote(llama_seq_id live_seq_id, uint32_t depth) {
+    return mem_recr->eagle3_recurrent_round_promote(live_seq_id, depth);
+}
+
+void llama_memory_hybrid::eagle3_recurrent_round_clear(llama_seq_id live_seq_id) {
+    mem_recr->eagle3_recurrent_round_clear(live_seq_id);
+}
+
 void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
         mem_attn->state_write(io, seq_id, flags);

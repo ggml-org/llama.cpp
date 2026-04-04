@@ -188,6 +188,7 @@ int main(int argc, char ** argv) {
     int n_predict = 0;
     int n_drafted = 0;
     int n_accept  = 0;
+    int n_seq_accept[10] = {0};
 
     int n_past_tgt = inp.size();
     int n_past_dft = inp.size();
@@ -381,13 +382,14 @@ int main(int argc, char ** argv) {
                     token_str = common_token_to_piece(ctx_tgt, token_id);
 
                     for (int s = 0; s < n_seq_dft; ++s) {
+                        // n_seq_accept
                         if (!drafts[s].active) {
                             continue;
                         }
 
                         if (i_dft < (int) drafts[s].tokens.size() && token_id == drafts[s].tokens[i_dft]) {
                             LOG_DBG("the sampled target token matches the %dth drafted token of sequence %d (%d, '%s') - accepted\n", i_dft, s, token_id, token_str.c_str());
-
+                            n_seq_accept[i_dft] += 1;
                             s_keep = s;
                             accept = true;
                         } else {
@@ -625,6 +627,13 @@ int main(int argc, char ** argv) {
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
+    LOG_INF("n_accept  = %d\n", n_accept);
+    for (int i = 0; i < 10; i++)
+    {
+        LOG_INF("n_seq_accept[%d]-accept_len-%d\n", i,n_seq_accept[i]);
+        
+    }
+    
     LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
 
     LOG_INF("\n");

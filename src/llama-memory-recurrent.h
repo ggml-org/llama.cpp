@@ -60,6 +60,20 @@ public:
 
     bool get_can_shift() const override;
 
+    bool eagle3_recurrent_round_begin(
+            llama_seq_id live_seq_id,
+               uint32_t  n_depth,
+              llama_pos  p0) override;
+
+    bool eagle3_recurrent_round_promote(
+            llama_seq_id live_seq_id,
+               uint32_t  depth) override;
+
+    void eagle3_recurrent_round_clear(llama_seq_id live_seq_id) override;
+
+    bool eagle3_recurrent_round_active(llama_seq_id live_seq_id) const;
+    int32_t eagle3_recurrent_round_cell(llama_seq_id live_seq_id, int depth) const;
+
     // state write/load
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
@@ -81,6 +95,8 @@ public:
         int32_t   src  = -1; // used to know where states should be copied from
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
+        llama_seq_id eagle3_owner = -1;
+        int32_t      eagle3_depth = 0;
 
         std::set<llama_seq_id> seq_id;
 
@@ -89,12 +105,18 @@ public:
         }
 
         bool is_empty() const {
-            return seq_id.empty();
+            return seq_id.empty() && eagle3_owner < 0;
         }
 
         bool is_same_seq(const mem_cell & other) const {
             return seq_id == other.seq_id;
         }
+    };
+
+    struct eagle3_recurrent_round_state {
+        llama_seq_id live_seq_id = -1;
+        llama_pos base_pos = -1;
+        std::vector<int32_t> depth_cells;
     };
 
     std::vector<mem_cell> cells;
@@ -117,11 +139,18 @@ private:
     size_t size_r_bytes() const;
     size_t size_s_bytes() const;
 
+    int32_t eagle3_recurrent_cell_alloc() const;
+    void eagle3_recurrent_cell_reserve(int32_t cell_id, llama_seq_id live_seq_id, int depth, llama_pos pos);
+    int32_t eagle3_recurrent_cell_release(int32_t cell_id);
+    void eagle3_recurrent_round_clear_all();
+
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+
+    std::map<llama_seq_id, eagle3_recurrent_round_state> eagle3_rounds;
 };
 
 class llama_memory_recurrent_context : public llama_memory_context_i {
@@ -163,6 +192,8 @@ public:
     ggml_tensor * get_s_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+    bool has_eagle3_round(llama_seq_id live_seq_id) const;
+    int32_t get_eagle3_round_cell(llama_seq_id live_seq_id, int depth) const;
 
 private:
     const llama_memory_status status;

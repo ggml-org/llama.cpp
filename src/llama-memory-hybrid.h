@@ -70,6 +70,17 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
+    bool eagle3_recurrent_round_begin(
+            llama_seq_id live_seq_id,
+               uint32_t  n_depth,
+              llama_pos  p0) override;
+
+    bool eagle3_recurrent_round_promote(
+            llama_seq_id live_seq_id,
+               uint32_t  depth) override;
+
+    void eagle3_recurrent_round_clear(llama_seq_id live_seq_id) override;
+
     // state write/load
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;

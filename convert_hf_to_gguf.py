@@ -2748,6 +2748,7 @@ class StableLMModel(TextModel):
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
     "LlamaForCausalLMEagle3",
+    "Eagle3LlamaForCausalLM",
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
@@ -2786,7 +2787,9 @@ class LlamaModel(TextModel):
                 target_config = json.load(f)
 
             # EAGLE3 extract_layers
-            target_num_layers = target_config["num_hidden_layers"]
+            # Support nested config (e.g. VL/MoE models with text_config)
+            tc = target_config.get("text_config", target_config)
+            target_num_layers = tc["num_hidden_layers"]
             extract_layers = [2, target_num_layers // 2, target_num_layers - 3]
             logger.info(f"EAGLE3: extract_layers = {extract_layers} (target model has {target_num_layers} layers)")
             self.gguf_writer.add_array(f"{self.gguf_writer.arch}.extract_layers", extract_layers)
@@ -2796,7 +2799,7 @@ class LlamaModel(TextModel):
                 target_hidden_size = eagle3_raw_config["target_hidden_size"]
                 logger.info(f"EAGLE3: target_hidden_size = {target_hidden_size} (from EAGLE3 config)")
             else:
-                target_hidden_size = target_config["hidden_size"]
+                target_hidden_size = tc["hidden_size"]
                 logger.info(f"EAGLE3: target_hidden_size = {target_hidden_size} (from target model config)")
             self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
 

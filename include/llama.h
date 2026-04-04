@@ -777,6 +777,26 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    // Begin a transient EAGLE3 recurrent verification round for a live sequence.
+    // The round reserves one recurrent state cell per verification depth, starting at position p0.
+    LLAMA_API bool llama_memory_eagle3_recurrent_begin(
+            llama_memory_t mem,
+              llama_seq_id live_seq_id,
+                 uint32_t  n_depth,
+                llama_pos  p0);
+
+    // Promote the accepted verification depth back to the live sequence.
+    // Returns false if no active EAGLE3 recurrent round exists for the sequence.
+    LLAMA_API bool llama_memory_eagle3_recurrent_promote(
+            llama_memory_t mem,
+              llama_seq_id live_seq_id,
+                 uint32_t  depth);
+
+    // Clear any transient EAGLE3 recurrent verification state for the live sequence.
+    LLAMA_API void llama_memory_eagle3_recurrent_clear(
+            llama_memory_t mem,
+              llama_seq_id live_seq_id);
+
     //
     // State / sessions
     //

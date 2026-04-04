@@ -2193,11 +2193,20 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // EAGLE3: auto-detect encoder (embeddings+no target_model) or decoder (has target_model)
     llm_graph_type gtype = LLM_GRAPH_TYPE_DEFAULT;
+    // if (model.arch == LLM_ARCH_EAGLE3) {
+    //     if (cparams.embeddings && model.target_tok_embd == nullptr) {
+    //         gtype = LLM_GRAPH_TYPE_ENCODER;
+    //     } else if (model.target_tok_embd != nullptr) {
+    //         gtype = LLM_GRAPH_TYPE_DECODER;
+    //     }
+    // }
+
+    // 修改后：
     if (model.arch == LLM_ARCH_EAGLE3) {
-        if (cparams.embeddings && model.target_tok_embd == nullptr) {
-            gtype = LLM_GRAPH_TYPE_ENCODER;
-        } else if (model.target_tok_embd != nullptr) {
+        if (model.target_tok_embd != nullptr) {
             gtype = LLM_GRAPH_TYPE_DECODER;
+        } else {
+            gtype = LLM_GRAPH_TYPE_ENCODER;
         }
     }
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
@@ -3466,6 +3475,39 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     }
 
     return mem->get_can_shift();
+}
+
+bool llama_memory_eagle3_recurrent_begin(
+        llama_memory_t mem,
+          llama_seq_id live_seq_id,
+             uint32_t  n_depth,
+            llama_pos  p0) {
+    if (!mem) {
+        return false;
+    }
+
+    return mem->eagle3_recurrent_round_begin(live_seq_id, n_depth, p0);
+}
+
+bool llama_memory_eagle3_recurrent_promote(
+        llama_memory_t mem,
+          llama_seq_id live_seq_id,
+             uint32_t  depth) {
+    if (!mem) {
+        return false;
+    }
+
+    return mem->eagle3_recurrent_round_promote(live_seq_id, depth);
+}
+
+void llama_memory_eagle3_recurrent_clear(
+        llama_memory_t mem,
+          llama_seq_id live_seq_id) {
+    if (!mem) {
+        return;
+    }
+
+    mem->eagle3_recurrent_round_clear(live_seq_id);
 }
 
 // llama state API

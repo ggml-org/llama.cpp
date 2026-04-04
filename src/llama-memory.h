@@ -112,6 +112,32 @@ struct llama_memory_i {
     virtual std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const = 0;
 
     //
+    // transient EAGLE3 recurrent round state
+    //
+
+    virtual bool eagle3_recurrent_round_begin(
+            llama_seq_id live_seq_id,
+               uint32_t  n_depth,
+              llama_pos  p0) {
+        GGML_UNUSED(live_seq_id);
+        GGML_UNUSED(n_depth);
+        GGML_UNUSED(p0);
+        return true;
+    }
+
+    virtual bool eagle3_recurrent_round_promote(
+            llama_seq_id live_seq_id,
+               uint32_t  depth) {
+        GGML_UNUSED(live_seq_id);
+        GGML_UNUSED(depth);
+        return true;
+    }
+
+    virtual void eagle3_recurrent_round_clear(llama_seq_id live_seq_id) {
+        GGML_UNUSED(live_seq_id);
+    }
+
+    //
     // state write/read
     //
 

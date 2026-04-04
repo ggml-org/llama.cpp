@@ -122,11 +122,16 @@ llama_memory_recurrent::llama_memory_recurrent(
 }
 
 void llama_memory_recurrent::clear(bool data) {
+    eagle3_recurrent_round_clear_all();
+
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
         cells[i].seq_id.clear();
         cells[i].src = -1;
+        cells[i].src0 = -1;
         cells[i].tail = -1;
+        cells[i].eagle3_owner = -1;
+        cells[i].eagle3_depth = 0;
     }
 
     head = 0;
@@ -137,6 +142,194 @@ void llama_memory_recurrent::clear(bool data) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
     }
+}
+
+int32_t llama_memory_recurrent::eagle3_recurrent_cell_alloc() const {
+    uint32_t cell_id = head;
+    const uint32_t n_scan = size;
+
+    for (uint32_t i = 0; i < n_scan; ++i) {
+        if (cell_id >= size) {
+            cell_id = 0;
+        }
+
+        if (cells[cell_id].is_empty()) {
+            return cell_id;
+        }
+
+        ++cell_id;
+    }
+
+    return -1;
+}
+
+void llama_memory_recurrent::eagle3_recurrent_cell_reserve(int32_t cell_id, llama_seq_id live_seq_id, int depth, llama_pos pos) {
+    GGML_ASSERT(cell_id >= 0 && (uint32_t) cell_id < size);
+
+    auto & cell = cells[cell_id];
+    GGML_ASSERT(cell.is_empty());
+
+    cell.pos = pos;
+    cell.src = -1;
+    cell.src0 = -1;
+    cell.eagle3_owner = live_seq_id;
+    cell.eagle3_depth = depth;
+    cell.seq_id.clear();
+
+    used += 1;
+}
+
+int32_t llama_memory_recurrent::eagle3_recurrent_cell_release(int32_t cell_id) {
+    if (cell_id < 0 || (uint32_t) cell_id >= size) {
+        return size;
+    }
+
+    auto & cell = cells[cell_id];
+    if (cell.eagle3_owner < 0) {
+        return size;
+    }
+
+    const bool was_used = !cell.is_empty();
+
+    cell.pos = -1;
+    cell.src = -1;
+    cell.src0 = -1;
+    cell.eagle3_owner = -1;
+    cell.eagle3_depth = 0;
+    cell.seq_id.clear();
+
+    if (was_used) {
+        used -= 1;
+    }
+
+    return cell_id;
+}
+
+void llama_memory_recurrent::eagle3_recurrent_round_clear_all() {
+    std::vector<llama_seq_id> live_seqs;
+    live_seqs.reserve(eagle3_rounds.size());
+
+    for (const auto & kv : eagle3_rounds) {
+        live_seqs.push_back(kv.first);
+    }
+
+    for (llama_seq_id live_seq_id : live_seqs) {
+        eagle3_recurrent_round_clear(live_seq_id);
+    }
+}
+
+bool llama_memory_recurrent::eagle3_recurrent_round_begin(llama_seq_id live_seq_id, uint32_t n_depth, llama_pos p0) {
+    if (live_seq_id < 0 || (uint32_t) live_seq_id >= size || n_depth == 0) {
+        return false;
+    }
+
+    eagle3_recurrent_round_clear(live_seq_id);
+
+    eagle3_recurrent_round_state round;
+    round.live_seq_id = live_seq_id;
+    round.base_pos = p0;
+    round.depth_cells.reserve(n_depth);
+
+    for (uint32_t depth = 1; depth <= n_depth; ++depth) {
+        const int32_t cell_id = eagle3_recurrent_cell_alloc();
+        if (cell_id < 0) {
+            for (int32_t reserved_cell : round.depth_cells) {
+                eagle3_recurrent_cell_release(reserved_cell);
+            }
+            return false;
+        }
+
+        eagle3_recurrent_cell_reserve(cell_id, live_seq_id, depth, p0 + (llama_pos) depth - 1);
+        round.depth_cells.push_back(cell_id);
+    }
+
+    eagle3_rounds[live_seq_id] = std::move(round);
+    return true;
+}
+
+bool llama_memory_recurrent::eagle3_recurrent_round_promote(llama_seq_id live_seq_id, uint32_t depth) {
+    auto it = eagle3_rounds.find(live_seq_id);
+    if (it == eagle3_rounds.end() || depth == 0 || depth > it->second.depth_cells.size()) {
+        return false;
+    }
+
+    uint32_t new_head = size;
+
+    const int32_t accepted_cell_id = it->second.depth_cells[depth - 1];
+    auto & accepted_cell = cells[accepted_cell_id];
+    GGML_ASSERT(accepted_cell.eagle3_owner == live_seq_id);
+
+    const int32_t old_tail_id = cells[live_seq_id].tail;
+    if (old_tail_id >= 0 && old_tail_id != accepted_cell_id) {
+        auto & old_tail = cells[old_tail_id];
+        old_tail.seq_id.erase(live_seq_id);
+        if (old_tail.is_empty()) {
+            if (old_tail.pos >= 0) {
+                used -= 1;
+            }
+            old_tail.pos = -1;
+            old_tail.src = -1;
+            old_tail.src0 = -1;
+            if (new_head == size) {
+                new_head = old_tail_id;
+            }
+        }
+    }
+
+    accepted_cell.eagle3_owner = -1;
+    accepted_cell.eagle3_depth = 0;
+    accepted_cell.src = accepted_cell_id;
+    accepted_cell.src0 = accepted_cell_id;
+    accepted_cell.seq_id.insert(live_seq_id);
+    cells[live_seq_id].tail = accepted_cell_id;
+
+    for (size_t i = 0; i < it->second.depth_cells.size(); ++i) {
+        const int32_t cell_id = it->second.depth_cells[i];
+        if ((uint32_t) i + 1 == depth) {
+            continue;
+        }
+        new_head = std::min<uint32_t>(new_head, eagle3_recurrent_cell_release(cell_id));
+    }
+
+    eagle3_rounds.erase(it);
+
+    if (new_head != size && new_head < head) {
+        head = new_head;
+    }
+
+    return true;
+}
+
+void llama_memory_recurrent::eagle3_recurrent_round_clear(llama_seq_id live_seq_id) {
+    auto it = eagle3_rounds.find(live_seq_id);
+    if (it == eagle3_rounds.end()) {
+        return;
+    }
+
+    uint32_t new_head = size;
+
+    for (int32_t cell_id : it->second.depth_cells) {
+        new_head = std::min<uint32_t>(new_head, eagle3_recurrent_cell_release(cell_id));
+    }
+
+    eagle3_rounds.erase(it);
+
+    if (new_head != size && new_head < head) {
+        head = new_head;
+    }
+}
+
+bool llama_memory_recurrent::eagle3_recurrent_round_active(llama_seq_id live_seq_id) const {
+    return eagle3_rounds.find(live_seq_id) != eagle3_rounds.end();
+}
+
+int32_t llama_memory_recurrent::eagle3_recurrent_round_cell(llama_seq_id live_seq_id, int depth) const {
+    auto it = eagle3_rounds.find(live_seq_id);
+    if (it == eagle3_rounds.end() || depth <= 0 || depth > (int) it->second.depth_cells.size()) {
+        return -1;
+    }
+
+    return it->second.depth_cells[depth - 1];
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -195,6 +388,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
                 cells[i].pos = -1;
                 cells[i].src = -1;
+                cells[i].src0 = -1;
                 if (new_head == size) {
                     new_head = i;
                 }
@@ -235,6 +429,7 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
             if (cell_dst.seq_id.empty()) {
                 cell_dst.pos = -1;
                 cell_dst.src = -1;
+                cell_dst.src0 = -1;
                 used -= 1;
             }
         }
@@ -262,6 +457,7 @@ void llama_memory_recurrent::seq_keep(llama_seq_id seq_id) {
 
             cells[i].pos = -1;
             cells[i].src = -1;
+            cells[i].src0 = -1;
             cells[i].seq_id.clear();
 
             if (new_head == size){
@@ -1162,4 +1358,12 @@ ggml_tensor * llama_memory_recurrent_context::get_s_l(int32_t il) const {
 
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     return  mem->cells[i + mem->head].src0;
+}
+
+bool llama_memory_recurrent_context::has_eagle3_round(llama_seq_id live_seq_id) const {
+    return mem->eagle3_recurrent_round_active(live_seq_id);
+}
+
+int32_t llama_memory_recurrent_context::get_eagle3_round_cell(llama_seq_id live_seq_id, int depth) const {
+    return mem->eagle3_recurrent_round_cell(live_seq_id, depth);
 }

@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cstdio>
 #include <cstring>
@@ -32,6 +33,9 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
+
+    params.kv_unified = true;
+    params.n_parallel = std::max(params.n_parallel, params.speculative.n_max + 2);
 
     // init llama.cpp
     llama_backend_init();
@@ -111,7 +115,7 @@ int main(int argc, char ** argv) {
     int n_predict = 0;
     int n_drafted = 0;
     int n_accept  = 0;
-
+    int draft_len_slot[10] = {0};
     // used to determine end of generation
     bool has_eos = false;
 
@@ -150,6 +154,7 @@ int main(int argc, char ** argv) {
     llama_token id_last;
     llama_tokens prompt_tgt;
     int n_past;
+    bool pending_first_token_print = false;
 
     // TODO: simplify
     if (params.speculative.eagle3) {
@@ -158,7 +163,7 @@ int main(int argc, char ** argv) {
 
         id_last = common_sampler_sample(smpl, ctx_tgt, -1);
         common_sampler_accept(smpl, id_last, true);
-        LOG("%s", common_token_to_piece(ctx_tgt, id_last).c_str());
+        pending_first_token_print = true;
         n_predict++;
 
         // all tokens currently in the target context
@@ -179,14 +184,18 @@ int main(int argc, char ** argv) {
         n_past = inp.size() - 1;
     }
 
-    // init the speculator
     const auto & params_spec = params.speculative;
-
     struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt);
 
     common_speculative_begin(spec, prompt_tgt);
 
+    if (pending_first_token_print) {
+        LOG("%s", common_token_to_piece(ctx_tgt, id_last).c_str());
+        pending_first_token_print = false;
+    }
+
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+    llama_memory_t mem_tgt = llama_get_memory(ctx_tgt);
 
     const auto t_enc_end = ggml_time_us();
 
@@ -200,37 +209,34 @@ int main(int argc, char ** argv) {
         // offloaded to a remote device. it doesn't even have to be based on an LLM. instead, it can provide tokens
         // from a cache or lookup tables.
         //
+
+
         llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
-        // always have a token to evaluate from before - id_last
-        common_batch_clear(batch_tgt);
-        common_batch_add  (batch_tgt, id_last, n_past++, { 0 }, true);
-
-        // evaluate the target model on [id_last, draft0, draft1, ..., draftN-1]
-        {
-            // do not waste time on small drafts
-            if (draft.size() < (size_t) params_spec.n_min) {
-                draft.clear();
-            }
-
-            for (size_t i = 0; i < draft.size(); ++i) {
-                common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
-            }
-
-            //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
-
-            llama_decode(ctx_tgt, batch_tgt);
+        // do not waste time on small drafts
+        if (draft.size() < (size_t) params_spec.n_min) {
+            draft.clear();
         }
 
-        // sample from the full target batch and return the accepted tokens based on the target sampler
-        //
-        // for each token to be accepted, the sampler would have to sample that same token
-        // in such cases, instead of decoding the sampled token as we normally do, we simply continue with the
-        // available logits from the batch and sample the next token until we run out of logits or the sampler
-        // disagrees with the draft
-        //
+        const int n_verify = (int) draft.size() + 1;
+
+        common_batch_clear(batch_tgt);
+
+        if (!llama_memory_eagle3_recurrent_begin(mem_tgt, 0, n_verify, n_past)) {
+            LOG_ERR("%s: failed to reserve EAGLE3 recurrent verification slots for depth %d\n", __func__, n_verify);
+            return 1;
+        }
+
+        common_batch_add(batch_tgt, id_last, n_past++, { 0 }, true);
+
+        for (size_t i = 0; i < draft.size(); ++i) {
+            common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+        }
+
+        llama_decode(ctx_tgt, batch_tgt);
+
         const auto ids = common_sampler_sample_and_accept_n(smpl, ctx_tgt, draft);
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
@@ -240,7 +246,10 @@ int main(int argc, char ** argv) {
         n_past    += ids.size() - 1;
         n_drafted += draft.size(); // note: we ignore the discarded small drafts
         n_accept  += ids.size() - 1;
+        draft_len_slot[ids.size()-1] += 1;
         n_predict += ids.size();
+
+        common_speculative_accept(spec, ids.size() - 1);
 
         // process the accepted tokens and update contexts
         //
@@ -268,10 +277,11 @@ int main(int argc, char ** argv) {
 
         LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) draft.size(), id_last);
 
+        GGML_ASSERT(llama_memory_eagle3_recurrent_promote(mem_tgt, 0, ids.size()));
+
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
-
-            llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0, n_past, -1);
+            llama_memory_seq_rm(mem_tgt, 0, n_past, -1);
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
@@ -293,6 +303,13 @@ int main(int argc, char ** argv) {
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
+
+    
+    for(int j=0;j<10;j++){
+        LOG_INF("draft_len_slot[%d]  = %d\n",j,draft_len_slot[j]);
+        
+    }
+    
     LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
 
     LOG_INF("\n");
