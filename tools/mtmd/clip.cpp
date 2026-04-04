@@ -3577,7 +3577,11 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GEMMA4A:
-            return ctx->model.pre_encode_out_w->ne[1]; // output projection dim (1536)
+            // Use final audio→LLM projection if present, otherwise fall back to pre_encode
+            if (ctx->model.mm_audio_input_proj_w) {
+                return ctx->model.mm_audio_input_proj_w->ne[1]; // e.g., 2560 for E4B, 1536 for E2B
+            }
+            return ctx->model.pre_encode_out_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

@@ -92,6 +92,12 @@ ggml_cgraph * clip_graph_gemma4a::build() {
         const auto & layer = model.layers[il];
         auto * residual = cur;
 
+        // Trace conformer layer progress (also serves as MSVC optimizer barrier —
+        // without an external function call here, MSVC /O2 miscompiles this loop)
+        if (il == 0) {
+            LOG_INF("gemma4a: encoding %d conformer layers\n", hparams.n_layer);
+        }
+
         // ── 3a. Feed-Forward 1 (half-step) ───────────────────
         if (layer.ff_norm_w && layer.ff_up_w && layer.ff_down_w) {
             cur = build_norm(cur, layer.ff_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
