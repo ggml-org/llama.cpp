@@ -101,8 +101,7 @@ uint32_t get_expert_frequency(int layer_hash, int expert_id);
 struct prefetch_request {
     expert_key  key;
     sycl::event event;                 // DMA completion event from cache DMA queue
-    void *      device_ptr = nullptr;  // VRAM destination (from allocate_slot)
-    int         pool_slot  = -1;       // Index into vram_pool_ (-1 = unified cache)
+    void *      device_ptr = nullptr;  // VRAM destination (from unified cache)
     bool        completed  = false;
     // Unified cache tracking for async finalization in await().
     ggml_sycl_cache_id cache_key = {};            // Cache key for register_ready
@@ -181,8 +180,8 @@ class ExpertPrefetcher {
     // Return the configured prefetch depth (layers ahead to look).
     int prefetch_depth() const { return prefetch_depth_; }
 
-    // Non-blocking query: is this expert currently in the LRU cache?
-    // Returns the cached VRAM pointer if found, nullptr otherwise.
+    // Non-blocking query: is this expert currently cached in VRAM?
+    // Returns the cached VRAM pointer if found via unified cache, nullptr otherwise.
     void * get_cached_ptr(int layer_idx, int expert_idx) const;
 
     // Synchronous demand-load: hint + await in one call.
@@ -198,13 +197,9 @@ class ExpertPrefetcher {
     int  completed_count() const;
     bool is_active() const { return initialized_; }
 
-    // Query how many pool slots are available (total, not just free).
-    // Safe to call without lock only after preload_experts() or hint() has returned
-    // (happens-before through mutex_ release).
-    int pool_capacity() const { return pool_capacity_; }
-
-    // Pre-fill the pool with popular experts at model init time.
+    // Pre-fill the cache with popular experts at model init time.
     // Called from moe_hybrid_init_once() after Phase 2.
+    // Routes through unified cache (no private pool).
     void preload_experts(int layer_idx, const std::vector<int> & expert_ids);
 
   private:
@@ -213,60 +208,21 @@ class ExpertPrefetcher {
     int                          prefetch_depth_ = 2;  // Default: 2 layers ahead
     bool                         initialized_   = false;
 
-    // Dynamic pool capacity: computed from available VRAM at first use.
-    // Uses ~50% of remaining VRAM, clamped to [8, 2048] slots.
-    int pool_capacity_ = 0;
-
     // Max concurrent in-flight DMA operations. Limits PCIe bandwidth
-    // saturation while allowing the rest of the pool for LRU caching.
+    // saturation to avoid starving the compute engine.
     static constexpr int max_concurrent_dma_ = 32;
 
     // In-flight prefetch tracking. Key = expert_key.
+    // All VRAM allocation is delegated to the unified cache — the prefetcher
+    // only tracks scheduling state (events + completion flags).
     std::unordered_map<expert_key, prefetch_request, expert_key_hash> inflight_;
-
-    // VRAM prefetch pool with LRU tracking.
-    // Each slot holds one expert's weight data and persists across tokens.
-    // Only evicted (LRU) when the pool is full and a new expert needs a slot.
-    struct vram_slot {
-        void *     ptr             = nullptr;
-        bool       free            = true;
-        expert_key cached_key      = { -1, -1 };  // Which expert occupies this slot
-        int64_t    last_used_token = -1;           // Token number at last access (for LRU)
-    };
-    std::vector<vram_slot> vram_pool_;
-    size_t                 vram_slot_bytes_ = 0;  // Size of each pool slot
-
-    // LRU cache: maps cached expert_key -> pool slot index.
-    // Entries persist across tokens until evicted for a new expert.
-    std::unordered_map<expert_key, int, expert_key_hash> cached_slots_;
-
-    // Monotonic counter, incremented per hint/hint_batch/hint_batch_adaptive call.
-    // NOT a true token counter -- multiple calls per inference token are expected
-    // (one per predicted layer across lookahead depths). Used only for LRU ordering.
-    // Atomic: incremented outside mutex_ in hint() to avoid locking on the fast
-    // path when only the token counter needs bumping. LRU reads happen under mutex_.
-    std::atomic<int64_t> current_token_{ 0 };
-
-    // Lazily allocate the VRAM pool from available budget. Returns false if
-    // allocation failed (disables prefetching). Called with mutex_ held.
-    bool ensure_pool_allocated(size_t expert_weight_bytes);
-
-    // Acquire a free VRAM slot. If all slots are occupied, evict the LRU entry.
-    // Returns slot index or -1 if pool is not allocated.
-    int acquire_vram_slot_lru(int layer_idx, int expert_idx);
-    // Release a VRAM slot back to the pool (internal, clears cached state).
-    void release_vram_slot(int slot);
 
     mutable std::mutex mutex_;
 
     // Stats
     int completed_count_ = 0;
-    int prefetch_hits_   = 0;  // Experts found already in VRAM (no DMA needed)
-    int lru_evictions_   = 0;  // Number of LRU evictions
 
-    // Garbage-collect completed in-flight requests -> move to cached state.
-    // Unlike the old gc_completed(), this does NOT release the slot or clear
-    // the placement table. Instead, the slot transitions to "cached" state.
+    // Garbage-collect completed in-flight requests (remove from inflight_ map).
     void gc_completed();
 
     // Check if we have room for more in-flight requests.
@@ -406,6 +362,7 @@ class ExpertPredictor {
     float *      scores_dev_    = nullptr;
     int          scores_dev_n_  = 0;       // Number of floats allocated
     sycl::queue * scores_queue_ = nullptr;  // Queue used for allocation (for deallocation)
+    bool         scores_from_arena_ = false;  // True if allocated from VRAM arena
 
     // Rolling accuracy stats (last ACCURACY_WINDOW predictions).
     static constexpr int ACCURACY_WINDOW = 100;

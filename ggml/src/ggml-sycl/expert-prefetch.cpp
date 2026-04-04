@@ -27,22 +27,9 @@ ExpertPrefetcher::~ExpertPrefetcher() {
     if (initialized_ && !ggml_sycl_is_shutting_down()) {
         shutdown();
     }
-    // Free VRAM pool slots and deregister from VRAM budget.
-    if (!ggml_sycl_is_shutting_down() && dma_queue_) {
-        size_t freed_bytes = 0;
-        for (auto & slot : vram_pool_) {
-            if (slot.ptr) {
-                sycl::free(slot.ptr, *dma_queue_);
-                slot.ptr = nullptr;
-                freed_bytes += vram_slot_bytes_;
-            }
-        }
-        if (freed_bytes > 0) {
-            unified_cache_sub_runtime_bytes(device_id_, freed_bytes, runtime_category::EXPERT_CACHE);
-        }
-    }
-    // During static destruction, intentionally leak the queue handle + VRAM pool.
+    // During static destruction, intentionally leak the queue handle.
     // The OS reclaims all process memory at exit.
+    // All VRAM is owned by the unified cache — nothing to free here.
     if (ggml_sycl_is_shutting_down() && dma_queue_) {
         (void) dma_queue_.release();
     }
@@ -81,9 +68,8 @@ void ExpertPrefetcher::shutdown() {
 
     cancel_all();
     initialized_ = false;
-    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d, cache_hits=%d, "
-                  "lru_evictions=%d, pool_slots=%d)\n",
-                  completed_count_, prefetch_hits_, lru_evictions_, pool_capacity_);
+    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d)\n",
+                  completed_count_);
 
     // Print final MoE dispatch statistics
     if (MoeDispatchStats::enabled()) {
@@ -105,7 +91,6 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
         return false;
     }
 
-    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
     return hint_locked(layer_idx, expert_idx);
 }
@@ -126,17 +111,8 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
         return false;
     }
 
-    // Move completed in-flight entries to cached state (persistent LRU).
+    // Garbage-collect completed in-flight entries.
     gc_completed();
-
-    // Already cached in our LRU pool -- touch LRU timestamp, no DMA needed.
-    auto cached_it = cached_slots_.find(key);
-    if (cached_it != cached_slots_.end()) {
-        int slot = cached_it->second;
-        vram_pool_[slot].last_used_token = current_token_.load(std::memory_order_relaxed);
-        prefetch_hits_++;
-        return false;
-    }
 
     // Step 1: Get expert metadata via read-only accessor.
     expert_stage_info info;
@@ -212,7 +188,6 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     req.key        = key;
     req.event      = cr.event;
     req.device_ptr = cr.device_ptr;
-    req.pool_slot  = -1;  // Unified cache manages storage, not our pool
     req.completed  = false;
     req.cache_key  = info.cache_key;
     req.layout     = info.layout;
@@ -231,7 +206,6 @@ void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert
         return;
     }
 
-    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
     for (int eid : expert_indices) {
         hint_locked(layer_idx, eid);
@@ -255,11 +229,10 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 
     // Hold the lock across the entire function to prevent TOCTOU races:
     // budget is computed and consumed atomically within a single critical section.
-    current_token_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
 
     gc_completed();
-    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, max_concurrent_dma_) : 8;
+    int max_dma = max_concurrent_dma_;
     int budget = max_dma - static_cast<int>(inflight_.size());
 
     int scheduled = 0;
@@ -291,20 +264,12 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 
     expert_key key{ layer_idx, expert_idx };
 
-    // Phase 1: Check cached LRU pool, in-flight completed, or extract event.
+    // Phase 1: Check in-flight completed or extract event.
     // Release mutex before blocking on event.wait() to avoid deadlock.
     sycl::event ev_copy;
     bool        need_wait = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
-        // Check LRU cache first — expert may be persisted from a previous token.
-        auto cached_it = cached_slots_.find(key);
-        if (cached_it != cached_slots_.end()) {
-            int slot = cached_it->second;
-            vram_pool_[slot].last_used_token = current_token_.load(std::memory_order_relaxed);
-            return vram_pool_[slot].ptr;
-        }
 
         auto it = inflight_.find(key);
         if (it == inflight_.end()) {
@@ -325,11 +290,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
             GGML_LOG_WARN("[SYCL] Prefetch await failed for L%d E%d: %s\n",
                           layer_idx, expert_idx, e.what());
             std::lock_guard<std::mutex> lock(mutex_);
-            auto it = inflight_.find(key);
-            if (it != inflight_.end()) {
-                release_vram_slot(it->second.pool_slot);
-                inflight_.erase(it);
-            }
+            inflight_.erase(key);
             return nullptr;
         }
     }
@@ -396,27 +357,8 @@ void ExpertPrefetcher::cancel_all() {
         }
     }
 
-    // Release all pool slots and clear tracking.
-    for (auto & [key, req] : inflight_) {
-        // Don't call release_vram_slot — just mark free directly to avoid
-        // double-clearing placement table entries during shutdown.
-        if (req.pool_slot >= 0 && req.pool_slot < static_cast<int>(vram_pool_.size())) {
-            vram_pool_[req.pool_slot].free       = true;
-            vram_pool_[req.pool_slot].cached_key  = { -1, -1 };
-            vram_pool_[req.pool_slot].last_used_token = -1;
-        }
-    }
+    // Clear in-flight tracking. All VRAM is owned by the unified cache.
     inflight_.clear();
-
-    // Clear all cached LRU entries.
-    for (const auto & [ck, si] : cached_slots_) {
-        if (si >= 0 && si < static_cast<int>(vram_pool_.size())) {
-            vram_pool_[si].free       = true;
-            vram_pool_[si].cached_key  = { -1, -1 };
-            vram_pool_[si].last_used_token = -1;
-        }
-    }
-    cached_slots_.clear();
 }
 
 // ============================================================================
@@ -428,14 +370,19 @@ void * ExpertPrefetcher::get_cached_ptr(int layer_idx, int expert_idx) const {
         return nullptr;
     }
 
-    // Fall back to prefetcher's own LRU pool.
-    expert_key key{ layer_idx, expert_idx };
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = cached_slots_.find(key);
-    if (it != cached_slots_.end()) {
-        return vram_pool_[it->second].ptr;
+    // Query the unified cache for this expert's device pointer.
+    // The prefetcher no longer maintains a private pool.
+    expert_stage_info info;
+    if (!moe_get_expert_stage_info(layer_idx, expert_idx, device_id_, info)) {
+        return nullptr;
     }
-    return nullptr;
+
+    unified_cache * cache = get_unified_cache_for_device(device_id_);
+    if (!cache) {
+        return nullptr;
+    }
+
+    return cache->lookup(info.cache_key, info.layout);
 }
 
 // ============================================================================
@@ -447,18 +394,9 @@ void * ExpertPrefetcher::demand_load(int layer_idx, int expert_idx) {
         return nullptr;
     }
 
-    // Single lock: check cache and, only on miss, submit DMA.
-    // Using one critical section avoids the TOCTOU race where a concurrent
-    // await() could move the expert to cached_slots_ between two acquisitions,
-    // causing hint_locked() to submit a redundant DMA and evict an LRU entry.
+    // Submit DMA via unified cache (hint_locked checks cache first).
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto cached_it = cached_slots_.find({layer_idx, expert_idx});
-        if (cached_it != cached_slots_.end()) {
-            vram_pool_[cached_it->second].last_used_token = current_token_.load(std::memory_order_relaxed);
-            return vram_pool_[cached_it->second].ptr;
-        }
-        current_token_.fetch_add(1, std::memory_order_relaxed);
         hint_locked(layer_idx, expert_idx);
     }
 
@@ -492,32 +430,11 @@ int ExpertPrefetcher::completed_count() const {
 
 void ExpertPrefetcher::gc_completed() {
     // Called with mutex_ held.
-    // Move completed in-flight entries to "cached" state in the LRU pool.
-    // Unlike the old implementation, this does NOT clear device_ptr or release
-    // the pool slot. The slot persists with valid data until LRU eviction.
-    //
-    // Safety: gc_completed() is called from hint_locked(), which runs for
-    // future layers (L+1..L+depth). By the time hint_locked(L+1) runs,
-    // layer L-1's GPU dispatch has completed because:
-    //   1. ggml_sycl_mul_mat_id() runs synchronously per layer
-    //   2. dispatch_cpu_and_scatter() includes stream->wait() before return
-    //   3. await() is called before kernel submission in ggml_sycl_mul_mat_id()
-    //
-    // Callers: hint_locked(), hint_batch_adaptive() — all hold mutex_ before calling.
+    // Remove completed entries from in-flight map. The unified cache tracks
+    // all cached expert data — the prefetcher only needs to track active DMA.
     auto it = inflight_.begin();
     while (it != inflight_.end()) {
         if (it->second.completed) {
-            int slot = it->second.pool_slot;
-            expert_key key = it->second.key;
-
-            if (slot >= 0) {
-                // Private pool slot: register in cached_slots_ for LRU tracking.
-                cached_slots_[key] = slot;
-            }
-            // Unified cache entries (pool_slot == -1) are tracked by the cache
-            // itself — no cached_slots_ registration needed. Subsequent calls
-            // to hint_locked() will find them via cache->lookup() in the async path.
-
             it = inflight_.erase(it);
         } else {
             ++it;
@@ -528,143 +445,17 @@ void ExpertPrefetcher::gc_completed() {
 bool ExpertPrefetcher::has_capacity() const {
     // Called with mutex_ held.
     // Count only active (non-completed) in-flight entries.
-    // Cached entries don't count — they're in the LRU pool, not in-flight.
     int active = 0;
     for (const auto & [k, req] : inflight_) {
         if (!req.completed) {
             active++;
         }
     }
-    // Limit concurrent DMA to pool_capacity_ (or 8 if pool not yet allocated).
-    int max_dma = (pool_capacity_ > 0) ? std::min(pool_capacity_, max_concurrent_dma_) : 8;
-    return active < max_dma;
-}
-
-bool ExpertPrefetcher::ensure_pool_allocated(size_t expert_weight_bytes) {
-    // Called with mutex_ held. Lazily allocates the VRAM pool on first use.
-    if (!vram_pool_.empty()) {
-        return true;
-    }
-
-    vram_slot_bytes_ = expert_weight_bytes;
-
-    // Query available VRAM and use ~80% for expert cache.
-    // After per-tensor host placement (T1), freed VRAM is available here.
-    size_t avail = unified_cache_available_for_compute(device_id_);
-    const float budget_pct = 0.80f;
-    size_t budget = static_cast<size_t>(avail * budget_pct);
-    int n_slots = (vram_slot_bytes_ > 0) ? static_cast<int>(budget / vram_slot_bytes_) : 0;
-
-    // Clamp to [32, 8192] slots.  With ~9 GB freed VRAM and ~340 KB/expert,
-    // the 120B model can cache thousands of experts (128 experts × 36 MoE layers = 4608 total).
-    n_slots        = std::max(n_slots, 32);
-    n_slots        = std::min(n_slots, 8192);
-    pool_capacity_ = n_slots;
-
-    vram_pool_.resize(pool_capacity_);
-    size_t allocated = 0;
-    size_t total_alloc_bytes = 0;
-    for (auto & slot : vram_pool_) {
-        try {
-            slot.ptr  = sycl::malloc_device(vram_slot_bytes_, *dma_queue_);
-            slot.free = (slot.ptr != nullptr);
-            if (slot.ptr) {
-                allocated++;
-                total_alloc_bytes += vram_slot_bytes_;
-            }
-        } catch (const sycl::exception &) {
-            slot.ptr  = nullptr;
-            slot.free = false;
-        }
-    }
-
-    // Register against VRAM budget so other subsystems see the reservation.
-    if (total_alloc_bytes > 0) {
-        unified_cache_add_runtime_bytes(device_id_, total_alloc_bytes, runtime_category::EXPERT_CACHE);
-    }
-
-    GGML_LOG_INFO(
-        "[SYCL] Expert cache pool: %zu/%d slots x %.1f KB = %.1f MB "
-        "(%.0f%% of %.1f MB available)\n",
-        allocated, pool_capacity_, vram_slot_bytes_ / 1024.0, total_alloc_bytes / (1024.0 * 1024.0), budget_pct * 100.0,
-        avail / (1024.0 * 1024.0));
-    if (allocated == 0) {
-        GGML_LOG_WARN("[SYCL] Expert prefetch VRAM pool: ALL slots failed to allocate — "
-                      "prefetching permanently disabled\n");
-        prefetch_disabled_ = true;
-        return false;
-    }
-    // Trim pool to actual allocated count.
-    pool_capacity_ = static_cast<int>(allocated);
-    return true;
-}
-
-int ExpertPrefetcher::acquire_vram_slot_lru(int layer_idx, int expert_idx) {
-    // Called with mutex_ held.
-    // First: look for a truly free slot (never used or explicitly released).
-    for (int i = 0; i < static_cast<int>(vram_pool_.size()); i++) {
-        if (vram_pool_[i].free && vram_pool_[i].ptr) {
-            vram_pool_[i].free = false;
-            return i;
-        }
-    }
-
-    // All slots occupied — evict the LRU cached entry.
-    // Only evict from cached_slots_ (not in-flight entries — those have active DMA).
-    // NOTE: O(n) linear scan over cached_slots_ is intentional at the current
-    // pool cap of [32, 8192] slots. If the cap ever exceeds 8192, consider replacing
-    // this with a min-heap keyed on last_used_token for O(log n) eviction.
-    int    lru_slot  = -1;
-    int64_t lru_time = INT64_MAX;
-    for (const auto & [ck, si] : cached_slots_) {
-        // Skip slots that are currently in-flight (shouldn't happen, but be safe).
-        if (inflight_.count(ck)) {
-            continue;
-        }
-        if (vram_pool_[si].last_used_token < lru_time && vram_pool_[si].ptr) {
-            lru_time = vram_pool_[si].last_used_token;
-            lru_slot = si;
-        }
-    }
-
-    if (lru_slot < 0) {
-        return -1;  // Cannot evict (all slots in-flight or invalid)
-    }
-
-    // Evict the LRU entry: remove from cache map.
-    expert_key evicted_key = vram_pool_[lru_slot].cached_key;
-    cached_slots_.erase(evicted_key);
-    lru_evictions_++;
-
-    GGML_SYCL_DEBUG("[PREFETCH] LRU evict L%d E%d (token %lld) for L%d E%d\n",
-                    evicted_key.layer, evicted_key.expert_id,
-                    (long long)vram_pool_[lru_slot].last_used_token,
-                    layer_idx, expert_idx);
-
-    // Reset slot metadata (ptr stays valid, just reused).
-    vram_pool_[lru_slot].free            = false;
-    vram_pool_[lru_slot].cached_key      = { -1, -1 };
-    vram_pool_[lru_slot].last_used_token = -1;
-
-    return lru_slot;
-}
-
-void ExpertPrefetcher::release_vram_slot(int slot) {
-    // Called with mutex_ held.
-    if (slot >= 0 && slot < static_cast<int>(vram_pool_.size())) {
-        // Remove from LRU cache if present.
-        expert_key key = vram_pool_[slot].cached_key;
-        if (key.layer >= 0) {
-            cached_slots_.erase(key);
-        }
-        vram_pool_[slot].free            = true;
-        vram_pool_[slot].cached_key      = { -1, -1 };
-        vram_pool_[slot].last_used_token = -1;
-    }
+    return active < max_concurrent_dma_;
 }
 
 // ============================================================================
-// Pre-load popular experts into VRAM pool at model init time (Gap 1)
+// Pre-load popular experts into VRAM via unified cache at model init time
 // ============================================================================
 
 void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & expert_ids) {
@@ -699,19 +490,22 @@ ExpertPredictor::~ExpertPredictor() {
     // Free pre-allocated device scores buffer.
     // Skip during static destruction (SYCL context may be invalid).
     if (scores_dev_ && scores_queue_ && !ggml_sycl_is_shutting_down()) {
-        if (scores_dev_n_ > 0) {
+        if (scores_dev_n_ > 0 && !scores_from_arena_) {
             int scores_device = ggml_sycl_get_device_id_from_queue(*scores_queue_);
             unified_cache_sub_runtime_bytes(scores_device, scores_dev_n_ * sizeof(float),
                                             runtime_category::EXPERT_CACHE);
         }
-        try {
-            sycl::free(scores_dev_, *scores_queue_);
-        } catch (...) {
-            // SYCL runtime may be partially torn down
+        if (!scores_from_arena_) {
+            try {
+                sycl::free(scores_dev_, *scores_queue_);
+            } catch (...) {
+                // SYCL runtime may be partially torn down
+            }
         }
     }
-    scores_dev_   = nullptr;
-    scores_dev_n_ = 0;
+    scores_dev_        = nullptr;
+    scores_dev_n_      = 0;
+    scores_from_arena_ = false;
 }
 
 void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
@@ -1052,13 +846,25 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
     if (!scores_dev_ || scores_dev_n_ < M) {
         int scores_device = ggml_sycl_get_device_id_from_queue(compute_q);
         if (scores_dev_ && scores_queue_) {
-            if (scores_dev_n_ > 0) {
+            if (scores_dev_n_ > 0 && !scores_from_arena_) {
                 unified_cache_sub_runtime_bytes(scores_device, scores_dev_n_ * sizeof(float),
                                                 runtime_category::EXPERT_CACHE);
             }
-            sycl::free(scores_dev_, *scores_queue_);
+            if (!scores_from_arena_) {
+                sycl::free(scores_dev_, *scores_queue_);
+            }
         }
-        scores_dev_   = sycl::malloc_device<float>(M, compute_q);
+        scores_from_arena_ = false;
+        if (vram_arena_enabled() && scores_device >= 0) {
+            void * ptr = unified_cache_arena_alloc(scores_device, M * sizeof(float));
+            if (ptr) {
+                scores_dev_        = static_cast<float *>(ptr);
+                scores_from_arena_ = true;
+            }
+        }
+        if (!scores_from_arena_) {
+            scores_dev_ = sycl::malloc_device<float>(M, compute_q);
+        }
         scores_dev_n_ = M;
         scores_queue_ = &compute_q;
         if (!scores_dev_) {
@@ -1066,7 +872,9 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
             GGML_LOG_WARN("[EXPERT-PREDICT] Failed to allocate device scores buffer, falling back to heuristic\n");
             return predict(next_layer_idx);
         }
-        unified_cache_add_runtime_bytes(scores_device, M * sizeof(float), runtime_category::EXPERT_CACHE);
+        if (!scores_from_arena_) {
+            unified_cache_add_runtime_bytes(scores_device, M * sizeof(float), runtime_category::EXPERT_CACHE);
+        }
     }
     float * scores_dev = scores_dev_;
 

@@ -3322,8 +3322,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 }
             }
         }
-        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 prefetch pool pre-loading complete "
-                      "(pool_capacity=%d)\n", prefetcher.pool_capacity());
+        GGML_LOG_INFO("[MOE-HYBRID] Phase 3: GPU0 expert pre-loading complete (via unified cache)\n");
     } else if (skip_phase3) {
         GGML_LOG_INFO("[MOE-HYBRID] Phase 3: skipped — S1 mode already cached dense weights as AOS in VRAM\n");
     }
