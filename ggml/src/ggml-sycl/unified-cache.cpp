@@ -980,6 +980,10 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         bcs_queue_ =
             std::make_unique<sycl::queue>(queue_.get_context(), queue_.get_device(), sycl::property::queue::in_order{});
         GGML_LOG_INFO("[UNIFIED-CACHE] Created BCS queue for H2D copy pipelining\n");
+        // Give the device pool a reference so it can drain BCS before chunk allocs.
+        if (layout_pool_) {
+            layout_pool_->set_bcs_queue(bcs_queue_.get());
+        }
     } catch (const sycl::exception & e) {
         GGML_LOG_WARN("[UNIFIED-CACHE] Failed to create BCS queue, falling back to DMA queue: %s\n", e.what());
         bcs_queue_.reset();
@@ -1003,9 +1007,8 @@ unified_cache::~unified_cache() {
         if (layout_pool_) {
             layout_pool_->abandon();
         }
-        // Leak arena memory intentionally — process is exiting.
-        // Null out queue_ to prevent vram_arena destructor from calling sycl::free.
-        arena_.destroy();  // Skips sycl::free when queue_ is null in arena.
+        // Abandon arena without calling sycl::free — context is invalid.
+        arena_.abandon();
         compute_arena_ptr_ = nullptr;
         return;
     }
@@ -1423,6 +1426,13 @@ size_t host_cache::pre_allocate_pinned(size_t total_bytes) {
         return 0;
     }
     return pinned_pool_->pre_allocate(total_bytes);
+}
+
+size_t host_cache::pre_allocate_all(size_t model_weight_bytes) {
+    if (!pinned_pool_) {
+        return 0;
+    }
+    return pinned_pool_->pre_allocate_all(model_weight_bytes);
 }
 
 void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
@@ -3226,6 +3236,17 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                                              : 0;
                 const bool pool_has_space = layout_pool_->can_fit(request.dst_size);
                 if (pool_has_space || pool_headroom >= layout_pool_->get_default_chunk_size()) {
+                    // Drain ALL queues before pool growth to prevent BCS stall.
+                    // Level Zero's sycl::malloc_device during pool chunk allocation
+                    // can stall BCS H2D events, causing staging pool event waits to
+                    // hang indefinitely.  Draining before growth ensures no in-flight
+                    // operations conflict with the new device memory allocation.
+                    if (!pool_has_space) {
+                        try { queue_.wait(); } catch (...) {}
+                        if (bcs_queue_) {
+                            try { bcs_queue_->wait(); } catch (...) {}
+                        }
+                    }
                     auto pool_result = layout_pool_->allocate(request.dst_size);
                     new_device_ptr   = pool_result.ptr;
                     if (new_device_ptr) {
@@ -5223,8 +5244,7 @@ sycl::event unified_cache::copy_to_device(void * dst, const void * src, size_t s
         // No staging buffer — this should not happen since staging_ is always
         // pre-allocated in the constructor.  Fall back to host_cache pinned pool
         // to avoid runtime sycl::malloc_host.
-        const int device_id = ggml_sycl_get_device_id_from_queue(queue_);
-        auto * hcache = get_host_cache_for_device(device_id);
+        auto * hcache = try_get_host_cache();
         void * temp = hcache ? hcache->allocate_pinned_runtime(size, 64) : nullptr;
         if (temp) {
             std::memcpy(temp, src, size);
@@ -6540,7 +6560,7 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
             return true;
         }
         if (rec.uses_pinned_pool) {
-            if (auto * hcache = get_host_cache_for_device(rec.handle.device)) {
+            if (auto * hcache = try_get_host_cache()) {
                 hcache->free_pinned_runtime(rec.handle.ptr, rec.handle.size);
             }
         } else if (rec.queue != nullptr && rec.handle.ptr != nullptr) {
@@ -6680,18 +6700,17 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
         }
         ptr = ggml_sycl_malloc_device_raw(alloc_size, *req.queue, "unified_alloc:device");
     } else {
-        // Always try the pre-allocated pinned chunk pool first to avoid
-        // runtime sycl::malloc_host calls during inference.
-        if (auto * hcache = get_host_cache_for_device(req.device)) {
+        // Always try the pre-allocated pinned chunk pool first (lock-free path).
+        // Uses try_get_host_cache() to avoid g_cache_rw_mutex which would deadlock
+        // during S1-PRELOAD when the caller already holds the cache lock.
+        if (auto * hcache = try_get_host_cache()) {
             ptr              = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
             uses_pinned_pool = (ptr != nullptr);
         }
         if (!ptr) {
-            // Fallback: direct malloc_host — should only happen during init or
-            // if pre_allocate was called with insufficient bytes.
-            GGML_SYCL_DEBUG("[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes, falling back to malloc_host\n",
-                            alloc_size);
-            ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:host");
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes — "
+                           "all host-pinned memory should be pre-allocated at init\n",
+                           alloc_size);
         }
     }
 
@@ -6743,7 +6762,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                 unified_managed_sub_host_bytes(alloc_size);
             }
             if (uses_pinned_pool) {
-                if (auto * hcache = get_host_cache_for_device(req.device)) {
+                if (auto * hcache = try_get_host_cache()) {
                     hcache->free_pinned_runtime(ptr, alloc_size);
                 }
             } else {
@@ -8703,11 +8722,19 @@ unified_cache::vram_alloc_result unified_cache::allocate(size_t          size,
         return result;
     }
 
-    // Step 4: Host-pinned fallback.
-    try {
-        ptr = ggml_sycl_malloc_host(size, queue_, label);
-    } catch (...) {
-        ptr = nullptr;
+    // Step 4: Host-pinned fallback — route through the pre-allocated pinned pool.
+    // All host-pinned memory is pre-allocated at init; zero runtime malloc_host.
+    if (auto * hcache = try_get_host_cache()) {
+        ptr = hcache->allocate_pinned_runtime(size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+    }
+    if (!ptr) {
+        // Pool exhausted — last resort: raw malloc_host (should not happen
+        // after pre_allocate_all, but avoids hard failure during init).
+        try {
+            ptr = ggml_sycl_malloc_host(size, queue_, label);
+        } catch (...) {
+            ptr = nullptr;
+        }
     }
 
     if (!ptr) {
@@ -8774,8 +8801,6 @@ bool unified_cache::reserve_compute_arena(size_t arena_bytes) {
         size_t zone_cap = arena_.zone_capacity(vram_zone_id::COMPUTE);
         if (zone_cap >= arena_bytes) {
             // Point compute_arena at the arena's compute zone base.
-            compute_arena_ptr_  = arena_.zone_alloc(vram_zone_id::COMPUTE, 0, 1);
-            // Actually, the zone is the entire pre-reserved region.  Use its base.
             compute_arena_ptr_  = arena_.offset_to_ptr(0);  // Compute zone starts at offset 0.
             compute_arena_size_ = zone_cap;
             compute_arena_off_.store(0, std::memory_order_relaxed);
@@ -9680,6 +9705,23 @@ void vram_arena::destroy() {
             } catch (...) {}
             chunks_[i] = {};
         }
+    }
+    arena_base_ = nullptr;
+    arena_size_ = 0;
+    n_chunks_   = 0;
+    for (int i = 0; i < static_cast<int>(vram_zone_id::COUNT); i++) {
+        zones_[i].start = 0;
+        zones_[i].size  = 0;
+        zones_[i].used.store(0, std::memory_order_relaxed);
+        zones_[i].free_list.clear();
+    }
+}
+
+void vram_arena::abandon() {
+    // Null everything without calling sycl::free — used during shutdown
+    // when the SYCL context is already invalid.
+    for (int i = 0; i < n_chunks_; i++) {
+        chunks_[i] = {};
     }
     arena_base_ = nullptr;
     arena_size_ = 0;

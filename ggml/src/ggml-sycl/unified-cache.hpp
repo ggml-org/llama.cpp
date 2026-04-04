@@ -139,6 +139,9 @@ class vram_arena {
     // Destroy arena (free all chunks).
     void destroy();
 
+    // Abandon arena without freeing (for shutdown when SYCL context is invalid).
+    void abandon();
+
   private:
     void *     arena_base_ = nullptr;  // Base pointer (first chunk)
     size_t     arena_size_ = 0;        // Total arena size across all chunks
@@ -535,6 +538,11 @@ class host_cache {
     // triggers sycl::malloc_host (which blocks the Level Zero driver).
     // Call at init time after MoE prestage completes.
     size_t pre_allocate_pinned(size_t total_bytes);
+
+    // Pre-allocate ALL pinned memory for the full model weight set.
+    // Called once after model header is parsed (tensor count + sizes known).
+    // Ensures zero sycl::malloc_host calls during inference.
+    size_t pre_allocate_all(size_t model_weight_bytes);
 
     host_cache(const host_cache &)             = delete;
     host_cache & operator=(const host_cache &) = delete;
@@ -1064,6 +1072,55 @@ class unified_cache {
     // All dense weights are loaded by then; further layout requests (e.g. late
     // MoE experts) that don't fit in existing chunks will fall back to
     // individual allocations instead of wasting a full 256 MB chunk.
+    // Pre-allocate device pool chunks for `total_bytes` of layout allocations.
+    // Must be called BEFORE any BCS H2D copies to avoid sycl::malloc_device
+    // stalling the BCS engine.  Returns number of new chunks allocated.
+    // Charges each chunk incrementally to the VRAM budget so that
+    // available-space queries reflect the reduced capacity.
+    size_t pre_grow_layout_pool(size_t total_bytes) {
+        if (!layout_pool_) {
+            return 0;
+        }
+        const size_t chunk_size = layout_pool_->get_default_chunk_size();
+        // Subtract existing free space in pool
+        size_t pool_free = 0;
+        {
+            size_t total_chunk = layout_pool_->total_chunk_bytes();
+            size_t total_used  = layout_pool_->total_used_bytes();
+            pool_free = (total_chunk > total_used) ? (total_chunk - total_used) : 0;
+        }
+        if (pool_free >= total_bytes) {
+            return 0;
+        }
+        const size_t deficit       = total_bytes - pool_free;
+        const size_t chunks_needed = (deficit + chunk_size - 1) / chunk_size;
+        size_t       chunks_grown  = 0;
+        for (size_t i = 0; i < chunks_needed; i++) {
+            // Check budget before each chunk.
+            size_t avail = (budget_ > used_.load(std::memory_order_relaxed))
+                           ? budget_ - used_.load(std::memory_order_relaxed)
+                           : 0;
+            if (chunk_size > avail) {
+                GGML_LOG_WARN("[UNIFIED-CACHE] pre_grow: budget exhausted after %zu/%zu chunks\n",
+                              chunks_grown, chunks_needed);
+                break;
+            }
+            size_t physical = layout_pool_->grow_one_chunk();
+            if (physical == 0) {
+                break;
+            }
+            // Charge immediately so the next iteration sees reduced capacity.
+            used_.fetch_add(physical, std::memory_order_relaxed);
+            chunks_grown++;
+        }
+        if (chunks_grown > 0) {
+            GGML_LOG_INFO("[DEVICE-POOL] pre_grow: %zu/%zu chunks (%.1f MB) for %.1f MB working set\n",
+                          chunks_grown, chunks_needed, chunks_grown * chunk_size / (1024.0 * 1024.0),
+                          total_bytes / (1024.0 * 1024.0));
+        }
+        return chunks_grown;
+    }
+
     void seal_layout_pool() {
         if (layout_pool_) {
             layout_pool_->seal();
