@@ -159,6 +159,82 @@ class vram_arena {
     vram_zone zones_[static_cast<int>(vram_zone_id::COUNT)];
 };
 
+// === Priority-based static placement planner (P4) ===
+//
+// At model load time, assigns each weight to VRAM (device) or host based on
+// priority.  Weights are sorted by (priority, layer_id, byte_size descending)
+// and packed into VRAM greedily.  Weights that don't fit spill to host.
+//
+// Priority ordering (Unsloth-informed):
+//   0 = NORM / EMBEDDING   — tiny, always fit, needed for every token
+//   1 = ATTENTION           — Q/K/V/O projections, critical for quality
+//   2 = FFN                 — feed-forward weights
+//   3 = MOE_GATE            — routing gate (small but latency-sensitive)
+//   4 = MOE_DOWN            — expert down projections (Unsloth: most impactful)
+//   5 = MOE_UP              — expert up projections
+//   6 = MOE_GATE_PROJ       — expert gate projections (least impactful per Unsloth)
+
+enum class placement_priority : uint8_t {
+    NORM_EMBED    = 0,  // Norms + embeddings (tiny, always on device)
+    ATTENTION     = 1,  // Attention projections
+    FFN           = 2,  // FFN weights (non-MoE)
+    MOE_GATE      = 3,  // MoE routing gate
+    MOE_DOWN      = 4,  // MoE expert down_proj (most impactful per Unsloth)
+    MOE_UP        = 5,  // MoE expert up_proj
+    MOE_GATE_PROJ = 6,  // MoE expert gate_proj (least impactful per Unsloth)
+    COUNT         = 7,
+};
+
+// Single entry in the placement plan: one weight tensor's placement decision.
+struct placement_entry {
+    std::string        name;      // Tensor name (for logging and S1-PRELOAD lookup)
+    size_t             src_size;  // AOS source bytes
+    size_t             dst_size;  // Layout-converted destination bytes (SOA/COALESCED)
+    placement_priority priority;  // Sort key
+    int                layer_id;  // Layer number (earlier = higher priority within same level)
+    bool               on_device; // true = VRAM, false = host
+};
+
+// Complete placement plan for all model weights.
+struct placement_plan {
+    std::vector<placement_entry> entries;      // All weights, sorted by priority
+    size_t                       vram_bytes;   // Total bytes placed on device
+    size_t                       host_bytes;   // Total bytes spilled to host
+    size_t                       vram_budget;  // VRAM budget used for planning
+    int                          device_id;    // Device this plan was computed for
+
+    // Quick lookup: is this tensor on device?
+    // Returns true if tensor with given name is planned for VRAM.
+    bool is_on_device(const std::string & name) const {
+        auto it = name_index_.find(name);
+        return it != name_index_.end() && entries[it->second].on_device;
+    }
+
+    // Build the name->index lookup after entries are populated.
+    void build_index() {
+        name_index_.clear();
+        name_index_.reserve(entries.size());
+        for (size_t i = 0; i < entries.size(); ++i) {
+            name_index_[entries[i].name] = i;
+        }
+    }
+
+  private:
+    std::unordered_map<std::string, size_t> name_index_;
+};
+
+// Compute placement plan for all model weights given a VRAM budget.
+// tensor_inventory: vector of (name, src_size) pairs from model header.
+// vram_budget: available VRAM bytes for weights.
+// device_id: target device (for layout size calculation).
+// Sorts by (priority ASC, layer_id ASC, dst_size DESC) and greedily
+// packs into VRAM.  The mapping from tensor_usage to placement_priority
+// is in unified-cache.cpp (requires common.hpp types).
+placement_plan compute_placement_plan(
+    const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
+    size_t                                              vram_budget,
+    int                                                 device_id);
+
 namespace detail {
 
 static constexpr uint64_t k_cache_guard_magic = 0xC0DECA5EC0DECA5EULL;
@@ -1127,6 +1203,25 @@ class unified_cache {
         }
     }
 
+    // === Placement Plan (P4) ===
+    // Priority-based static weight placement computed at model load time.
+    // When active, S1-PRELOAD uses the plan to decide VRAM vs host placement
+    // instead of first-come-first-served.  Gated by GGML_SYCL_VRAM_ARENA=1.
+
+    void set_placement_plan(placement_plan && plan) {
+        placement_plan_     = std::move(plan);
+        has_placement_plan_ = true;
+    }
+
+    bool plan_on_device(const std::string & tensor_name) const {
+        if (!has_placement_plan_) return true;
+        return placement_plan_.is_on_device(tensor_name);
+    }
+
+    bool has_placement_plan() const { return has_placement_plan_; }
+
+    const placement_plan & get_placement_plan() const { return placement_plan_; }
+
     // Access the internal SYCL queue (for deferred free of temp allocations
     // made on this queue's context, e.g. GPU-side reorder temp buffers).
     sycl::queue & get_queue() { return queue_; }
@@ -1603,6 +1698,10 @@ class unified_cache {
     };
     std::unordered_map<std::string, partial_entry> partial_cache_;
     std::mutex                                     partial_mutex_;
+
+    // === Placement Plan (P4) ===
+    placement_plan placement_plan_;
+    bool           has_placement_plan_ = false;
 
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };

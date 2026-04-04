@@ -5566,6 +5566,11 @@ static int                                         g_moe_n_experts_used         
 static uint32_t                                    g_model_n_layer               = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
 
+// P4: Priority-based static placement plan (computed in set_tensor_inventory,
+// applied in preload_model_weights).  Gated by GGML_SYCL_VRAM_ARENA=1.
+static ggml_sycl::placement_plan g_placement_plan;
+static bool                      g_has_placement_plan = false;
+
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
 
 // Layer-to-device map for CPU offload dispatch
@@ -5810,9 +5815,28 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         }
     }
 
-    GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
-                  g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
-                  free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load(std::memory_order_relaxed) ? "enabled" : "disabled");
+    // P4: Compute priority-based placement plan when VRAM arena is enabled.
+    // The plan determines which weights go to VRAM vs host, sorted by
+    // Unsloth-informed priority (attention > FFN > MoE experts).
+    if (ggml_sycl::vram_arena_enabled() && model_size_exceeds_budget) {
+        g_placement_plan = ggml_sycl::compute_placement_plan(
+            g_tensor_inventory, vram_budget, ctx->device);
+        g_has_placement_plan = true;
+        GGML_LOG_INFO("[SYCL] Placement plan computed: %zu entries, "
+                      "%.1f MB device + %.1f MB host\n",
+                      g_placement_plan.entries.size(),
+                      g_placement_plan.vram_bytes / (1024.0 * 1024.0),
+                      g_placement_plan.host_bytes / (1024.0 * 1024.0));
+    } else {
+        g_has_placement_plan = false;
+    }
+
+    GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total "
+                  "(VRAM: %.2f GB free, tiered: %s)\n",
+                  g_tensor_inventory.size(),
+                  g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
+                  free_mem / (1024.0 * 1024.0 * 1024.0),
+                  g_tiered_enabled.load(std::memory_order_relaxed) ? "enabled" : "disabled");
 }
 
 // Get the total model size from tensor inventory (for budget calculations)
@@ -10568,11 +10592,12 @@ static void ggml_sycl_preload_model_weights() {
     // at the end completes all transfers.  This reduces preload time from
     // O(n * latency) to O(total_bytes / bandwidth) — e.g. 10 min → seconds.
     if (s1_mode) {
-        size_t dense_cached  = 0;
-        size_t dense_failed  = 0;
-        size_t moe_cached    = 0;
-        size_t moe_failed    = 0;
-        size_t total_bytes   = 0;
+        size_t dense_cached      = 0;
+        size_t dense_failed      = 0;
+        size_t dense_host_placed = 0;  // P4: weights kept on host per placement plan
+        size_t moe_cached        = 0;
+        size_t moe_failed        = 0;
+        size_t total_bytes       = 0;
 
         // Collect all (tensor, device) pairs, grouped by device
         struct preload_item {
@@ -10609,6 +10634,12 @@ static void ggml_sycl_preload_model_weights() {
             ggml_sycl::unified_cache * cache  = ggml_sycl::get_unified_cache(stream);
             if (!cache) {
                 continue;
+            }
+
+            // P4: Apply placement plan to cache (one-time transfer from global).
+            if (g_has_placement_plan && !cache->has_placement_plan()) {
+                cache->set_placement_plan(std::move(g_placement_plan));
+                g_has_placement_plan = false;
             }
 
             // Track dense weight cache keys for pinning after finalize
@@ -10708,6 +10739,15 @@ static void ggml_sycl_preload_model_weights() {
                         dense_failed++;
                         continue;
                     }
+
+                    // P4: Skip device upload if placement plan says host.
+                    if (cache->has_placement_plan() && tensor->name[0] != '\0') {
+                        if (!cache->plan_on_device(std::string(tensor->name))) {
+                            dense_host_placed++;
+                            continue;
+                        }
+                    }
+
                     ggml_sycl_cache_id cache_key =
                         ggml_backend_sycl_get_weight_cache_key(tensor, device);
                     if (!cache_key.valid) {
@@ -10868,11 +10908,15 @@ static void ggml_sycl_preload_model_weights() {
         const auto t_end   = std::chrono::steady_clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
 
-        GGML_LOG_INFO("[S1-PRELOAD] async bulk: dense cached=%zu failed=%zu, moe cached=%zu failed=%zu, "
+        GGML_LOG_INFO("[S1-PRELOAD] async bulk: dense cached=%zu failed=%zu "
+                      "host_placed=%zu, moe cached=%zu failed=%zu, "
                       "%.1f MB in %lld ms (%.1f GB/s)\n",
-                      dense_cached, dense_failed, moe_cached, moe_failed,
+                      dense_cached, dense_failed, dense_host_placed,
+                      moe_cached, moe_failed,
                       total_bytes / (1024.0f * 1024.0f), (long long) elapsed,
-                      elapsed > 0 ? (total_bytes / (1024.0 * 1024.0 * 1024.0)) / (elapsed / 1000.0) : 0.0);
+                      elapsed > 0 ? (total_bytes / (1024.0 * 1024.0 * 1024.0))
+                                         / (elapsed / 1000.0)
+                                  : 0.0);
 
         // Register MoE expert VRAM reserve AFTER cache creation.
         // Must happen here (not in set_tensor_inventory) because the unified cache

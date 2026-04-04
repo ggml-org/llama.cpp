@@ -74,6 +74,14 @@ class sycl_device_pool {
         arena_ = arena;
     }
 
+    // Set BCS (copy engine) queue for draining before chunk allocations.
+    // sycl::malloc_device stalls BCS H2D events permanently if called
+    // with pending async BCS operations.
+    void set_bcs_queue(sycl::queue * bcs_q) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        bcs_queue_ = bcs_q;
+    }
+
     // After S1-PRELOAD, seal the pool to prevent new chunk allocations.
     // Subsequent allocations that don't fit in existing chunks return {nullptr, 0}.
     // This avoids wasting VRAM on new chunks when all dense weights are loaded.
@@ -150,6 +158,14 @@ class sycl_device_pool {
                               chunk_size / (1024.0 * 1024.0), available / (1024.0 * 1024.0));
                 return {};
             }
+        }
+
+        // Drain ALL queues before allocating device memory.
+        // sycl::malloc_device commits GPU pages, stalling BCS permanently
+        // if H2D transfers are pending.
+        try { queue_.wait(); } catch (...) {}
+        if (bcs_queue_) {
+            try { bcs_queue_->wait(); } catch (...) {}
         }
 
         // Use _raw to bypass unified_cache_allocate routing — the layout pool
@@ -249,6 +265,35 @@ class sycl_device_pool {
     // Get the default chunk size (used for budget pre-checks).
     size_t get_default_chunk_size() const { return default_chunk_size_; }
 
+    // Allocate one new chunk of default size (no sub-allocation).
+    // Returns the physical bytes allocated, or 0 on failure.
+    // Used by unified_cache::pre_grow_layout_pool() to pre-allocate
+    // chunks before S1-PRELOAD H2D copies begin.
+    size_t grow_one_chunk() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (sealed_) {
+            return 0;
+        }
+        const size_t chunk_size = default_chunk_size_;
+        if (device_id_ >= 0) {
+            size_t available = unified_cache_total_available_bytes(device_id_);
+            if (chunk_size > available) {
+                return 0;
+            }
+        }
+        try { queue_.wait(); } catch (...) {}
+        if (bcs_queue_) {
+            try { bcs_queue_->wait(); } catch (...) {}
+        }
+        void * base = ggml_sycl_malloc_device_raw(chunk_size, queue_, "layout_pool:pre_grow");
+        if (!base) {
+            return 0;
+        }
+        chunks_.push_back({ base, chunk_size, 0 });
+        chunk_bytes_ += chunk_size;
+        return chunk_size;
+    }
+
     // Statistics
     size_t chunk_count() const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -298,6 +343,7 @@ class sycl_device_pool {
     bool                 abandoned_   = false;
     bool                 sealed_     = false;
     vram_arena *         arena_      = nullptr;  // Optional arena backing (set by unified_cache)
+    sycl::queue *        bcs_queue_  = nullptr;  // BCS queue for drain before chunk alloc
     mutable std::mutex   mutex_;
 };
 
