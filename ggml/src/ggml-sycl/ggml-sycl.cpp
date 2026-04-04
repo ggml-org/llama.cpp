@@ -5814,18 +5814,42 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         }
     }
 
-    // P4: Compute priority-based placement plan when VRAM arena is enabled.
-    // The plan determines which weights go to VRAM vs host, sorted by
-    // Unsloth-informed priority (attention > FFN > MoE experts).
+    // P4/P4.5: Compute placement plan when VRAM arena is enabled.
+    // Single GPU: P4 Unsloth-priority bin-packing.
+    // Multi-GPU: P4.5 hybrid parallelism (layer split + expert distribution).
     if (ggml_sycl::vram_arena_enabled() && model_size_exceeds_budget) {
-        g_placement_plan = ggml_sycl::compute_placement_plan(
-            g_tensor_inventory, vram_budget, ctx->device);
-        g_has_placement_plan = true;
-        GGML_LOG_INFO("[SYCL] Placement plan computed: %zu entries, "
-                      "%.1f MB device + %.1f MB host\n",
-                      g_placement_plan.entries.size(),
-                      g_placement_plan.vram_bytes / (1024.0 * 1024.0),
-                      g_placement_plan.host_bytes / (1024.0 * 1024.0));
+        const auto & info = ggml_sycl_info();
+        if (info.total_gpu_count >= 2 && ggml_backend_sycl_moe_multi_gpu_requested()) {
+            // P4.5: Multi-device placement
+            std::vector<ggml_sycl::device_budget> budgets;
+            budgets.reserve(info.total_gpu_count);
+            for (int d = 0; d < info.total_gpu_count; d++) {
+                size_t dev_free = 0, dev_total = 0;
+                ggml_backend_sycl_get_device_memory(d, &dev_free, &dev_total);
+                size_t dev_budget = static_cast<size_t>(
+                    dev_total * (static_cast<double>(budget_pct) / 100.0));
+                budgets.push_back({ d, dev_budget, dev_total });
+            }
+            g_placement_plan = ggml_sycl::compute_multi_device_plan(
+                budgets, g_tensor_inventory, static_cast<int>(g_model_n_layer));
+            g_has_placement_plan = true;
+            GGML_LOG_INFO("[SYCL] Multi-device placement plan computed: %zu entries, "
+                          "%.1f MB device + %.1f MB host (%d GPUs)\n",
+                          g_placement_plan.entries.size(),
+                          g_placement_plan.vram_bytes / (1024.0 * 1024.0),
+                          g_placement_plan.host_bytes / (1024.0 * 1024.0),
+                          info.total_gpu_count);
+        } else {
+            // P4: Single-device placement
+            g_placement_plan = ggml_sycl::compute_placement_plan(
+                g_tensor_inventory, vram_budget, ctx->device);
+            g_has_placement_plan = true;
+            GGML_LOG_INFO("[SYCL] Placement plan computed: %zu entries, "
+                          "%.1f MB device + %.1f MB host\n",
+                          g_placement_plan.entries.size(),
+                          g_placement_plan.vram_bytes / (1024.0 * 1024.0),
+                          g_placement_plan.host_bytes / (1024.0 * 1024.0));
+        }
     } else {
         g_has_placement_plan = false;
     }
@@ -10685,6 +10709,18 @@ static void ggml_sycl_preload_model_weights() {
             items.push_back({ tensor, device, usage == tensor_usage::MOE_EXPERT_WEIGHT });
         }
 
+        // P4.5: For multi-device plans, route items to their planned target device.
+        // Override the default device_id from tensor extras with the plan's assignment.
+        if (g_has_placement_plan && g_placement_plan.multi_device) {
+            for (auto & item : items) {
+                if (!item.tensor->name[0]) continue;
+                int target = g_placement_plan.get_target_device(std::string(item.tensor->name));
+                if (target >= 0) {
+                    item.device = target;
+                }
+            }
+        }
+
         // Process per device — one queue.wait() per device at the end
         std::unordered_map<int, std::vector<size_t>> items_by_device;
         for (size_t i = 0; i < items.size(); ++i) {
@@ -10700,10 +10736,16 @@ static void ggml_sycl_preload_model_weights() {
                 continue;
             }
 
-            // P4: Apply placement plan to cache (one-time transfer from global).
+            // P4/P4.5: Apply placement plan to cache.
+            // Multi-device plans are copied to each device's cache (all need it).
+            // Single-device plans are moved (only primary device uses it).
             if (g_has_placement_plan && !cache->has_placement_plan()) {
-                cache->set_placement_plan(std::move(g_placement_plan));
-                g_has_placement_plan = false;
+                if (g_placement_plan.multi_device) {
+                    cache->set_placement_plan(ggml_sycl::placement_plan(g_placement_plan));
+                } else {
+                    cache->set_placement_plan(std::move(g_placement_plan));
+                    g_has_placement_plan = false;
+                }
             }
 
             // Track dense weight cache keys for pinning after finalize
@@ -10804,9 +10846,9 @@ static void ggml_sycl_preload_model_weights() {
                         continue;
                     }
 
-                    // P4: Skip device upload if placement plan says host.
+                    // P4/P4.5: Skip upload if placement plan says host or different device.
                     if (cache->has_placement_plan() && tensor->name[0] != '\0') {
-                        if (!cache->plan_on_device(std::string(tensor->name))) {
+                        if (!cache->plan_on_this_device(std::string(tensor->name), device)) {
                             dense_host_placed++;
                             continue;
                         }
@@ -10967,6 +11009,11 @@ static void ggml_sycl_preload_model_weights() {
             // (late MoE experts, warmup conversions) will sub-allocate from
             // existing chunks or fall back to individual allocations.
             ggml_sycl::unified_cache_seal_layout_pool(device);
+        }
+
+        // P4.5: Clear multi-device plan after all device caches received it
+        if (g_has_placement_plan && g_placement_plan.multi_device) {
+            g_has_placement_plan = false;
         }
 
         const auto t_end   = std::chrono::steady_clock::now();

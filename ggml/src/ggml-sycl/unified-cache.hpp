@@ -187,27 +187,57 @@ enum class placement_priority : uint8_t {
 
 // Single entry in the placement plan: one weight tensor's placement decision.
 struct placement_entry {
-    std::string        name;      // Tensor name (for logging and S1-PRELOAD lookup)
-    size_t             src_size;  // AOS source bytes
-    size_t             dst_size;  // Layout-converted destination bytes (SOA/COALESCED)
-    placement_priority priority;  // Sort key
-    int                layer_id;  // Layer number (earlier = higher priority within same level)
-    bool               on_device; // true = VRAM, false = host
+    std::string        name;           // Tensor name (for logging and S1-PRELOAD lookup)
+    size_t             src_size;       // AOS source bytes
+    size_t             dst_size;       // Layout-converted destination bytes (SOA/COALESCED)
+    placement_priority priority;       // Sort key
+    int                layer_id;       // Layer number (earlier = higher priority within same level)
+    bool               on_device;      // true = VRAM (any device), false = host
+    int                target_device;  // Target GPU device_id (-1 = host/CPU)
+};
+
+// Per-device VRAM budget for multi-GPU placement planning.
+struct device_budget {
+    int    device_id;    // SYCL device index
+    size_t vram_budget;  // Available VRAM bytes for weights on this device
+    size_t total_vram;   // Total VRAM on this device (for proportional split)
 };
 
 // Complete placement plan for all model weights.
+// Supports single-device (P4) and multi-device (P4.5) planning.
 struct placement_plan {
     std::vector<placement_entry> entries;      // All weights, sorted by priority
-    size_t                       vram_bytes;   // Total bytes placed on device
+    size_t                       vram_bytes;   // Total bytes placed on device(s)
     size_t                       host_bytes;   // Total bytes spilled to host
-    size_t                       vram_budget;  // VRAM budget used for planning
-    int                          device_id;    // Device this plan was computed for
+    size_t                       vram_budget;  // VRAM budget used for planning (primary device)
+    int                          device_id;    // Primary device (single-device) or -1 (multi-device)
+    bool                         multi_device; // True if plan spans multiple GPUs
 
-    // Quick lookup: is this tensor on device?
-    // Returns true if tensor with given name is planned for VRAM.
+    // Per-device VRAM usage (multi-device only, indexed by position in devices vector)
+    std::vector<int>    devices;          // Device IDs participating in this plan
+    std::vector<size_t> per_device_vram;  // VRAM bytes used per device
+
+    // Quick lookup: is this tensor on any device?
+    // Returns true if tensor with given name is planned for VRAM (any GPU).
     bool is_on_device(const std::string & name) const {
         auto it = name_index_.find(name);
         return it != name_index_.end() && entries[it->second].on_device;
+    }
+
+    // Multi-device query: is this tensor on a specific device?
+    // Returns true if the tensor is assigned to device_id.
+    bool is_on_device(const std::string & name, int dev_id) const {
+        auto it = name_index_.find(name);
+        if (it == name_index_.end()) return false;
+        const auto & e = entries[it->second];
+        return e.on_device && e.target_device == dev_id;
+    }
+
+    // Get the target device for a tensor (-1 if host or not found).
+    int get_target_device(const std::string & name) const {
+        auto it = name_index_.find(name);
+        if (it == name_index_.end()) return -1;
+        return entries[it->second].target_device;
     }
 
     // Build the name->index lookup after entries are populated.
@@ -234,6 +264,19 @@ placement_plan compute_placement_plan(
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
     size_t                                              vram_budget,
     int                                                 device_id);
+
+// P4.5: Compute multi-device placement plan for hybrid parallelism.
+// Dense layers use layer parallelism (contiguous ranges per device, proportional to VRAM).
+// MoE experts use expert parallelism (distributed across devices by Unsloth priority).
+// Falls back to single-device compute_placement_plan() when only 1 device is provided.
+//
+// device_budgets: per-device VRAM budgets, sorted by device_id.
+// tensor_inventory: vector of (name, src_size) pairs from model header.
+// n_layers: total number of transformer layers in the model.
+placement_plan compute_multi_device_plan(
+    const std::vector<device_budget> &                  device_budgets,
+    const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
+    int                                                 n_layers);
 
 namespace detail {
 
@@ -1218,6 +1261,16 @@ class unified_cache {
         return placement_plan_.is_on_device(tensor_name);
     }
 
+    // P4.5: Check if tensor is assigned to THIS device in a multi-device plan.
+    bool plan_on_this_device(const std::string & tensor_name, int this_device) const {
+        if (!has_placement_plan_) return true;
+        if (!placement_plan_.multi_device) {
+            // Single-device plan: original behavior
+            return placement_plan_.is_on_device(tensor_name);
+        }
+        return placement_plan_.is_on_device(tensor_name, this_device);
+    }
+
     bool has_placement_plan() const { return has_placement_plan_; }
 
     const placement_plan & get_placement_plan() const { return placement_plan_; }
@@ -1791,6 +1844,29 @@ enum class alloc_role : uint8_t {
     EXPERT_STAGING = 6,
     OTHER          = 7,
 };
+
+// Location-transparent descriptor for any managed allocation.
+// Returned by query_location() — gives callers the current pointer, tier,
+// layout, and arena zone without SYCL pointer-type queries at runtime.
+// Immutable during inference (allocations do not migrate mid-token).
+struct memory_location {
+    void *           ptr       = nullptr;        // Current data pointer (device or host)
+    alloc_tier       tier      = alloc_tier::MMAP_TRACKED;
+    ggml_layout_mode layout    = GGML_LAYOUT_AOS;
+    alloc_role       role      = alloc_role::OTHER;
+    vram_zone_id     zone      = vram_zone_id::COUNT;  // COUNT = not in arena
+    int              device    = -1;                    // Owning device (-1 = host)
+    bool             from_arena = false;                // True if sub-allocated from VRAM arena
+
+    explicit operator bool() const { return ptr != nullptr; }
+    bool on_device() const { return tier == alloc_tier::DEVICE_VRAM; }
+    bool host_accessible() const { return tier != alloc_tier::DEVICE_VRAM; }
+};
+
+// Query current location of any pointer.  Uses alloc_registry for tier
+// classification and arena zone ownership detection.  O(1) via binary search.
+// Does NOT acquire SYCL runtime locks — safe to call at graph build time.
+memory_location query_location(const void * ptr, int device_hint = -1);
 
 enum class offload_buffer_role : uint8_t {
     STAGING_SRC0       = 0,

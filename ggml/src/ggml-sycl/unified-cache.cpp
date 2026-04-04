@@ -9125,6 +9125,71 @@ void * unified_cache_kv_arena_alloc(int device_id, size_t size) {
     return cache->get_arena().zone_alloc(vram_zone_id::KV, size);
 }
 
+memory_location query_location(const void * ptr, int device_hint) {
+    memory_location loc{};
+    if (!ptr) {
+        return loc;
+    }
+
+    loc.ptr = const_cast<void *>(ptr);
+
+    // Step 1: Check alloc_registry for tier classification (O(1) binary search).
+    const auto * info = alloc_registry::instance().lookup(ptr);
+    if (info) {
+        loc.device = info->device_id;
+        switch (info->type) {
+            case alloc_type::DEVICE:
+                loc.tier = alloc_tier::DEVICE_VRAM;
+                break;
+            case alloc_type::HOST_PINNED:
+                loc.tier = alloc_tier::HOST_PINNED;
+                break;
+            case alloc_type::SHARED:
+                loc.tier = alloc_tier::HOST_PINNED;  // treat shared as host-accessible
+                break;
+            case alloc_type::MMAP:
+                loc.tier = alloc_tier::MMAP_TRACKED;
+                break;
+            default:
+                loc.tier = alloc_tier::MMAP_TRACKED;
+                break;
+        }
+    } else if (device_hint >= 0) {
+        // Not registered — assume host/mmap (conservative).
+        loc.device = device_hint;
+        loc.tier   = alloc_tier::MMAP_TRACKED;
+    }
+
+    // Step 2: Check arena zone ownership (device allocations only).
+    if (loc.tier == alloc_tier::DEVICE_VRAM) {
+        int dev = (loc.device >= 0) ? loc.device : device_hint;
+        if (dev >= 0) {
+            auto * cache = get_unified_cache_for_device(dev);
+            if (cache && cache->get_arena().active()) {
+                auto & arena = cache->get_arena();
+                if (arena.owns(ptr)) {
+                    loc.from_arena = true;
+                    if (arena.zone_owns(vram_zone_id::COMPUTE, ptr)) {
+                        loc.zone = vram_zone_id::COMPUTE;
+                        loc.role = alloc_role::COMPUTE;
+                    } else if (arena.zone_owns(vram_zone_id::KV, ptr)) {
+                        loc.zone = vram_zone_id::KV;
+                        loc.role = alloc_role::KV;
+                    } else if (arena.zone_owns(vram_zone_id::ONEDNN, ptr)) {
+                        loc.zone = vram_zone_id::ONEDNN;
+                        loc.role = alloc_role::COMPUTE;
+                    } else if (arena.zone_owns(vram_zone_id::WEIGHT, ptr)) {
+                        loc.zone = vram_zone_id::WEIGHT;
+                        loc.role = alloc_role::WEIGHT;
+                    }
+                }
+            }
+        }
+    }
+
+    return loc;
+}
+
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (!cache) {
@@ -9835,10 +9900,11 @@ placement_plan compute_placement_plan(
     int    device_id) {
 
     placement_plan plan;
-    plan.vram_budget = vram_budget;
-    plan.device_id   = device_id;
-    plan.vram_bytes  = 0;
-    plan.host_bytes  = 0;
+    plan.vram_budget  = vram_budget;
+    plan.device_id    = device_id;
+    plan.multi_device = false;
+    plan.vram_bytes   = 0;
+    plan.host_bytes   = 0;
 
     // Build entries with priority classification
     plan.entries.reserve(tensor_inventory.size());
@@ -9855,7 +9921,8 @@ placement_plan compute_placement_plan(
 
         // MoE expert tensors are composite (contain all experts for a layer).
         // They compete for VRAM at the full tensor level during S1-PRELOAD.
-        entry.on_device = false;  // Will be set during packing below
+        entry.on_device      = false;      // Will be set during packing below
+        entry.target_device  = -1;         // -1 = host (updated during packing)
         plan.entries.push_back(std::move(entry));
     }
 
@@ -9878,11 +9945,13 @@ placement_plan compute_placement_plan(
     size_t remaining = vram_budget;
     for (auto & entry : plan.entries) {
         if (entry.dst_size <= remaining) {
-            entry.on_device = true;
+            entry.on_device     = true;
+            entry.target_device = device_id;
             remaining -= entry.dst_size;
             plan.vram_bytes += entry.dst_size;
         } else {
-            entry.on_device = false;
+            entry.on_device     = false;
+            entry.target_device = -1;
             plan.host_bytes += entry.dst_size;
         }
     }
@@ -9920,6 +9989,224 @@ placement_plan compute_placement_plan(
                   plan.vram_bytes / (1024.0 * 1024.0),
                   plan.host_bytes / (1024.0 * 1024.0),
                   vram_budget / (1024.0 * 1024.0));
+
+    return plan;
+}
+
+// ---------------------------------------------------------------------------
+// P4.5: Multi-device placement planning with hybrid parallelism.
+// ---------------------------------------------------------------------------
+//
+// Algorithm:
+//   1. Compute per-device budgets and total VRAM pool.
+//   2. For DENSE layers: assign contiguous layer ranges proportional to VRAM.
+//      Each device gets a range [layer_start, layer_end).  Dense weights for
+//      a layer go entirely to the owning device.
+//   3. For MoE EXPERT tensors: pool remaining VRAM across all devices and
+//      fill by Unsloth priority (gate > down > up, earlier layers first).
+//      Each expert tensor is assigned to the device with the most remaining
+//      budget (first-fit-decreasing across devices).
+//   4. Overflow (dense or expert) spills to host (-1).
+//
+// Falls back to single-device compute_placement_plan() when only 1 device.
+
+placement_plan compute_multi_device_plan(
+    const std::vector<device_budget> &                  device_budgets,
+    const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
+    int                                                 n_layers) {
+
+    // Single device: delegate to existing P4 path
+    if (device_budgets.size() <= 1) {
+        const int    dev    = device_budgets.empty() ? 0 : device_budgets[0].device_id;
+        const size_t budget = device_budgets.empty() ? 0 : device_budgets[0].vram_budget;
+        return compute_placement_plan(tensor_inventory, budget, dev);
+    }
+
+    const size_t n_devs = device_budgets.size();
+
+    placement_plan plan;
+    plan.device_id    = -1;  // Multi-device
+    plan.multi_device = true;
+    plan.vram_bytes   = 0;
+    plan.host_bytes   = 0;
+    plan.vram_budget  = 0;
+
+    // Store device list and per-device tracking
+    plan.devices.resize(n_devs);
+    plan.per_device_vram.resize(n_devs, 0);
+    std::vector<size_t> remaining(n_devs);
+    for (size_t d = 0; d < n_devs; d++) {
+        plan.devices[d]    = device_budgets[d].device_id;
+        remaining[d]       = device_budgets[d].vram_budget;
+        plan.vram_budget  += device_budgets[d].vram_budget;
+    }
+
+    // Step 1: Compute layer-to-device assignment (dense layers).
+    // Proportional to total VRAM, so bigger GPU gets more layers.
+    // layer_owner[l] = device index in device_budgets (not device_id).
+    std::vector<int> layer_owner(n_layers, 0);
+    {
+        size_t total_vram = 0;
+        for (const auto & db : device_budgets) {
+            total_vram += db.total_vram;
+        }
+        int layer_cursor = 0;
+        for (size_t d = 0; d < n_devs; d++) {
+            double fraction = static_cast<double>(device_budgets[d].total_vram)
+                              / static_cast<double>(total_vram);
+            int n_dev_layers = static_cast<int>(fraction * n_layers + 0.5);
+            if (d == n_devs - 1) {
+                n_dev_layers = n_layers - layer_cursor;
+            }
+            for (int l = 0; l < n_dev_layers && layer_cursor < n_layers; l++, layer_cursor++) {
+                layer_owner[layer_cursor] = static_cast<int>(d);
+            }
+        }
+    }
+
+    // Step 2: Build entries with priority classification (same as P4).
+    plan.entries.reserve(tensor_inventory.size());
+    for (const auto & [name, src_size] : tensor_inventory) {
+        placement_entry entry;
+        entry.name          = name;
+        entry.src_size      = src_size;
+        entry.dst_size      = src_size;
+        entry.layer_id      = p4_extract_layer_id(name.c_str());
+        entry.on_device     = false;
+        entry.target_device = -1;
+
+        const tensor_usage usage = infer_tensor_usage(name.c_str());
+        entry.priority = tensor_to_placement_priority(usage, name.c_str());
+
+        plan.entries.push_back(std::move(entry));
+    }
+
+    // Step 3: Sort by (priority ASC, layer_id ASC, dst_size DESC).
+    std::sort(plan.entries.begin(), plan.entries.end(),
+        [](const placement_entry & a, const placement_entry & b) {
+            if (a.priority != b.priority) {
+                return static_cast<uint8_t>(a.priority) < static_cast<uint8_t>(b.priority);
+            }
+            if (a.layer_id != b.layer_id) {
+                return a.layer_id < b.layer_id;
+            }
+            return a.dst_size > b.dst_size;
+        });
+
+    // Step 4: Pack entries into devices.
+    // Dense weights: go to the device owning their layer.
+    // MoE experts: distributed across ALL devices by most-remaining-budget.
+    // Non-layer tensors (embeddings, output head): primary device (index 0).
+
+    auto is_moe_priority = [](placement_priority p) {
+        return p == placement_priority::MOE_GATE ||
+               p == placement_priority::MOE_DOWN ||
+               p == placement_priority::MOE_UP   ||
+               p == placement_priority::MOE_GATE_PROJ;
+    };
+
+    for (auto & entry : plan.entries) {
+        int target_dev_idx = -1;
+
+        if (is_moe_priority(entry.priority)) {
+            // MoE expert: device with most remaining budget that fits
+            size_t best_remaining = 0;
+            for (size_t d = 0; d < n_devs; d++) {
+                if (remaining[d] >= entry.dst_size && remaining[d] > best_remaining) {
+                    best_remaining = remaining[d];
+                    target_dev_idx = static_cast<int>(d);
+                }
+            }
+        } else {
+            // Dense weight: assign to layer-owning device
+            int layer_id = entry.layer_id;
+            if (layer_id >= 0 && layer_id < n_layers) {
+                target_dev_idx = layer_owner[layer_id];
+            } else {
+                target_dev_idx = 0;
+            }
+            // Check if owning device has budget
+            if (target_dev_idx >= 0 &&
+                static_cast<size_t>(target_dev_idx) < n_devs &&
+                remaining[target_dev_idx] < entry.dst_size) {
+                // Owning device full — try any other device with space
+                int fallback = -1;
+                size_t best_remaining = 0;
+                for (size_t d = 0; d < n_devs; d++) {
+                    if (remaining[d] >= entry.dst_size && remaining[d] > best_remaining) {
+                        best_remaining = remaining[d];
+                        fallback       = static_cast<int>(d);
+                    }
+                }
+                target_dev_idx = fallback;
+            }
+        }
+
+        if (target_dev_idx >= 0 &&
+            static_cast<size_t>(target_dev_idx) < n_devs &&
+            remaining[target_dev_idx] >= entry.dst_size) {
+            entry.on_device     = true;
+            entry.target_device = device_budgets[target_dev_idx].device_id;
+            remaining[target_dev_idx] -= entry.dst_size;
+            plan.vram_bytes += entry.dst_size;
+            plan.per_device_vram[target_dev_idx] += entry.dst_size;
+        } else {
+            entry.on_device     = false;
+            entry.target_device = -1;
+            plan.host_bytes += entry.dst_size;
+        }
+    }
+
+    plan.build_index();
+
+    // Log multi-device placement summary
+    GGML_LOG_INFO("[PLACEMENT-MULTI] %zu devices, %d layers, hybrid parallelism\n",
+                  n_devs, n_layers);
+    for (size_t d = 0; d < n_devs; d++) {
+        int first_layer = n_layers, last_layer = -1;
+        for (int l = 0; l < n_layers; l++) {
+            if (layer_owner[l] == static_cast<int>(d)) {
+                first_layer = std::min(first_layer, l);
+                last_layer  = std::max(last_layer, l);
+            }
+        }
+        GGML_LOG_INFO("[PLACEMENT-MULTI] Device %d: layers [%d, %d], "
+                      "%.1f MB VRAM used (%.1f MB budget)\n",
+                      device_budgets[d].device_id, first_layer, last_layer,
+                      plan.per_device_vram[d] / (1024.0 * 1024.0),
+                      device_budgets[d].vram_budget / (1024.0 * 1024.0));
+    }
+
+    // Per-priority breakdown
+    static const char * priority_names[] = {
+        "NORM/EMBED", "ATTENTION", "FFN", "MOE_GATE",
+        "MOE_DOWN", "MOE_UP", "MOE_GATE_PROJ"
+    };
+    for (int p = 0; p < static_cast<int>(placement_priority::COUNT); ++p) {
+        size_t dev_count = 0, host_count = 0;
+        size_t dev_bytes = 0, host_bytes = 0;
+        for (const auto & e : plan.entries) {
+            if (static_cast<int>(e.priority) == p) {
+                if (e.on_device) {
+                    dev_count++;
+                    dev_bytes += e.dst_size;
+                } else {
+                    host_count++;
+                    host_bytes += e.dst_size;
+                }
+            }
+        }
+        if (dev_count + host_count > 0) {
+            GGML_LOG_INFO("[PLACEMENT-MULTI] %-14s  device=%3zu (%.1f MB)  host=%3zu (%.1f MB)\n",
+                          priority_names[p],
+                          dev_count, dev_bytes / (1024.0 * 1024.0),
+                          host_count, host_bytes / (1024.0 * 1024.0));
+        }
+    }
+    GGML_LOG_INFO("[PLACEMENT-MULTI] Total: %.1f MB device + %.1f MB host (budget=%.1f MB)\n",
+                  plan.vram_bytes / (1024.0 * 1024.0),
+                  plan.host_bytes / (1024.0 * 1024.0),
+                  plan.vram_budget / (1024.0 * 1024.0));
 
     return plan;
 }
