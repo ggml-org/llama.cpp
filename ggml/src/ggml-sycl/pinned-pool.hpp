@@ -51,6 +51,11 @@ class pinned_chunk_pool {
     // Returns the number of chunks actually allocated.
     size_t pre_allocate(size_t total_bytes);
 
+    // Pre-allocate ALL chunks needed for the full model weight set plus headroom.
+    // Called once after model header is parsed and total weight size is known.
+    // Returns the number of new chunks allocated.
+    size_t pre_allocate_all(size_t model_weight_bytes);
+
     // Check if a pointer belongs to this pool (falls within any chunk).
     bool contains(const void * ptr) const;
 

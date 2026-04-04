@@ -219,6 +219,20 @@ size_t pinned_chunk_pool::pre_allocate(size_t total_bytes) {
     return chunks_grown;
 }
 
+size_t pinned_chunk_pool::pre_allocate_all(size_t model_weight_bytes) {
+    constexpr double k_headroom_factor = 1.2;
+    const size_t total_need = static_cast<size_t>(
+        static_cast<double>(model_weight_bytes) * k_headroom_factor);
+
+    GGML_LOG_INFO("[SYCL] Pinned pool pre_allocate_all: "
+                  "model=%.1f MB, total=%.1f MB (%.0f%% headroom)\n",
+                  model_weight_bytes / (1024.0 * 1024.0),
+                  total_need / (1024.0 * 1024.0),
+                  (k_headroom_factor - 1.0) * 100.0);
+
+    return pre_allocate(total_need);
+}
+
 bool pinned_chunk_pool::contains(const void * ptr) const {
     if (!ptr) {
         return false;
