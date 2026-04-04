@@ -965,7 +965,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     }
 
     return "";
-};
+}
 
 void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
