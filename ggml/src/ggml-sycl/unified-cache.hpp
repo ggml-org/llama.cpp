@@ -776,6 +776,11 @@ class host_cache {
 
     size_t evict(size_t bytes_needed);
 
+    // Evict all weight entries (DENSE_WEIGHT and MOE_EXPERT) from the host cache.
+    // Called during new model load to reclaim pinned pool space from the previous model.
+    // Returns total bytes freed.
+    size_t evict_all_weights();
+
     // Reserve non-cache runtime buffers (compute, KV, etc.)
     void update_reserved_bytes(size_t reserved_bytes);
 

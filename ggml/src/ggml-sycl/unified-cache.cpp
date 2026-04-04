@@ -2128,6 +2128,31 @@ size_t host_cache::evict(size_t bytes_needed) {
     return freed;
 }
 
+size_t host_cache::evict_all_weights() {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<unified_cache_key> to_evict;
+    to_evict.reserve(entries_.size());
+
+    for (const auto & pair : entries_) {
+        if (pair.first.type == cache_entry_type::DENSE_WEIGHT ||
+            pair.first.type == cache_entry_type::MOE_EXPERT) {
+            to_evict.push_back(pair.first);
+        }
+    }
+
+    size_t freed = 0;
+    for (const auto & key : to_evict) {
+        auto it = entries_.find(key);
+        if (it != entries_.end()) {
+            freed += it->second.size;
+            free_entry(it->second);
+            entries_.erase(it);
+        }
+    }
+    return freed;
+}
+
 size_t host_cache::evict_one() {
     float             min_score = std::numeric_limits<float>::max();
     unified_cache_key evict_key{};

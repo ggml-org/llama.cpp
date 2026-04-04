@@ -4837,6 +4837,18 @@ void ggml_backend_sycl_set_model_loading(bool loading) {
         g_sycl_in_model_load.store(true, std::memory_order_release);
         // S1: only clear on outermost entry.  Non-S1: always clear.
         if (depth == 0 || !g_all_weights_host.load(std::memory_order_acquire)) {
+            // Reclaim host-pinned memory from previous model's weight entries.
+            // Must happen before release_host_weight_extras to free pinned pool
+            // space for the new model's host buffers.
+            auto * hcache = ggml_sycl::try_get_host_cache();
+            if (hcache) {
+                size_t freed = hcache->evict_all_weights();
+                if (freed > 0) {
+                    GGML_LOG_INFO("[HOST-CACHE] Evicted %.1f MB from previous model\n",
+                                  freed / (1024.0 * 1024.0));
+                }
+            }
+
             g_sycl_layouts_epoch.fetch_add(1, std::memory_order_acq_rel);
             ggml_sycl_clear_layout_choices();
             ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::registry_only);
