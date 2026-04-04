@@ -7,6 +7,7 @@
 #include "unified-cache.hpp"
 
 #include "alloc-registry.hpp"
+#include "mem-handle.hpp"
 #include "expert-prefetch.hpp"
 #include "kv-tier-manager.hpp"
 #include "common.hpp"
@@ -5047,6 +5048,20 @@ size_t unified_cache::evict(size_t bytes_needed) {
     while (freed < bytes_needed && !entries_.empty()) {
         size_t evicted = evict_one(0);
         if (evicted == 0) {
+            // Diagnostic: why can't we evict anything?
+            size_t n_pinned = 0, n_evicting = 0, n_in_progress = 0, n_host = 0, n_eligible = 0;
+            for (const auto & pair : entries_) {
+                const auto & entry = pair.second;
+                if (entry.pinned) n_pinned++;
+                else if (entry.state == cache_entry_state::EVICTING) n_evicting++;
+                else if (entry.state == cache_entry_state::IN_PROGRESS) n_in_progress++;
+                else if (entry.host_resident) n_host++;
+                else n_eligible++;
+            }
+            GGML_LOG_WARN("[UNIFIED-CACHE] evict blocked: total=%zu pinned=%zu evicting=%zu "
+                          "in_progress=%zu host=%zu eligible=%zu graph_active=%d\n",
+                          entries_.size(), n_pinned, n_evicting, n_in_progress, n_host, n_eligible,
+                          g_graph_compute_active.load(std::memory_order_acquire) ? 1 : 0);
             break;  // All entries pinned
         }
         freed += evicted;
@@ -5118,6 +5133,7 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
     // the expert pointer table → GPU page fault → DEVICE_LOST.
     // Callers fall back to host-pinned zero-copy when eviction returns 0.
     if (g_graph_compute_active.load(std::memory_order_acquire)) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] evict_one: blocked by graph_compute_active\n");
         return 0;
     }
 
@@ -5185,7 +5201,8 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
     }
 
     if (!found) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict failed: no eligible entries\n");
+        GGML_LOG_WARN("[UNIFIED-CACHE] evict_one: no eligible entries found in %zu entries\n",
+                      entries_.size());
         return 0;  // All entries pinned
     }
 
@@ -5292,6 +5309,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         // Remove from entries — invalidates iterator, must not dereference `it` after this
         entries_.erase(it);
 
+        // Bump generation so all mem_handles see that pointers may have moved.
+        cache_generation_bump();
+
         GGML_SYCL_DEBUG(
             "[UNIFIED-CACHE] Evicted: model=%llu name_hash=0x%llx layout=%d %.2f MB (used=%.1f/%.1f MB) "
             "host_resident=%d\n",
@@ -5370,6 +5390,10 @@ size_t unified_cache::finalize_evictions_locked() {
         id_to_key_.erase(key.id);
         entries_.erase(key);
         evictions_in_flight_--;
+    }
+
+    if (!finalized_keys.empty()) {
+        cache_generation_bump();
     }
 
     return finalized_keys.size();
@@ -5483,6 +5507,9 @@ void * unified_cache::promote_to_device(const unified_cache_key & key, size_t si
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     entries_[key]       = std::move(entry);
     id_to_key_[key.id] = key;
+
+    // Pointer moved from host to device — invalidate cached handles.
+    cache_generation_bump();
 
     GGML_SYCL_DEBUG(
         "[UNIFIED-CACHE] promote_to_device: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
