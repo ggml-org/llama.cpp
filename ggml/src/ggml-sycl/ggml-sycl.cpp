@@ -5830,8 +5830,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                     dev_total * (static_cast<double>(budget_pct) / 100.0));
                 budgets.push_back({ d, dev_budget, dev_total });
             }
+            const auto gpu_mode = ggml_sycl::get_multi_gpu_mode(is_moe);
             g_placement_plan = ggml_sycl::compute_multi_device_plan(
-                budgets, g_tensor_inventory, static_cast<int>(g_model_n_layer));
+                budgets, g_tensor_inventory, static_cast<int>(g_model_n_layer), gpu_mode);
             g_has_placement_plan = true;
             GGML_LOG_INFO("[SYCL] Multi-device placement plan computed: %zu entries, "
                           "%.1f MB device + %.1f MB host (%d GPUs)\n",
@@ -36160,40 +36161,15 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
             return false;
         }
 
-        // Classify this layer on first encounter using actual tensor cache key
+        // Classify this layer on first encounter using resolve_allocation()
         if (!g_layer_classified[layer_id]) {
             std::lock_guard<std::mutex> lock(g_layer_map_mutex);
             if (!g_layer_classified[layer_id]) {
-                bool on_cpu = false;
-
-                // Strategy: query the unified cache for weight location.
-                // If found with location != DEVICE → host-resident → CPU.
-                // If NOT found (evicted by LRU during layout finalization) AND
-                // the model exceeds VRAM → weight only exists on host → CPU.
-                auto * cache =
-                    ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache_for_device(ctx.device) : nullptr;
-                if (cache) {
-                    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-                    if (key.valid) {
-                        const layout_mode layouts[]      = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_AOS };
-                        bool              found_in_cache = false;
-                        for (layout_mode layout : layouts) {
-                            ggml_sycl::cache_ptr_view view = cache->get_view(key, layout);
-                            if (view.ptr) {
-                                on_cpu         = (view.location != ggml_sycl::cache_location::DEVICE);
-                                found_in_cache = true;
-                                break;
-                            }
-                        }
-                        if (!found_in_cache && unified_cache_active()) {
-                            // Weight evicted from cache — only exists on host (mmap/pinned)
-                            on_cpu = true;
-                        }
-                    }
-                }
+                auto loc    = resolve_allocation(src0, ctx.device);
+                bool on_cpu = loc ? !loc.on_device() : false;
 
                 // Fallback: check if weight buffer itself is host-resident
-                if (!on_cpu && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+                if (!on_cpu && !loc && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
                     on_cpu = true;
                 }
 

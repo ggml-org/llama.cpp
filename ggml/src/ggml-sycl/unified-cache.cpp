@@ -8,6 +8,7 @@
 
 #include "alloc-registry.hpp"
 #include "expert-prefetch.hpp"
+#include "kv-tier-manager.hpp"
 #include "common.hpp"
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
@@ -9190,6 +9191,35 @@ memory_location query_location(const void * ptr, int device_hint) {
     return loc;
 }
 
+memory_location query_kv_location(int layer_id, int device) {
+    memory_location loc{};
+    loc.device = device;
+    loc.role   = alloc_role::KV;
+    loc.layout = GGML_LAYOUT_AOS;  // KV cache is always row-major
+
+    if (device < 0) {
+        // No device specified — assume host
+        loc.tier = alloc_tier::HOST_PINNED;
+        return loc;
+    }
+
+    auto & mgr = get_kv_tier_manager(device);
+    if (!mgr.is_active()) {
+        // No tiering configured — all KV on device (default path)
+        loc.tier = alloc_tier::DEVICE_VRAM;
+        return loc;
+    }
+
+    if (mgr.is_hot(static_cast<uint32_t>(layer_id))) {
+        loc.tier = alloc_tier::DEVICE_VRAM;
+        loc.zone = vram_zone_id::KV;
+    } else {
+        loc.tier = alloc_tier::HOST_PINNED;
+    }
+
+    return loc;
+}
+
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (!cache) {
@@ -10010,10 +10040,24 @@ placement_plan compute_placement_plan(
 //
 // Falls back to single-device compute_placement_plan() when only 1 device.
 
+multi_gpu_mode get_multi_gpu_mode(bool is_moe) {
+    const char * env = std::getenv("GGML_SYCL_MULTI_GPU_MODE");
+    if (env) {
+        if (std::strcmp(env, "layer") == 0)  return multi_gpu_mode::LAYER;
+        if (std::strcmp(env, "expert") == 0) return multi_gpu_mode::EXPERT;
+        if (std::strcmp(env, "hybrid") == 0) return multi_gpu_mode::HYBRID;
+        GGML_LOG_WARN("[PLACEMENT-MULTI] Unknown GGML_SYCL_MULTI_GPU_MODE='%s', "
+                      "using default\n", env);
+    }
+    // Default: hybrid for MoE, layer for dense-only
+    return is_moe ? multi_gpu_mode::HYBRID : multi_gpu_mode::LAYER;
+}
+
 placement_plan compute_multi_device_plan(
     const std::vector<device_budget> &                  device_budgets,
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
-    int                                                 n_layers) {
+    int                                                 n_layers,
+    multi_gpu_mode                                      mode) {
 
     // Single device: delegate to existing P4 path
     if (device_budgets.size() <= 1) {
@@ -10094,9 +10138,10 @@ placement_plan compute_multi_device_plan(
         });
 
     // Step 4: Pack entries into devices.
-    // Dense weights: go to the device owning their layer.
-    // MoE experts: distributed across ALL devices by most-remaining-budget.
-    // Non-layer tensors (embeddings, output head): primary device (index 0).
+    // Behavior depends on parallelism mode:
+    //   LAYER:  All tensors (dense + MoE) assigned by layer owner.
+    //   EXPERT: Dense to primary device; MoE experts distributed across all.
+    //   HYBRID: Dense by layer owner; MoE experts distributed across all.
 
     auto is_moe_priority = [](placement_priority p) {
         return p == placement_priority::MOE_GATE ||
@@ -10105,11 +10150,17 @@ placement_plan compute_multi_device_plan(
                p == placement_priority::MOE_GATE_PROJ;
     };
 
+    static const char * mode_names[] = { "LAYER", "EXPERT", "HYBRID" };
+    GGML_LOG_INFO("[PLACEMENT-MULTI] Mode: %s\n",
+                  mode_names[static_cast<int>(mode)]);
+
     for (auto & entry : plan.entries) {
         int target_dev_idx = -1;
 
-        if (is_moe_priority(entry.priority)) {
-            // MoE expert: device with most remaining budget that fits
+        const bool is_moe = is_moe_priority(entry.priority);
+
+        if (is_moe && mode != multi_gpu_mode::LAYER) {
+            // EXPERT or HYBRID: distribute MoE experts across all devices
             size_t best_remaining = 0;
             for (size_t d = 0; d < n_devs; d++) {
                 if (remaining[d] >= entry.dst_size && remaining[d] > best_remaining) {
@@ -10117,8 +10168,14 @@ placement_plan compute_multi_device_plan(
                     target_dev_idx = static_cast<int>(d);
                 }
             }
+        } else if (!is_moe && mode == multi_gpu_mode::EXPERT) {
+            // EXPERT mode: all dense layers on primary device
+            target_dev_idx = 0;
+            if (remaining[0] < entry.dst_size) {
+                target_dev_idx = -1;  // Spill to host
+            }
         } else {
-            // Dense weight: assign to layer-owning device
+            // LAYER or HYBRID for dense: assign by layer owner
             int layer_id = entry.layer_id;
             if (layer_id >= 0 && layer_id < n_layers) {
                 target_dev_idx = layer_owner[layer_id];

@@ -203,6 +203,13 @@ struct device_budget {
     size_t total_vram;   // Total VRAM on this device (for proportional split)
 };
 
+// Multi-GPU parallelism mode (GGML_SYCL_MULTI_GPU_MODE env var).
+enum class multi_gpu_mode : uint8_t {
+    LAYER   = 0,  // Pure layer parallelism (no cross-device expert sharing)
+    EXPERT  = 1,  // Pure expert parallelism (all layers replicated, experts split)
+    HYBRID  = 2,  // Layer parallelism for dense + expert parallelism for MoE (default)
+};
+
 // Complete placement plan for all model weights.
 // Supports single-device (P4) and multi-device (P4.5) planning.
 struct placement_plan {
@@ -273,10 +280,16 @@ placement_plan compute_placement_plan(
 // device_budgets: per-device VRAM budgets, sorted by device_id.
 // tensor_inventory: vector of (name, src_size) pairs from model header.
 // n_layers: total number of transformer layers in the model.
+// mode: parallelism strategy (LAYER, EXPERT, or HYBRID).
 placement_plan compute_multi_device_plan(
     const std::vector<device_budget> &                  device_budgets,
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
-    int                                                 n_layers);
+    int                                                 n_layers,
+    multi_gpu_mode                                      mode = multi_gpu_mode::HYBRID);
+
+// Parse GGML_SYCL_MULTI_GPU_MODE env var.
+// Returns HYBRID for MoE models, LAYER for dense-only, unless overridden.
+multi_gpu_mode get_multi_gpu_mode(bool is_moe);
 
 namespace detail {
 
@@ -1867,6 +1880,11 @@ struct memory_location {
 // classification and arena zone ownership detection.  O(1) via binary search.
 // Does NOT acquire SYCL runtime locks — safe to call at graph build time.
 memory_location query_location(const void * ptr, int device_hint = -1);
+
+// Query KV cache location for a specific layer.  Returns tier (DEVICE_VRAM
+// or HOST_PINNED) based on kv_tier_manager placement decisions.
+// O(1) lookup — safe at graph build time.
+memory_location query_kv_location(int layer_id, int device);
 
 enum class offload_buffer_role : uint8_t {
     STAGING_SRC0       = 0,
