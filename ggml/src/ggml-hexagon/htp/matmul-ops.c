@@ -2996,6 +2996,10 @@ int op_matmul(struct htp_ops_context * octx) {
         return op_matmul_hvx(octx);
     }
 
+    // Always re-quantize src1 since HMX kernel overwrites vtcm/spad,
+    // so any previously cached quantized data is invalid.
+    octx->src1_spad.src = NULL;
+
     int k = (int) src0->ne[0];  // inner dimension
     int n = (int) src0->ne[1];  // weight columns
 
@@ -3044,7 +3048,6 @@ int op_matmul(struct htp_ops_context * octx) {
 
     if (ret != 0) {
         FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
-        octx->src1_spad.src = NULL; // force requant
         return op_matmul(octx);
     }
 
@@ -3064,10 +3067,6 @@ int op_matmul(struct htp_ops_context * octx) {
 
         octx->src[1] = &src1_tail;
         octx->dst    = &dst_tail;
-
-        // Always re-quantize tail src1: HMX Phase 1 overwrites VTCM,
-        // so any previously cached quantized data is invalid.
-        octx->src1_spad.src = NULL;
 
         FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1_tail.data, (void *) dst_tail.data);
         return op_matmul_hvx(octx);
