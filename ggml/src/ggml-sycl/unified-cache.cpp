@@ -5056,23 +5056,19 @@ size_t unified_cache::evict(size_t bytes_needed) {
 
     size_t freed = 0;
     while (freed < bytes_needed && !entries_.empty()) {
+        const size_t n_before = entries_.size();
         size_t evicted = evict_one(0);
         if (evicted == 0) {
-            // Diagnostic: why can't we evict anything?
-            size_t n_pinned = 0, n_evicting = 0, n_in_progress = 0, n_host = 0, n_eligible = 0;
-            for (const auto & pair : entries_) {
-                const auto & entry = pair.second;
-                if (entry.pinned) n_pinned++;
-                else if (entry.state == cache_entry_state::EVICTING) n_evicting++;
-                else if (entry.state == cache_entry_state::IN_PROGRESS) n_in_progress++;
-                else if (entry.host_resident) n_host++;
-                else n_eligible++;
+            // evict_one returns 0 for two reasons:
+            //   1. No eligible entry found (all pinned/in-progress/graph-active)
+            //   2. Evicted a host-resident entry (freed 0 device bytes but
+            //      removed from entries_)
+            // If entries_ shrank, a host-resident entry was evicted — keep
+            // trying, device-resident entries may follow.
+            if (entries_.size() < n_before) {
+                continue;
             }
-            GGML_LOG_WARN("[UNIFIED-CACHE] evict blocked: total=%zu pinned=%zu evicting=%zu "
-                          "in_progress=%zu host=%zu eligible=%zu graph_active=%d\n",
-                          entries_.size(), n_pinned, n_evicting, n_in_progress, n_host, n_eligible,
-                          g_graph_compute_active.load(std::memory_order_acquire) ? 1 : 0);
-            break;  // All entries pinned
+            break;  // Genuinely nothing evictable
         }
         freed += evicted;
     }
@@ -6620,12 +6616,24 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
 
         budget = static_cast<size_t>(base_mem * (static_cast<double>(pct) / 100.0));
 
-        // Cap budget to actual free VRAM at startup to account for system overhead
-        // (display compositor, driver structures, etc.) which can be 1-2 GB
-        if (free_mem > 0 && budget > free_mem) {
-            GGML_LOG_INFO("[UNIFIED-CACHE] Capping budget from %.1f MB to %.1f MB (actual free VRAM)\n",
-                          budget / (1024.0f * 1024.0f), free_mem / (1024.0f * 1024.0f));
-            budget                = free_mem;
+        // Cap budget to actual free VRAM to account for system overhead
+        // (display compositor, driver structures, etc.).
+        //
+        // IMPORTANT: Use the pre-probe free VRAM snapshot, NOT the current
+        // get_memory_info() value.  The alloc probe at init does binary-search
+        // malloc_device/free cycles whose freed memory lingers in the L0 USM
+        // pool, making post-probe get_memory_info() report artificially low
+        // free_mem (e.g. 600 MB on a 12 GB GPU).  The pre-probe snapshot
+        // reflects the true available VRAM before our process consumed any.
+        size_t clean_free = ggml_sycl_get_free_vram_at_init(device_id);
+        if (clean_free == 0) {
+            clean_free = free_mem;  // fallback to current if pre-probe unavailable
+        }
+        if (clean_free > 0 && budget > clean_free) {
+            GGML_LOG_INFO("[UNIFIED-CACHE] Capping budget from %.1f MB to %.1f MB "
+                          "(pre-probe free VRAM)\n",
+                          budget / (1024.0f * 1024.0f), clean_free / (1024.0f * 1024.0f));
+            budget                = clean_free;
             budget_capped_to_free = true;
         }
 

@@ -13096,9 +13096,19 @@ static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_typ
         limit = ggml_sycl_info().devices[ctx->device].max_alloc_size;
     }
 
-    // NOTE: host_max_alloc_size cap removed here — it was overly conservative
-    // (based on smallest-device VRAM) and blocked 120B model loading.
-    // ggml_sycl_host_malloc() will attempt large allocations with a warning.
+    // Reserve 512 MB compute headroom so get_max_size is consistent with the
+    // alloc_buffer headroom check.  Without this, ggml thinks it can allocate
+    // the full safe limit, but alloc_buffer rejects allocations that leave
+    // less than 512 MB free → the scheduler doesn't know to fall back early.
+    constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(ctx->device, &free_vram, &total_vram);
+    if (free_vram > COMPUTE_HEADROOM) {
+        size_t effective = free_vram - COMPUTE_HEADROOM;
+        if (effective < limit) {
+            limit = effective;
+        }
+    }
 
     return limit;
 }
@@ -29489,46 +29499,53 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
         // KQ + KQV multi-batch
         GGML_SYCL_KTRACE("mul_mat_f16_kqkv_multi", " batches=%lld", (long long) (src1->ne[2] * src1->ne[3]));
-        bool batched_ok = false;
         if (!force_simple_kqv) {
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
-                batched_ok = true;
             } catch (const std::exception & e) {
                 // Batched path failed — could be VRAM exhaustion or oneDNN
-                // descriptor incompatibility.  Try eviction for VRAM issues,
-                // then fall back to the general mul_mat path if unrecoverable.
+                // descriptor incompatibility (e.g. unsupported GQA broadcast).
+                // Try eviction for VRAM issues, then fall back to vec_nc.
                 GGML_LOG_WARN("[SYCL] batched F16 mul_mat failed: %s — attempting recovery\n", e.what());
+                bool recovered = false;
                 auto * cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
                 if (cache) {
-                    // Drain in-flight kernels so freed VRAM is truly unused.
                     try { ctx.stream()->wait_and_throw(); } catch (...) {}
                     ggml_sycl::unified_cache_set_graph_compute_active(false);
                     cache->unpin_all();
                     constexpr size_t evict_chunk = 256ull * 1024ull * 1024ull;
-                    for (int attempt = 0; attempt < 3 && !batched_ok; ++attempt) {
+                    for (int attempt = 0; attempt < 3 && !recovered; ++attempt) {
                         size_t freed = cache->evict_and_flush(evict_chunk);
                         if (freed == 0) break;
                         GGML_LOG_INFO("[SYCL] Evicted %.1f MB for compute scratch (attempt %d)\n",
                                       freed / (1024.0 * 1024.0), attempt + 1);
                         try {
                             ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
-                            batched_ok = true;
+                            recovered = true;
                         } catch (...) {}
                     }
                     ggml_sycl::unified_cache_set_graph_compute_active(true);
                 }
+                if (!recovered) {
+                    // Eviction didn't help — likely a oneDNN descriptor error
+                    // (e.g. unsupported GQA broadcast), not VRAM exhaustion.
+                    // Fall back to CPU for this attention mul_mat.
+                    if (!ggml_sycl_cpu_fallback_graph(ctx, dst, "batched F16 oneDNN fallback")) {
+                        // CPU fallback also failed — last resort diagnostics.
+                        size_t free_vram = 0, total_vram = 0;
+                        ggml_backend_sycl_get_device_memory(ctx.device, &free_vram, &total_vram);
+                        fprintf(stderr, "[SYCL] VRAM exhaustion diagnostic: "
+                                        "free=%.1f MB total=%.1f MB\n",
+                                        free_vram / (1024.0 * 1024.0),
+                                        total_vram / (1024.0 * 1024.0));
+                        GGML_ABORT("[SYCL] batched F16 mul_mat failed — no recovery path available.");
+                    }
+                }
             }
-        }
-        if (!batched_ok) {
-            // Batched oneDNN GEMM failed or was skipped.  Fall through to
-            // the general mul_mat dispatch (unified kernel / MMVQ / etc.)
-            // which handles FP16 attention via simpler per-head iteration.
-            GGML_LOG_WARN("[SYCL] batched F16 path unavailable — falling back to general mul_mat\n");
-            goto general_mul_mat;
+        } else {
+            GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
         }
     } else {
-        general_mul_mat:
         ggml_sycl::test_record_orchestrator_call();
         auto decision = ctx.matmul_orchestrator.select(src0, src1, dst, forced_layout);
         // =====================================================================
