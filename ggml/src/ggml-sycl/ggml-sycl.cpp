@@ -13118,9 +13118,10 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
 // This avoids the monolithic multi-GB sycl::malloc_device that fails with
 // UR_RESULT_ERROR_OUT_OF_RESOURCES when VRAM is fragmented (n_ctx >= 10240).
 struct kv_layer_alloc {
-    void * ptr       = nullptr;  // Device VRAM or host-pinned pointer
-    size_t size      = 0;        // Bytes allocated for this layer
-    bool   on_device = false;    // true = VRAM, false = host-pinned
+    void * ptr        = nullptr;  // Device VRAM or host-pinned pointer
+    size_t size       = 0;        // Bytes allocated for this layer
+    bool   on_device  = false;    // true = VRAM, false = host-pinned
+    bool   from_arena = false;    // true = sub-allocated from arena KV zone (do NOT free individually)
 };
 
 struct tiered_kv_buffer_context {
@@ -13158,8 +13159,11 @@ static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     ggml_sycl_set_device(ctx->device);
 
     // Free per-layer allocations via unified_cache_deallocate.
+    // Arena-sourced layers (from_arena=true) are sub-allocations from the VRAM
+    // arena KV zone — they must NOT be freed individually.  The arena reclaims
+    // them when it is destroyed.
     for (auto & la : ctx->layer_allocs) {
-        if (la.ptr) {
+        if (la.ptr && !la.from_arena) {
             ggml_sycl::unified_cache_deallocate(ctx->device, la.ptr, la.size,
                                                 ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
             la.ptr = nullptr;
@@ -13487,13 +13491,35 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     uint32_t n_device_layers = 0;
     uint32_t n_host_layers   = 0;
 
+    // P5: Check if the VRAM arena KV zone is available for device-layer placement.
+    // Arena KV zone sub-allocates from the pre-reserved VRAM block, eliminating
+    // per-layer sycl::malloc_device calls during context creation.
+    const bool arena_kv_active = ggml_sycl::vram_arena_enabled()
+                                 && ggml_sycl::unified_cache_kv_arena_capacity(device) > 0;
+
     for (uint32_t l = 0; l < n_layers; l++) {
         const size_t layer_size = aligned_per_layer;
         char tag[64];
         snprintf(tag, sizeof(tag), "kv_tier:layer_%u", l);
 
         if (layout[l].on_device && kv_host_val != 1 && total_device + layer_size <= kv_device_budget) {
-            // Try device allocation via unified cache (handles budget + eviction).
+            // P5: Prefer arena KV zone for device layers — avoids individual
+            // sycl::malloc_device calls during context creation.
+            if (arena_kv_active) {
+                void * arena_ptr = ggml_sycl::unified_cache_kv_arena_alloc(device, layer_size);
+                if (arena_ptr) {
+                    layer_allocs[l].ptr        = arena_ptr;
+                    layer_allocs[l].size       = layer_size;
+                    layer_allocs[l].on_device  = true;
+                    layer_allocs[l].from_arena = true;
+                    total_device += layer_size;
+                    n_device_layers++;
+                    continue;
+                }
+                // Arena KV zone exhausted — fall through to unified_cache_allocate.
+            }
+
+            // Fallback: device allocation via unified cache (handles budget + eviction).
             auto result = ggml_sycl::unified_cache_allocate(
                 device, layer_size,
                 ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT, tag);
@@ -13537,9 +13563,9 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         } else {
             GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate layer %u (%zu bytes)\n",
                            device, l, layer_size);
-            // Clean up already-allocated layers
+            // Clean up already-allocated layers (skip arena-sourced ones).
             for (uint32_t j = 0; j < l; j++) {
-                if (layer_allocs[j].ptr) {
+                if (layer_allocs[j].ptr && !layer_allocs[j].from_arena) {
                     ggml_sycl::unified_cache_deallocate(
                         device, layer_allocs[j].ptr, layer_allocs[j].size,
                         ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
@@ -13569,7 +13595,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate %zu bytes for allocator base\n",
                        device, alloc_padded);
         for (auto & la : layer_allocs) {
-            if (la.ptr) {
+            if (la.ptr && !la.from_arena) {
                 ggml_sycl::unified_cache_deallocate(
                     device, la.ptr, la.size,
                     ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
@@ -13604,9 +13630,16 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         GGML_LOG_INFO("[KV-TIER] alloc_base=%p size=%zu (range %p-%p)\n",
                       alloc_base, size, (void*)ab_start, (void*)ab_end);
         for (uint32_t l = 0; l < std::min(n_layers, 4u); l++) {
-            GGML_LOG_INFO("[KV-TIER] layer_allocs[%u]: ptr=%p size=%zu on_device=%d\n",
-                          l, layer_allocs[l].ptr, layer_allocs[l].size, (int)layer_allocs[l].on_device);
+            GGML_LOG_INFO("[KV-TIER] layer_allocs[%u]: ptr=%p size=%zu on_device=%d from_arena=%d\n",
+                          l, layer_allocs[l].ptr, layer_allocs[l].size,
+                          (int)layer_allocs[l].on_device, (int)layer_allocs[l].from_arena);
         }
+    }
+
+    // Count arena-sourced layers for logging.
+    uint32_t n_arena_layers = 0;
+    for (const auto & la : layer_allocs) {
+        if (la.from_arena) n_arena_layers++;
     }
 
     // Log placement summary
@@ -13615,13 +13648,15 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
                       device, n_layers, size / (1024.0 * 1024.0),
                       kv_host_val == 1 ? " (KV_HOST=1)" : " (VRAM exhausted)");
     } else if (n_host_layers == 0) {
-        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on device (%.1f MB, per-layer alloc)\n",
-                      device, n_layers, size / (1024.0 * 1024.0));
+        GGML_LOG_INFO("[KV-TIER] Device %d: all %u KV layers on device (%.1f MB, per-layer alloc%s)\n",
+                      device, n_layers, size / (1024.0 * 1024.0),
+                      n_arena_layers > 0 ? ", arena KV zone" : "");
     } else {
         GGML_LOG_INFO(
-            "[KV-TIER] Device %d: %u device layers (%.1f MB), "
+            "[KV-TIER] Device %d: %u device layers (%.1f MB%s), "
             "%u host layers (%.1f MB), %.1f MB total (per-layer alloc)\n",
             device, n_device_layers, total_device / (1024.0 * 1024.0),
+            n_arena_layers > 0 ? ", arena KV zone" : "",
             n_host_layers, total_host / (1024.0 * 1024.0),
             size / (1024.0 * 1024.0));
     }

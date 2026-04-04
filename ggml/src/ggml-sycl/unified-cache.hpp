@@ -2321,6 +2321,12 @@ size_t unified_cache_compute_arena_used(int device_id);
 size_t unified_cache_kv_arena_capacity(int device_id);
 size_t unified_cache_kv_arena_used(int device_id);
 
+// Sub-allocate from the arena's KV zone for per-layer KV cache placement.
+// Returns nullptr if arena is inactive or KV zone is exhausted.
+// The returned pointer is VRAM (device-local) and must NOT be freed individually —
+// it is owned by the arena and released when the arena is destroyed.
+void * unified_cache_kv_arena_alloc(int device_id, size_t size);
+
 // Reserve the inference scratch pool on a device.
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 

@@ -9117,6 +9117,14 @@ size_t unified_cache_kv_arena_used(int device_id) {
     return cache->get_arena().zone_used(vram_zone_id::KV);
 }
 
+void * unified_cache_kv_arena_alloc(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !cache->get_arena().active()) {
+        return nullptr;
+    }
+    return cache->get_arena().zone_alloc(vram_zone_id::KV, size);
+}
+
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {
     auto * cache = get_unified_cache_for_device(device_id);
     if (!cache) {
