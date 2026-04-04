@@ -11012,6 +11012,13 @@ static void ggml_sycl_preload_model_weights() {
                         total_bytes += dst_size;
                         // Track for pinning after finalize
                         dense_pin_keys.push_back({ cache_key, preload_layout });
+                        // Register layout choice so inference dispatch uses the
+                        // same layout we uploaded.  Without this, the dispatch
+                        // derives a fallback that may differ from preload_layout,
+                        // triggering an assertion crash.
+                        ggml_sycl_register_layout_choice(
+                            cache_key, device, preload_layout,
+                            tensor->type, tensor->name);
                     } else {
                         dense_failed++;
                     }
