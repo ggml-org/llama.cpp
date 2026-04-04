@@ -108,7 +108,7 @@ You have access to the following tools:
     system_prompt += R"(
 - **write**: Create new files or overwrite existing ones.
 - **edit**: Make targeted edits using search/replace. The old_string must match exactly. Use replace_all=true to replace all occurrences of a word or phrase.
-- **glob**: Find files matching a pattern. Use to explore project structure.
+- **glob**: Find files matching a pattern (e.g. `*.cpp`, `*.{jpg,png}`). Use to explore project structure.
 - **update_plan**: Update and display your task plan. Use for multi-step tasks to show progress while staying in the tool-calling loop.
 
 ## Using the edit tool
