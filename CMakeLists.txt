@@ -32,6 +32,7 @@ else()
 endif()
 
 option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
+option(LLAMA_USE_SYSTEM_HTTPLIB "Use system cpp-httplib" OFF)
 
 option(LLAMA_WASM_MEM64 "llama: use 64-bit memory in WASM builds" ON)
 
@@ -198,7 +199,13 @@ add_subdirectory(src)
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
-    add_subdirectory(vendor/cpp-httplib)
+
+    if (LLAMA_USE_SYSTEM_HTTPLIB)
+        find_package(httplib REQUIRED)
+        add_library(cpp-httplib ALIAS httplib::httplib)
+    else()
+        add_subdirectory(vendor/cpp-httplib)
+    endif()
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
