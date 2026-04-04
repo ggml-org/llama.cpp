@@ -49,7 +49,9 @@ class vmem_kv_pool {
     // Map physical pages for a layer's KV region.
     // layer_offset: byte offset from the start of the virtual range.
     // size: bytes to map (will be rounded up to page_size).
-    // on_device: true = VRAM physical pages, false = host physical pages.
+    // on_device: must be true — L0 zePhysicalMemCreate requires a device handle
+    //            and does not support host-only physical memory.  CPU-layer KV
+    //            falls back to P5 arena (sycl::malloc_host).
     // Returns pointer within the virtual range, or nullptr on failure.
     void * map_layer(size_t layer_offset, size_t size, bool on_device);
 

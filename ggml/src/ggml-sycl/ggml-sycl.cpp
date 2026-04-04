@@ -13581,6 +13581,10 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     //   - Per-layer sycl::malloc_device calls
     //   - Synthetic alloc_base hack
     //   - Per-layer pointer remapping in init_tensor (for all-device case)
+    // Graph replay compatible: virtual addresses are stable (reserved once), and
+    // SYCL treats vmem as device USM (get_pointer_type = device).
+    // Phase 3 note: L0 VM only supports device physical memory — CPU-layer KV
+    // falls back to P5 arena (sycl::malloc_host) via the per-layer path below.
     if (kv_host_val != 1 && size <= kv_device_budget
         && ggml_sycl::vram_arena_enabled()
         && ggml_sycl::vmem_kv_available(*buft_ctx->stream)) {
