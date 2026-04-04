@@ -75,84 +75,6 @@ static std::string escape_json_string_inner(const std::string & s) {
     return escaped;
 }
 
-static const std::string GEMMA4_QUOTE = "<|\"|>";
-
-static std::string normalize_gemma4_to_json(const std::string & input) {
-    std::string result;
-    result.reserve(input.size() * 2);
-
-    enum Ctx { DICT, ARRAY };
-    std::vector<Ctx> ctx;
-
-    auto is_ws = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
-    auto skip_ws = [&](size_t & pos) {
-        while (pos < input.size() && is_ws(input[pos])) {
-            result += input[pos++];
-        }
-    };
-
-    auto quote_unquoted_key = [&](size_t & pos) {
-        if (pos < input.size() && input[pos] != '"' && input[pos] != '}') {
-            result += '"';
-            while (pos < input.size() && input[pos] != ':' && !is_ws(input[pos])) {
-                result += input[pos++];
-            }
-            result += '"';
-            skip_ws(pos);
-        }
-    };
-
-    size_t i = 0;
-    while (i < input.size()) {
-        if (i + GEMMA4_QUOTE.size() <= input.size() &&
-            input.compare(i, GEMMA4_QUOTE.size(), GEMMA4_QUOTE) == 0) {
-            result += '"';
-            i += GEMMA4_QUOTE.size();
-            continue;
-        }
-
-        char c = input[i];
-
-        if (c == '{') {
-            result += c;
-            ctx.push_back(DICT);
-            ++i;
-            skip_ws(i);
-            quote_unquoted_key(i);
-            continue;
-        }
-        if (c == '}') {
-            result += c;
-            if (!ctx.empty()) ctx.pop_back();
-            ++i;
-            continue;
-        }
-        if (c == '[') {
-            result += c;
-            ctx.push_back(ARRAY);
-            ++i;
-            continue;
-        }
-        if (c == ']') {
-            result += c;
-            if (!ctx.empty()) ctx.pop_back();
-            ++i;
-            continue;
-        }
-        if (c == ',' && !ctx.empty() && ctx.back() == DICT) {
-            result += c;
-            ++i;
-            skip_ws(i);
-            quote_unquoted_key(i);
-            continue;
-        }
-
-        result += c;
-        ++i;
-    }
-    return result;
-}
-
 // Convert Python-style single-quoted strings to JSON double-quoted strings
 // Only converts outer string delimiters, properly handling escape sequences:
 // - {'key': 'value'} -> {"key": "value"}
@@ -294,10 +216,6 @@ std::string & common_chat_peg_mapper::args_target() {
 
 std::string common_chat_peg_mapper::normalize_container_value(const std::string & input) {
     return normalize_quotes_to_json(input);
-}
-
-std::string common_chat_peg_gemma4_mapper::normalize_container_value(const std::string & input) {
-    return normalize_quotes_to_json(normalize_gemma4_to_json(input));
 }
 
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
@@ -946,4 +864,144 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
         trigger_rule("tool-call", literal(section_start) + space() + tool_calls + space() + literal(section_end));
 
     return force_tool_calls ? section : optional(section);
+}
+
+void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
+    for (const auto & node : result.nodes) {
+        visit(arena, node);
+    }
+}
+
+static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id) {
+    const auto & node = arena.get(id);
+
+    if (node.text.empty()) {
+        return "";
+    }
+
+    if (node.rule == "gemma4-number" || node.rule == "gemma4-bool" || node.rule == "gemma4-null") {
+        return std::string(node.text);
+    }
+
+    if (node.rule == "gemma4-string-content") {
+        return escape_json_string_inner(std::string(node.text));
+    }
+
+    if (node.rule == "gemma4-string") {
+        std::string result = "\"";
+        if (!node.children.empty()) {
+            result += gemma4_to_json(arena, node.children[0]);
+            if (!node.is_partial) {
+                result += "\"";
+            }
+        }
+        return result;
+    }
+
+    if (node.rule == "gemma4-array") {
+        std::string result = "[";
+
+        bool add_comma = false;
+        for (auto child_id : node.children) {
+            if (add_comma) {
+                result += ',';
+            }
+            add_comma = true;
+            result += gemma4_to_json(arena, child_id);
+        }
+
+        if (!node.is_partial) {
+            result += ']';
+        }
+        return result;
+    }
+
+    if (node.rule == "gemma4-dict-key-name") {
+        return std::string(node.text);
+    }
+
+    if (node.rule == "gemma4-dict-key") {
+        std::string result = "\"";
+        if (!node.children.empty()) {
+            result += escape_json_string_inner(gemma4_to_json(arena, node.children[0]));
+        }
+        if (!node.is_partial) {
+            result += "\":";
+        }
+        return result;
+    }
+
+    if (node.rule == "gemma4-dict-kv") {
+        std::string result;
+        for (auto child_id : node.children) {
+            result += gemma4_to_json(arena, child_id);
+        }
+        return result;
+    }
+
+    if (node.rule == "gemma4-dict") {
+        std::string result = "{";
+
+        bool add_comma = false;
+        for (auto child_id : node.children) {
+            if (add_comma) {
+                result += ',';
+            }
+            add_comma = true;
+            result += gemma4_to_json(arena, child_id);
+        }
+
+        if (!node.is_partial) {
+            result += '}';
+        }
+        return result;
+    }
+
+    if (node.rule == "gemma4-value") {
+        if (!node.children.empty()) {
+            return gemma4_to_json(arena, node.children[0]);
+        }
+        return "";
+    }
+
+    return "";
+}
+
+void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
+    const auto & node = arena.get(id);
+
+    if (node.tag == "reasoning") {
+        result.reasoning_content += std::string(node.text);
+        return;
+    }
+
+    if (node.tag == "content") {
+        result.content += std::string(node.text);
+        return;
+    }
+
+    if (node.tag == "tool") {
+        auto name_id = arena.find_by_tag(node, "tool-name");
+        auto args_id = arena.find_by_tag(node, "tool-args");
+
+        if (name_id != COMMON_PEG_INVALID_AST_ID && args_id != COMMON_PEG_INVALID_AST_ID) {
+            const auto & name_node = arena.get(name_id);
+            const auto & args_node = arena.get(args_id);
+
+            if (!name_node.is_partial) {
+                common_chat_tool_call call;
+                call.name = std::string(name_node.text);
+                if (!args_node.children.empty()) {
+                    call.arguments = gemma4_to_json(arena, args_node.children[0]);
+                }
+                result.tool_calls.push_back(call);
+            }
+        }
+
+        return;
+    }
+
+    for (auto child_id : node.children) {
+        visit(arena, child_id);
+    }
 }

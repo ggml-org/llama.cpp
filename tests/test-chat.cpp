@@ -1976,9 +1976,23 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         // Google Gemma 4 (tool calling with Gemma4 dict format)
-        auto tst = peg_tester("models/templates/gemma4.jinja");
+        auto tst = peg_tester("models/templates/google-gemma-4-31B-it.jinja");
 
         tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).run();
+
+        // Reasoning and content
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Reasoning and content with reasoning_format = none
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .run();
 
         // Simple tool call with string argument
         tst.test(

@@ -106,6 +106,9 @@ class common_peg_ast_arena {
 
     const common_peg_ast_node & get(common_peg_ast_id id) const { return nodes_.at(id); }
 
+    common_peg_ast_id find_by_tag(const common_peg_ast_node & parent, const std::string & tag, int max_depth = 3) const;
+    common_peg_ast_id find_by_rule(const common_peg_ast_node & parent, const std::string & tag, int max_depth = 3) const;
+
     size_t size() const { return nodes_.size(); }
 
     void clear() { nodes_.clear(); }
