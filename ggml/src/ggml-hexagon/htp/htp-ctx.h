@@ -3,6 +3,7 @@
 
 #include "hex-dma.h"
 #include "htp-ops.h"
+#include "hmx-worker.h"
 #include "worker-pool.h"
 
 #include <assert.h>
@@ -72,6 +73,10 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     struct htp_ops_context octx;
+
+#ifdef HTP_HAS_HMX
+    hmx_worker_context_t   hmx_worker; // Async HMX worker for pipeline overlap
+#endif
 };
 
 int op_matmul(struct htp_ops_context * octx);

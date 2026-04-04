@@ -324,6 +324,14 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
 #ifdef HTP_HAS_HMX
     ctx->hmx_enabled = use_hmx;
+    ctx->hmx_worker  = NULL;
+    if (use_hmx) {
+        AEEResult hmx_worker_err = hmx_worker_init(&ctx->hmx_worker, 8192, ctx->vtcm_rctx);
+        if (hmx_worker_err != AEE_SUCCESS) {
+            FARF(ERROR, "hmx_worker_init failed: %d", hmx_worker_err);
+            return hmx_worker_err;
+        }
+    }
     FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
 #endif
 
@@ -389,7 +397,13 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     }
 
 #ifdef HTP_HAS_HMX
-    ctx->hmx_enabled = 0;
+    if (ctx->hmx_enabled) {
+        if (ctx->hmx_worker) {
+            hmx_worker_release(ctx->hmx_worker);
+            ctx->hmx_worker = NULL;
+        }
+        ctx->hmx_enabled = 0;
+    }
 #endif
 
     vtcm_free(ctx);
