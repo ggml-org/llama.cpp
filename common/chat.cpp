@@ -1165,7 +1165,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 })));
             });
 
-            auto tool_call  = p.trigger_rule("tool-call", p.repeat(
+            auto tool_call = p.trigger_rule("tool-call", p.repeat(
                 "<|tool_call>call:" + tool_choice + "<tool_call|>",
                 /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
                 /* max = */ inputs.parallel_tool_calls ? -1 : 1
@@ -1821,7 +1821,6 @@ static void convert_tool_responses_gemma4(json & messages) {
         i = builder.pos;
     }
 
-    LOG_DBG("New messages: %s\n", result.dump(2).c_str());
     messages = result;
 }
 
