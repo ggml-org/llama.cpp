@@ -145,7 +145,6 @@ enum class tool_format {
     JSON_NATIVE,      // Pure JSON: {"name": "X", "arguments": {...}}
     TAG_WITH_JSON,    // Tag-based with JSON args: <function=X>{...}</function>
     TAG_WITH_TAGGED,  // Tag-based with tagged args: <param=key>value</param>
-    TAG_WITH_GEMMA4_DICT, // Gemma4 custom dict: <|tool_call>call:name{key:<|"|>val<|"|>}<tool_call|>
 };
 
 inline std::ostream & operator<<(std::ostream & os, const tool_format & format) {
@@ -158,8 +157,6 @@ inline std::ostream & operator<<(std::ostream & os, const tool_format & format) 
             return os << "TAG_WITH_JSON";
         case tool_format::TAG_WITH_TAGGED:
             return os << "TAG_WITH_TAGGED";
-        case tool_format::TAG_WITH_GEMMA4_DICT:
-            return os << "TAG_WITH_GEMMA4_DICT";
         default:
             return os << "UNKNOWN";
     }
@@ -363,7 +360,6 @@ struct analyze_tools : analyze_base {
                                         const common_peg_parser & call_id_section, bool have_call_id,
                                         const common_peg_parser & args,
                                         std::optional<common_peg_parser> atomic_peek) const;
-    common_peg_parser build_tool_parser_tag_gemma4_dict(parser_build_context & ctx) const;
 };
 
 // ============================================================================
