@@ -11,6 +11,7 @@
 ggml_cgraph * clip_graph_gemma4a::build() {
     const float res_weight = 0.5f;
     const float norm_eps   = 1e-6f;
+    const norm_type conf_norm = NORM_TYPE_RMS;
 
     // ── 1. Input: mel spectrogram ────────────────────────────
     // build_inp_raw(1) gives us [mel_bins, n_frames]
@@ -100,14 +101,14 @@ ggml_cgraph * clip_graph_gemma4a::build() {
 
         // ── 3a. Feed-Forward 1 (half-step) ───────────────────
         if (layer.ff_norm_w && layer.ff_up_w && layer.ff_down_w) {
-            cur = build_norm(cur, layer.ff_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+            cur = build_norm(cur, layer.ff_norm_w, nullptr, conf_norm, norm_eps, il);
             cur = build_ffn(cur,
                 layer.ff_up_w, nullptr,
                 nullptr, nullptr,
                 layer.ff_down_w, nullptr,
                 FFN_SILU, il);
             if (layer.ff_post_norm_w) {
-                cur = build_norm(cur, layer.ff_post_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+                cur = build_norm(cur, layer.ff_post_norm_w, nullptr, conf_norm, norm_eps, il);
             }
             residual = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, res_weight));
         }
@@ -121,7 +122,7 @@ ggml_cgraph * clip_graph_gemma4a::build() {
 
             ggml_tensor * attn_norm_w = layer.attn_pre_norm_w ? layer.attn_pre_norm_w : layer.ln_1_w;
             cur = attn_norm_w
-                ? build_norm(residual, attn_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il)
+                ? build_norm(residual, attn_norm_w, nullptr, conf_norm, norm_eps, il)
                 : residual;
 
             ggml_tensor * Qcur = build_mm(layer.q_w, cur);
@@ -235,44 +236,35 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 ggml_tensor * term_bd = ggml_mul_mat(ctx0, sin_proj, Q_blocks);
 
                 // ── Relative shift (Transformer-XL diagonal skew) ──
-                // HF operates on [..., W, F_span] with W outer, F_span inner (contiguous).
+                // HF's _rel_shift operates on [..., W=chunk_sz, F_span] in row-major
+                // (F_span varies fastest = last dim in PyTorch).
+                //
                 // Our term_bd is [F_span(ne0), chunk_sz(ne1), n_blocks, n_head].
-                // The skew trick requires F_span to be the INNER (ne[0]) dimension
-                // and W (chunk_sz) to be the OUTER (ne[1]). Our layout already has
-                // F_span at ne[0], but ggml's reshape merges ne[0]*ne[1] in
-                // column-major order (ne[0] varies fastest), so elements interleave
-                // by F_span stride — which IS the correct skew direction.
+                // In ggml column-major, ne[0] varies fastest, so F_span varies fastest
+                // — matching PyTorch's layout. NO transpose needed before the skew.
                 //
-                // HOWEVER, HF's reshape is row-major where W is outer and F_span is
-                // inner. For the skew to work identically, we need chunk_sz at ne[0]
-                // and F_span at ne[1] before the reshape, so the memory order matches.
-                //
-                // Step 1: transpose ne[0] and ne[1] → [chunk_sz, F_span, n_blocks, n_head]
-                term_bd = ggml_cont(ctx0, ggml_permute(ctx0, term_bd, 1, 0, 2, 3));
-                // Now: [chunk_sz=ne0, F_span=ne1, n_blocks, n_head]
+                // The skew: pad F_span → ctx_sz+1, flatten, slice, reshape.
+                // This shifts each "row" (indexed by W) by one position.
 
-                // Step 2: pad ne[1] (F_span) to ctx_sz+1
+                // Step 1: pad ne[0] (F_span) from 13 to ctx_sz+1=25
                 const int pad_amount = (ctx_sz + 1) - F_span;
-                term_bd = ggml_pad(ctx0, term_bd, 0, pad_amount, 0, 0);
-                // [chunk_sz, ctx_sz+1, n_blocks, n_head]
+                term_bd = ggml_pad(ctx0, term_bd, pad_amount, 0, 0, 0);
+                // [ctx_sz+1, chunk_sz, n_blocks, n_head]
 
-                // Step 3: reshape to merge ne[0]*ne[1] = chunk_sz*(ctx_sz+1)
+                // Step 2: reshape to merge ne[0]*ne[1]
                 term_bd = ggml_reshape_3d(ctx0, term_bd,
-                    chunk_sz * (ctx_sz + 1), n_blocks, n_head);
+                    (ctx_sz + 1) * chunk_sz, n_blocks, n_head);
 
-                // Step 4: slice to chunk_sz * ctx_sz
+                // Step 3: slice to ctx_sz * chunk_sz
                 term_bd = ggml_view_3d(ctx0, term_bd,
-                    (int64_t)chunk_sz * ctx_sz, n_blocks, n_head,
+                    (int64_t)ctx_sz * chunk_sz, n_blocks, n_head,
                     term_bd->nb[1], term_bd->nb[2], 0);
                 term_bd = ggml_cont(ctx0, term_bd);
 
-                // Step 5: reshape to [chunk_sz, ctx_sz, n_blocks, n_head]
-                term_bd = ggml_reshape_4d(ctx0, term_bd,
-                    chunk_sz, ctx_sz, n_blocks, n_head);
-
-                // Step 6: transpose back → [ctx_sz, chunk_sz, n_blocks, n_head]
-                // to match scores/term_ac layout
-                term_bd_shifted = ggml_cont(ctx0, ggml_permute(ctx0, term_bd, 1, 0, 2, 3));
+                // Step 4: reshape to [ctx_sz, chunk_sz, n_blocks, n_head]
+                // This directly matches term_ac's layout — no transpose needed
+                term_bd_shifted = ggml_reshape_4d(ctx0, term_bd,
+                    ctx_sz, chunk_sz, n_blocks, n_head);
             }
 
             // ── Combined logits = term_ac + term_bd ──
@@ -316,14 +308,14 @@ ggml_cgraph * clip_graph_gemma4a::build() {
 
             cur = build_mm(layer.o_w, x);
             if (layer.attn_post_norm_w) {
-                cur = build_norm(cur, layer.attn_post_norm_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+                cur = build_norm(cur, layer.attn_post_norm_w, nullptr, conf_norm, norm_eps, il);
             }
             residual = ggml_add(ctx0, residual, cur);
         }
 
         // ── 3c. Convolution Module ───────────────────────────
         if (layer.norm_conv_w && layer.conv_pw1_w && layer.conv_dw_w && layer.conv_pw2_w) {
-            cur = build_norm(residual, layer.norm_conv_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+            cur = build_norm(residual, layer.norm_conv_w, nullptr, conf_norm, norm_eps, il);
 
             auto * x = build_mm(layer.conv_pw1_w, cur);
 
@@ -357,21 +349,21 @@ ggml_cgraph * clip_graph_gemma4a::build() {
 
         // ── 3d. Feed-Forward 2 (half-step) ───────────────────
         if (layer.ff_norm_1_w && layer.ff_up_1_w && layer.ff_down_1_w) {
-            cur = build_norm(residual, layer.ff_norm_1_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+            cur = build_norm(residual, layer.ff_norm_1_w, nullptr, conf_norm, norm_eps, il);
             cur = build_ffn(cur,
                 layer.ff_up_1_w, nullptr,
                 nullptr, nullptr,
                 layer.ff_down_1_w, nullptr,
                 FFN_SILU, il);
             if (layer.ff_post_norm_1_w) {
-                cur = build_norm(cur, layer.ff_post_norm_1_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+                cur = build_norm(cur, layer.ff_post_norm_1_w, nullptr, conf_norm, norm_eps, il);
             }
             residual = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, res_weight));
         }
 
         // ── 3e. Final layer norm ─────────────────────────────
         if (layer.ln_2_w) {
-            cur = build_norm(residual, layer.ln_2_w, nullptr, NORM_TYPE_RMS, norm_eps, il);
+            cur = build_norm(residual, layer.ln_2_w, nullptr, conf_norm, norm_eps, il);
         } else {
             cur = residual;
         }
