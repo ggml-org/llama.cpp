@@ -16,6 +16,7 @@
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
+	import { rehypeRtlSupport } from '$lib/markdown/rehype-rtl-support';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
@@ -101,6 +102,7 @@
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
+			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
@@ -221,28 +223,7 @@
 		return previousContent.length > 0 && newContent.startsWith(previousContent);
 	}
 
-	/**
-	 * Adds dir="auto" to all text-containing elements in the generated HTML.
-	 * This ensures proper bidirectional text support for mixed RTL/LTR content.
-	 */
-	function addDirAutoToTextElements(html: string): string {
-		if (typeof window === 'undefined') return html; // SSR safety
 
-		const parser = new DOMParser();
-		const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
-
-		// Add dir="auto" to all text-containing elements
-		const textElements = doc.querySelectorAll(
-			'p, h1, h2, h3, h4, h5, h6, li, blockquote, div, span'
-		);
-		textElements.forEach((el) => {
-			if (el.textContent?.trim()) {
-				el.setAttribute('dir', 'auto');
-			}
-		});
-
-		return doc.body.firstElementChild?.innerHTML || html;
-	}
 
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
@@ -269,9 +250,6 @@
 		const singleNodeRoot = { type: 'root', children: [node] };
 		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
 		let html = processorInstance.stringify(transformedRoot);
-
-		// Add bidirectional text support
-		html = addDirAutoToTextElements(html);
 
 		transformCache.set(hash, html);
 
@@ -470,7 +448,7 @@
 				singleNodeRoot as MdastRoot
 			)) as HastRoot;
 
-			unstableHtml = addDirAutoToTextElements(processorInstance.stringify(transformedRoot));
+			unstableHtml = processorInstance.stringify(transformedRoot);
 		}
 
 		renderedBlocks = nextBlocks;
