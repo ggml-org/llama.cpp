@@ -3388,8 +3388,8 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 } else {
                     // Try extra->data_device
                     auto * extra = static_cast<ggml_tensor_extra_gpu *>(src->extra);
-                    if (extra && extra->data_device[device]) {
-                        gate_ptr = extra->data_device[device];
+                    if (extra && extra->data_device_ptr(device)) {
+                        gate_ptr = extra->data_device_ptr(device);
                     }
                 }
 
@@ -6013,9 +6013,9 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
     if (extra && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
         if (tier == ggml_sycl::memory_tier::VRAM && alloc == sycl::usm::alloc::device) {
-            extra->data_device[device] = cached_ptr;
+            extra->set_data_device(device, cached_ptr);
         } else {
-            extra->data_device[device] = nullptr;
+            extra->set_data_device(device, nullptr);
         }
         if (extra->layout.mode == GGML_LAYOUT_AOS) {
             extra->layout.data_ptr  = cached_ptr;
@@ -7736,15 +7736,16 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
     }
     if (tensor->extra != nullptr) {
         auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        if (extra->data_device[device] != nullptr) {
+        void * dev_ptr = extra->data_device_ptr(device);
+        if (dev_ptr != nullptr) {
             if (is_input_tensor && !tp_enabled && tensor->data) {
-                ggml_sycl_refresh_cached_input_ptr(extra->data_device[device], tensor->data, ggml_nbytes(tensor),
+                ggml_sycl_refresh_cached_input_ptr(dev_ptr, tensor->data, ggml_nbytes(tensor),
                                                    device);
             }
             GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
-                            tensor->name, device, device, extra->data_device[device]);
-            g_data_ptr_cache[tensor] = extra->data_device[device];
-            return extra->data_device[device];
+                            tensor->name, device, device, dev_ptr);
+            g_data_ptr_cache[tensor] = dev_ptr;
+            return dev_ptr;
         }
     }
 
@@ -7762,9 +7763,10 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             tensor->name, base->name ? base->name : "(null)", (void *) base->extra, base->data, tensor->data);
         if (base->extra != nullptr) {
             auto * base_extra = static_cast<ggml_tensor_extra_gpu *>(base->extra);
-            if (base_extra->data_device[device] != nullptr && base->data != nullptr && tensor->data != nullptr) {
+            void * base_dev_ptr = base_extra->data_device_ptr(device);
+            if (base_dev_ptr != nullptr && base->data != nullptr && tensor->data != nullptr) {
                 ptrdiff_t offset = static_cast<char *>(tensor->data) - static_cast<char *>(base->data);
-                void *    result = static_cast<char *>(base_extra->data_device[device]) + offset;
+                void *    result = static_cast<char *>(base_dev_ptr) + offset;
                 GGML_SYCL_DEBUG(
                     "ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, resolved via view_src %s + offset %td = %p\n",
                     tensor->name, device, base->name, offset, result);
@@ -7840,8 +7842,8 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             if (ptr_type == sycl::usm::alloc::device) {
                 if (tensor->extra != nullptr) {
                     auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                    if (extra->data_device[device] == nullptr) {
-                        extra->data_device[device] = tensor->data;
+                    if (extra->data_device_ptr(device) == nullptr) {
+                        extra->set_data_device(device, tensor->data);
                     }
                 }
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
@@ -8322,6 +8324,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
         if (mem_err != 0 || free_vram == 0) {
             free_vram = device_vram;
         }
+        // Save pre-probe free VRAM.  The alloc probe below does binary-search
+        // malloc_device/free cycles whose freed memory lingers in the L0 USM
+        // pool, making subsequent get_memory_info() report artificially low
+        // free_mem.  This pre-probe snapshot is the ground truth.
+        info.devices[i].free_vram_at_init = free_vram;
 
         size_t probe_upper = info.devices[i].max_alloc_size;
         if (free_vram > 0 && free_vram < probe_upper) {
@@ -8488,6 +8495,13 @@ size_t ggml_sycl_get_safe_max_alloc_size(int device) {
         safe = ggml_sycl_info().devices[device].max_alloc_size;
     }
     return safe;
+}
+
+size_t ggml_sycl_get_free_vram_at_init(int device) {
+    if (device < 0 || device >= ggml_sycl_info().device_count) {
+        return 0;
+    }
+    return ggml_sycl_info().devices[device].free_vram_at_init;
 }
 
 static void print_device_detail(int id, sycl::device & device, std::string device_type) {
@@ -8913,9 +8927,9 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
             for (int i = 0; i < num_local_devices; i++) {
                 int dev_id = g_sycl_tp_config.devices[i];
                 if (ctx->tp_dev_ptrs[dev_id] != nullptr) {
-                    extra->data_device[dev_id] = (char *) ctx->tp_dev_ptrs[dev_id] + offset;
+                    extra->set_data_device(dev_id, (char *) ctx->tp_dev_ptrs[dev_id] + offset);
                     GGML_SYCL_DEBUG("SYCL TP: init_tensor (view) %s device %d: offset=%td, ptr=%p\n", tensor->name,
-                                    dev_id, offset, extra->data_device[dev_id]);
+                                    dev_id, offset, extra->data_device_ptr(dev_id));
                 }
             }
         }
@@ -8931,8 +8945,8 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
                 tensor->extra = extra;
                 ctx->tensor_extras.push_back({ tensor, extra });
             }
-            if (extra->data_device[ctx->device] == nullptr) {
-                extra->data_device[ctx->device] = tensor->data;
+            if (extra->data_device_ptr(ctx->device) == nullptr) {
+                extra->set_data_device(ctx->device, tensor->data);
             }
         }
         return GGML_STATUS_SUCCESS;
@@ -8957,10 +8971,10 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         for (int i = 0; i < num_local_devices; i++) {
             int dev_id = g_sycl_tp_config.devices[i];
             if (ctx->tp_dev_ptrs[dev_id] != nullptr) {
-                extra->data_device[dev_id] = (char *) ctx->tp_dev_ptrs[dev_id] + offset;
+                extra->set_data_device(dev_id, (char *) ctx->tp_dev_ptrs[dev_id] + offset);
 
                 GGML_SYCL_DEBUG("SYCL TP: init_tensor %s device %d: offset=%td, ptr=%p\n", tensor->name, dev_id, offset,
-                                extra->data_device[dev_id]);
+                                extra->data_device_ptr(dev_id));
             }
         }
     } else if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K ||
@@ -8985,7 +8999,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         // in ggml_sycl_get_data_ptr during dispatch.
         // Note: TP guard is unnecessary here — we're in the else-if of the TP check at line 3039.
         if (tensor->data != nullptr) {
-            extra->data_device[ctx->device] = tensor->data;
+            extra->set_data_device(ctx->device, tensor->data);
         }
 
         GGML_SYCL_DEBUG("[SOA-DEBUG] init_tensor: %s type=%d allocated extra=%p reorder_mode=%d (total=%zu)\n",
@@ -9005,8 +9019,8 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
             tensor->extra = extra;
             ctx->tensor_extras.push_back({ tensor, extra });
         }
-        if (extra->data_device[ctx->device] == nullptr) {
-            extra->data_device[ctx->device] = tensor->data;
+        if (extra->data_device_ptr(ctx->device) == nullptr) {
+            extra->set_data_device(ctx->device, tensor->data);
         }
     }
     if (ggml_is_quantized(tensor->type)) {
@@ -12936,12 +12950,29 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
                           size / (1024 * 1024), safe_alloc / (1024 * 1024));
             req.intent.constraints.must_host_pinned = true;
         } else {
-            // Always prefer device VRAM.  When allow_shared_fallback is true
-            // and the device allocation fails (budget exceeded or OOM),
-            // the retry block below will fall back to host-pinned automatically.
-            // This is critical for oneDNN PP performance: device-local weights
-            // enable fast dequant+GEMM whereas host-pinned weights are slow.
-            req.intent.constraints.must_device = true;
+            // Reserve 512 MB headroom for compute scratch (oneDNN FP16 workspace,
+            // graph replay buffers, etc.).  Without this, a model that fills VRAM
+            // with weights leaves zero space for compute scratch → GGML_ABORT in
+            // batched mul_mat.  The ggml backend scheduler will route the remaining
+            // tensors to a host backend automatically when this allocation fails.
+            constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
+            size_t free_vram = 0, total_vram = 0;
+            ggml_backend_sycl_get_device_memory(buft_ctx->device, &free_vram, &total_vram);
+            if (buft_ctx->allow_shared_fallback
+                && size + COMPUTE_HEADROOM > free_vram) {
+                GGML_LOG_INFO("[SYCL] Buffer alloc (%.1f MB) would leave < 512 MB headroom "
+                              "(free=%.1f MB) — routing to host-pinned\n",
+                              size / (1024.0 * 1024.0), free_vram / (1024.0 * 1024.0));
+                req.intent.constraints.must_host_pinned = true;
+                req.intent.constraints.must_device      = false;
+            } else {
+                // Always prefer device VRAM.  When allow_shared_fallback is true
+                // and the device allocation fails (budget exceeded or OOM),
+                // the retry block below will fall back to host-pinned automatically.
+                // This is critical for oneDNN PP performance: device-local weights
+                // enable fast dequant+GEMM whereas host-pinned weights are slow.
+                req.intent.constraints.must_device = true;
+            }
         }
     }
 
@@ -13270,12 +13301,12 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
         // slow path that may fail on cross-context device pointers.
         if (tensor->view_src->extra) {
             auto * src_extra = static_cast<ggml_tensor_extra_gpu *>(tensor->view_src->extra);
-            if (src_extra->data_device[ctx->device]) {
+            if (src_extra->data_device_ptr(ctx->device)) {
                 if (!tensor->extra) {
                     tensor->extra = new ggml_tensor_extra_gpu{};
                 }
                 auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                extra->data_device[ctx->device] = tensor->data;
+                extra->set_data_device(ctx->device, tensor->data);
             }
         }
         return GGML_STATUS_SUCCESS;
@@ -13288,7 +13319,7 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
             tensor->extra = new ggml_tensor_extra_gpu{};
         }
         auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        extra->data_device[ctx->device] = tensor->data;
+        extra->set_data_device(ctx->device, tensor->data);
         return GGML_STATUS_SUCCESS;
     }
 
@@ -13337,7 +13368,7 @@ static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffe
                     tensor->extra = new ggml_tensor_extra_gpu{};
                 }
                 auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                extra->data_device[ctx->device] = tensor->data;
+                extra->set_data_device(ctx->device, tensor->data);
             }
 
             // Diagnostic: log first 4 layers + last layer to verify remapping
@@ -14061,6 +14092,26 @@ static enum ggml_status ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_
 
         was inserted. You need to rewrite this code.
         */
+        // Check VRAM headroom before allocating.  Reserve 512 MB for compute
+        // scratch (oneDNN FP16 workspace, graph temporaries).  Without this,
+        // models that fill VRAM leave zero space for compute → GGML_ABORT.
+        {
+            constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
+            size_t free_vram = 0, total_vram = 0;
+            ggml_backend_sycl_get_device_memory(i, &free_vram, &total_vram);
+            if (size + COMPUTE_HEADROOM > free_vram) {
+                GGML_LOG_INFO("[SYCL] Tensor alloc (%.1f MB) would leave < 512 MB headroom "
+                              "(free=%.1f MB) — using host-pinned\n",
+                              size / (1024.0 * 1024.0), free_vram / (1024.0 * 1024.0));
+                buf = (char *) sycl::malloc_host(size, *stream);
+                if (buf) {
+                    extra->set_data_device(i, buf);
+                    extra->data_device_size[i] = size;
+                    continue;  // Skip the device alloc path below
+                }
+                // Host alloc failed, fall through to device attempt
+            }
+        }
         ggml_sycl::unified_cache_add_runtime_bytes(i, size);
         buf = (char *) ggml_sycl_malloc_device_raw(size, *stream, "tensor_data_device");
         if (!buf) {
@@ -14079,7 +14130,7 @@ static enum ggml_status ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_
             */
             SYCL_CHECK(CHECK_TRY_ERROR((*stream).memset(buf + original_size, 0, size - original_size).wait()));
         }
-        extra->data_device[i]      = buf;
+        extra->set_data_device(i, buf);
         extra->data_device_size[i] = size;
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
             /*
@@ -14142,7 +14193,7 @@ static void ggml_backend_sycl_split_buffer_set_tensor(ggml_backend_buffer_t buff
         */
         ggml_sycl_set_device(i);
         const queue_ptr stream = ctx->streams[i];
-        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(extra->data_device[i], buf_host, original_size).wait()));
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(extra->data_device_ptr(i), buf_host, original_size).wait()));
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -14197,7 +14248,7 @@ static void ggml_backend_sycl_split_buffer_get_tensor(ggml_backend_buffer_t buff
         ggml_sycl_set_device(i);
 
         const queue_ptr stream = ctx->streams[i];
-        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(buf_host, extra->data_device[i], original_size).wait()));
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(buf_host, extra->data_device_ptr(i), original_size).wait()));
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -14423,13 +14474,13 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
             // Use ctx->devices.size() not world_size - in multi-process mode we only have 1 local device
             for (int rank = 0; rank < (int) ctx->devices.size(); rank++) {
                 int device = ctx->devices[rank];
-                if (parent_extra->data_device[device] != nullptr) {
-                    extra->data_device[device] =
-                        reinterpret_cast<char *>(parent_extra->data_device[device]) + view_offset;
+                void * parent_ptr = parent_extra->data_device_ptr(device);
+                if (parent_ptr != nullptr) {
+                    extra->set_data_device(device, reinterpret_cast<char *>(parent_ptr) + view_offset);
                 }
             }
             // tensor->data now points to main device's view location
-            tensor->data  = extra->data_device[main_device];
+            tensor->data  = extra->data_device_ptr(main_device);
             tensor->extra = extra;
             ggml_sycl_init_layout_info(extra, tensor, main_device, true);
 
@@ -14555,7 +14606,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
             // Zero-fill the entire buffer (important for row-parallel zero-padding).
             // No .wait() needed: in-order queue serializes with subsequent memcpy in set_tensor.
             stream->memset(buf, 0, padded_size);
-            extra->data_device[device]      = buf;
+            extra->set_data_device(device, buf);
             extra->data_device_size[device] = padded_size;
             // Store local dimensions for rank 0 (used for tensor->ne update)
             if (rank == 0) {
@@ -14581,7 +14632,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                     (long long) tensor->ne[0], (long long) tensor->ne[1], is_multiprocess_tp);
         }
         // tensor->data points to main device's shard
-        tensor->data = extra->data_device[main_device];
+        tensor->data = extra->data_device_ptr(main_device);
     } else {
         // Non-sharded tensor: DUPLICATE on all TP devices for fast access
         // Intel Arc GPUs don't support P2P, and host memory is 32x slower for kernel access
@@ -14656,11 +14707,11 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
                         tensor->name, rank, device, q_dev.get_info<sycl::info::device::name>().c_str(), (void *) buf,
                         padded_size);
             }
-            extra->data_device[device]      = buf;
+            extra->set_data_device(device, buf);
             extra->data_device_size[device] = padded_size;
         }
         // tensor->data points to main device's copy
-        tensor->data = extra->data_device[main_device];
+        tensor->data = extra->data_device_ptr(main_device);
     }
 
     ggml_sycl_init_layout_info(extra, tensor, main_device, true);
@@ -14703,7 +14754,7 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 stream = &dpct::get_current_device().default_queue();
             }
             // Direct copy - data is already this rank's shard
-            stream->memcpy(extra->data_device[device], data, size).wait();
+            stream->memcpy(extra->data_device_ptr(device), data, size).wait();
             // DEBUG: Print first bytes of column-parallel weights to verify correct loading
             if (tensor->name[0] && strstr(tensor->name, "blk.0.attn_q.weight")) {
                 const uint8_t * src = static_cast<const uint8_t *>(data);
@@ -14726,7 +14777,7 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(ggml_backend_buffer_t buffer,
                     stream = &dpct::get_current_device().default_queue();
                 }
                 // Copy this rank's shard to its device
-                ggml_sycl_tp_copy_weight_shard(extra->data_device[device], data, tensor, rank, world_size, stream);
+                ggml_sycl_tp_copy_weight_shard(extra->data_device_ptr(device), data, tensor, rank, world_size, stream);
             }
         }
         // Restore sharded dimensions
@@ -14775,9 +14826,9 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 fprintf(stderr, "TP DEBUG COPY SOURCE: tok38.qs=0x%02x%02x, tok100.qs=0x%02x%02x\n", src_blk38.qs[0],
                         src_blk38.qs[1], src_blk100.qs[0], src_blk100.qs[1]);
                 fprintf(stderr, "TP DEBUG COPY tok_embd: src=%p, dst=%p, size=%zu\n", data,
-                        (void *) extra->data_device[device], size);
+                        extra->data_device_ptr(device), size);
             }
-            stream->memcpy(extra->data_device[device], data, size).wait();
+            stream->memcpy(extra->data_device_ptr(device), data, size).wait();
             // DEBUG: Verify copy by reading back token 0, 1, 38, 100
             if (g_ggml_sycl_tp_debug && is_tok_embd) {
                 struct {
@@ -14785,12 +14836,13 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(ggml_backend_buffer_t buffer,
                     uint8_t    qs[16];
                 } blk0, blk1, blk38, blk100;
 
+                void * dev_ptr      = extra->data_device_ptr(device);
                 size_t blk_row_size = (4096 / 32) * 18;  // 128 blocks * 18 bytes = 2304 bytes/row
-                stream->memcpy(&blk0, extra->data_device[device], sizeof(blk0)).wait();
-                stream->memcpy(&blk1, (char *) extra->data_device[device] + 1 * blk_row_size, sizeof(blk1)).wait();
+                stream->memcpy(&blk0, dev_ptr, sizeof(blk0)).wait();
+                stream->memcpy(&blk1, (char *) dev_ptr + 1 * blk_row_size, sizeof(blk1)).wait();
 
-                stream->memcpy(&blk38, (char *) extra->data_device[device] + 38 * blk_row_size, sizeof(blk38)).wait();
-                stream->memcpy(&blk100, (char *) extra->data_device[device] + 100 * blk_row_size, sizeof(blk100))
+                stream->memcpy(&blk38, (char *) dev_ptr + 38 * blk_row_size, sizeof(blk38)).wait();
+                stream->memcpy(&blk100, (char *) dev_ptr + 100 * blk_row_size, sizeof(blk100))
                     .wait();
                 fprintf(stderr, "TP DEBUG COPY VERIFY device=%d: tok0.d=%f, tok1.d=%f, tok38.d=%f, tok100.d=%f\n",
                         device, (float) blk0.d, (float) blk1.d, (float) blk38.d, (float) blk100.d);
@@ -14826,9 +14878,9 @@ static void ggml_backend_sycl_tp_buffer_get_tensor(ggml_backend_buffer_t buffer,
         size_t shard_size = ggml_sycl_tp_get_shard_size(tensor, 0, extra->tp_world_size);
         GGML_ASSERT(offset == 0 && size == shard_size);
 
-        stream->memcpy(data, extra->data_device[device], shard_size).wait();
+        stream->memcpy(data, extra->data_device_ptr(device), shard_size).wait();
     } else {
-        const char * src = static_cast<const char *>(extra->data_device[device]) + offset;
+        const char * src = static_cast<const char *>(extra->data_device_ptr(device)) + offset;
         stream->memcpy(data, src, size).wait();
     }
     GGML_UNUSED(buffer);
@@ -17998,7 +18050,7 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *                     dst,
         int                     id;
         SYCL_CHECK(CHECK_TRY_ERROR(id = get_current_device_id()));
         // GGML_SYCL_DEBUG("current device index %d\n", id);
-        src_ptr = (char *) extra->data_device[id];
+        src_ptr = (char *) extra->data_device_ptr(id);
     } else if (ggml_backend_buffer_is_sycl_tp(src->buffer)) {
         // TP (Tensor Parallelism) buffer - similar to split buffer
         // Data is stored in device-specific locations within extra
@@ -18008,7 +18060,7 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *                     dst,
         int                     id;
         SYCL_CHECK(CHECK_TRY_ERROR(id = get_current_device_id()));
 
-        src_ptr = (char *) extra->data_device[id];
+        src_ptr = (char *) extra->data_device_ptr(id);
         GGML_SYCL_DEBUG("[CPY_TENSOR_2D] TP buffer: device=%d src_ptr=%p dst=%p (tensor=%s) stream_dev=%s\n", id,
                         (void *) src_ptr, dst, src->name,
 
@@ -18865,7 +18917,7 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
 
             if (ggml_backend_buffer_is_sycl_tp(src0->buffer)) {
                 ggml_tensor_extra_gpu * extra  = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-                dev[i].src0_dd                 = (char *) extra->data_device[i];
+                dev[i].src0_dd                 = (char *) extra->data_device_ptr(i);
                 dev[i].src0_ptr_origin         = "tp_data_device";
                 dev[i].src0_layout_ptr_source  = "n/a";
                 exc_ctx.dev[i].src0_dd         = dev[i].src0_dd;
@@ -19153,7 +19205,7 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                                                              src1_ncols * src1_padded_row_size * q8_1_ts / q8_1_bs)
                                                     .wait()));
                         } else {
-                            float * src1_ddf_i_source = (float *) src1_extra->data_device[ctx.device];
+                            float * src1_ddf_i_source = (float *) src1_extra->data_device_ptr(ctx.device);
                             src1_ddf_i_source += (i0 * ne11 + src1_col_0) * ne10;
                             SYCL_CHECK(
                                 CHECK_TRY_ERROR(dev2dev_memcpy(*stream, *main_stream, src1_ddf_i, src1_ddf_i_source,
@@ -19526,7 +19578,7 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
     if (ggml_sycl::layer_streaming_active(device)) {
         void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
         if (streamed) {
-            extra->data_device[device] = streamed;
+            extra->set_data_device(device, streamed);
             return;
         }
         // Layer not loaded — ensure it's loaded now
@@ -19536,7 +19588,7 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
             ggml_sycl::layer_streaming_ensure_layer(device, layer_id, q);
             streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
             if (streamed) {
-                extra->data_device[device] = streamed;
+                extra->set_data_device(device, streamed);
                 return;
             }
         }
@@ -19551,16 +19603,16 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
     }
 
     if (tier == ggml_sycl::memory_tier::VRAM) {
-        extra->data_device[device] = cached_ptr;
+        extra->set_data_device(device, cached_ptr);
     } else if (tier == ggml_sycl::memory_tier::PINNED_HOST) {
         // Host pinned (USM) — GPU can access directly via PCIe. Slow but correct.
-        extra->data_device[device] = cached_ptr;
+        extra->set_data_device(device, cached_ptr, GGML_LAYOUT_AOS, /*on_device=*/false);
     } else {
         // MMAP tier — not USM, GPU cannot access. Stage to pinned memory.
         size_t nbytes = ggml_nbytes(src0);
         void * staged = ggml_sycl_get_staged_ptr_device(cached_ptr, nbytes, device);
         if (staged) {
-            extra->data_device[device] = staged;
+            extra->set_data_device(device, staged);
         }
     }
 }
@@ -19790,10 +19842,10 @@ static void tp_device1_worker_thread_func() {
         if (g_ggml_sycl_tp_debug) {
             fprintf(stderr, "SYCL TP WORKER: Accessing data_device[%d]\n", device);
         }
-        void * gate_weight_1 = gate_extra ? gate_extra->data_device[device] : nullptr;
-        void * up_weight_1   = up_extra ? up_extra->data_device[device] : nullptr;
+        void * gate_weight_1 = gate_extra ? gate_extra->data_device_ptr(device) : nullptr;
+        void * up_weight_1   = up_extra ? up_extra->data_device_ptr(device) : nullptr;
 
-        void * down_weight_1 = down_extra ? down_extra->data_device[device] : nullptr;
+        void * down_weight_1 = down_extra ? down_extra->data_device_ptr(device) : nullptr;
         if (g_ggml_sycl_tp_debug) {
             fprintf(stderr, "SYCL TP WORKER: Weight device pointers: gate=%p, up=%p, down=%p\n", gate_weight_1,
                     up_weight_1, down_weight_1);
@@ -20680,7 +20732,7 @@ static void ggml_sycl_mul_mat_tp_column_parallel_post(ggml_backend_sycl_context 
     for (int rank = 1; rank < world_size; rank++) {
         int device = g_sycl_tp_config.devices[rank];
         // Get this rank's weight shard
-        void * weight_shard = src0_extra->data_device[device];
+        void * weight_shard = src0_extra->data_device_ptr(device);
         if (weight_shard == nullptr) {
             fprintf(stderr, "SYCL TP: ERROR - no weight shard on device %d for rank %d\n", device, rank);
             continue;
@@ -20832,9 +20884,9 @@ void ggml_sycl_tp_launch_async_ffn(ggml_backend_sycl_context & ctx,
     auto * up_extra   = static_cast<ggml_tensor_extra_gpu *>(weights.up->extra);
     auto * down_extra = static_cast<ggml_tensor_extra_gpu *>(weights.down->extra);
 
-    void * gate_weight_1 = gate_extra ? gate_extra->data_device[device] : nullptr;
-    void * up_weight_1   = up_extra ? up_extra->data_device[device] : nullptr;
-    void * down_weight_1 = down_extra ? down_extra->data_device[device] : nullptr;
+    void * gate_weight_1 = gate_extra ? gate_extra->data_device_ptr(device) : nullptr;
+    void * up_weight_1   = up_extra ? up_extra->data_device_ptr(device) : nullptr;
+    void * down_weight_1 = down_extra ? down_extra->data_device_ptr(device) : nullptr;
     if (!gate_weight_1 || !up_weight_1 || !down_weight_1) {
         GGML_SYCL_DEBUG("SYCL TP ASYNC: Missing weight shards on device 1 for layer %d\n", layer);
         ggml_sycl_set_device(main_device);
@@ -21270,15 +21322,15 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                     auto *    gate_extra    = static_cast<ggml_tensor_extra_gpu *>(weights.gate->extra);
                     auto *    up_extra      = static_cast<ggml_tensor_extra_gpu *>(weights.up->extra);
                     auto *    down_extra    = static_cast<ggml_tensor_extra_gpu *>(weights.down->extra);
-                    void *    gate_weight_1 = gate_extra ? gate_extra->data_device[device] : nullptr;
-                    void *    up_weight_1   = up_extra ? up_extra->data_device[device] : nullptr;
-                    void *    down_weight_1 = down_extra ? down_extra->data_device[device] : nullptr;
+                    void *    gate_weight_1 = gate_extra ? gate_extra->data_device_ptr(device) : nullptr;
+                    void *    up_weight_1   = up_extra ? up_extra->data_device_ptr(device) : nullptr;
+                    void *    down_weight_1 = down_extra ? down_extra->data_device_ptr(device) : nullptr;
                     // DEBUG: Compare device 0 and device 1 weight VALUES (not just pointers)
 
                     static int weight_dbg = 0;
                     if (g_ggml_sycl_tp_debug && weight_dbg++ < 3) {
-                        void * gate_weight_0 = gate_extra ? gate_extra->data_device[main_device] : nullptr;
-                        void * down_weight_0 = down_extra ? down_extra->data_device[main_device] : nullptr;
+                        void * gate_weight_0 = gate_extra ? gate_extra->data_device_ptr(main_device) : nullptr;
+                        void * down_weight_0 = down_extra ? down_extra->data_device_ptr(main_device) : nullptr;
                         fprintf(stderr, "TP DEBUG FFN layer %d weights: gate_0=%p, gate_1=%p, down_0=%p, down_1=%p\n",
                                 layer, gate_weight_0, gate_weight_1, down_weight_0, down_weight_1);
                         // Read first Q4_0 block from each device's gate weight to compare values
@@ -21747,10 +21799,10 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                     auto *    k_extra    = static_cast<ggml_tensor_extra_gpu *>(attn_weights.k->extra);
                     auto *    v_extra    = static_cast<ggml_tensor_extra_gpu *>(attn_weights.v->extra);
                     auto *    o_extra    = static_cast<ggml_tensor_extra_gpu *>(attn_weights.o->extra);
-                    void *    q_weight_1 = q_extra ? q_extra->data_device[device] : nullptr;
-                    void *    k_weight_1 = k_extra ? k_extra->data_device[device] : nullptr;
-                    void *    v_weight_1 = v_extra ? v_extra->data_device[device] : nullptr;
-                    void *    o_weight_1 = o_extra ? o_extra->data_device[device] : nullptr;
+                    void *    q_weight_1 = q_extra ? q_extra->data_device_ptr(device) : nullptr;
+                    void *    k_weight_1 = k_extra ? k_extra->data_device_ptr(device) : nullptr;
+                    void *    v_weight_1 = v_extra ? v_extra->data_device_ptr(device) : nullptr;
+                    void *    o_weight_1 = o_extra ? o_extra->data_device_ptr(device) : nullptr;
                     if (!q_weight_1 || !k_weight_1 || !v_weight_1 || !o_weight_1) {
                         static int warn = 0;
 
@@ -21764,7 +21816,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
 
                         static int o_weight_dbg = 0;
                         if (g_ggml_sycl_tp_debug && o_weight_dbg++ < 3) {
-                            void * o_weight_0 = o_extra ? o_extra->data_device[main_device] : nullptr;
+                            void * o_weight_0 = o_extra ? o_extra->data_device_ptr(main_device) : nullptr;
                             fprintf(stderr, "TP DEBUG ATTN layer %d: O_weight_0=%p, O_weight_1=%p\n", layer, o_weight_0,
                                     o_weight_1);
                             // Read first few Q4_0 blocks and dequantize to check values
@@ -22389,7 +22441,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
     for (int rank = 1; rank < world_size; rank++) {
         int    device       = g_sycl_tp_config.devices[rank];
         // Get this rank's weight shard
-        void * weight_shard = extra->data_device[device];
+        void * weight_shard = extra->data_device_ptr(device);
         if (weight_shard == nullptr) {
             fprintf(stderr, "SYCL TP: ERROR - no weight shard on device %d for rank %d\n", device, rank);
             continue;
@@ -22884,8 +22936,11 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     throw;
 } catch (const sycl::exception & exc) {
     if (g_ggml_sycl_graph_recording) { throw; }
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
+    // Re-throw for callers that have eviction-retry logic (e.g., the
+    // batched F16 mul_mat path).  Previously this called std::exit(1),
+    // which prevented the evict-on-demand recovery from running.
+    GGML_LOG_WARN("[SYCL] sycl::exception in batched mul_mat: %s — re-throwing for fallback\n", exc.what());
+    throw;
 } catch (const std::exception & e) {
     if (g_ggml_sycl_graph_recording) { throw; }
     GGML_LOG_WARN("[SYCL] Error in batched mul_mat: %s — re-throwing for fallback\n", e.what());
@@ -29382,17 +29437,17 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
                         for (int dev = 0; dev < g_sycl_tp_config.world_size; dev++) {
                             int dev_id = g_sycl_tp_config.devices[dev];
-                            if (extra->data_device[dev_id]) {
+                            if (extra->data_device_ptr(dev_id)) {
                                 ggml_sycl_set_device(dev_id);
                                 queue_ptr dev_stream = ctx.stream(dev_id, 0);
-                                dev_stream->memcpy(&wblk, extra->data_device[dev_id], sizeof(wblk)).wait();
+                                dev_stream->memcpy(&wblk, extra->data_device_ptr(dev_id), sizeof(wblk)).wait();
                                 float d_f = (float) wblk.d;
 
                                 int v0 = (wblk.qs[0] & 0xF) - 8;
                                 int v1 = (wblk.qs[0] >> 4) - 8;
                                 fprintf(stderr,
                                         "TP DEBUG L31 WEIGHT_CHECK device=%d: ptr=%p d=%f qs[0]=0x%02x deq=[%f,%f]\n",
-                                        dev_id, extra->data_device[dev_id], d_f, wblk.qs[0], v0 * d_f, v1 * d_f);
+                                        dev_id, extra->data_device_ptr(dev_id), d_f, wblk.qs[0], v0 * d_f, v1 * d_f);
                             }
                         }
                         ggml_sycl_set_device(ctx.device);  // Restore device
@@ -29438,15 +29493,33 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
             } catch (const std::exception & e) {
-                // Batched path failed — likely VRAM exhaustion from internal
-                // sycl::malloc_device for FP16 temporaries.  Try evicting
-                // cold cache entries to free space, then retry once.
+                // Batched path failed — likely VRAM exhaustion from oneDNN's
+                // internal sycl::malloc_device for FP16 workspace.  Evict
+                // cold cache entries to reclaim VRAM, then retry.
+                //
+                // The eviction guard (g_graph_compute_active) blocks eviction
+                // during graph execution to prevent freeing VRAM that in-flight
+                // kernels still reference.  Here we know the failed allocation
+                // means no NEW kernel launched, so we can safely:
+                //   1. Wait on the compute queue (drain in-flight kernels)
+                //   2. Temporarily lift the guard
+                //   3. Evict and free
+                //   4. Restore the guard
                 GGML_LOG_WARN("[SYCL] batched F16 mul_mat failed: %s — evicting cache and retrying\n", e.what());
                 bool recovered = false;
                 auto * cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
                 if (cache) {
-                    // Evict 256 MB chunks up to 3 times to free VRAM for
-                    // the FP16 temporary buffers needed by batched mul_mat.
+                    // Drain in-flight kernels so freed VRAM is truly unused.
+                    try { ctx.stream()->wait_and_throw(); } catch (...) {}
+                    // Lift eviction guard so evict_and_flush can process
+                    // deferred frees (sycl::free).
+                    ggml_sycl::unified_cache_set_graph_compute_active(false);
+                    // Unpin all entries so they become evictable.  Graph weight
+                    // pinning prevents eviction during normal execution, but here
+                    // the compute queue is drained — no kernels reference these
+                    // weights.  Remaining graph nodes will re-access the cache,
+                    // which triggers on-demand re-caching if the weight was evicted.
+                    cache->unpin_all();
                     constexpr size_t evict_chunk = 256ull * 1024ull * 1024ull;
                     for (int attempt = 0; attempt < 3 && !recovered; ++attempt) {
                         size_t freed = cache->evict_and_flush(evict_chunk);
@@ -29460,8 +29533,22 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             // Retry after more eviction
                         }
                     }
+                    // Restore eviction guard for remaining graph nodes.
+                    ggml_sycl::unified_cache_set_graph_compute_active(true);
                 }
                 if (!recovered) {
+                    size_t free_vram = 0, total_vram = 0;
+                    ggml_backend_sycl_get_device_memory(ctx.device, &free_vram, &total_vram);
+                    size_t cache_used = 0, cache_budget = 0;
+                    if (cache) {
+                        cache_used   = cache->used();
+                        cache_budget = cache->budget();
+                    }
+                    fprintf(stderr, "[SYCL] VRAM exhaustion diagnostic: "
+                                    "free=%.1f MB total=%.1f MB cache_used=%.1f MB cache_budget=%.1f MB\n",
+                                    free_vram / (1024.0 * 1024.0), total_vram / (1024.0 * 1024.0),
+                                    cache_used / (1024.0 * 1024.0), cache_budget / (1024.0 * 1024.0));
+                    fflush(stderr);
                     GGML_ABORT("[SYCL] batched F16 mul_mat failed after eviction — VRAM exhaustion. "
                                "The per-layer KV allocator should leave headroom for compute scratch.");
                 }
@@ -30220,7 +30307,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         bool                    is_tp_buf = ggml_backend_buffer_is_sycl_tp(src0->buffer);
         ggml_tensor_extra_gpu * extra     = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
 
-        void * weight_ptr = extra ? extra->data_device[0] : src0->data;
+        void * weight_ptr = extra ? extra->data_device_ptr(0) : src0->data;
         fprintf(stderr,
                 "TP DEBUG #%d L%d %s b=%lld: in=[%.3f,%.3f,%.3f,%.3f] out=[%.3f,%.3f,...] in_nan=%d out_nan=%d\n",
                 call_seq, layer, is_gate ? "GATE" : "UP", (long long) batch, in_vals[0], in_vals[1], in_vals[2],
@@ -41567,8 +41654,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel &  kernel,
 
         if (tensor->extra) {
             auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-            if (extra->data_device[ctx.device] != nullptr) {
-                return extra->data_device[ctx.device];
+            if (extra->data_device_ptr(ctx.device) != nullptr) {
+                return extra->data_device_ptr(ctx.device);
             }
         }
 

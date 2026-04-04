@@ -687,7 +687,7 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
     auto fast_alloc = [device, &query_ctx](const ggml_tensor * t, const void * ptr) -> sycl::usm::alloc {
         if (t && t->extra) {
             auto * extra = static_cast<ggml_tensor_extra_gpu *>(t->extra);
-            if (extra->data_device[device] != nullptr) {
+            if (extra->data_device_ptr(device) != nullptr) {
                 return sycl::usm::alloc::device;
             }
         }

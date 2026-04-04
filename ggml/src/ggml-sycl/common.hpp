@@ -23,6 +23,7 @@
 #include "sycl_hw.hpp"
 #include "tensor-types.hpp"
 #include "unified-cache.hpp"
+#include "mem-handle.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -542,6 +543,7 @@ struct sycl_device_info {
     size_t          smpbo;                // max. shared memory per block (with opt-in)
     bool            vmm;                  // virtual memory support
     size_t          total_vram;
+    size_t          free_vram_at_init;    // free VRAM before alloc probe (L0 pool-clean)
     size_t          max_alloc_size;       // device-reported max allocation size
     size_t          safe_max_alloc_size;  // probed safe allocation size
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
@@ -576,6 +578,7 @@ struct ggml_sycl_device_info {
 
 const ggml_sycl_device_info & ggml_sycl_info();
 size_t                        ggml_sycl_get_safe_max_alloc_size(int device);
+size_t                        ggml_sycl_get_free_vram_at_init(int device);
 size_t                        ggml_sycl_get_host_max_alloc_size();
 
 // Access a device by logical GPU index using the full (pre-scheduler-hiding) map.
@@ -1862,8 +1865,30 @@ struct ggml_tensor_extra_gpu {
     uint64_t         cache_uuid = 0;                                        // Monotonic cache identity for weights
     uint64_t         model_id   = 0;                                        // Model identifier for cache keys
     void *           data_device[GGML_SYCL_MAX_DEVICES];                    // 1 pointer for each device for split
-                                                                            // tensors
+                                                                            // tensors (legacy — use data_handle)
+    ggml_sycl::mem_handle data_handle[GGML_SYCL_MAX_DEVICES];              // Smart handles (P12 migration)
     size_t           data_device_size[GGML_SYCL_MAX_DEVICES] = { 0 };       // Allocation sizes for data_device
+
+    // Compatibility shim: resolve data_handle if set, else fall back to raw data_device.
+    // Use this instead of data_device[dev] directly for incremental migration.
+    void * data_device_ptr(int dev) const {
+        auto resolved = data_handle[dev].resolve();
+        if (resolved) {
+            return resolved.ptr;
+        }
+        return data_device[dev];
+    }
+
+    // Set data pointer for a device.  Updates both legacy data_device and
+    // the smart handle (DIRECT kind — never stale, no cache lookup).
+    void set_data_device(int dev, void * ptr, ggml_layout_mode layout = GGML_LAYOUT_AOS, bool on_device = true) {
+        data_device[dev] = ptr;
+        if (ptr) {
+            data_handle[dev] = ggml_sycl::mem_handle::from_direct(ptr, layout, on_device);
+        } else {
+            data_handle[dev] = ggml_sycl::mem_handle{};
+        }
+    }
     dpct::event_ptr  events[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];  // events for synchronizing multiple GPUs
     optimize_feature optimized_feature = {};  // Must have = {} to ensure default member initializers apply
 
@@ -2046,8 +2071,9 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
         return nullptr;
     }
     // Fast path 1: extra->data_device (set by weight buffer init_tensor and KV init_tensor)
+    // Uses data_device_ptr() which resolves smart handle or falls back to raw pointer.
     if (tensor->extra != nullptr) {
-        void * ptr = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)->data_device[device];
+        void * ptr = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)->data_device_ptr(device);
         if (ptr != nullptr) {
             return ptr;
         }

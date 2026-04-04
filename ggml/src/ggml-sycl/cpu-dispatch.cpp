@@ -2450,7 +2450,7 @@ static void * get_host_ptr(const ggml_tensor * t,
     void * dev_ptr = nullptr;
     {
         if (t->extra) {
-            void * ed = static_cast<ggml_tensor_extra_gpu *>(t->extra)->data_device[device];
+            void * ed = static_cast<ggml_tensor_extra_gpu *>(t->extra)->data_device_ptr(device);
             if (ed) {
                 dev_ptr = ed;
             }
@@ -2463,7 +2463,7 @@ static void * get_host_ptr(const ggml_tensor * t,
                 base = base->view_src;
             }
             if (base->extra) {
-                void * base_dev = static_cast<ggml_tensor_extra_gpu *>(base->extra)->data_device[device];
+                void * base_dev = static_cast<ggml_tensor_extra_gpu *>(base->extra)->data_device_ptr(device);
                 if (base_dev && base->data) {
                     ptrdiff_t offset = static_cast<char *>(t->data) - static_cast<char *>(base->data);
                     dev_ptr          = static_cast<char *>(base_dev) + offset;

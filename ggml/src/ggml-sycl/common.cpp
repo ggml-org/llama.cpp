@@ -814,12 +814,14 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
                 SYCL_CHECK(CHECK_TRY_ERROR(dpct::destroy_event(extra->events[i][is])));
             }
         }
-        if (extra->data_device[i] != nullptr && streams.size() > 0) {
+        if (extra->data_device_ptr(i) != nullptr && streams.size() > 0) {
             ggml_sycl_set_device(i);
             if (extra->data_device_size[i] > 0) {
                 ggml_sycl::unified_cache_sub_runtime_bytes(i, extra->data_device_size[i]);
             }
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+            extra->data_device[i]      = nullptr;
+            extra->data_handle[i]      = ggml_sycl::mem_handle{};
             extra->data_device_size[i] = 0;
         }
         // Free XMX MXFP4 tiled cache (legacy - will be migrated to layout system)
