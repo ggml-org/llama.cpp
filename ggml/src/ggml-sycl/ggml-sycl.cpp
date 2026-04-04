@@ -4840,6 +4840,16 @@ void ggml_backend_sycl_set_model_loading(bool loading) {
             g_sycl_layouts_epoch.fetch_add(1, std::memory_order_acq_rel);
             ggml_sycl_clear_layout_choices();
             ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::registry_only);
+
+            // Eager arena reservation: create the unified cache (and its VRAM arena)
+            // BEFORE any KV/compute buffer allocations can steal VRAM.  The cache
+            // constructor reserves the arena when vram_arena_enabled().
+            if (ggml_sycl::unified_cache_enabled()) {
+                const int total_gpus = ggml_sycl_info().total_gpu_count;
+                for (int d = 0; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
+                    ggml_sycl::get_unified_cache_for_device(d);
+                }
+            }
         }
         return;
     }
@@ -16322,8 +16332,36 @@ static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffe
     GGML_UNUSED(buft);
 }
 
+// Wrapper context for SYCL host buffers — tracks whether the allocation came
+// from the pre-allocated pinned pool or from raw sycl::malloc_host so that
+// free_buffer uses the correct deallocation path.
+struct sycl_host_buf_ctx {
+    void * ptr;
+    size_t size;
+    bool   from_pool;
+};
+
 static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    ggml_sycl_host_free(buffer->context);
+    auto * ctx = static_cast<sycl_host_buf_ctx *>(buffer->context);
+    if (!ctx) {
+        return;
+    }
+    if (ctx->from_pool) {
+        auto * hcache = ggml_sycl::try_get_host_cache();
+        if (hcache) {
+            hcache->free_pinned_runtime(ctx->ptr, ctx->size);
+        }
+    } else {
+        ggml_sycl_host_free(ctx->ptr);
+    }
+    delete ctx;
+    buffer->context = nullptr;
+}
+
+static void * ggml_backend_sycl_host_buffer_get_base(ggml_backend_buffer_t buffer) {
+    auto * ctx = static_cast<sycl_host_buf_ctx *>(buffer->context);
+    GGML_ASSERT(ctx && ctx->ptr);
+    return ctx->ptr;
 }
 
 static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
@@ -16333,28 +16371,37 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     GGML_LOG_INFO("[SYCL] Host buffer alloc request: %.1f MB (evictable=%d, in_model_load=%d)\n",
                   size / (1024.0 * 1024.0), weights_evictable ? 1 : 0, in_model_load ? 1 : 0);
 
-    // With correct get_max_size (capped at iGPU's max_mem_alloc_size), ggml
-    // automatically chunks buffers to fit within the limit. All allocations
-    // here should be <= host_max_alloc_size, so sycl::malloc_host works directly.
-    void * ptr = ggml_sycl_host_malloc(size);
+    // Try pinned pool first (cache-managed, zero runtime sycl::malloc_host)
+    void * ptr       = nullptr;
+    bool   from_pool = false;
+    auto * hcache    = ggml_sycl::try_get_host_cache();
+    if (hcache) {
+        ptr       = hcache->allocate_pinned_runtime(size, 64);
+        from_pool = (ptr != nullptr);
+    }
+    if (!ptr) {
+        // Fallback: direct sycl::malloc_host (host cache not yet initialized
+        // or pinned pool exhausted — happens during early model load)
+        ptr = ggml_sycl_host_malloc(size);
+    }
     if (ptr == nullptr) {
         GGML_LOG_ERROR(
-            "[SYCL] FATAL: sycl::malloc_host(%.1f MB) failed — cannot allocate host buffer. "
+            "[SYCL] FATAL: host buffer alloc (%.1f MB) failed — cannot allocate host buffer. "
             "All host buffers must be USM-pinned for GPU DMA access.\n",
             size / (1024.0f * 1024.0f));
         return nullptr;
     }
-    const sycl::usm::alloc alloc_type = ggml_sycl_get_alloc_type(ptr);
-    const char *           alloc_name = alloc_type == sycl::usm::alloc::host   ? "pinned" :
-                                        alloc_type == sycl::usm::alloc::shared ? "shared" :
+    GGML_SYCL_DEBUG("[SYCL] Host buffer alloc: %.1f MB (from_pool=%d)\n",
+                    size / (1024.0f * 1024.0f), from_pool ? 1 : 0);
 
-                                        alloc_type == sycl::usm::alloc::device ? "device" :
-                                                                                 "unknown";
-    GGML_SYCL_DEBUG("[SYCL] Host buffer alloc: %.1f MB (%s)\n", size / (1024.0f * 1024.0f), alloc_name);
-    // FIXME: this is a hack to avoid having to implement a new buffer type
+    // Use the wrapper struct as buffer context so free_buffer knows which
+    // deallocation path to take.  Override get_base to extract the raw pointer.
+    auto * ctx = new sycl_host_buf_ctx{ ptr, size, from_pool };
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
 
     buffer->buft              = buft;
+    buffer->context           = ctx;
+    buffer->iface.get_base    = ggml_backend_sycl_host_buffer_get_base;
     buffer->iface.free_buffer = ggml_backend_sycl_host_buffer_free_buffer;
     return buffer;
 }
