@@ -11058,17 +11058,17 @@ static void ggml_sycl_preload_model_weights() {
             cache->finalize_pending_fills();
             cache->process_deferred_frees_public();
 
-            // Update each tensor's fast-path data_device pointer to the VRAM
-            // location returned by the cache.  Without this, data_device_ptr()
-            // still points to host-pinned memory and inference falls back to
-            // host-resident paths (~100x slower).
+            // Replace each tensor's DIRECT handle (host-pinned pointer from
+            // model load) with a WEIGHT handle that resolves through the cache.
+            // The WEIGHT handle's resolve() queries cache->get_weight_ptr()
+            // which returns the VRAM arena pointer.  Without this, the DIRECT
+            // handle always returns the host pointer → host fallback (~100x slower).
             for (const auto & pin_info : dense_pin_keys) {
-                auto cached = cache->get_weight_ptr(pin_info.key);
-                if (cached && cached.ptr && cached.on_device && pin_info.tensor) {
-                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(pin_info.tensor->extra);
-                    if (extra) {
-                        extra->set_data_device(device, cached.ptr, cached.layout, true);
-                    }
+                if (!pin_info.tensor) continue;
+                auto * extra = static_cast<ggml_tensor_extra_gpu *>(pin_info.tensor->extra);
+                if (extra) {
+                    extra->data_handle[device] =
+                        ggml_sycl::mem_handle::from_cache_id(pin_info.key, device);
                 }
             }
 
