@@ -2317,6 +2317,10 @@ bool unified_cache_arena_owns(int device_id, const void * ptr);
 size_t unified_cache_compute_arena_capacity(int device_id);
 size_t unified_cache_compute_arena_used(int device_id);
 
+// Query KV arena zone capacity and usage.
+size_t unified_cache_kv_arena_capacity(int device_id);
+size_t unified_cache_kv_arena_used(int device_id);
+
 // Reserve the inference scratch pool on a device.
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 

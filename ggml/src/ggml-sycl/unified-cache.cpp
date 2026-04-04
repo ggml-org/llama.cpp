@@ -63,6 +63,7 @@ struct runtime_alloc_record {
     alloc_handle  handle{};
     sycl::queue * queue            = nullptr;
     bool          uses_pinned_pool = false;
+    bool          from_arena       = false;  // True if sub-allocated from vram_arena (KV zone)
     std::string   cohort_id;
 };
 
@@ -6550,6 +6551,11 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
         if (rec.handle.tier == alloc_tier::MMAP_TRACKED) {
             return true;
         }
+        // Arena sub-allocations (KV zone) are freed when the arena is destroyed,
+        // not individually.  Just remove the tracking record.
+        if (rec.from_arena) {
+            return true;
+        }
         // Check if this pointer was allocated via regular malloc (pinned cap overflow).
         // The alloc_registry tracks these as MMAP type.  Using sycl::free on them
         // would crash, so use ::free instead.
@@ -6643,6 +6649,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     bool         reserve_host   = (tier == alloc_tier::HOST_PINNED);
 
     bool   uses_pinned_pool = false;
+    bool   from_arena       = false;
     void * ptr              = nullptr;
     if (tier == alloc_tier::DEVICE_VRAM) {
         // Guard against Level Zero overcommit: if this allocation would exceed
@@ -6698,7 +6705,23 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                 }
             }
         }
-        ptr = ggml_sycl_malloc_device_raw(alloc_size, *req.queue, "unified_alloc:device");
+        // P5: Route KV allocations through the arena's KV zone when active.
+        // This co-locates KV cache with weights in the same pre-allocated VRAM block,
+        // eliminating separate sycl::malloc_device calls during context creation.
+        if (req.intent.role == alloc_role::KV && vram_arena_enabled()) {
+            auto * cache = get_unified_cache_for_device(req.device);
+            if (cache && cache->get_arena().active()) {
+                ptr = cache->get_arena().zone_alloc(vram_zone_id::KV, alloc_size);
+                if (ptr) {
+                    from_arena = true;
+                    GGML_SYCL_DEBUG("[UNIFIED-ALLOC] KV arena alloc: dev=%d size=%.1f MB ptr=%p\n",
+                                    req.device, alloc_size / (1024.0 * 1024.0), ptr);
+                }
+            }
+        }
+        if (!ptr) {
+            ptr = ggml_sycl_malloc_device_raw(alloc_size, *req.queue, "unified_alloc:device");
+        }
     } else {
         // Always try the pre-allocated pinned chunk pool first (lock-free path).
         // Uses try_get_host_cache() to avoid g_cache_rw_mutex which would deadlock
@@ -6747,6 +6770,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     rec.handle.alloc_id  = g_runtime_alloc_id.fetch_add(1, std::memory_order_relaxed);
     rec.queue            = req.queue;
     rec.uses_pinned_pool = uses_pinned_pool;
+    rec.from_arena       = from_arena;
     if (req.intent.cohort_id && req.intent.cohort_id[0] != '\0') {
         rec.cohort_id = req.intent.cohort_id;
     }
@@ -9075,6 +9099,22 @@ size_t unified_cache_compute_arena_capacity(int device_id) {
 size_t unified_cache_compute_arena_used(int device_id) {
     auto * cache = get_unified_cache_for_device(device_id);
     return cache ? cache->compute_arena_used() : 0;
+}
+
+size_t unified_cache_kv_arena_capacity(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !cache->get_arena().active()) {
+        return 0;
+    }
+    return cache->get_arena().zone_capacity(vram_zone_id::KV);
+}
+
+size_t unified_cache_kv_arena_used(int device_id) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !cache->get_arena().active()) {
+        return 0;
+    }
+    return cache->get_arena().zone_used(vram_zone_id::KV);
 }
 
 bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes) {
