@@ -596,9 +596,12 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
         }
     }
 
-    for (const auto & f : files) {
-        if (gguf_filename_is_model(f.path)) {
-            return f;
+    // fallback to first available model only if tag is empty
+    if (tag.empty()) {
+        for (const auto & f : files) {
+            if (gguf_filename_is_model(f.path)) {
+                return f;
+            }
         }
     }
 
