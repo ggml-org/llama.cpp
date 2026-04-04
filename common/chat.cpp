@@ -1112,7 +1112,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             p.rule("thought", p.content(p.literal("<|channel>thought\n") + p.until("<channel|>") + p.literal("<channel|>")));
         }
 
-        auto thought = p.ref("thought");
+        auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));
 
         if (has_response_format) {
             auto response_format = p.literal("```json") <<
@@ -1124,7 +1124,8 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Gemma4 tool calling syntax
             // Rules should match traversal logic in gemma4_to_json()
-            auto gemma4_string = p.rule("gemma4-string", p.literal("<|\"|>") + p.until("<|\"|>") + p.literal("<|\"|>"));
+            auto gemma4_string_content = p.rule("gemma4-string-content", p.until("<|\"|>"));
+            auto gemma4_string = p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
             auto gemma4_bool = p.rule("gemma4-bool", p.literal("true") | p.literal("false"));
             auto gemma4_null = p.rule("gemma4-null", p.literal("null"));
             auto gemma4_number = p.rule("gemma4-number", [&]() {
@@ -1186,12 +1187,12 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             ));
 
             auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
-            auto message = p.rule("message", p.optional(thought) + content);
+            auto message = p.rule("message", thought + content);
             return start + p.zero_or_more(message) + tool_call;
         }
 
         auto content = p.rule("content", p.content(p.until("<|channel>")));
-        auto message = p.rule("message", p.optional(thought) + content);
+        auto message = p.rule("message", thought + content);
         return start + p.one_or_more(message);
     });
 
@@ -1697,7 +1698,7 @@ static void requires_non_null_content(json & messages) {
 // Gemma4 uses a custom tool_responses field instead of role:tool messages.
 //
 // This will transform a sequence of messages:
-//   assistant(tool_call) -> tool -> assistant(tool_call) -> tool -> assistant(content)
+//   assistant(tool_call+) -> tool+ -> assistant(content)
 //
 // Into a single assistant message containing a tool_responses field:
 //   assistant(content + tool_call + tool_responses)
@@ -1712,30 +1713,25 @@ struct gemma4_model_turn_builder {
     json content;
 
     void collect() {
-        while (pos < messages.size()) {
-            auto & curr = messages[pos];
-            const auto role = curr.value("role", "");
+        // Collect the first assistant message
+        auto & msg = messages[pos];
+        for (auto & tc : msg.at("tool_calls")) {
+            tool_calls.push_back(tc);
+        }
+        pos++;
 
-            if (role == "tool") {
-                collect_result(curr);
-                pos++;
-            } else if (role == "assistant") {
-                // Check if this is the final assistant content message
-                if (!has_tool_calls(curr)) {
-                    if (has_content(curr)) {
-                        content = curr.at("content");
-                    }
-                    pos++;
-                    break;
-                }
+        // Collect tool call results
+        while (pos < messages.size() && messages[pos].value("role", "") == "tool") {
+            collect_result(messages[pos]);
+            pos++;
+        }
 
-                // Collect tool calls
-                for (auto & tc : curr.at("tool_calls")) {
-                    tool_calls.push_back(tc);
-                }
+        // Check if the next assistant message is the final message
+        if (pos < messages.size() && messages[pos].value("role", "") == "assistant") {
+            auto & next = messages[pos];
+            if (!has_tool_calls(next) && has_content(next)) {
+                content = next.at("content");
                 pos++;
-            } else {
-                break;
             }
         }
     }

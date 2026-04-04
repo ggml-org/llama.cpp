@@ -883,21 +883,17 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return std::string(node.text);
     }
 
+    if (node.rule == "gemma4-string-content") {
+        return escape_json_string_inner(std::string(node.text));
+    }
+
     if (node.rule == "gemma4-string") {
-        auto sv = node.text;
-        constexpr size_t delim_size = 5;
-
-        if (sv.size() >= delim_size) {
-            sv.remove_prefix(delim_size);
-        }
-        if (!node.is_partial && sv.size() >= delim_size) {
-            sv.remove_suffix(delim_size);
-        }
-
         std::string result = "\"";
-        result += escape_json_string_inner(std::string(sv));
-        if (!node.is_partial) {
-            result += "\"";
+        if (!node.children.empty()) {
+            result += gemma4_to_json(arena, node.children[0]);
+            if (!node.is_partial) {
+                result += "\"";
+            }
         }
         return result;
     }
@@ -975,17 +971,11 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
     const auto & node = arena.get(id);
 
     if (node.tag == "reasoning") {
-        if (!result.reasoning_content.empty()) {
-            result.reasoning_content += "\n\n";
-        }
         result.reasoning_content += std::string(node.text);
         return;
     }
 
     if (node.tag == "content") {
-        if (!result.content.empty()) {
-            result.content += "\n\n";
-        }
         result.content += std::string(node.text);
         return;
     }
