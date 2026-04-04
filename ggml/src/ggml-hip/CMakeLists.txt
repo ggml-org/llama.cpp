@@ -127,6 +127,7 @@ if (NOT GGML_CUDA_FA)
 endif()
 
 if (CXX_IS_HIPCC)
+    add_compile_definitions(__HIP_NO_HALF_CONVERSIONS__)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
     if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         # CMake on Windows doesn't support the HIP language yet.
