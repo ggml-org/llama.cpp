@@ -16513,9 +16513,20 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     ggml_sycl_buffer buffer_pool[MAX_SYCL_BUFFERS] = {};
     size_t           pool_size                     = 0;
 
-    explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_) : device(device_), qptr(qptr_) {}
+    // Cache the arena-enabled flag at construction time — avoids repeated
+    // getenv() lookups on every alloc/free in the hot path.
+    bool arena_mode_ = false;
+
+    explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_)
+        : device(device_), qptr(qptr_), arena_mode_(ggml_sycl::vram_arena_enabled()) {}
 
     ~ggml_sycl_pool_leg() {
+        // When arena is active, no buffers should be in the free list —
+        // all allocations came from the compute arena and were never cached.
+        if (arena_mode_) {
+            return;
+        }
+
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
 
@@ -16530,11 +16541,28 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
+        const size_t rounded_size = ggml_sycl_pool_round_size(size);
+
+        // --- VRAM arena fast path ---
+        // When the VRAM arena is active, ALL compute scratch comes from the
+        // compute arena's bump allocator.  No free list, no malloc_device.
+        // The arena resets between graph_compute calls.
+        if (arena_mode_) {
+            void * ptr = ggml_sycl::unified_cache_arena_alloc(device, rounded_size);
+            if (ptr) {
+                *actual_size = rounded_size;
+                return ptr;
+            }
+            // Arena full — no fallback.  Caller must handle nullptr.
+            GGML_SYCL_DEBUG("[POOL-LEG] arena full: requested %zu bytes\n", rounded_size);
+            return nullptr;
+        }
+
+        // --- Legacy path (arena OFF) ---
 #ifdef DEBUG_sycl_MALLOC
         int    nnz      = 0;
         size_t max_size = 0;
 #endif
-        const size_t rounded_size = ggml_sycl_pool_round_size(size);
         size_t       best_diff    = 1ull << 36;
         int          ibest        = -1;
 
@@ -16620,6 +16648,13 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         // Arena pointers are ephemeral — they reset between graph_compute calls.
         // Do NOT cache them in the buffer pool; just discard.
         if (ggml_sycl::unified_cache_arena_owns(device, ptr)) {
+            return;
+        }
+
+        // When VRAM arena is active, ALL allocs came from the arena — nothing
+        // to cache or free.  This should not be reached (arena_owns above
+        // catches arena pointers), but guard against stale pointers.
+        if (arena_mode_) {
             return;
         }
 
