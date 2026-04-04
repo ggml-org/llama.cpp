@@ -18928,7 +18928,7 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                                 src0->name);
             } else {
                 // Fast O(1) path: unified cache resolve
-                auto resolved = ggml_sycl_resolve_weight(src0, i);
+                auto resolved = ggml_sycl_resolve(src0, i);
                 if (resolved && resolved.on_device) {
                     dev[i].src0_dd                = (char *) resolved.ptr;
                     dev[i].src0_ptr_origin        = "resolve_weight";
@@ -25581,7 +25581,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // lets us compute per-expert offsets without individual cache entries.
         // Only AOS layout supports direct byte-offset arithmetic; COALESCED/SOA
         // rearrange bytes within tiles so offset math gives wrong data.
-        auto whole_tensor_resolved = ggml_sycl_resolve_weight(src0, device);
+        auto whole_tensor_resolved = ggml_sycl_resolve(src0, device);
         if (whole_tensor_resolved && whole_tensor_resolved.layout == GGML_LAYOUT_AOS
             && whole_tensor_resolved.on_device) {
             direct_base = whole_tensor_resolved.ptr;
@@ -28255,7 +28255,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
         const size_t src0_row_bytes = ggml_row_size(src0->type, ne00);
 
         // Primary GPU: existing SOA/COALESCED device pointer
-        auto resolved_split_pri = ggml_sycl_resolve_weight(src0, device);
+        auto resolved_split_pri = ggml_sycl_resolve(src0, device);
         if (!resolved_split_pri || resolved_split_pri.layout != src0_layout) return false;
         const char * src0_primary = (const char *) resolved_split_pri.ptr;
 
@@ -28538,7 +28538,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
     // bytes within tiles so row-offset arithmetic gives wrong data.
     const char * src0_aos = nullptr;
     {
-        auto resolved = ggml_sycl_resolve_weight(src0, device);
+        auto resolved = ggml_sycl_resolve(src0, device);
         if (resolved && resolved.layout == GGML_LAYOUT_AOS && resolved.on_device) {
             src0_aos = (const char *) resolved.ptr;
         }
@@ -28596,7 +28596,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
     quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
         src1_ddf, src1_ddq, K, 1, K_padded, stream);
 
-    auto resolved_split_gpu = ggml_sycl_resolve_weight(src0, device);
+    auto resolved_split_gpu = ggml_sycl_resolve(src0, device);
     if (!resolved_split_gpu || resolved_split_gpu.layout != src0_layout) {
         return false;
     }
@@ -28743,7 +28743,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             }
         }
         if (!src0_data) {
-            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+            auto resolved = ggml_sycl_resolve(src0, ctx.device);
             if (resolved) {
                 src0_data = resolved.ptr;
                 switch (resolved.layout) {
@@ -29095,7 +29095,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             ggml_sycl_ensure_weight_on_device(src0, ctx.device);
 
             // Resolve weight via unified cache -- single O(1) lookup
-            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+            auto resolved = ggml_sycl_resolve(src0, ctx.device);
             ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
             const bool              has_soa_reorder =
                 extra && extra->optimized_feature.is_reordered() && ggml_sycl_supports_reorder_mmvq(src0->type);
@@ -29489,74 +29489,46 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
         // KQ + KQV multi-batch
         GGML_SYCL_KTRACE("mul_mat_f16_kqkv_multi", " batches=%lld", (long long) (src1->ne[2] * src1->ne[3]));
+        bool batched_ok = false;
         if (!force_simple_kqv) {
             try {
                 ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+                batched_ok = true;
             } catch (const std::exception & e) {
-                // Batched path failed — likely VRAM exhaustion from oneDNN's
-                // internal sycl::malloc_device for FP16 workspace.  Evict
-                // cold cache entries to reclaim VRAM, then retry.
-                //
-                // The eviction guard (g_graph_compute_active) blocks eviction
-                // during graph execution to prevent freeing VRAM that in-flight
-                // kernels still reference.  Here we know the failed allocation
-                // means no NEW kernel launched, so we can safely:
-                //   1. Wait on the compute queue (drain in-flight kernels)
-                //   2. Temporarily lift the guard
-                //   3. Evict and free
-                //   4. Restore the guard
-                GGML_LOG_WARN("[SYCL] batched F16 mul_mat failed: %s — evicting cache and retrying\n", e.what());
-                bool recovered = false;
+                // Batched path failed — could be VRAM exhaustion or oneDNN
+                // descriptor incompatibility.  Try eviction for VRAM issues,
+                // then fall back to the general mul_mat path if unrecoverable.
+                GGML_LOG_WARN("[SYCL] batched F16 mul_mat failed: %s — attempting recovery\n", e.what());
                 auto * cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
                 if (cache) {
                     // Drain in-flight kernels so freed VRAM is truly unused.
                     try { ctx.stream()->wait_and_throw(); } catch (...) {}
-                    // Lift eviction guard so evict_and_flush can process
-                    // deferred frees (sycl::free).
                     ggml_sycl::unified_cache_set_graph_compute_active(false);
-                    // Unpin all entries so they become evictable.  Graph weight
-                    // pinning prevents eviction during normal execution, but here
-                    // the compute queue is drained — no kernels reference these
-                    // weights.  Remaining graph nodes will re-access the cache,
-                    // which triggers on-demand re-caching if the weight was evicted.
                     cache->unpin_all();
                     constexpr size_t evict_chunk = 256ull * 1024ull * 1024ull;
-                    for (int attempt = 0; attempt < 3 && !recovered; ++attempt) {
+                    for (int attempt = 0; attempt < 3 && !batched_ok; ++attempt) {
                         size_t freed = cache->evict_and_flush(evict_chunk);
-                        if (freed == 0) break;  // Nothing evictable
+                        if (freed == 0) break;
                         GGML_LOG_INFO("[SYCL] Evicted %.1f MB for compute scratch (attempt %d)\n",
                                       freed / (1024.0 * 1024.0), attempt + 1);
                         try {
                             ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
-                            recovered = true;
-                        } catch (...) {
-                            // Retry after more eviction
-                        }
+                            batched_ok = true;
+                        } catch (...) {}
                     }
-                    // Restore eviction guard for remaining graph nodes.
                     ggml_sycl::unified_cache_set_graph_compute_active(true);
                 }
-                if (!recovered) {
-                    size_t free_vram = 0, total_vram = 0;
-                    ggml_backend_sycl_get_device_memory(ctx.device, &free_vram, &total_vram);
-                    size_t cache_used = 0, cache_budget = 0;
-                    if (cache) {
-                        cache_used   = cache->used();
-                        cache_budget = cache->budget();
-                    }
-                    fprintf(stderr, "[SYCL] VRAM exhaustion diagnostic: "
-                                    "free=%.1f MB total=%.1f MB cache_used=%.1f MB cache_budget=%.1f MB\n",
-                                    free_vram / (1024.0 * 1024.0), total_vram / (1024.0 * 1024.0),
-                                    cache_used / (1024.0 * 1024.0), cache_budget / (1024.0 * 1024.0));
-                    fflush(stderr);
-                    GGML_ABORT("[SYCL] batched F16 mul_mat failed after eviction — VRAM exhaustion. "
-                               "The per-layer KV allocator should leave headroom for compute scratch.");
-                }
             }
-        } else {
-            GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
+        }
+        if (!batched_ok) {
+            // Batched oneDNN GEMM failed or was skipped.  Fall through to
+            // the general mul_mat dispatch (unified kernel / MMVQ / etc.)
+            // which handles FP16 attention via simpler per-head iteration.
+            GGML_LOG_WARN("[SYCL] batched F16 path unavailable — falling back to general mul_mat\n");
+            goto general_mul_mat;
         }
     } else {
+        general_mul_mat:
         ggml_sycl::test_record_orchestrator_call();
         auto decision = ctx.matmul_orchestrator.select(src0, src1, dst, forced_layout);
         // =====================================================================
@@ -29597,7 +29569,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         // Fallback chain: COALESCED → SOA → AOS.
                         // Unified weight resolution: single O(1) cache lookup with
                         // built-in COALESCED → SOA → AOS fallback.
-                        auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+                        auto resolved = ggml_sycl_resolve(src0, ctx.device);
                         layout_mode   requested_layout = resolved.layout;
                         const char *  src0_ptr_source  = "resolve_weight";
                         const void *  src0_data        = resolved.ptr;
@@ -30546,7 +30518,7 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     const layout_mode use_layout =
         (src0->type == GGML_TYPE_MXFP4 && layout == GGML_LAYOUT_SOA) ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
 
-    auto resolved_fused = ggml_sycl_resolve_weight(src0, ctx.device);
+    auto resolved_fused = ggml_sycl_resolve(src0, ctx.device);
     // Fused kernel only supports AOS and MXFP4 SOA — reject incompatible layouts
     if (resolved_fused && resolved_fused.layout != use_layout) {
         if (use_layout == GGML_LAYOUT_AOS) {
@@ -30913,7 +30885,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     void * src0_layout_ptr = nullptr;
 
     if (!host_weights) {
-        auto resolved_xmx = ggml_sycl_resolve_weight(src0, ctx.device);
+        auto resolved_xmx = ggml_sycl_resolve(src0, ctx.device);
         // XMX MoE requires an exact layout match (SOA or XMX_TILED)
         if (resolved_xmx && resolved_xmx.layout == layout) {
             src0_layout_ptr = resolved_xmx.ptr;
@@ -34029,7 +34001,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         // Check if weights are host-resident using the comprehensive check
         bool hw = ggml_sycl_is_host_resident_weight(src0, ctx.stream());
         if (!hw && src0->extra) {
-            auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+            auto resolved = ggml_sycl_resolve(src0, ctx.device);
             if (resolved && !resolved.on_device) {
                 hw = true;
             }
@@ -34297,7 +34269,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     bool        src0_layout_aos = true;
     void *      src0_layout_ptr = nullptr;
     if (!host_weights) {
-        auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+        auto resolved   = ggml_sycl_resolve(src0, ctx.device);
         src0_layout     = resolved.layout;
         src0_layout_ptr = resolved.ptr;
         src0_layout_aos = (src0_layout == GGML_LAYOUT_AOS);
@@ -34359,7 +34331,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     // superseding any layout choice registry adjustments.
     const void * src0_layout_base = nullptr;
     if (!use_expert_cache) {
-        auto resolved   = ggml_sycl_resolve_weight(src0, ctx.device);
+        auto resolved   = ggml_sycl_resolve(src0, ctx.device);
         if (resolved) {
             src0_layout_ptr = resolved.ptr;
             src0_layout     = resolved.layout;
@@ -37670,8 +37642,8 @@ static bool execute_ffn_fusion(ggml_backend_sycl_context & ctx,
         stream->memset(input_q8, 0, q8_size);
     }
     // Resolve weights — fused FFN only supports AOS layout
-    auto gate_resolved = ggml_sycl_resolve_weight(W_gate, device);
-    auto up_resolved   = ggml_sycl_resolve_weight(W_up, device);
+    auto gate_resolved = ggml_sycl_resolve(W_gate, device);
+    auto up_resolved   = ggml_sycl_resolve(W_up, device);
     const void * W_gate_data = (gate_resolved && gate_resolved.layout == GGML_LAYOUT_AOS) ? gate_resolved.ptr : nullptr;
     const void * W_up_data   = (up_resolved   && up_resolved.layout   == GGML_LAYOUT_AOS) ? up_resolved.ptr   : nullptr;
 
@@ -38866,7 +38838,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 continue;
             }
             // Resolve weight pointer and layout
-            auto resolved = ggml_sycl_resolve_weight(src0, sycl_ctx->device);
+            auto resolved = ggml_sycl_resolve(src0, sycl_ctx->device);
             if (!resolved) {
                 continue;
             }
@@ -41462,7 +41434,7 @@ static const void * resolve_split_weight_ptr(
         int64_t             row_count) {
     if (device == primary_device) {
         // Primary device: resolve via unified cache (covers full N rows)
-        auto resolved_sp = ggml_sycl_resolve_weight(weight_tensor, device);
+        auto resolved_sp = ggml_sycl_resolve(weight_tensor, device);
         if (resolved_sp && resolved_sp.layout == weight_layout) {
             return resolved_sp.ptr;
         }
@@ -41479,7 +41451,7 @@ static const void * resolve_split_weight_ptr(
     // bytes within tiles so row-offset arithmetic gives wrong data.
     const void * src_aos = nullptr;
     {
-        auto resolved = ggml_sycl_resolve_weight(weight_tensor, primary_device);
+        auto resolved = ggml_sycl_resolve(weight_tensor, primary_device);
         if (resolved && resolved.layout == GGML_LAYOUT_AOS && resolved.on_device) {
             src_aos = resolved.ptr;
         }
@@ -43693,7 +43665,7 @@ full_build:
 
                             // Prefer a concrete SoA/Coalesced pointer for persistent DMMV.
                             {
-                                auto resolved_ptg = ggml_sycl_resolve_weight(weight_tensor, ctx.device);
+                                auto resolved_ptg = ggml_sycl_resolve(weight_tensor, ctx.device);
                                 if (resolved_ptg && resolved_ptg.layout != GGML_LAYOUT_AOS) {
                                     preferred_layout_ptr = resolved_ptg.ptr;
                                 }
@@ -43723,7 +43695,7 @@ full_build:
                         }
                         if (!weight) {
                             // resolve_weight already tried COALESCED > SOA > AOS
-                            auto resolved_ptg_wt = ggml_sycl_resolve_weight(weight_tensor, ctx.device);
+                            auto resolved_ptg_wt = ggml_sycl_resolve(weight_tensor, ctx.device);
                             if (resolved_ptg_wt && resolved_ptg_wt.layout != GGML_LAYOUT_AOS) {
                                 weight        = resolved_ptg_wt.ptr;
                                 weight_layout = resolved_ptg_wt.layout;

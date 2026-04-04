@@ -344,8 +344,8 @@ static bool try_fused_ffn_gate_up_swiglu(
 
     // Get device pointers — fused FFN only supports AOS layout
     const int device = ctx.device;
-    auto gate_resolved = ggml_sycl_resolve_weight(gate_weight, device);
-    auto up_resolved   = ggml_sycl_resolve_weight(up_weight, device);
+    auto gate_resolved = ggml_sycl_resolve(gate_weight, device);
+    auto up_resolved   = ggml_sycl_resolve(up_weight, device);
     if (!gate_resolved || gate_resolved.layout != GGML_LAYOUT_AOS ||
         !up_resolved   || up_resolved.layout   != GGML_LAYOUT_AOS) {
         return false;

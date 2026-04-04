@@ -371,7 +371,7 @@ static void ggml_sycl_mul_mat_vec_rmsnorm(
     const float * f32_input  = (const float *) ggml_sycl_get_data_ptr(x, device);
     const float * gamma_data = (const float *) ggml_sycl_get_layout_ptr(gamma, device);
     float * dst_data         = (float *) ggml_sycl_get_data_ptr(dst, device);
-    auto W_resolved = ggml_sycl_resolve_weight(W, device);
+    auto W_resolved = ggml_sycl_resolve(W, device);
     if (!W_resolved || W_resolved.layout != GGML_LAYOUT_AOS) {
         GGML_SYCL_DEBUG("[MMVQ_RMSNORM] AOS layout unavailable for %s\n", W->name ? W->name : "?");
         return;

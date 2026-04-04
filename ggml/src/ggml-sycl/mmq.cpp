@@ -6938,7 +6938,7 @@ void ggml_sycl_op_mul_mat_q(
 
     if (layout != GGML_LAYOUT_AOS) {
         storage = get_storage_tensor(src0);
-        auto resolved = ggml_sycl_resolve_weight(storage, device_id);
+        auto resolved = ggml_sycl_resolve(storage, device_id);
         if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
             layout      = resolved.layout;
             layout_base = resolved.ptr;

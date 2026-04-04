@@ -2247,57 +2247,67 @@ inline bool ggml_sycl_should_use_unified_type(ggml_type type) {
     return type == GGML_TYPE_Q4_0 || type == GGML_TYPE_MXFP4;
 }
 
-// Single unified weight pointer resolution.  Returns the best available
-// pointer from the unified cache (VRAM preferred).  Falls back to host.
-// Does NOT call ensure_cached_layout -- O(1) cache lookup only.
+// Forward declaration of unified resolve (defined below).
+inline ggml_sycl::resolved_ptr ggml_sycl_resolve(
+    const ggml_tensor * tensor, int device);
+
+// Legacy weight resolution — thin wrapper around ggml_sycl_resolve.
+// Returns weight_ptr_result for backward compatibility with existing callers.
+// New code should use ggml_sycl_resolve() directly.
 inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
     const ggml_tensor * tensor, int device) {
+    auto resolved = ggml_sycl_resolve(tensor, device);
     ggml_sycl::unified_cache::weight_ptr_result result{};
+    result.ptr       = resolved.ptr;
+    result.layout    = resolved.layout;
+    result.on_device = resolved.on_device;
+    return result;
+}
+
+// === Unified tensor resolution (P13) ===
+// Single entry point for ALL tensor types: weights, KV cache, activations, dst.
+// Returns resolved_ptr with pointer, layout mode, and device/host flag.
+//   - Weights: queries unified cache for best layout (SOA/COALESCED/AOS)
+//   - Non-weights: data_device_ptr fast path + alloc_registry lookup
+// O(1) hot path.  Safe at graph build time (no SYCL runtime locks).
+inline ggml_sycl::resolved_ptr ggml_sycl_resolve(
+    const ggml_tensor * tensor, int device) {
+    ggml_sycl::resolved_ptr result{};
     if (!tensor) {
         return result;
     }
 
-    // Non-weight tensors: use raw data pointer
-    if (!ggml_sycl_tensor_is_weight(tensor)) {
-        result.ptr = ggml_sycl_get_data_ptr(tensor, device);
-        result.layout = GGML_LAYOUT_AOS;
-        if (result.ptr) {
-            result.on_device = (ggml_sycl_get_alloc_type(result.ptr) == sycl::usm::alloc::device);
-        }
-        return result;
-    }
-
-    // Weight tensor: try unified cache first
-    if (ggml_sycl::unified_cache_enabled()) {
+    // Weight tensors: try unified cache for best layout
+    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled()) {
         auto * cache = ggml_sycl::get_unified_cache_for_device(device);
         if (cache) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
             if (key.valid) {
-                result = cache->get_weight_ptr(key);
-                if (result) {
-                    // Validate that the returned layout is compatible with this
-                    // tensor's dimensions. COALESCED requires specific alignment
-                    // ((ncols/block_size) % MMVQ_COALESCED_TILE_BLOCKS == 0).
-                    // If not compatible, downgrade to SOA or AOS.
-                    if (result.layout == GGML_LAYOUT_COALESCED &&
+                auto wpr = cache->get_weight_ptr(key);
+                if (wpr) {
+                    // Validate COALESCED compatibility
+                    if (wpr.layout == GGML_LAYOUT_COALESCED &&
                         !ggml_sycl_layout_supports_coalesced(tensor)) {
-                        // COALESCED not safe — try SOA
                         auto soa_ptr = cache->lookup(key, GGML_LAYOUT_SOA);
                         if (soa_ptr) {
-                            result.ptr = soa_ptr;
-                            result.layout = GGML_LAYOUT_SOA;
-                        } else {
-                            // No compatible layout in cache — fall through to host
-                            result = {};
+                            result.ptr       = soa_ptr;
+                            result.layout    = GGML_LAYOUT_SOA;
+                            result.on_device = wpr.on_device;
+                            return result;
                         }
+                        // No compatible layout — fall through to raw pointer
+                    } else {
+                        result.ptr       = wpr.ptr;
+                        result.layout    = wpr.layout;
+                        result.on_device = wpr.on_device;
+                        return result;
                     }
-                    if (result) return result;
                 }
             }
         }
     }
 
-    // Fallback: host/device pointer from tensor
+    // Non-weight tensors OR weight fallback: raw data pointer
     result.ptr = ggml_sycl_get_data_ptr(tensor, device);
     result.layout = GGML_LAYOUT_AOS;
     if (result.ptr) {
@@ -2308,8 +2318,7 @@ inline ggml_sycl::unified_cache::weight_ptr_result ggml_sycl_resolve_weight(
 
 // Location-transparent allocation query for ANY tensor (weights, KV, activations).
 // Returns memory_location with tier, layout, arena zone, and device info.
-// For weights: resolves via unified cache (best available layout).
-// For non-weights: resolves via data_device/alloc_registry fast path.
+// Uses ggml_sycl_resolve internally for pointer + layout resolution.
 // O(1) — no SYCL runtime locks.  Safe at graph build time.
 inline ggml_sycl::memory_location resolve_allocation(
     const ggml_tensor * tensor, int device) {
@@ -2318,22 +2327,13 @@ inline ggml_sycl::memory_location resolve_allocation(
         return loc;
     }
 
-    // Weight tensors: try unified cache for best layout
-    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled()) {
-        auto resolved = ggml_sycl_resolve_weight(tensor, device);
-        if (resolved) {
-            loc = ggml_sycl::query_location(resolved.ptr, device);
-            loc.layout = resolved.layout;
-            loc.role   = ggml_sycl::alloc_role::WEIGHT;
-            return loc;
+    auto resolved = ggml_sycl_resolve(tensor, device);
+    if (resolved) {
+        loc = ggml_sycl::query_location(resolved.ptr, device);
+        loc.layout = resolved.layout;
+        if (ggml_sycl_tensor_is_weight(tensor)) {
+            loc.role = ggml_sycl::alloc_role::WEIGHT;
         }
-    }
-
-    // Non-weight tensors (KV cache, activations, dst): fast path
-    void * ptr = ggml_sycl_get_data_ptr(tensor, device);
-    if (ptr) {
-        loc = ggml_sycl::query_location(ptr, device);
-        loc.layout = GGML_LAYOUT_AOS;  // Non-weight tensors are always AOS
     }
     return loc;
 }

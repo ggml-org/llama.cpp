@@ -81,7 +81,7 @@ resolved_ptr mem_handle::resolve_slow() const {
         return {};
     }
 
-    // weight_ptr_result has: ptr, layout, on_device
+    // get_weight_ptr returns weight_ptr_result with: ptr, layout, on_device
     auto result = cache->get_weight_ptr(key_.id);
     if (!result) {
         return {};

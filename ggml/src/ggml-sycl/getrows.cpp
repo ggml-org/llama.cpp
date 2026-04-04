@@ -1719,7 +1719,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         layout = mode;
     }
     const void *            layout_base = nullptr;
-    auto resolved = ggml_sycl_resolve_weight(storage, device);
+    auto resolved = ggml_sycl_resolve(storage, device);
     if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
         layout      = resolved.layout;
         layout_base = resolved.ptr;

@@ -4047,7 +4047,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
 
     const void * src0_d = nullptr;
     if (!use_ptr_table) {
-        auto resolved = ggml_sycl_resolve_weight(src0, ctx.device);
+        auto resolved = ggml_sycl_resolve(src0, ctx.device);
         if (!resolved) {
             GGML_SYCL_DEBUG("[MMVQ] resolve_weight failed for %s (layout=%d)\n",
                             src0->name ? src0->name : "?", (int) layout);
@@ -5140,7 +5140,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
     layout_mode  layout      = GGML_LAYOUT_AOS;
 
     // Unified weight resolution: single O(1) cache lookup
-    auto resolved = ggml_sycl_resolve_weight(src0, device_id);
+    auto resolved = ggml_sycl_resolve(src0, device_id);
     if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
         layout      = resolved.layout;
         layout_base = resolved.ptr;

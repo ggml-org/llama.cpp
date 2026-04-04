@@ -3608,7 +3608,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                               (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K);
     if (allow_layout && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
         storage = get_storage_tensor(src0);
-        auto resolved = ggml_sycl_resolve_weight(storage, device_id);
+        auto resolved = ggml_sycl_resolve(storage, device_id);
         if (resolved && (resolved.layout == GGML_LAYOUT_SOA || resolved.layout == GGML_LAYOUT_COALESCED)) {
             layout = resolved.layout;
             layout_rows = ggml_nrows(storage);
