@@ -157,10 +157,20 @@ AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t
         return AEE_EBADPARM;
     }
 
+    // See if we already have this mapping
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+        struct htp_mmap *m = &ctx->mmap[i];
+        if (m->fd == fd) {
+            m->pinned = pinned;
+            return AEE_SUCCESS;
+        }
+    }
+
+    // Add new mapping
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            FARF(HIGH, "mmap : fd %u size %u pinned %u", m->fd, size, pinned);
+            FARF(HIGH, "mmap : fd %u size %u pinned %u", fd, size, pinned);
 
             void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
             if (va == (void*)-1) {

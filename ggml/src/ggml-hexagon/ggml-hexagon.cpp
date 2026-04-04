@@ -203,7 +203,7 @@ struct ggml_backend_hexagon_buffer_context {
         this->fd     = -1;
     }
 
-    void alloc(size_t size, bool pinned) {
+    void alloc(size_t size, bool pinned = false) {
         if (this->base) return;
 
         this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, size);
@@ -237,7 +237,7 @@ struct ggml_backend_hexagon_buffer_context {
         this->base = NULL;
     }
 
-    ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool pinned) {
+    ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool pinned = false) {
         size += 4 * 1024;  // extra page for padding
 
         this->sess   = sess;
@@ -1453,7 +1453,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, false /*repack*/);
+        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
@@ -1465,7 +1465,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, true /*repack*/);
+        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
@@ -1517,13 +1517,38 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
 
 // Backend session implementation
 
-// struct op_shared_mem : public ggml_backend_hexagon_buffer_context {
-//     uint32_t  chunk_size;
-//     uint32_t  chunk_mask;
-// 
-//     op_shared_mem(, 
-// 
-// };
+struct op_shared_mem {
+    ggml_backend_hexagon_buffer_context *buf;
+
+    uint64_t  block_mask;
+    size_t    block_size;
+    size_t    n_blocks;
+
+    op_shared_mem(ggml_hexagon_session *sess, size_t max_batch, size_t max_pending) {
+        size_t n_bufs    = HTP_OP_MAX_BUFS;
+        size_t n_ops     = max_batch;
+        size_t n_tensors = n_ops + n_ops * HTP_OP_MAX_INPUTS;
+
+        block_size = sizeof(htp_general_req)        +
+                     sizeof(htp_op_buf) * n_bufs    +
+                     sizeof(htp_tensor) * n_tensors +
+                     sizeof(htp_op_req) * n_ops;
+
+        const size_t max_blocks = sizeof(block_mask) * 8; // 1 bit per block
+        n_blocks   = max_pending < max_blocks ? max_pending : max_blocks;
+
+        buf = new ggml_backend_hexagon_buffer_context(sess, block_size * n_blocks, true /* pinned */);
+
+        if (opt_verbose) {
+            GGML_LOG_INFO("ggml-hex: %s allocated shared buf %zu : block-size %zu max-batch %zu max-pending %zu\n",
+                    sess->name.c_str(), (size_t) buf->size, block_size, max_batch, max_pending);
+        }
+    }
+
+    ~op_shared_mem() {
+        delete buf;
+    }
+};
 
 struct op_request_batch {
     const char* name;
@@ -1553,8 +1578,8 @@ struct op_request_batch {
         b_map.clear();
     }
 
-    op_request_batch(const std::string& sess_name, unsigned int n = HTP_OP_MAX_REQS) {
-        name = sess_name.c_str();
+    op_request_batch(ggml_hexagon_session *sess, unsigned int n = HTP_OP_MAX_REQS) {
+        name = sess->name.c_str();
         n_reqs_max = (n > HTP_OP_MAX_REQS) ? HTP_OP_MAX_REQS : n;
         reset();
     }
@@ -1904,8 +1929,9 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
     this->valid_iface = true;
 
-    // Allocate OpReq batch
-    this->orb = new op_request_batch(this->name);
+    // Allocate buffers and state for OpReq batching
+    this->orb  = new op_request_batch(this);
+    this->oshm = new op_shared_mem(this, HTP_OP_MAX_REQS, 4);
 }
 
 void ggml_hexagon_session::release() noexcept(true) {
