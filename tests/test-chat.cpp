@@ -2062,6 +2062,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_tool_calls("set_nullable", R"({"value": null})"))
             .run();
 
+        // Tool call with nullable string type ["string", "null"] - non-null value
+        tst.test(
+                "<|tool_call>call:set_nullable_str{name:<|\"|>hello world<|\"|>}<tool_call|>")
+            .tools({ nullable_string_tool })
+            .expect(message_with_tool_calls("set_nullable_str", R"({"name": "hello world"})"))
+            .run();
+
+        // Tool call with nullable string - null first in type array ["null", "string"]
+        tst.test(
+                "<|tool_call>call:set_nullable_str_nf{name:<|\"|>hello world<|\"|>}<tool_call|>")
+            .tools({ nullable_string_null_first_tool })
+            .expect(message_with_tool_calls("set_nullable_str_nf", R"({"name": "hello world"})"))
+            .run();
+
+        // Tool call with nullable integer type ["integer", "null"]
+        tst.test(
+                "<|tool_call>call:set_nullable_int{count:42}<tool_call|>")
+            .tools({ nullable_int_tool })
+            .expect(message_with_tool_calls("set_nullable_int", R"({"count": 42})"))
+            .run();
+
         // Tool call with array argument (todo list)
         tst.test(
                 "<|tool_call>call:todo_list{todos:[<|\"|>buy milk<|\"|>,<|\"|>walk dog<|\"|>]}<tool_call|>")

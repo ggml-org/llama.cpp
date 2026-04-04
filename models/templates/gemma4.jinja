@@ -6,6 +6,12 @@
         {%- if key not in standard_keys -%}
             {%- if ns.found_first %},{% endif -%}
             {%- set ns.found_first = true -%}
+            {%- set effective_type = '' -%}
+            {%- if value['type'] is string -%}
+                {%- set effective_type = value['type'] | upper -%}
+            {%- elif value['type'] is defined and value['type'] is not string -%}
+                {%- set effective_type = (value['type'] | reject('equalto', 'null') | list | first | default('')) | upper -%}
+            {%- endif -%}
             {{ key }}:{
             {%- if value['description'] -%}
                 description:<|"|>{{ value['description'] }}<|"|>
@@ -15,12 +21,12 @@
                 {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
                 nullable:true
             {%- endif -%}
-            {%- if value['type'] | upper == 'STRING' -%}
+            {%- if effective_type == 'STRING' -%}
                 {%- if value['enum'] -%}
                     {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
                     enum:{{ format_argument(value['enum']) }}
                 {%- endif -%}
-            {%- elif value['type'] | upper == 'OBJECT' -%}
+            {%- elif effective_type == 'OBJECT' -%}
                 ,properties:{
                 {%- if value['properties'] is defined and value['properties'] is mapping -%}
                     {{- format_parameters(value['properties'], value['required'] | default([])) -}}
@@ -36,7 +42,7 @@
                     {%- endfor -%}
                     ]
                 {%- endif -%}
-            {%- elif value['type'] | upper == 'ARRAY' -%}
+            {%- elif effective_type == 'ARRAY' -%}
                 {%- if value['items'] is mapping and value['items'] -%}
                     ,items:{
                     {%- set ns_items = namespace(found_first=false) -%}
@@ -61,7 +67,7 @@
                                 {%- if item_value is string -%}
                                     type:{{ format_argument(item_value | upper) }}
                                 {%- else -%}
-                                    type:{{ format_argument(item_value | map('upper') | list) }}
+                                    type:{{ format_argument((item_value | reject('equalto', 'null') | list | first | default('')) | upper) }}
                                 {%- endif -%}
                             {%- else -%}
                                 {{ item_key }}:{{ format_argument(item_value) }}
@@ -72,7 +78,7 @@
                 {%- endif -%}
             {%- endif -%}
             {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
-            type:<|"|>{{ value['type'] | upper }}<|"|>}
+            type:<|"|>{{ effective_type }}<|"|>}
         {%- endif -%}
     {%- endfor -%}
 {%- endmacro -%}
@@ -93,7 +99,11 @@
             ],
         {%- endif -%}
         {%- if params['type'] -%}
-            type:<|"|>{{- params['type'] | upper -}}<|"|>}
+            {%- if params['type'] is string -%}
+                type:<|"|>{{- params['type'] | upper -}}<|"|>}
+            {%- elif params['type'] is defined and params['type'] is not string -%}
+                type:<|"|>{{- (params['type'] | reject('equalto', 'null') | list | first | default('')) | upper -}}<|"|>}
+            {%- endif -%}
         {%- endif -%}
     {%- endif -%}
     {%- if 'response' in tool_data['function'] -%}
@@ -102,8 +112,9 @@
         {%- if response_declaration['description'] -%}
             description:<|"|>{{- response_declaration['description'] -}}<|"|>,
         {%- endif -%}
-        {%- if response_declaration['type'] | upper == 'OBJECT' -%}
-            type:<|"|>{{- response_declaration['type'] | upper -}}<|"|>}
+        {%- set resp_type = response_declaration['type'] | upper if response_declaration['type'] is string else (response_declaration['type'] | reject('equalto', 'null') | list | first | default('')) | upper -%}
+        {%- if resp_type == 'OBJECT' -%}
+            type:<|"|>{{- resp_type -}}<|"|>}
         {%- endif -%}
     {%- endif -%}
     }
