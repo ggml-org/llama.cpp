@@ -509,9 +509,6 @@ static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32
 }
 
 static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_req * op) {
-    struct profile_data prof;
-    profile_start(&prof);
-
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     octx->flags = op->flags;
     octx->op    = op->opcode;
@@ -550,8 +547,6 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
 
     FARF(HIGH, "post-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
         dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
-
-    profile_stop(&prof);
 }
 
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
@@ -615,7 +610,15 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         octx.ctx       = ctx;
 
         for (uint32_t i=0; i < n_ops; i++) {
+            struct profile_data prof;
+            profile_start(&prof);
+
             proc_op_req(&octx, tens, i, &ops[i]);
+
+            profile_stop(&prof);
+            ops[i].prof_usecs  = prof.usecs;
+            ops[i].prof_cycles = prof.cycles;
+            ops[i].prof_pkts   = prof.pkts;
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
@@ -625,10 +628,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         // Prep response struct
         struct htp_general_rsp rsp;
         rsp.status      = HTP_STATUS_OK; // FIXME
-        rsp.prof_usecs  = 0; // prof->usecs;
-        rsp.prof_cycles = 0; // prof->cycles;
-        rsp.prof_pkts   = 0; // prof->pkts;
-
         err = dspqueue_write(queue, 0, 0, NULL /* n_bufs, bufs */, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
         if (err != 0) {
             FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);

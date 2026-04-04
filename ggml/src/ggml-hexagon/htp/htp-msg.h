@@ -85,6 +85,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS 
+
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    256
 #define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
@@ -121,6 +122,12 @@ struct htp_op_req {
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst;                       // Output tensor index
+
+    // the rest is filled in plance by the NPU
+    uint32_t prof_usecs;                // Number of usec per request
+    uint32_t prof_cycles;               // Number of cycles per request
+    uint32_t prof_pkts;                 // Number of instruction packets per request
+    uint32_t unused;
 };
 
 struct htp_general_req {
@@ -128,16 +135,14 @@ struct htp_general_req {
     uint16_t n_tensors;  // Number of tensors
     uint16_t n_ops;      // Number of ops
     uint16_t flags;      // unused
-    // struct htp_op_buf bufs[0];
-    // struct htp_tensor tensors[0];
-    // struct htp_op_req ops[0];
+    // struct htp_op_buf bufs[];    -- dspqueue buf 0
+    // struct htp_tensor tensors[]; -- dspqueue buf 1
+    // struct htp_op_req ops[];     -- dspqueue buf 2
 };
 
 struct htp_general_rsp {
-    uint32_t status;       // HTP_STATUS_...
-    uint32_t prof_usecs;   // Number of usec per request
-    uint32_t prof_cycles;  // Number of cycles per request
-    uint32_t prof_pkts;    // Number of instruction packets per request
+    uint32_t status;     // HTP_STATUS_...
+    // struct htp_op_req ops[];     -- dspqueue buf 0
 };
 
 #endif /* HTP_MSG_H */
