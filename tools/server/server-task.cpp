@@ -498,7 +498,8 @@ task_params server_task::params_from_json_cmpl(
         const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
         const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
         const auto message   = json_value(data, "reasoning_budget_message", std::string());
-        params.sampling.reasoning_budget_tokens = budget;
+        const auto percent  = json_value(data, "reasoning_budget_percent", 0.);
+        params.sampling.reasoning_budget_tokens = percent > 0 ? params.n_predict * percent : budget;
         params.sampling.reasoning_control = json_value(data, "reasoning_control", false);
 
         if (!start_tag.empty()) {
