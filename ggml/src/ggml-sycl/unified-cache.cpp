@@ -2061,7 +2061,7 @@ bool host_cache::adopt_evicted(const ggml_sycl_cache_id &    key_id,
     entry.last_access  = time_++;
     entry.pinned       = false;
     entry.owns_ptr     = true;
-    entry.pinned_alloc = true;   // Was allocated via sycl::malloc_host
+    entry.pinned_alloc = true;   // Allocated from pinned pool (or originally via sycl::malloc_host)
     entry.location     = cache_location::HOST_PINNED;
     if (xmx_info) {
         entry.xmx_info = *xmx_info;
@@ -5232,12 +5232,14 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
             const bool async_evict_enabled = async_evict_enabled_ && has_transformed_layout;
 
             if (async_evict_enabled) {
-                // P7: Async D2H eviction — preserve transformed layout in host-pinned memory
+                // P7: Async D2H eviction — preserve transformed layout in host-pinned memory.
+                // Use pre-allocated pinned pool (zero runtime sycl::malloc_host).
                 void * host_dst = nullptr;
-                try {
-                    host_dst = sycl::malloc_host(entry_size, queue_.get_context());
-                } catch (...) {
-                    host_dst = nullptr;
+                {
+                    auto * hcache = try_get_host_cache();
+                    if (hcache) {
+                        host_dst = hcache->allocate_pinned_runtime(entry_size, 64);
+                    }
                 }
 
                 if (host_dst) {
@@ -5247,7 +5249,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                     try {
                         evt = dq.memcpy(host_dst, ptr, entry_size);
                     } catch (...) {
-                        sycl::free(host_dst, queue_.get_context());
+                        if (auto * hc = try_get_host_cache()) {
+                            hc->free_pinned_runtime(host_dst, entry_size);
+                        }
                         host_dst = nullptr;
                     }
 
@@ -5360,11 +5364,13 @@ size_t unified_cache::finalize_evictions_locked() {
                 entry.type, entry.layer_id, entry.expert_id,
                 entry.layout, xmx_ptr);
             if (!adopted) {
-                // Host cache full — free the buffer
-                try { sycl::free(entry.eviction_host_ptr, queue_.get_context()); } catch (...) {}
+                // Host cache full — return buffer to pinned pool
+                hcache->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
             }
         } else if (entry.eviction_host_ptr) {
-            try { sycl::free(entry.eviction_host_ptr, queue_.get_context()); } catch (...) {}
+            if (auto * hc = try_get_host_cache()) {
+                hc->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
+            }
         }
 
         // Reclaim device VRAM

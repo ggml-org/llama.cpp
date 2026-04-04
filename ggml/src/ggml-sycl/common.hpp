@@ -1709,20 +1709,12 @@ struct staging_buffer_pool {
             }
         }
         if (!ptr) {
-            // Fallback: direct malloc_host — should not happen if pre_allocate
-            // was called with sufficient bytes at init time.
-            GGML_LOG_WARN("[staging_buffer_pool] pinned pool exhausted, falling back to sycl::malloc_host (%zu bytes)\n",
-                          needed);
-            try {
-                ptr = sycl::malloc_host(needed, queue);
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[staging_buffer_pool] malloc_host fallback failed (%zu bytes): %s\n",
-                               needed, e.what());
-                return nullptr;
-            }
-            if (!ptr) {
-                return nullptr;
-            }
+            // Pinned pool exhausted — the pool should be pre-sized correctly
+            // at init time.  Do NOT fall back to sycl::malloc_host during
+            // inference (violates zero-malloc-during-inference invariant).
+            GGML_LOG_WARN("[staging_buffer_pool] pinned pool exhausted, cannot allocate %zu bytes "
+                          "(no runtime sycl::malloc_host fallback)\n", needed);
+            return nullptr;
         }
         ggml_sycl::alloc_registry::instance().register_alloc(
             ptr, needed, -1, ggml_sycl::alloc_type::HOST_PINNED);
