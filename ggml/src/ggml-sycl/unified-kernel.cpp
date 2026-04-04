@@ -4325,6 +4325,42 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
 namespace ggml_sycl {
 
+// =============================================================================
+// Arena-Routed Allocation Helpers
+// =============================================================================
+// When GGML_SYCL_VRAM_ARENA=1, host-pinned allocations route through the
+// pinned_chunk_pool (via host_cache).  When arena is OFF, fall back to direct
+// sycl::malloc_host.  Callers set from_pool so the matching free routes correctly.
+
+static void * pinned_alloc(size_t bytes, sycl::queue & queue, bool & from_pool) {
+    from_pool = false;
+    if (bytes == 0) return nullptr;
+    if (vram_arena_enabled()) {
+        auto * hcache = try_get_host_cache();
+        if (hcache) {
+            void * ptr = hcache->allocate_pinned_runtime(bytes, 64);
+            if (ptr) {
+                from_pool = true;
+                return ptr;
+            }
+        }
+    }
+    // Fallback: direct sycl::malloc_host
+    return sycl::malloc_host(bytes, queue);
+}
+
+static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from_pool) {
+    if (!ptr) return;
+    if (from_pool) {
+        auto * hcache = try_get_host_cache();
+        if (hcache) {
+            hcache->free_pinned_runtime(ptr, bytes);
+            return;
+        }
+    }
+    sycl::free(ptr, queue);
+}
+
 static const char * persistent_op_type_name(OperationType type) {
     switch (type) {
         case OperationType::RMS_NORM:       return "RMS_NORM";
@@ -6758,8 +6794,9 @@ UnifiedKernel::~UnifiedKernel() {
         micro_tile_counters_n_ = 0;
     }
     if (micro_generation_) {
-        sycl::free(micro_generation_, queue_);
+        pinned_free(micro_generation_, sizeof(int), queue_, pinned_pool_micro_gen_);
         micro_generation_ = nullptr;
+        pinned_pool_micro_gen_ = false;
     }
     // Free MMVQ micro-graph Q8 and scratch buffers
     if (mmvq_q8_buf_size_ > 0 && device_id_ >= 0) {
@@ -6982,7 +7019,7 @@ void UnifiedKernel::free_persistent_buffers() {
     tile_counter_    = nullptr;
     barrier_counter_ = nullptr;
     barrier_sense_   = nullptr;
-    if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
+    if (d_ops_pool_) { pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; pinned_pool_ops_ = false; }
     for (auto & slot : get_rows_slots_) {
         if (slot.ptr) {
             if (slot.size > 0 && device_id_ >= 0) {
@@ -7001,26 +7038,28 @@ void UnifiedKernel::free_persistent_buffers() {
         if (dag_state_.ready_counter)    sycl::free(dag_state_.ready_counter, queue_);
         if (dag_state_.tile_claimed)     sycl::free(dag_state_.tile_claimed, queue_);
         if (dag_state_.tiles_done)       sycl::free(dag_state_.tiles_done, queue_);
-        if (dag_state_.successor_offset) sycl::free(dag_state_.successor_offset, queue_);
-        if (dag_state_.successor_list)   sycl::free(dag_state_.successor_list, queue_);
-        if (dag_state_.n_tiles)          sycl::free(dag_state_.n_tiles, queue_);
+        if (dag_state_.successor_offset) pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
+        if (dag_state_.successor_list)   pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
+        if (dag_state_.n_tiles)          pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
         if (dag_state_.completed_count)  sycl::free(dag_state_.completed_count, queue_);
         dag_state_          = {};
         dag_allocated_      = false;
         dag_pool_n_ops_     = 0;
         dag_pool_n_edges_   = 0;
+        pinned_pool_dag_    = false;
     }
     // Free phase schedule allocations
     if (phase_allocated_) {
-        if (phase_schedule_.entries)       sycl::free(phase_schedule_.entries, queue_);
-        if (phase_schedule_.phase_offset)  sycl::free(phase_schedule_.phase_offset, queue_);
-        if (phase_schedule_.phase_tiles)   sycl::free(phase_schedule_.phase_tiles, queue_);
-        if (phase_schedule_.phase_type)    sycl::free(phase_schedule_.phase_type, queue_);
+        if (phase_schedule_.entries)       pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+        if (phase_schedule_.phase_offset)  pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
+        if (phase_schedule_.phase_tiles)   pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
+        if (phase_schedule_.phase_type)    pinned_free(phase_schedule_.phase_type,   pinned_phase_type_bytes_,    queue_, pinned_pool_phase_);
 
-        phase_schedule_     = {};
-        phase_allocated_    = false;
-        phase_pool_n_ops_   = 0;
+        phase_schedule_      = {};
+        phase_allocated_     = false;
+        phase_pool_n_ops_    = 0;
         phase_pool_n_phases_ = 0;
+        pinned_pool_phase_   = false;
     }
     // Free light barrier flags
     if (light_flags_) {
@@ -7030,8 +7069,8 @@ void UnifiedKernel::free_persistent_buffers() {
     }
     // Free role schedule allocations
     if (role_allocated_) {
-        if (role_schedule_.elem_segments)    sycl::free(const_cast<RoleSegment *>(role_schedule_.elem_segments), queue_);
-        if (role_schedule_.matmul_segments)  sycl::free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), queue_);
+        if (role_schedule_.elem_segments)    pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments),   pinned_role_elem_bytes_,   queue_, pinned_pool_role_);
+        if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
         // sync_flags is the base of a single contiguous allocation that includes
         // role_tile_counter, elem_barrier_cnt/sense, mm_barrier_cnt/sense
         if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
@@ -7041,6 +7080,7 @@ void UnifiedKernel::free_persistent_buffers() {
         role_pool_n_elem_    = 0;
         role_pool_n_matmul_  = 0;
         role_pool_n_sync_    = 0;
+        pinned_pool_role_    = false;
     }
     invalidate_plan_cache();
     host_ops_ = {};  // Release heap memory (invalidate_plan_cache only clears, keeps capacity)
@@ -7073,9 +7113,9 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
             sycl::free(dag_state_.ready_counter, queue_);
             sycl::free(dag_state_.tile_claimed, queue_);
             sycl::free(dag_state_.tiles_done, queue_);
-            sycl::free(dag_state_.successor_offset, queue_);
-            sycl::free(dag_state_.successor_list, queue_);
-            sycl::free(dag_state_.n_tiles, queue_);
+            pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
+            pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
+            pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
             sycl::free(dag_state_.completed_count, queue_);
         }
         // Allocate new with some headroom
@@ -7084,9 +7124,12 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
         dag_state_.ready_counter    = sycl::malloc_device<int>(alloc_ops, queue_);
         dag_state_.tile_claimed     = sycl::malloc_device<int>(alloc_ops, queue_);
         dag_state_.tiles_done       = sycl::malloc_device<int>(alloc_ops, queue_);
-        dag_state_.successor_offset = sycl::malloc_host<int>(alloc_ops + 1, queue_);
-        dag_state_.successor_list   = sycl::malloc_host<int>(std::max(alloc_edges, 1), queue_);
-        dag_state_.n_tiles          = sycl::malloc_host<int>(alloc_ops, queue_);
+        pinned_dag_successor_offset_bytes_ = (alloc_ops + 1) * sizeof(int);
+        pinned_dag_successor_list_bytes_   = std::max(alloc_edges, 1) * sizeof(int);
+        pinned_dag_n_tiles_bytes_          = alloc_ops * sizeof(int);
+        dag_state_.successor_offset = static_cast<int *>(pinned_alloc(pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_));
+        dag_state_.successor_list   = static_cast<int *>(pinned_alloc(pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_));
+        dag_state_.n_tiles          = static_cast<int *>(pinned_alloc(pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_));
         dag_state_.completed_count  = sycl::malloc_device<int>(1, queue_);
         dag_pool_n_ops_   = alloc_ops;
         dag_pool_n_edges_ = alloc_edges;
@@ -7223,17 +7266,21 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
     // Allocate host-pinned arrays (grow-on-demand; kernel reads via PCIe zero-copy)
     if (n_ops > phase_pool_n_ops_ || n_phases > phase_pool_n_phases_) {
         if (phase_allocated_) {
-            sycl::free(phase_schedule_.entries, queue_);
-            sycl::free(phase_schedule_.phase_offset, queue_);
-            sycl::free(phase_schedule_.phase_tiles, queue_);
-            if (phase_schedule_.phase_type) sycl::free(phase_schedule_.phase_type, queue_);
+            pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
+            if (phase_schedule_.phase_type) pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
         }
         const int alloc_ops    = n_ops + 64;
         const int alloc_phases = n_phases + 16;
-        phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
-        phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
-        phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
-        phase_schedule_.phase_type   = sycl::malloc_host<int>(alloc_phases, queue_);
+        pinned_phase_entries_bytes_ = alloc_ops * sizeof(DevicePhaseEntry);
+        pinned_phase_offset_bytes_  = (alloc_phases + 1) * sizeof(int);
+        pinned_phase_tiles_bytes_   = alloc_phases * sizeof(int);
+        pinned_phase_type_bytes_    = alloc_phases * sizeof(int);
+        phase_schedule_.entries      = static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
+        phase_schedule_.phase_offset = static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_));
+        phase_schedule_.phase_tiles  = static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_));
+        phase_schedule_.phase_type   = static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_,    queue_, pinned_pool_phase_));
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }
@@ -7437,8 +7484,8 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         n_sync > role_pool_n_sync_) {
         // Free old allocations
         if (role_allocated_) {
-            if (role_schedule_.elem_segments)    sycl::free(const_cast<RoleSegment *>(role_schedule_.elem_segments), queue_);
-            if (role_schedule_.matmul_segments)  sycl::free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), queue_);
+            if (role_schedule_.elem_segments)    pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments),   pinned_role_elem_bytes_,   queue_, pinned_pool_role_);
+            if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
             if (role_schedule_.sync_flags)       sycl::free(role_schedule_.sync_flags, queue_);
             if (role_schedule_.role_tile_counter) sycl::free(role_schedule_.role_tile_counter, queue_);
             // Barrier counters are within the sync_flags allocation (contiguous block)
@@ -7450,8 +7497,10 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
         const int alloc_matmul = n_matmul_segs + 16;
         const int alloc_sync   = std::max(n_sync, 1) + 8;
 
-        role_schedule_.elem_segments   = sycl::malloc_host<RoleSegment>(alloc_elem, queue_);
-        role_schedule_.matmul_segments = sycl::malloc_host<RoleSegment>(alloc_matmul, queue_);
+        pinned_role_elem_bytes_   = alloc_elem * sizeof(RoleSegment);
+        pinned_role_matmul_bytes_ = alloc_matmul * sizeof(RoleSegment);
+        role_schedule_.elem_segments   = static_cast<RoleSegment *>(pinned_alloc(pinned_role_elem_bytes_,   queue_, pinned_pool_role_));
+        role_schedule_.matmul_segments = static_cast<RoleSegment *>(pinned_alloc(pinned_role_matmul_bytes_, queue_, pinned_pool_role_));
 
         // Single allocation for all sync/counter/barrier ints.
         // Each atomic counter/sense pair is padded to 64 bytes (16 ints) to avoid
@@ -9511,7 +9560,7 @@ void UnifiedKernel::record_micro_graph() {
     // zeroing all tile counters before each graph replay, we increment the
     // generation and kernels compute their tile range as [gen*n_tiles, (gen+1)*n_tiles).
     if (!micro_generation_) {
-        micro_generation_ = sycl::malloc_host<int>(1, queue_);
+        micro_generation_ = static_cast<int *>(pinned_alloc(sizeof(int), queue_, pinned_pool_micro_gen_));
         *micro_generation_ = -1;  // First ++generation yields 0, matching zeroed counters
     }
 
@@ -10208,8 +10257,9 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     for (const auto & phase : phases) {
         // Copy phase operations to host-pinned pool (kernel reads via PCIe zero-copy)
         if (phase.count > d_ops_pool_size_) {
-            if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
-            d_ops_pool_ = static_cast<void *>(sycl::malloc_host<DeviceOperation>(phase.count, queue_));
+            if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+            pinned_ops_pool_bytes_ = phase.count * sizeof(DeviceOperation);
+            d_ops_pool_ = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
             d_ops_pool_size_ = d_ops_pool_ ? phase.count : 0;
         }
         DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
@@ -10925,16 +10975,20 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         const int final_n_ops    = phase_schedule_.total_ops;
         if (final_n_ops > phase_pool_n_ops_ || final_n_phases > phase_pool_n_phases_) {
             // Grow host-pinned arrays (rare: only if fusion increased beyond initial allocation)
-            sycl::free(phase_schedule_.entries, queue_);
-            sycl::free(phase_schedule_.phase_offset, queue_);
-            sycl::free(phase_schedule_.phase_tiles, queue_);
-            if (phase_schedule_.phase_type) sycl::free(phase_schedule_.phase_type, queue_);
+            pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
+            if (phase_schedule_.phase_type) pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
             const int alloc_ops    = final_n_ops + 64;
             const int alloc_phases = final_n_phases + 16;
-            phase_schedule_.entries      = sycl::malloc_host<DevicePhaseEntry>(alloc_ops, queue_);
-            phase_schedule_.phase_offset = sycl::malloc_host<int>(alloc_phases + 1, queue_);
-            phase_schedule_.phase_tiles  = sycl::malloc_host<int>(alloc_phases, queue_);
-            phase_schedule_.phase_type   = sycl::malloc_host<int>(alloc_phases, queue_);
+            pinned_phase_entries_bytes_ = alloc_ops * sizeof(DevicePhaseEntry);
+            pinned_phase_offset_bytes_  = (alloc_phases + 1) * sizeof(int);
+            pinned_phase_tiles_bytes_   = alloc_phases * sizeof(int);
+            pinned_phase_type_bytes_    = alloc_phases * sizeof(int);
+            phase_schedule_.entries      = static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
+            phase_schedule_.phase_offset = static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_));
+            phase_schedule_.phase_tiles  = static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_));
+            phase_schedule_.phase_type   = static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_,    queue_, pinned_pool_phase_));
             phase_pool_n_ops_    = alloc_ops;
             phase_pool_n_phases_ = alloc_phases;
         }
@@ -10954,8 +11008,9 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy, no device memcpy)
     const int n_ops_device = static_cast<int>(host_ops_.size());
     if (n_ops_device > d_ops_pool_size_) {
-        if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
-        d_ops_pool_ = static_cast<void *>(sycl::malloc_host<DeviceOperation>(n_ops_device, queue_));
+        if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        pinned_ops_pool_bytes_ = n_ops_device * sizeof(DeviceOperation);
+        d_ops_pool_ = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
         d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
@@ -11331,8 +11386,10 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                 continue;
             }
 
+            bool   profile_from_pool = false;
+            size_t profile_alloc_bytes = ops_by_type[idx].size() * sizeof(DeviceOperation);
             DeviceOperation * d_ops_subset =
-                sycl::malloc_host<DeviceOperation>(ops_by_type[idx].size(), queue_);
+                static_cast<DeviceOperation *>(pinned_alloc(profile_alloc_bytes, queue_, profile_from_pool));
             if (!d_ops_subset) {
                 GGML_LOG_WARN("[PERSISTENT-TG] execute profile: alloc failed for op=%s\n",
                               persistent_op_type_name(static_cast<OperationType>(idx)));
@@ -11353,7 +11410,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                           tiles_by_type[idx],
                           avg_ms, total_ms);
 
-            sycl::free(d_ops_subset, queue_);
+            pinned_free(d_ops_subset, profile_alloc_bytes, queue_, profile_from_pool);
         }
     }
 
@@ -11533,10 +11590,9 @@ void UnifiedKernel::launch_persistent_kernel_async() {
     // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
-        if (d_ops_pool_) {
-            sycl::free(d_ops_pool_, queue_);
-        }
-        d_ops_pool_      = static_cast<void *>(sycl::malloc_host<DeviceOperation>(n_ops_device, queue_));
+        if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        pinned_ops_pool_bytes_ = n_ops_device * sizeof(DeviceOperation);
+        d_ops_pool_      = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
         d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);

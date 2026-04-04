@@ -3025,6 +3025,26 @@ private:
     float * mmvq_gate_scratch_    = nullptr;
     float * mmvq_up_scratch_      = nullptr;
     size_t  mmvq_gate_scratch_sz_ = 0;
+
+    // Arena routing flags — when true, pointer came from the pinned pool / VRAM arena
+    // and must NOT be sycl::free'd individually. Only active when vram_arena_enabled().
+    bool pinned_pool_dag_       = false;  // dag_state_ host-pinned buffers
+    bool pinned_pool_phase_     = false;  // phase_schedule_ host-pinned buffers
+    bool pinned_pool_role_      = false;  // role_schedule_ host-pinned buffers
+    bool pinned_pool_micro_gen_ = false;  // micro_generation_ host-pinned counter
+    bool pinned_pool_ops_       = false;  // d_ops_pool_ host-pinned ops table
+
+    // Size tracking for pinned pool deallocation (need exact sizes for free)
+    size_t pinned_dag_successor_offset_bytes_ = 0;
+    size_t pinned_dag_successor_list_bytes_   = 0;
+    size_t pinned_dag_n_tiles_bytes_          = 0;
+    size_t pinned_phase_entries_bytes_        = 0;
+    size_t pinned_phase_offset_bytes_         = 0;
+    size_t pinned_phase_tiles_bytes_          = 0;
+    size_t pinned_phase_type_bytes_           = 0;
+    size_t pinned_role_elem_bytes_            = 0;
+    size_t pinned_role_matmul_bytes_          = 0;
+    size_t pinned_ops_pool_bytes_             = 0;
 };
 
 }  // namespace ggml_sycl
