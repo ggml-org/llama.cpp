@@ -4965,6 +4965,16 @@ layer_weight_pointers unified_cache::await_layer(int layer_id) {
     return ptrs;
 }
 
+bool unified_cache::get_layer_weight_set(int layer_id, layer_weight_set & out) const {
+    std::lock_guard<std::mutex> lock(layer_state_mutex_);
+    auto it = layer_weights_.find(layer_id);
+    if (it == layer_weights_.end()) {
+        return false;
+    }
+    out = it->second;
+    return true;
+}
+
 bool unified_cache::is_layer_ready(int layer_id) const {
     std::lock_guard<std::mutex> lock(layer_state_mutex_);
     auto                        it = layer_ready_.find(layer_id);

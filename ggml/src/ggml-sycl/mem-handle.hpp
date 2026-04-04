@@ -63,6 +63,11 @@ public:
     // query the cache.
     static mem_handle from_weight(const unified_cache_key & key, int device);
 
+    // Create a WEIGHT handle from a bare cache ID + device.
+    // Convenience factory for callers that have ggml_sycl_cache_id (e.g.
+    // layer_weight_set fields) rather than a full unified_cache_key.
+    static mem_handle from_cache_id(const ggml_sycl_cache_id & id, int device);
+
     // Create a DIRECT handle from a raw pointer.
     // resolve() always returns this pointer without checking the cache.
     static mem_handle from_direct(void * ptr, ggml_layout_mode layout, bool on_device);
@@ -99,5 +104,37 @@ private:
     mutable uint64_t     gen_    = 0;
     mutable resolved_ptr cached_ = {};
 };
+
+// === layer_weight_handles ===
+// Smart handle version of layer_weight_pointers (unified-cache.hpp).
+// Holds mem_handle per weight field.  Call resolve_all() to produce a
+// layer_weight_pointers struct of raw void* for immediate use.
+
+struct layer_weight_handles {
+    mem_handle attn_norm;
+    mem_handle q_proj;
+    mem_handle k_proj;
+    mem_handle v_proj;
+    mem_handle o_proj;
+    mem_handle ffn_norm;
+    mem_handle gate_proj;
+    mem_handle up_proj;
+    mem_handle down_proj;
+    mem_handle attn_qkv_proj;     // Fused QKV (optional)
+    mem_handle ffn_gate_up_proj;  // Fused gate+up (optional)
+
+    // Resolve all handles and write raw pointers into a layer_weight_pointers.
+    // Returns true if all required (non-optional) handles resolve successfully.
+    bool resolve_all(layer_weight_pointers & out) const;
+
+    // Construct handles for a layer from a weight set + device ID.
+    static layer_weight_handles from_weight_set(const layer_weight_set & ws, int device);
+};
+
+// Build layer weight handles for a prefetched layer.
+// Queries the unified cache for the layer's weight set (cache IDs) and
+// constructs mem_handle per weight.  Returns false if the layer has not
+// been prefetched.
+bool build_layer_handles(int device, int layer_id, layer_weight_handles & out);
 
 }  // namespace ggml_sycl

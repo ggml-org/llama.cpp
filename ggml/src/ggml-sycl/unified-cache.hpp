@@ -1132,6 +1132,10 @@ class unified_cache {
     // Returns pointers to all cached weights for the layer.
     layer_weight_pointers await_layer(int layer_id);
 
+    // Get the weight set (cache IDs) for a layer that has been prefetched.
+    // Returns true and fills `out` if found, false otherwise.
+    bool get_layer_weight_set(int layer_id, layer_weight_set & out) const;
+
     // Check if a layer has been prefetched and is ready (non-blocking).
     bool is_layer_ready(int layer_id) const;
 

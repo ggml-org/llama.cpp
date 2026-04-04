@@ -20,9 +20,11 @@
 //
 
 #include "persistent-tg-kernel.hpp"
-#include "ggml.h"  // For GGML_TYPE_* constants
+#include "ggml.h"       // For GGML_TYPE_* constants
+#include "ggml-impl.h"  // For GGML_LOG_WARN
 
 #include <algorithm>
+#include <vector>
 
 namespace ggml_sycl {
 
@@ -160,9 +162,11 @@ template <int WORKGROUP_SIZE> class PersistentDMMVKernel {
 
     // Dispatch to the appropriate operation based on work item
     void dispatch_operation(const WorkItem & wi) {
-        // Get layer data pointers
-        // const LayerWeights & weights = args.layer_weights[wi.layer];
-        // KVCache &            kv      = args.kv_caches[wi.layer];
+        // Get layer data pointers (resolved from smart handles before launch)
+        const LayerWeights & weights = args.layer_weights[wi.layer];
+        KVCache &            kv      = args.kv_caches[wi.layer];
+        (void) weights;  // Stubs don't use these yet
+        (void) kv;
 
         switch (wi.op) {
             case OP_ATTN_NORM:
@@ -275,11 +279,36 @@ template <int WORKGROUP_SIZE> class PersistentDMMVKernel {
 // launch_persistent_tg_kernel Implementation
 // =============================================================================
 
-sycl::event launch_persistent_tg_kernel(sycl::queue &              q,
-                                        const PersistentTGArgs &   args,
-                                        const PersistentTGConfig & config) {
+sycl::event launch_persistent_tg_kernel(sycl::queue &                           q,
+                                        const PersistentTGArgs &                args,
+                                        const PersistentTGConfig &              config,
+                                        const std::vector<LayerWeightHandles> & layer_handles) {
+    // --- Host-side handle resolution ---
+    // Resolve all smart handles to raw device pointers before kernel submission.
+    // This is the only place where mem_handle::resolve() is called — the kernel
+    // itself only sees raw const void*.
+    GGML_ASSERT(static_cast<int>(layer_handles.size()) == args.n_layers);
+
+    std::vector<LayerWeights> resolved_weights(args.n_layers);
+    for (int i = 0; i < args.n_layers; ++i) {
+        bool ok = layer_handles[i].resolve_all(resolved_weights[i]);
+        if (!ok) {
+            GGML_LOG_WARN("[PERSISTENT-TG] Failed to resolve weight handles for layer %d\n", i);
+            return {};
+        }
+    }
+
+    // Allocate device-accessible memory for the resolved weights array.
+    // The kernel reads layer_weights[i] on-device, so this must be in USM.
+    const size_t weights_bytes = args.n_layers * sizeof(LayerWeights);
+    LayerWeights * dev_weights = static_cast<LayerWeights *>(sycl::malloc_device(weights_bytes, q));
+    GGML_ASSERT(dev_weights != nullptr);
+    q.memcpy(dev_weights, resolved_weights.data(), weights_bytes).wait();
+
+    PersistentTGArgs resolved_args = args;
+    resolved_args.layer_weights    = dev_weights;
+
     // Calculate SLM (Shared Local Memory) size based on config
-    // Reserve space for intermediate results during tile computation
     const size_t slm_floats = config.tile_n * config.tile_k;
 
     // Create nd_range based on config
@@ -289,16 +318,12 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &              q,
 
     // Submit the persistent kernel
     sycl::event e = q.submit([&](sycl::handler & cgh) {
-        // Allocate local memory for the workgroup
         sycl::local_accessor<float, 1> slm(slm_floats, cgh);
 
-        // Lambda captures args and config by value to ensure kernel safety
-        auto args_copy   = args;
+        auto args_copy   = resolved_args;
         auto config_copy = config;
 
         cgh.parallel_for(nd_range, [=](sycl::nd_item<1> item) {
-            // Instantiate kernel based on workgroup size
-            // Using fixed sizes for common configurations
             if (config_copy.workgroup_size == 256) {
                 PersistentDMMVKernel<256> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
@@ -309,10 +334,18 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &              q,
                 PersistentDMMVKernel<128> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             } else {
-                // Fallback to 256 for unsupported sizes
                 PersistentDMMVKernel<256> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             }
+        });
+    });
+
+    // Free the device weights array after kernel completes.
+    // Use host_task to ensure async cleanup without blocking.
+    q.submit([&](sycl::handler & cgh) {
+        cgh.depends_on(e);
+        cgh.host_task([dev_weights_ptr = dev_weights, &q]() {
+            sycl::free(dev_weights_ptr, q);
         });
     });
 

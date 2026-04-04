@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <sycl/sycl.hpp>
 
+#include "mem-handle.hpp"      // For mem_handle, resolved_ptr
 #include "unified-kernel.hpp"  // For ggml_sycl_unified::XMXConfig
 
 namespace ggml_sycl {
@@ -55,6 +56,57 @@ struct LayerWeights {
     const void * gate_proj;  // Gate projection [intermediate_dim, hidden_dim]
     const void * up_proj;    // Up projection [intermediate_dim, hidden_dim]
     const void * down_proj;  // Down projection [hidden_dim, intermediate_dim]
+};
+
+/**
+ * Smart handles for all weights of a single transformer layer.
+ *
+ * Each field is a mem_handle that resolves to the current device pointer
+ * via a generation-checked fast path (~3 ns).  Call resolve_all() before
+ * kernel launch to produce a LayerWeights struct of raw pointers that can
+ * be captured by value into a SYCL kernel.
+ */
+struct LayerWeightHandles {
+    mem_handle attn_norm;
+    mem_handle q_proj;
+    mem_handle k_proj;
+    mem_handle v_proj;
+    mem_handle o_proj;
+    mem_handle ffn_norm;
+    mem_handle gate_proj;
+    mem_handle up_proj;
+    mem_handle down_proj;
+
+    // Resolve all handles and produce a LayerWeights struct with raw pointers.
+    // Must be called on the host before kernel submission.
+    // Returns false if any required handle fails to resolve.
+    bool resolve_all(LayerWeights & out) const {
+        auto r_attn_norm = attn_norm.resolve();
+        auto r_q_proj    = q_proj.resolve();
+        auto r_k_proj    = k_proj.resolve();
+        auto r_v_proj    = v_proj.resolve();
+        auto r_o_proj    = o_proj.resolve();
+        auto r_ffn_norm  = ffn_norm.resolve();
+        auto r_gate_proj = gate_proj.resolve();
+        auto r_up_proj   = up_proj.resolve();
+        auto r_down_proj = down_proj.resolve();
+
+        if (!r_attn_norm || !r_q_proj || !r_k_proj || !r_v_proj || !r_o_proj ||
+            !r_ffn_norm  || !r_gate_proj || !r_up_proj || !r_down_proj) {
+            return false;
+        }
+
+        out.attn_norm = r_attn_norm.ptr;
+        out.q_proj    = r_q_proj.ptr;
+        out.k_proj    = r_k_proj.ptr;
+        out.v_proj    = r_v_proj.ptr;
+        out.o_proj    = r_o_proj.ptr;
+        out.ffn_norm  = r_ffn_norm.ptr;
+        out.gate_proj = r_gate_proj.ptr;
+        out.up_proj   = r_up_proj.ptr;
+        out.down_proj = r_down_proj.ptr;
+        return true;
+    }
 };
 
 // =============================================================================
@@ -168,26 +220,28 @@ struct PersistentTGConfig {
 /**
  * Launch the persistent token generation kernel.
  *
- * Executes a complete forward pass for a single token using a persistent
- * kernel that stays active across all layers. Work-stealing is used for
- * dynamic load balancing.
+ * Resolves all layer weight handles to raw device pointers, then submits
+ * the persistent kernel.  The resolution step uses generation-checked
+ * mem_handle::resolve() (~3 ns per field when cache hasn't changed).
  *
- * @param q      SYCL queue for submission
- * @param args   Kernel arguments (model config, weights, KV cache, buffers)
- * @param config Kernel configuration (tiles, workgroups, sync options)
+ * @param q             SYCL queue for submission
+ * @param args          Kernel arguments (model config, weights, KV cache, buffers)
+ * @param config        Kernel configuration (tiles, workgroups, sync options)
+ * @param layer_handles Per-layer smart handles (size == args.n_layers)
  * @return SYCL event for synchronization
  *
  * Prerequisites:
- * - All weight pointers must be valid device memory
+ * - layer_handles must be populated (e.g. via build_layer_handles())
  * - KV cache must be allocated with sufficient capacity
  * - work_counter must be initialized to 0
  * - intermediate_buffer must have sufficient size
  *
  * Thread safety: Not thread-safe. Caller must ensure exclusive queue access.
  */
-sycl::event launch_persistent_tg_kernel(sycl::queue &             q,
-                                        const PersistentTGArgs &  args,
-                                        const PersistentTGConfig & config);
+sycl::event launch_persistent_tg_kernel(sycl::queue &                        q,
+                                        const PersistentTGArgs &             args,
+                                        const PersistentTGConfig &           config,
+                                        const std::vector<LayerWeightHandles> & layer_handles);
 
 /**
  * Check if persistent TG kernel can be used for the given model configuration.
