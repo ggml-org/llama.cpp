@@ -35,8 +35,9 @@ class common_chat_peg_mapper {
 class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
   public:
     common_chat_peg_gemma4_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
-  protected:
-    std::string normalize_container_value(const std::string & input) override;
+    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+  private:
+    void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
 };
 
 struct content_structure;
