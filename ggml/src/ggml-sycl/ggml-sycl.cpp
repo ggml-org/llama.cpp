@@ -5781,6 +5781,35 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                       scratch_remaining / MB);
     }
 
+    // -----------------------------------------------------------------------
+    // Pre-allocate host-pinned memory for the full model working set so that
+    // NO sycl::malloc_host calls occur during inference.  The model size is
+    // now known from the tensor inventory; add headroom for staging buffers,
+    // SOA conversion temporaries, and runtime allocations.
+    // -----------------------------------------------------------------------
+    {
+        auto * hcache = ggml_sycl::get_host_cache_for_device(ctx->device);
+        if (hcache) {
+            // Pre-allocate host-pinned memory for the portion of model weights
+            // that doesn't fit in VRAM (spills to host), plus staging headroom.
+            // When the model fits entirely in VRAM, only staging buffers are needed.
+            const size_t host_spill = model_size_exceeds_budget
+                                          ? (g_tensor_inventory_total_size - vram_budget)
+                                          : 0;
+            // Staging headroom: 256 MB for SOA conversion + runtime temporaries
+            constexpr size_t staging_headroom = 256ULL * 1024ULL * 1024ULL;
+            const size_t pre_alloc_need       = host_spill + staging_headroom;
+            const size_t chunks_grown         = hcache->pre_allocate_pinned(pre_alloc_need);
+            if (chunks_grown > 0) {
+                GGML_LOG_INFO("[SYCL] Host-pinned pre-allocate: %zu chunks for %.1f MB "
+                              "(spill=%.1f MB + staging=%.1f MB)\n",
+                              chunks_grown, pre_alloc_need / (1024.0 * 1024.0),
+                              host_spill / (1024.0 * 1024.0),
+                              staging_headroom / (1024.0 * 1024.0));
+            }
+        }
+    }
+
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load(std::memory_order_relaxed) ? "enabled" : "disabled");

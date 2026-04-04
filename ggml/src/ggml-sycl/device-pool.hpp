@@ -35,6 +35,15 @@ namespace ggml_sycl {
 
 // Forward-declare to avoid circular include with unified-cache.hpp
 size_t unified_cache_total_available_bytes(int device);
+class vram_arena;
+enum class vram_zone_id : uint8_t;
+
+// Arena-backed allocation helper (defined in unified-cache.cpp where vram_arena is complete).
+// Returns nullptr if the arena is inactive or the zone is full.
+void * device_pool_arena_alloc(vram_arena * arena, size_t size, size_t align);
+
+// Arena-backed ownership check (defined in unified-cache.cpp).
+bool device_pool_arena_owns(const vram_arena * arena, const void * ptr);
 
 class sycl_device_pool {
   public:
@@ -55,6 +64,15 @@ class sycl_device_pool {
     sycl_device_pool & operator=(const sycl_device_pool &) = delete;
     sycl_device_pool(sycl_device_pool &&)                  = delete;
     sycl_device_pool & operator=(sycl_device_pool &&)      = delete;
+
+    // Bind the pool to a VRAM arena.  When set, allocate() routes to the
+    // arena's weight zone instead of allocating new chunks.  The arena must
+    // outlive the pool (guaranteed because both are members of unified_cache
+    // and the pool is destroyed first).
+    void set_arena(vram_arena * arena) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        arena_ = arena;
+    }
 
     // After S1-PRELOAD, seal the pool to prevent new chunk allocations.
     // Subsequent allocations that don't fit in existing chunks return {nullptr, 0}.
@@ -91,6 +109,16 @@ class sycl_device_pool {
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
+
+        // Arena path: route to the VRAM arena's weight zone instead of own chunks.
+        if (arena_) {
+            void * ptr = device_pool_arena_alloc(arena_, size, align);
+            if (ptr) {
+                alloc_count_++;
+                return { ptr, 0 };  // new_physical_bytes=0: arena already charged to budget.
+            }
+            // Arena full — fall through to chunk-based allocation.
+        }
 
         // Try to sub-allocate from existing chunks (most recent first)
         for (auto it = chunks_.rbegin(); it != chunks_.rend(); ++it) {
@@ -153,6 +181,10 @@ class sycl_device_pool {
             return false;
         }
         std::lock_guard<std::mutex> lock(mutex_);
+        // Check arena-backed allocations first.
+        if (arena_ && device_pool_arena_owns(arena_, ptr)) {
+            return true;
+        }
         const auto p = reinterpret_cast<uintptr_t>(ptr);
         for (const auto & c : chunks_) {
             const auto base = reinterpret_cast<uintptr_t>(c.base);
@@ -265,6 +297,7 @@ class sycl_device_pool {
     int                  alloc_count_ = 0;
     bool                 abandoned_   = false;
     bool                 sealed_     = false;
+    vram_arena *         arena_      = nullptr;  // Optional arena backing (set by unified_cache)
     mutable std::mutex   mutex_;
 };
 

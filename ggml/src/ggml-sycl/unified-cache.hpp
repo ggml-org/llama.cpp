@@ -38,6 +38,124 @@ namespace ggml_sycl {
 // Forward declaration — needed by unified_cache::process_deferred_frees_public()
 bool unified_cache_is_graph_compute_active();
 
+// Check if VRAM arena mode is enabled (GGML_SYCL_VRAM_ARENA=1).
+bool vram_arena_enabled();
+
+// === VRAM Arena: zone-based sub-allocator for a single pre-allocated VRAM block ===
+//
+// Layout (left-to-right within arena):
+//   [Compute zone (bump→)] [KV zone (bump→)] ... [Weight zone (←bump from end)]
+//
+// Compute zone: bump-right, reset between tokens (arena_reset semantics).
+// KV zone: bump-right, grows as context fills.
+// Weight zone: bump-LEFT from arena end, with free-list for eviction reclaim.
+// oneDNN scratch: carved from a fixed region between KV and Weight zones.
+
+enum class vram_zone_id : uint8_t {
+    COMPUTE  = 0,  // Per-token scratch, bump-right, reset between tokens
+    KV       = 1,  // KV cache, bump-right, grows with context
+    ONEDNN   = 2,  // oneDNN FP16 scratch, fixed region
+    WEIGHT   = 3,  // Weight cache, bump-left from end, free-list reclaim
+    COUNT    = 4,
+};
+
+struct vram_free_block {
+    size_t offset;  // Offset from arena base
+    size_t size;
+};
+
+struct vram_zone {
+    size_t              start = 0;  // Offset from arena base
+    size_t              size  = 0;  // Total zone capacity
+    std::atomic<size_t> used{ 0 };  // Current allocation offset (bump pointer)
+
+    // Weight zone only: free-list for reclaimed eviction space.
+    // Sorted by offset for coalescing.
+    std::vector<vram_free_block> free_list;
+    std::mutex                   free_list_mutex;
+};
+
+class vram_arena {
+  public:
+    vram_arena() = default;
+    ~vram_arena();
+
+    // Non-copyable, non-movable
+    vram_arena(const vram_arena &)             = delete;
+    vram_arena & operator=(const vram_arena &) = delete;
+    vram_arena(vram_arena &&)                  = delete;
+    vram_arena & operator=(vram_arena &&)      = delete;
+
+    // Reserve VRAM arena.  Attempts single malloc_device(budget_bytes).
+    // If that exceeds max_alloc_size, splits into 2 chunks (50%+40%).
+    // Falls back to per-entry allocation (returns false) on total failure.
+    //
+    // compute_bytes: fixed compute scratch zone size
+    // onednn_bytes:  fixed oneDNN scratch zone size (0 to skip)
+    bool reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
+                 size_t compute_bytes, size_t onednn_bytes);
+
+    // Is arena active?
+    bool active() const { return arena_base_ != nullptr; }
+
+    // Base pointer
+    void * base() const { return arena_base_; }
+
+    // Total arena size
+    size_t total_size() const { return arena_size_; }
+
+    // Sub-allocate from a zone.  Returns nullptr on failure.
+    // For WEIGHT zone: bump-left from end; checks free-list first (best-fit).
+    // For others: bump-right from zone start.
+    // align: must be power of 2 (default 256 for GPU coalescing).
+    void * zone_alloc(vram_zone_id zone, size_t size, size_t align = 256);
+
+    // Reset a zone's bump pointer (e.g., compute zone between tokens).
+    void zone_reset(vram_zone_id zone);
+
+    // Reclaim weight space: add to free-list for reuse.
+    // offset: offset from arena base.  size: bytes to reclaim.
+    void weight_reclaim(size_t offset, size_t size);
+
+    // Check if a pointer belongs to this arena.
+    bool owns(const void * ptr) const;
+
+    // Check if a pointer belongs to a specific zone.
+    bool zone_owns(vram_zone_id zone, const void * ptr) const;
+
+    // Convert pointer to arena offset (returns SIZE_MAX if not owned).
+    size_t ptr_to_offset(const void * ptr) const;
+
+    // Convert arena offset to pointer.
+    void * offset_to_ptr(size_t offset) const;
+
+    // Zone capacity and usage.
+    size_t zone_capacity(vram_zone_id zone) const;
+    size_t zone_used(vram_zone_id zone) const;
+
+    // Number of chunks (1 if single alloc, 2 if split).
+    int chunk_count() const { return n_chunks_; }
+
+    // Destroy arena (free all chunks).
+    void destroy();
+
+  private:
+    void *     arena_base_ = nullptr;  // Base pointer (first chunk)
+    size_t     arena_size_ = 0;        // Total arena size across all chunks
+
+    // Chunk tracking (1 or 2 chunks)
+    struct chunk {
+        void * ptr  = nullptr;
+        size_t size = 0;
+    };
+    chunk  chunks_[2] = {};
+    int    n_chunks_   = 0;
+
+    sycl::queue * queue_ = nullptr;
+
+    vram_zone zones_[static_cast<int>(vram_zone_id::COUNT)];
+};
+
 namespace detail {
 
 static constexpr uint64_t k_cache_guard_magic = 0xC0DECA5EC0DECA5EULL;
@@ -409,6 +527,9 @@ class host_cache {
 
     void * allocate_pinned_runtime(size_t size, size_t alignment = 64);
     void   free_pinned_runtime(void * ptr, size_t size);
+
+    // Check if a pointer belongs to the pinned pool (for free routing).
+    bool contains_pinned(const void * ptr) const;
 
     // Pre-allocate pinned chunks so that inference-time allocate() never
     // triggers sycl::malloc_host (which blocks the Level Zero driver).
@@ -953,6 +1074,10 @@ class unified_cache {
     // made on this queue's context, e.g. GPU-side reorder temp buffers).
     sycl::queue & get_queue() { return queue_; }
 
+    // Access the VRAM arena (valid only when vram_arena_enabled()).
+    vram_arena &       get_arena()       { return arena_; }
+    const vram_arena & get_arena() const { return arena_; }
+
     // Register the compute queue so deferred frees wait for in-flight kernels.
     // Without this, evicted VRAM pointers can be freed while GPU kernels on the
     // compute queue still reference them → GPU page fault → DEVICE_LOST.
@@ -1274,6 +1399,12 @@ class unified_cache {
     // All layout allocations in ensure_cached_layout() are sub-allocated from this pool.
     // The pool is destroyed (freeing all chunks) in the unified_cache destructor.
     std::unique_ptr<ggml_sycl::sycl_device_pool> layout_pool_;
+
+    // VRAM arena: single pre-allocated VRAM block with zone-based sub-allocation.
+    // When active, replaces individual malloc_device calls in allocate_slot,
+    // reserve_compute_arena, reserve_onednn_scratch, and reserve_scratch_pool.
+    // Gated by GGML_SYCL_VRAM_ARENA=1 env var.
+    vram_arena arena_;
 
     // Compute arena: pre-reserved VRAM for compute scratch buffers.
     // Single sycl::malloc_device allocation made BEFORE S1-PRELOAD fills VRAM.
@@ -1833,6 +1964,11 @@ size_t compute_moe_effective_weight_bytes(size_t total_weight_bytes,
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
 host_cache * get_host_cache_for_device(int device_id);
+
+// Lock-free fast path: returns host_cache if already created, nullptr otherwise.
+// Never creates the cache, never acquires exclusive locks. Safe to call from
+// any context including inside malloc_host tracked paths.
+host_cache * try_get_host_cache();
 int          host_cache_guard_error_count();
 void         host_cache_guard_reset();
 bool         host_cache_guard_check_all(int device_id, const char * where);

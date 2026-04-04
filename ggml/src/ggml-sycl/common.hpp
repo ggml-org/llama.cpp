@@ -1647,6 +1647,7 @@ struct staging_buffer_pool {
         bool        in_use            = false;
         bool        has_pending_event = false;
         sycl::event pending_event;
+        bool        from_pinned_pool  = false;  // true = from pinned_chunk_pool, don't sycl::free
     };
 
     ~staging_buffer_pool() {
@@ -1692,21 +1693,42 @@ struct staging_buffer_pool {
             return best.ptr;
         }
 
-        // No suitable slot — allocate a new pinned buffer.
-        void * ptr = nullptr;
-        try {
-            ptr = sycl::malloc_host(needed, queue);
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[staging_buffer_pool] malloc_host failed (%zu bytes): %s\n",
-                           needed, e.what());
-            return nullptr;
+        // No suitable slot — allocate from the pre-allocated pinned chunk pool
+        // so that NO sycl::malloc_host occurs during inference.
+        // Use try_get_host_cache() (lock-free) to avoid deadlocks.
+        void * ptr          = nullptr;
+        bool   from_pool    = false;
+        {
+            auto * hcache = ggml_sycl::try_get_host_cache();
+            if (hcache) {
+                ptr       = hcache->allocate_pinned_runtime(needed, 64);
+                from_pool = (ptr != nullptr);
+            }
         }
         if (!ptr) {
-            return nullptr;
+            // Fallback: direct malloc_host — should not happen if pre_allocate
+            // was called with sufficient bytes at init time.
+            GGML_LOG_WARN("[staging_buffer_pool] pinned pool exhausted, falling back to sycl::malloc_host (%zu bytes)\n",
+                          needed);
+            try {
+                ptr = sycl::malloc_host(needed, queue);
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[staging_buffer_pool] malloc_host fallback failed (%zu bytes): %s\n",
+                               needed, e.what());
+                return nullptr;
+            }
+            if (!ptr) {
+                return nullptr;
+            }
         }
         ggml_sycl::alloc_registry::instance().register_alloc(
             ptr, needed, -1, ggml_sycl::alloc_type::HOST_PINNED);
-        slots_.push_back({ ptr, needed, true });
+        slot new_slot{};
+        new_slot.ptr              = ptr;
+        new_slot.size             = needed;
+        new_slot.in_use           = true;
+        new_slot.from_pinned_pool = from_pool;
+        slots_.push_back(new_slot);
         total_bytes_.fetch_add(needed, std::memory_order_relaxed);
         // Track pinned host allocation against the unified cache host budget.
         ggml_sycl::unified_cache_add_runtime_host_bytes(needed);
@@ -1750,13 +1772,18 @@ struct staging_buffer_pool {
     }
 
     // Free all pooled buffers.  Must be called while no acquire is in flight.
+    // Slots from the pinned_chunk_pool are NOT freed individually — the pool
+    // owns their lifetime and reclaims them on destruction.
     void shutdown(sycl::queue & queue) {
         std::lock_guard<std::mutex> lock(mutex_);
         size_t freed = total_bytes_.load(std::memory_order_relaxed);
         for (auto & s : slots_) {
             if (s.ptr) {
                 ggml_sycl::alloc_registry::instance().unregister_alloc(s.ptr);
-                sycl::free(s.ptr, queue);
+                if (!s.from_pinned_pool) {
+                    sycl::free(s.ptr, queue);
+                }
+                // Pool-allocated slots: ownership stays with pinned_chunk_pool
             }
         }
         slots_.clear();

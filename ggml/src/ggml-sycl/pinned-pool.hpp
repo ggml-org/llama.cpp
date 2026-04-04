@@ -51,6 +51,9 @@ class pinned_chunk_pool {
     // Returns the number of chunks actually allocated.
     size_t pre_allocate(size_t total_bytes);
 
+    // Check if a pointer belongs to this pool (falls within any chunk).
+    bool contains(const void * ptr) const;
+
     // Statistics
     size_t budget() const { return budget_; }
 

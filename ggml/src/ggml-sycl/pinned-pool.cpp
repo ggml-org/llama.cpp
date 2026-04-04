@@ -219,6 +219,21 @@ size_t pinned_chunk_pool::pre_allocate(size_t total_bytes) {
     return chunks_grown;
 }
 
+bool pinned_chunk_pool::contains(const void * ptr) const {
+    if (!ptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    const char * p = static_cast<const char *>(ptr);
+    for (const auto & c : chunks_) {
+        const char * base = static_cast<const char *>(c.base);
+        if (p >= base && p < base + c.size) {
+            return true;
+        }
+    }
+    return false;
+}
+
 size_t pinned_chunk_pool::allocated() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return total_allocated_;
