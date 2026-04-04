@@ -2659,8 +2659,6 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
 
         // Validate src0->data before computing expert offsets.
-        // With aligned_alloc host buffers, some tensor data pointers may be
-        // corrupt if the buffer wasn't properly allocated or mapped.
         const uintptr_t src0_addr = reinterpret_cast<uintptr_t>(src0->data);
         if (src0_addr == 0 || (src0_addr >> 47) != 0) {
             // Null or non-canonical address (bits 47+ set = kernel space on x86-64)
@@ -4853,6 +4851,28 @@ void ggml_backend_sycl_set_model_loading(bool loading) {
     // S1: only preload on outermost exit.  Non-S1: always preload.
     if (prev <= 1 || !g_all_weights_host.load(std::memory_order_acquire)) {
         g_sycl_in_model_load.store(false, std::memory_order_release);
+
+        // --- Compute Arena: reserve VRAM for compute scratch BEFORE weight preload ---
+        // This guarantees FP16 attention scratch has VRAM even after weights fill budget.
+        // Reserved unconditionally (arena is needed regardless of weight placement).
+        // Default 256 MB; override with GGML_SYCL_COMPUTE_ARENA_MB=N (0 to disable).
+        if (ggml_sycl::unified_cache_enabled()) {
+            size_t arena_mb = 256;
+            const char * env = std::getenv("GGML_SYCL_COMPUTE_ARENA_MB");
+            if (env) {
+                arena_mb = static_cast<size_t>(std::max(0, std::atoi(env)));
+            }
+            if (arena_mb > 0) {
+                const size_t arena_bytes = arena_mb * 1024 * 1024;
+                const int total_gpus = ggml_sycl_info().total_gpu_count;
+                for (int d = 0; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
+                    if (ggml_sycl::unified_cache_total_managed(d) > 0) {
+                        ggml_sycl::unified_cache_reserve_compute_arena(d, arena_bytes);
+                    }
+                }
+            }
+        }
+
         ggml_sycl_preload_model_weights();
     }
 }
@@ -8211,9 +8231,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
     // The maxMemAllocSize from the driver is a software-enforced limit that returns
     // ZE_RESULT_ERROR_UNSUPPORTED_SIZE when exceeded — no safety margin needed.
     //
-    // Buffers larger than this cap use aligned_alloc + pre-fault instead of
-    // sycl::malloc_host.  The unified cache handles GPU access through its
-    // staging/DMA path for non-USM model weight buffers.
+    // Buffers larger than this cap will fail sycl::malloc_host — ggml
+    // automatically chunks allocations to fit within this limit.
     {
         // Primary: min max_alloc_size across active GPU compute devices
         size_t min_max_alloc = SIZE_MAX;
@@ -10497,28 +10516,6 @@ static void ggml_sycl_preload_model_weights() {
     if (!ggml_backend_sycl_weights_evictable() || !ggml_sycl::unified_cache_enabled()) {
         return;
     }
-    // When model load used aligned_alloc (non-USM) for large buffers, weight data
-    // is NOT GPU-accessible via DMA. The unified cache's copy_to_device_async would
-    // need staging buffers for every tensor, which is slow and can hang.
-    // Skip preload — weights will be uploaded on-demand during first inference
-    // via ensure_cached_layout's staging path (which handles non-USM sources correctly
-    // because it uses smaller per-tensor staging buffers, not 10+ GB chunks).
-    if (g_all_weights_host.load(std::memory_order_acquire)) {
-        // Check if first weight is USM-accessible
-        std::lock_guard<std::mutex> lock(g_sycl_host_weight_extras_mutex);
-        if (!g_sycl_host_weight_extras.empty()) {
-            const void * first_data = g_sycl_host_weight_extras.begin()->first->data;
-            if (first_data) {
-                sycl::usm::alloc alloc_type = sycl::usm::alloc::unknown;
-                try { alloc_type = ggml_sycl_get_alloc_type(first_data); } catch (...) {}
-                if (alloc_type == sycl::usm::alloc::unknown) {
-                    GGML_LOG_INFO("[S1-PRELOAD] Weights in non-USM memory (aligned_alloc) — "
-                                  "skipping bulk preload, using on-demand upload\n");
-                    return;
-                }
-            }
-        }
-    }
     // S1: preload weights to device VRAM via unified cache.
     // Eviction strategy handles VRAM pressure if model doesn't fully fit.
 
@@ -10533,26 +10530,6 @@ static void ggml_sycl_preload_model_weights() {
     GGML_LOG_INFO("[S1-PRELOAD] %zu host-registered weights found for preload\n", weights.size());
     if (weights.empty()) {
         return;
-    }
-
-    // --- Compute Arena: reserve VRAM for compute scratch BEFORE S1-PRELOAD ---
-    // This guarantees FP16 attention scratch has VRAM even after weights fill budget.
-    // Default 256 MB; override with GGML_SYCL_COMPUTE_ARENA_MB=N (0 to disable).
-    {
-        size_t arena_mb = 256;
-        const char * env = std::getenv("GGML_SYCL_COMPUTE_ARENA_MB");
-        if (env) {
-            arena_mb = static_cast<size_t>(std::max(0, std::atoi(env)));
-        }
-        if (arena_mb > 0) {
-            const size_t arena_bytes = arena_mb * 1024 * 1024;
-            const int total_gpus = ggml_sycl_info().total_gpu_count;
-            for (int d = 0; d < total_gpus && d < GGML_SYCL_MAX_DEVICES; d++) {
-                if (ggml_sycl::unified_cache_total_managed(d) > 0) {
-                    ggml_sycl::unified_cache_reserve_compute_arena(d, arena_bytes);
-                }
-            }
-        }
     }
 
     const bool s1_mode = g_all_weights_host.load(std::memory_order_acquire);
@@ -15974,29 +15951,11 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     // here should be <= host_max_alloc_size, so sycl::malloc_host works directly.
     void * ptr = ggml_sycl_host_malloc(size);
     if (ptr == nullptr) {
-        // fallback to CPU memory when pinned allocation fails
-        // Keep host buffer type in evictable-weight mode so unified cache can stage weights.
-        if (weights_evictable) {
-            GGML_LOG_WARN(
-                "[SYCL] sycl::malloc_host(%.1f MB) failed, using CPU memory with SYCL host buffer type "
-                "(unified cache will stage weights).\n",
-                size / (1024.0f * 1024.0f));
-
-            ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
-            if (buffer == nullptr) {
-                return nullptr;
-            }
-            buffer->buft = buft;
-
-            return buffer;
-        }
-
-        // WARNING: Non-evictable mode expects SYCL-accessible host memory.
-        GGML_LOG_WARN(
-            "[SYCL] sycl::malloc_host(%.1f MB) failed, falling back to CPU buffer. "
-            "lazy_moe will NOT work - expert weights won't be accessible from GPU.\n",
+        GGML_LOG_ERROR(
+            "[SYCL] FATAL: sycl::malloc_host(%.1f MB) failed — cannot allocate host buffer. "
+            "All host buffers must be USM-pinned for GPU DMA access.\n",
             size / (1024.0f * 1024.0f));
-        return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+        return nullptr;
     }
     const sycl::usm::alloc alloc_type = ggml_sycl_get_alloc_type(ptr);
     const char *           alloc_name = alloc_type == sycl::usm::alloc::host   ? "pinned" :
@@ -18559,8 +18518,7 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                     // weights in VRAM.  A miss here means either:
                     //   (a) VRAM was too tight for S1-PRELOAD to cache this tensor
                     //   (b) MoE expert tensor not yet demand-loaded
-                    //   (c) non-USM memory (aligned_alloc) skipped bulk preload
-                    //   (d) first inference before S1-PRELOAD completes
+                    //   (c) first inference before S1-PRELOAD completes
                     // Log at DEBUG level so cache misses are visible for diagnosis.
                     GGML_SYCL_DEBUG("[MUL_MAT] resolve_weight miss for %s on device %d "
                                     "(resolved=%d on_device=%d ptr=%p)\n",

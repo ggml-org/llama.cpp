@@ -603,46 +603,32 @@ void * ggml_sycl_host_malloc(size_t size) try {
     }
 
     // Non-TP mode: use default queue for host malloc.
-    // Wrap in a timeout to prevent hanging when the GPU driver is in a bad state
-    // (e.g., after a previous DEVICE_LOST crash that left stale driver resources).
-    // sycl::malloc_host creates GGTT mappings for ALL Level Zero devices — if any
-    // device's driver is hung, the call blocks indefinitely.
-    static constexpr int ALLOC_TIMEOUT_SEC = 30;
     ggml_sycl::unified_cache_add_runtime_host_bytes(size);
     dpct::err0 err = 0;
     {
         auto & queue = dpct::get_in_order_queue();
-        auto future = std::async(std::launch::async, [&]() -> void * {
-            void * p = nullptr;
-            try {
-                p = sycl::malloc_host(size, queue);
-            } catch (...) {
-                p = nullptr;
-            }
-            return p;
-        });
-        auto status = future.wait_for(std::chrono::seconds(ALLOC_TIMEOUT_SEC));
-        if (status == std::future_status::ready) {
-            ptr = future.get();
-        } else {
-            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) TIMED OUT after %ds — "
-                           "GPU driver may be in bad state (try: echo 1 | sudo tee "
-                           "/sys/class/drm/card0/device/reset)\n",
-                           size / (1024.0 * 1024.0 * 1024.0), ALLOC_TIMEOUT_SEC);
-            ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-            // Detach the future — the thread may eventually complete or be killed at exit
-            return nullptr;
+        try {
+            ptr = sycl::malloc_host(size, queue);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED: %s "
+                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
+                           size / (1024.0 * 1024.0 * 1024.0), e.what());
+            ptr = nullptr;
+            err = 1;
+        } catch (...) {
+            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED with unknown exception "
+                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
+                           size / (1024.0 * 1024.0 * 1024.0));
+            ptr = nullptr;
+            err = 1;
         }
-        if (!ptr) err = 1;
     }
 
     if (err != 0 || !ptr) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-        if (err != 0) {
-            GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,
-                           "syclGetErrorString is not supported");
-        } else {
-            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null\n",
+        if (err == 0) {
+            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null "
+                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
                            size / (1024.0 * 1024.0 * 1024.0));
         }
         return nullptr;
@@ -664,7 +650,7 @@ void ggml_sycl_host_free(void * ptr) try {
     if (!ptr) {
         return;
     }
-    // Check allocation type BEFORE unregistering — MMAP (aligned_alloc) pointers
+    // Check allocation type BEFORE unregistering — MMAP pointers
     // must use std::free, not sycl::free (which would crash on non-USM memory).
     const auto * reg_info = ggml_sycl::alloc_registry::instance().lookup(ptr);
     const bool   is_mmap  = (reg_info != nullptr && reg_info->type == ggml_sycl::alloc_type::MMAP);
@@ -682,8 +668,7 @@ void ggml_sycl_host_free(void * ptr) try {
     if (alloc_size > 0) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(alloc_size);
     }
-    // Non-USM memory (aligned_alloc from host buffer alloc cap overflow):
-    // must use std::free, sycl::free would crash on non-USM pointers.
+    // MMAP memory: must use std::free, sycl::free would crash on non-USM pointers.
     if (is_mmap) {
         std::free(ptr);
         return;
