@@ -9493,11 +9493,38 @@ void * unified_cache::arena_alloc(size_t size) {
         return nullptr;
     }
 
+    // Track for LIFO reclaim — enables arena_free() to rewind the bump pointer
+    // when the caller frees the most recent allocation (stack discipline).
+    last_arena_alloc_off_.store(off, std::memory_order_relaxed);
+    last_arena_alloc_size_.store(aligned, std::memory_order_relaxed);
+
     return static_cast<uint8_t *>(compute_arena_ptr_) + off;
+}
+
+void unified_cache::arena_free(void * ptr, size_t size) {
+    if (!compute_arena_ptr_ || !ptr) {
+        return;
+    }
+
+    // Same alignment as arena_alloc().
+    const size_t aligned = (size + 255) & ~size_t(255);
+    const size_t off = static_cast<uint8_t *>(ptr)
+                     - static_cast<uint8_t *>(compute_arena_ptr_);
+
+    // LIFO reclaim: if this was the last allocation, rewind the bump pointer.
+    if (off == last_arena_alloc_off_.load(std::memory_order_relaxed) &&
+        aligned == last_arena_alloc_size_.load(std::memory_order_relaxed)) {
+        compute_arena_off_.fetch_sub(aligned, std::memory_order_relaxed);
+        last_arena_alloc_off_.store(0, std::memory_order_relaxed);
+        last_arena_alloc_size_.store(0, std::memory_order_relaxed);
+    }
+    // Non-LIFO free: no-op (space reclaimed at arena_reset).
 }
 
 void unified_cache::arena_reset() {
     compute_arena_off_.store(0, std::memory_order_relaxed);
+    last_arena_alloc_off_.store(0, std::memory_order_relaxed);
+    last_arena_alloc_size_.store(0, std::memory_order_relaxed);
 }
 
 bool unified_cache::arena_owns(const void * ptr) const {
@@ -9671,6 +9698,13 @@ void * unified_cache_arena_alloc(int device_id, size_t size) {
         return nullptr;
     }
     return cache->arena_alloc(size);
+}
+
+void unified_cache_arena_free(int device_id, void * ptr, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (cache) {
+        cache->arena_free(ptr, size);
+    }
 }
 
 void * unified_cache_arena_alloc_weight(int device_id, size_t size) {

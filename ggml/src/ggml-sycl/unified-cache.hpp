@@ -1543,6 +1543,10 @@ class unified_cache {
     // Returns nullptr if arena is not reserved or has insufficient space.
     void * arena_alloc(size_t size);
 
+    // LIFO reclaim: if ptr was the last bump allocation, rewind the bump pointer.
+    // Non-LIFO frees are no-ops (space reclaimed at arena_reset).
+    void arena_free(void * ptr, size_t size);
+
     // Reset the arena bump pointer to 0 (call between graph_compute invocations).
     void arena_reset();
 
@@ -1693,6 +1697,12 @@ class unified_cache {
     void *              compute_arena_ptr_  = nullptr;
     size_t              compute_arena_size_ = 0;
     std::atomic<size_t> compute_arena_off_{ 0 };
+
+    // LIFO reclaim tracking: if the last allocation is freed, rewind the bump
+    // pointer to reclaim the space instantly.  Only the most recent allocation
+    // is eligible; older frees are no-ops (reclaimed at arena_reset).
+    std::atomic<size_t> last_arena_alloc_off_{ 0 };
+    std::atomic<size_t> last_arena_alloc_size_{ 0 };
 
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;
@@ -2468,6 +2478,9 @@ bool unified_cache_reserve_compute_arena(int device_id, size_t arena_bytes);
 // Try to sub-allocate from the compute arena.
 // Returns nullptr if arena is not reserved or has insufficient space.
 void * unified_cache_arena_alloc(int device_id, size_t size);
+
+// LIFO reclaim: if ptr was the last bump allocation, rewind the bump pointer.
+void unified_cache_arena_free(int device_id, void * ptr, size_t size);
 
 // Sub-allocate from the weight zone (persistent, NOT reset between tokens).
 // Use for kernel infrastructure that persists for model lifetime.

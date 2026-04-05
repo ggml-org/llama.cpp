@@ -16632,25 +16632,15 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         // When the VRAM arena is active, ALL compute scratch comes from the
         // compute arena's bump allocator.  No free list, no malloc_device.
         // The arena resets between graph_compute calls.
+        // LIFO reclaim in arena_free() keeps the bump pointer tight — each
+        // op's scratch is reclaimed before the next op allocates.
         if (arena_mode_) {
             void * ptr = ggml_sycl::unified_cache_arena_alloc(device, rounded_size);
             if (ptr) {
                 *actual_size = rounded_size;
                 return ptr;
             }
-            // Arena full — fall back to raw device allocation.
-            // The arena's bump pointer never reclaims within a single graph_compute,
-            // so PP graphs with many nodes can exhaust the 256 MB compute zone.
-            // Without this fallback, nullptr propagates to GPU kernels causing a
-            // page fault and hang (the GPU kernel accesses address 0).
-            GGML_SYCL_DEBUG("[POOL-LEG] arena full (requested %zu bytes), falling back to malloc_device\n",
-                            rounded_size);
-            ptr = ggml_sycl_malloc_device_raw(rounded_size, *qptr, "pool_leg:arena_overflow");
-            if (ptr) {
-                *actual_size = rounded_size;
-                return ptr;
-            }
-            GGML_LOG_WARN("[POOL-LEG] arena overflow alloc also failed (%zu bytes)\n", rounded_size);
+            GGML_LOG_WARN("[POOL-LEG] arena exhausted (requested %zu bytes)\n", rounded_size);
             return nullptr;
         }
 
@@ -16742,20 +16732,19 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 
     void free(void * ptr, size_t size) override {
         // Arena pointers are ephemeral — they reset between graph_compute calls.
-        // Do NOT cache them in the buffer pool; just discard.
-        if (ggml_sycl::unified_cache_arena_owns(device, ptr)) {
+        // When arena_mode_ is active, attempt LIFO reclaim: if this pointer was
+        // the last bump allocation, rewind the bump pointer to reclaim space.
+        // Non-LIFO frees are no-ops (space reclaimed at arena_reset).
+        if (arena_mode_) {
+            if (ggml_sycl::unified_cache_arena_owns(device, ptr)) {
+                ggml_sycl::unified_cache_arena_free(device, ptr, size);
+            }
             return;
         }
 
-        // When VRAM arena is active, non-arena pointers are overflow
-        // allocations from ggml_sycl_malloc_device (arena was full).
-        // These MUST be freed to avoid VRAM leaks.  Unregister from
-        // alloc_registry first since ggml_sycl_malloc_device registered them.
-        if (arena_mode_) {
-            ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
-            try {
-                sycl::free(ptr, *qptr);
-            } catch (...) {}
+        // Legacy (arena OFF): arena pointers can still appear from the hybrid
+        // path in alloc() — skip them, they are not in the free list.
+        if (ggml_sycl::unified_cache_arena_owns(device, ptr)) {
             return;
         }
 
