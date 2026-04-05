@@ -6626,7 +6626,16 @@ static size_t runtime_reserved_host_bytes_nolock() {
 // caller must apply via update_reserved_bytes() AFTER releasing g_cache_rw_mutex.
 // This prevents a deadlock: update_reserved_bytes() → recalc → layer streaming
 // → unified_cache_add_runtime_bytes() → tries to re-lock g_cache_rw_mutex.
-static unified_cache * create_cache_for_device(int device_id, size_t * deferred_reserved_out = nullptr) {
+// Optional device memory hints to avoid calling ggml_sycl_info() during
+// static init (which would deadlock on the static local guard).
+struct device_mem_hint {
+    size_t free_mem         = 0;
+    size_t total_mem        = 0;
+    size_t free_vram_at_init = 0;
+};
+
+static unified_cache * create_cache_for_device(int device_id, size_t * deferred_reserved_out = nullptr,
+                                                const device_mem_hint * hint = nullptr) {
     // Get queue for this device
     sycl::queue & queue = ggml_sycl_get_device(device_id).default_queue();
 
@@ -6666,8 +6675,15 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
     bool   budget_capped_to_free = false;
     if (budget == 0) {
         size_t free_mem = 0, total_mem = 0;
-        ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
-        size_t base_mem = ggml_sycl_info().devices[device_id].total_vram;
+        if (hint && hint->total_mem > 0) {
+            // Use caller-provided values to avoid ggml_sycl_info() reentry deadlock
+            free_mem  = hint->free_mem;
+            total_mem = hint->total_mem;
+        } else {
+            ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
+        }
+        size_t base_mem = (hint && hint->total_mem > 0) ? hint->total_mem
+                        : ggml_sycl_info().devices[device_id].total_vram;
         if (base_mem == 0) {
             base_mem = total_mem > 0 ? total_mem : free_mem;
         }
@@ -6696,7 +6712,9 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
         // pool, making post-probe get_memory_info() report artificially low
         // free_mem (e.g. 600 MB on a 12 GB GPU).  The pre-probe snapshot
         // reflects the true available VRAM before our process consumed any.
-        size_t clean_free = ggml_sycl_get_free_vram_at_init(device_id);
+        size_t clean_free = (hint && hint->free_vram_at_init > 0)
+                              ? hint->free_vram_at_init
+                              : ggml_sycl_get_free_vram_at_init(device_id);
         if (clean_free == 0) {
             clean_free = free_mem;  // fallback to current if pre-probe unavailable
         }
@@ -6719,6 +6737,17 @@ static unified_cache * create_cache_for_device(int device_id, size_t * deferred_
                           "(weight budget=%.1f MB)\n",
                           compute_scratch_headroom / (1024.0 * 1024.0),
                           budget / (1024.0 * 1024.0));
+        }
+
+        // Leave additional headroom for KV cache and ggml compute buffers
+        // that allocate outside the arena via sycl::malloc_device.
+        // Default context (32K tokens) needs ~4 GB KV; -c 512 needs ~64 MB.
+        // Use 2 GB as a conservative default for typical inference contexts.
+        constexpr size_t kv_compute_headroom = 2048ull * 1024ull * 1024ull;
+        if (budget > kv_compute_headroom + compute_scratch_headroom) {
+            budget -= kv_compute_headroom;
+            GGML_LOG_INFO("[UNIFIED-CACHE] KV+compute headroom: %.0f MB reserved\n",
+                          kv_compute_headroom / (1024.0 * 1024.0));
         }
 
         char desc[256] = { 0 };
@@ -6868,7 +6897,9 @@ host_cache * get_host_cache(sycl::queue & queue) {
     return create_host_cache_for_device(device_id);
 }
 
-unified_cache * get_unified_cache_for_device(int device_id) {
+// Internal implementation: accepts optional device memory hints to avoid
+// ggml_sycl_info() reentry deadlock during ggml_sycl_init().
+static unified_cache * get_unified_cache_for_device_impl(int device_id, const device_mem_hint * hint) {
     unified_cache_mode mode             = get_effective_mode();
     int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device_id;
 
@@ -6894,13 +6925,26 @@ unified_cache * get_unified_cache_for_device(int device_id) {
             return it->second.get();
         }
 
-        result = create_cache_for_device(effective_device, &deferred_reserve);
+        result = create_cache_for_device(effective_device, &deferred_reserve, hint);
     }
     // Apply deferred reserved bytes outside the mutex to avoid deadlock
     if (result && deferred_reserve > 0) {
         result->update_reserved_bytes(deferred_reserve);
     }
     return result;
+}
+
+unified_cache * get_unified_cache_for_device(int device_id) {
+    return get_unified_cache_for_device_impl(device_id, nullptr);
+}
+
+unified_cache * get_unified_cache_for_device(int device_id, size_t free_mem, size_t total_mem,
+                                              size_t free_vram_at_init) {
+    device_mem_hint hint;
+    hint.free_mem          = free_mem;
+    hint.total_mem         = total_mem;
+    hint.free_vram_at_init = free_vram_at_init;
+    return get_unified_cache_for_device_impl(device_id, &hint);
 }
 
 host_cache * get_host_cache_for_device(int device_id) {
@@ -9978,141 +10022,93 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
     compute_bytes = (compute_bytes + 255) & ~size_t(255);
     onednn_bytes  = (onednn_bytes + 255) & ~size_t(255);
 
-    // Try single allocation first.
-    void * ptr = nullptr;
-    size_t alloc_size = budget_bytes;
+    // Default: 2-chunk split to avoid BMG driver hang with large (>5.5 GB)
+    // single allocations.  chunk0 = compute + oneDNN + KV, chunk1 = weights.
+    // Each chunk stays safely under the driver threshold.
+    //
+    // chunk0 sized to hold compute + oneDNN + remaining space for KV,
+    // capped at half the budget so neither chunk triggers the BMG bug.
+    // chunk1 gets the rest for weights.
+    const size_t fixed_zones  = compute_bytes + onednn_bytes;
+    const size_t half_budget  = budget_bytes / 2;
+    // chunk0: at least fixed_zones, at most half_budget, never > max_alloc_size.
+    size_t chunk0_size = std::max(fixed_zones, half_budget);
+    chunk0_size        = std::min(chunk0_size, max_alloc_size);
+    chunk0_size        = (chunk0_size + 255) & ~size_t(255);
+    // chunk1: rest of budget, capped at max_alloc_size.
+    size_t chunk1_size = (budget_bytes > chunk0_size) ? budget_bytes - chunk0_size : 0;
+    chunk1_size        = std::min(chunk1_size, max_alloc_size);
+    chunk1_size        = (chunk1_size + 255) & ~size_t(255);
 
-    if (alloc_size <= max_alloc_size) {
-        try {
-            ptr = sycl::malloc_device(alloc_size, queue);
-        } catch (const sycl::exception & e) {
-            GGML_LOG_WARN("[VRAM-ARENA] Single alloc (%.1f MB) failed: %s\n",
-                          alloc_size / (1024.0 * 1024.0), e.what());
-            ptr = nullptr;
-        }
-        if (ptr) {
-            // Register in alloc_registry so ggml_sycl_get_alloc_type() returns DEVICE
-            // for arena sub-pointers. Without this, graph_prestage_leaf_tensors and
-            // other code paths treat arena pointers as unknown → host memcpy from device → hang.
-            int dev_id = ggml_sycl_get_device_id_from_queue(queue);
-            alloc_registry::instance().register_alloc(ptr, alloc_size, dev_id, alloc_type::DEVICE);
-        }
+    if (chunk0_size == 0 || chunk1_size == 0) {
+        GGML_LOG_WARN("[VRAM-ARENA] Budget too small for 2-chunk split (%.1f MB)\n",
+                      budget_bytes / (1024.0 * 1024.0));
+        return false;
     }
 
-    if (!ptr) {
-        // Try 2-chunk split: 50% + 40% of budget (leaves 10% margin for driver)
-        const size_t chunk0_size = (budget_bytes * 50) / 100;
-        const size_t chunk1_size = (budget_bytes * 40) / 100;
-
-        if (chunk0_size > max_alloc_size || chunk1_size > max_alloc_size) {
-            GGML_LOG_WARN("[VRAM-ARENA] 2-chunk sizes (%.1f + %.1f MB) exceed max_alloc (%.1f MB)\n",
-                          chunk0_size / (1024.0 * 1024.0), chunk1_size / (1024.0 * 1024.0),
-                          max_alloc_size / (1024.0 * 1024.0));
-            return false;
-        }
-
-        void * p0 = nullptr;
-        void * p1 = nullptr;
-        int dev_id = ggml_sycl_get_device_id_from_queue(queue);
-        try {
-            p0 = sycl::malloc_device(chunk0_size, queue);
-        } catch (...) { p0 = nullptr; }
-        if (!p0) {
-            GGML_LOG_WARN("[VRAM-ARENA] 2-chunk: first chunk (%.1f MB) failed\n",
-                          chunk0_size / (1024.0 * 1024.0));
-            return false;
-        }
-        alloc_registry::instance().register_alloc(p0, chunk0_size, dev_id, alloc_type::DEVICE);
-        try {
-            p1 = sycl::malloc_device(chunk1_size, queue);
-        } catch (...) { p1 = nullptr; }
-        if (!p1) {
-            alloc_registry::instance().unregister_alloc(p0);
-            sycl::free(p0, queue);
-            GGML_LOG_WARN("[VRAM-ARENA] 2-chunk: second chunk (%.1f MB) failed\n",
-                          chunk1_size / (1024.0 * 1024.0));
-            return false;
-        }
-        alloc_registry::instance().register_alloc(p1, chunk1_size, dev_id, alloc_type::DEVICE);
-
-        // chunk0: compute+oneDNN+KV, chunk1: weights
-        chunks_[0] = { p0, chunk0_size };
-        chunks_[1] = { p1, chunk1_size };
-        n_chunks_  = 2;
-        arena_base_ = p0;
-        arena_size_ = chunk0_size + chunk1_size;
-
-        // Layout zones within 2-chunk arena:
-        // chunk0: [Compute zone] [oneDNN zone] [KV zone]
-        // chunk1: [Weight zone — entire chunk]
-        size_t off = 0;
-        auto & cz  = zones_[static_cast<int>(vram_zone_id::COMPUTE)];
-        cz.start   = off;
-        cz.size    = std::min(compute_bytes, chunk0_size);
-        cz.used.store(0, std::memory_order_relaxed);
-        off += cz.size;
-
-        auto & oz  = zones_[static_cast<int>(vram_zone_id::ONEDNN)];
-        oz.start   = off;
-        oz.size    = std::min(onednn_bytes, chunk0_size - off);
-        oz.used.store(0, std::memory_order_relaxed);
-        off += oz.size;
-
-        auto & kz  = zones_[static_cast<int>(vram_zone_id::KV)];
-        kz.start   = off;
-        kz.size    = chunk0_size - off;
-        kz.used.store(0, std::memory_order_relaxed);
-
-        // Weight zone occupies all of chunk1.
-        auto & wz  = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
-        wz.start   = chunk0_size;  // Offset from arena_base
-        wz.size    = chunk1_size;
-        wz.used.store(0, std::memory_order_relaxed);
-
-        GGML_LOG_INFO("[VRAM-ARENA] Reserved 2-chunk: %.1f + %.1f MB "
-                      "(compute=%.1f, oneDNN=%.1f, KV=%.1f, weight=%.1f MB)\n",
-                      chunk0_size / (1024.0 * 1024.0), chunk1_size / (1024.0 * 1024.0),
-                      cz.size / (1024.0 * 1024.0), oz.size / (1024.0 * 1024.0),
-                      kz.size / (1024.0 * 1024.0), wz.size / (1024.0 * 1024.0));
-        return true;
+    void * p0 = nullptr;
+    void * p1 = nullptr;
+    int dev_id = ggml_sycl_get_device_id_from_queue(queue);
+    try {
+        p0 = sycl::malloc_device(chunk0_size, queue);
+    } catch (...) { p0 = nullptr; }
+    if (!p0) {
+        GGML_LOG_WARN("[VRAM-ARENA] 2-chunk: chunk0 (%.1f MB) failed\n",
+                      chunk0_size / (1024.0 * 1024.0));
+        return false;
     }
+    alloc_registry::instance().register_alloc(p0, chunk0_size, dev_id, alloc_type::DEVICE);
+    try {
+        p1 = sycl::malloc_device(chunk1_size, queue);
+    } catch (...) { p1 = nullptr; }
+    if (!p1) {
+        alloc_registry::instance().unregister_alloc(p0);
+        sycl::free(p0, queue);
+        GGML_LOG_WARN("[VRAM-ARENA] 2-chunk: chunk1 (%.1f MB) failed\n",
+                      chunk1_size / (1024.0 * 1024.0));
+        return false;
+    }
+    alloc_registry::instance().register_alloc(p1, chunk1_size, dev_id, alloc_type::DEVICE);
 
-    // Single chunk succeeded.
-    chunks_[0]  = { ptr, alloc_size };
-    n_chunks_   = 1;
-    arena_base_ = ptr;
-    arena_size_ = alloc_size;
+    // chunk0: compute+oneDNN+KV, chunk1: weights
+    chunks_[0]  = { p0, chunk0_size };
+    chunks_[1]  = { p1, chunk1_size };
+    n_chunks_   = 2;
+    arena_base_ = p0;
+    arena_size_ = chunk0_size + chunk1_size;
 
-    // Layout: [Compute] [oneDNN] [KV (grows→) ... Weight (←grows)]
+    // Layout zones within 2-chunk arena:
+    // chunk0: [Compute zone] [oneDNN zone] [KV zone]
+    // chunk1: [Weight zone — entire chunk]
     size_t off = 0;
     auto & cz  = zones_[static_cast<int>(vram_zone_id::COMPUTE)];
     cz.start   = off;
-    cz.size    = compute_bytes;
+    cz.size    = std::min(compute_bytes, chunk0_size);
     cz.used.store(0, std::memory_order_relaxed);
-    off += compute_bytes;
+    off += cz.size;
 
     auto & oz  = zones_[static_cast<int>(vram_zone_id::ONEDNN)];
     oz.start   = off;
-    oz.size    = onednn_bytes;
+    oz.size    = std::min(onednn_bytes, chunk0_size - off);
     oz.used.store(0, std::memory_order_relaxed);
-    off += onednn_bytes;
+    off += oz.size;
 
-    // KV and Weight share the remaining space.  KV grows right, Weight grows left.
-    const size_t shared = alloc_size - off;
     auto & kz  = zones_[static_cast<int>(vram_zone_id::KV)];
     kz.start   = off;
-    kz.size    = shared;
+    kz.size    = chunk0_size - off;
     kz.used.store(0, std::memory_order_relaxed);
 
+    // Weight zone occupies all of chunk1.
     auto & wz  = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
-    wz.start   = off;      // Same region as KV (they grow toward each other)
-    wz.size    = shared;
+    wz.start   = chunk0_size;  // Logical offset at chunk boundary
+    wz.size    = chunk1_size;
     wz.used.store(0, std::memory_order_relaxed);
 
-    GGML_LOG_INFO("[VRAM-ARENA] Reserved single chunk: %.1f MB "
-                  "(compute=%.1f, oneDNN=%.1f, shared KV+weight=%.1f MB)\n",
-                  alloc_size / (1024.0 * 1024.0), cz.size / (1024.0 * 1024.0),
-                  oz.size / (1024.0 * 1024.0), shared / (1024.0 * 1024.0));
+    GGML_LOG_INFO("[VRAM-ARENA] Reserved 2-chunk: %.1f + %.1f MB "
+                  "(compute=%.1f, oneDNN=%.1f, KV=%.1f, weight=%.1f MB)\n",
+                  chunk0_size / (1024.0 * 1024.0), chunk1_size / (1024.0 * 1024.0),
+                  cz.size / (1024.0 * 1024.0), oz.size / (1024.0 * 1024.0),
+                  kz.size / (1024.0 * 1024.0), wz.size / (1024.0 * 1024.0));
     return true;
 }
 

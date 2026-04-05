@@ -86,9 +86,9 @@ class vram_arena {
     vram_arena(vram_arena &&)                  = delete;
     vram_arena & operator=(vram_arena &&)      = delete;
 
-    // Reserve VRAM arena.  Attempts single malloc_device(budget_bytes).
-    // If that exceeds max_alloc_size, splits into 2 chunks (50%+40%).
-    // Falls back to per-entry allocation (returns false) on total failure.
+    // Reserve VRAM arena using 2-chunk split to avoid BMG driver hang
+    // with large (>5.5 GB) single allocations.  chunk0 = compute+oneDNN+KV,
+    // chunk1 = weights.  Returns false on allocation failure.
     //
     // compute_bytes: fixed compute scratch zone size
     // onednn_bytes:  fixed oneDNN scratch zone size (0 to skip)
@@ -1867,6 +1867,11 @@ unified_cache * get_unified_cache(sycl::queue & queue);
 // Get unified cache for a specific device ID
 // Useful when device ID is known but queue isn't available
 unified_cache * get_unified_cache_for_device(int device_id);
+
+// Overload with device memory hints — avoids ggml_sycl_info() reentry
+// deadlock when called from within ggml_sycl_init() static initialization.
+unified_cache * get_unified_cache_for_device(int device_id, size_t free_mem, size_t total_mem,
+                                              size_t free_vram_at_init);
 
 // Check if unified cache is enabled (via env var or auto-detection)
 bool unified_cache_enabled();
