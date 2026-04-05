@@ -58,12 +58,12 @@ mem_handle mem_handle::from_arena_zone(int zone_id, size_t offset, size_t size,
                                        int device_id, uint64_t generation) {
     mem_handle h;
     // Map zone_id to the appropriate arena handle kind.
-    // vram_zone_id: COMPUTE=0, KV=1, ONEDNN=2, WEIGHT=3
+    // vram_zone_id: KV=0, WEIGHT=1, ONEDNN=2, RUNTIME=3, SCRATCH=4
     switch (zone_id) {
-        case 0:  h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;  // COMPUTE zone
-        case 1:  h.kind_ = mem_handle_kind::ARENA_SCRATCH; break;  // KV zone (scratch)
-        case 2:  h.kind_ = mem_handle_kind::ARENA_ONEDNN;  break;  // ONEDNN zone
-        default: h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;  // Fallback
+        case static_cast<int>(vram_zone_id::RUNTIME): h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;
+        case static_cast<int>(vram_zone_id::SCRATCH): h.kind_ = mem_handle_kind::ARENA_SCRATCH; break;
+        case static_cast<int>(vram_zone_id::ONEDNN):  h.kind_ = mem_handle_kind::ARENA_ONEDNN;  break;
+        default: h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;
     }
     h.device_    = device_id;
     h.zone_id_   = zone_id;

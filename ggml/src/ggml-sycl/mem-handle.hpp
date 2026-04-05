@@ -77,9 +77,9 @@ public:
     static mem_handle from_direct(void * ptr, ggml_layout_mode layout, bool on_device);
 
     // Create an arena zone handle.
-    // zone_id maps to vram_zone_id (COMPUTE=0, KV=1, ONEDNN=2).
+    // zone_id maps to vram_zone_id (KV=0, WEIGHT=1, ONEDNN=2, RUNTIME=3, SCRATCH=4).
     // The handle kind is derived from zone_id:
-    //   COMPUTE -> ARENA_RUNTIME, KV -> ARENA_SCRATCH, ONEDNN -> ARENA_ONEDNN.
+    //   RUNTIME -> ARENA_RUNTIME, SCRATCH -> ARENA_SCRATCH, ONEDNN -> ARENA_ONEDNN.
     static mem_handle from_arena_zone(int zone_id, size_t offset, size_t size,
                                       int device_id, uint64_t generation);
 
