@@ -86,6 +86,10 @@ struct task_params {
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
+    // output modalities
+    bool has_out_audio = false;
+    bool has_out_text  = true;
+
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
 };
@@ -322,6 +326,9 @@ struct completion_token_output {
     };
     std::vector<prob_info> probs;
 
+    std::vector<int16_t> audio_samples;
+    int audio_sample_rate = 0;
+
     json to_json(bool post_sampling_probs) const;
 
     static json probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs);
@@ -439,6 +446,9 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
+
+    std::vector<int16_t> audio_out;
+    int audio_out_sample_rate = 0;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop

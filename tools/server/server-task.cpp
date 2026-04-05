@@ -7,6 +7,8 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "server-common.h"
+#include "base64.hpp"
+#include "json-schema-to-grammar.h"
 
 using json = nlohmann::ordered_json;
 
@@ -599,6 +601,9 @@ task_params server_task::params_from_json_cmpl(
     if (params.n_cmpl > params_base.n_parallel) {
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
     }
+
+    params.has_out_audio = json_value(data, "has_out_audio", false);
+    params.has_out_text  = json_value(data, "has_out_text", true);
 
     return params;
 }
@@ -1498,6 +1503,19 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
 
     for (const auto & diff : oaicompat_msg_diffs) {
         add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
+    }
+
+    if (!audio_out.empty()) {
+        const std::string audio_data_base64 = base64::encode(
+            reinterpret_cast<const char *>(audio_out.data()),
+            audio_out.size() * sizeof(int16_t));
+        add_delta({
+            {"audio", {
+                {"data", audio_data_base64},
+                {"format", "pcm16"},
+                {"sample_rate", audio_out_sample_rate},
+            }},
+        });
     }
 
     if (!deltas.empty()) {

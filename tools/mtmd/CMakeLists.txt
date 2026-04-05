@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
+            audio-decoder.cpp
             mtmd-image.cpp
             mtmd.h
             mtmd-helper.cpp

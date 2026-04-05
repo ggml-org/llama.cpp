@@ -1,3 +1,4 @@
+#include "audio-decoder.h"
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
@@ -116,6 +117,8 @@ mtmd_context_params mtmd_context_params_default() {
         /* image_max_tokens  */ -1,
         /* cb_eval           */ nullptr,
         /* cb_eval_user_data */ nullptr,
+        /* vocoder_path      */ nullptr,
+        /* tokenizer_path    */ nullptr,
     };
     return params;
 }
@@ -156,6 +159,11 @@ struct mtmd_context {
 
     std::unique_ptr<mtmd_audio_preprocessor> audio_preproc;
     std::unique_ptr<mtmd_image_preprocessor> image_preproc;
+
+    // audio output
+    std::unique_ptr<mtmd_audio_decoder> audio_decoder;
+    std::vector<int16_t> audio_output_outstanding_pcm16;
+    mtmd_output_modality output_modality = MTMD_OUTPUT_MODALITY_TEXT;
 
     // TODO @ngxson : add timings
 
@@ -218,6 +226,21 @@ struct mtmd_context {
         }
         if (ctx_a) {
             init_audio();
+        }
+
+        if (ctx_params.vocoder_path && ctx_params.vocoder_path[0] != '\0') {
+            audio_decoder = mtmd_audio_decoder_create(
+                text_model,
+                ctx_params.vocoder_path,
+                ctx_params.tokenizer_path ? ctx_params.tokenizer_path : "",
+                ctx_params.n_threads,
+                ctx_params.use_gpu);
+
+            if (audio_decoder) {
+                LOG_INF("%s: audio decoder initialized\n", __func__);
+            } else {
+                LOG_WRN("%s: failed to initialize audio decoder\n", __func__);
+            }
         }
     }
 
@@ -1355,4 +1378,81 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
             }
         }
     }
+}
+
+bool mtmd_support_audio_output(mtmd_context * ctx) {
+    return ctx && ctx->audio_decoder;
+}
+
+int mtmd_audio_output_get_sample_rate(mtmd_context * ctx) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    return ctx->audio_decoder ? ctx->audio_decoder->get_sample_rate() : 0;
+}
+
+int mtmd_audio_output_decode(
+        mtmd_context * ctx,
+        const float * embedding,
+        size_t n_embd,
+        float * out_embedding) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    GGML_ASSERT(ctx->output_modality == MTMD_OUTPUT_MODALITY_AUDIO);
+
+    mtmd_audio_decode_result result;
+    if (auto res = ctx->audio_decoder->decode(result, embedding, n_embd); res != 0) {
+        LOG_ERR("%s: audio decoding failed: %d\n", __func__, res);
+        return res;
+    }
+
+    memcpy(out_embedding, result.embedding.data(), result.embedding.size() * sizeof(float));
+    ctx->audio_output_outstanding_pcm16.insert(
+        ctx->audio_output_outstanding_pcm16.end(),
+        result.pcm16.begin(),
+        result.pcm16.end());
+
+    if (result.is_final) {
+        ctx->output_modality = MTMD_OUTPUT_MODALITY_TEXT;
+    }
+
+    return 0;
+}
+
+void mtmd_audio_output_start_new_turn(mtmd_context * ctx) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    ctx->audio_decoder->start_new_turn();
+}
+
+mtmd_output_modality mtmd_get_output_modality(mtmd_context * ctx) {
+    return ctx ? ctx->output_modality : MTMD_OUTPUT_MODALITY_TEXT;
+}
+
+int mtmd_get_n_audio_samples(mtmd_context * ctx) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    return (int) ctx->audio_output_outstanding_pcm16.size();
+}
+
+int mtmd_get_audio_samples(mtmd_context * ctx, int16_t * samples) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    const int n_samples = mtmd_get_n_audio_samples(ctx);
+    memcpy(samples, ctx->audio_output_outstanding_pcm16.data(), n_samples * sizeof(int16_t));
+    ctx->audio_output_outstanding_pcm16.clear();
+    return n_samples;
+}
+
+void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id) {
+    if (!ctx || !ctx->audio_decoder) {
+        return;
+    }
+    ctx->output_modality = ctx->audio_decoder->accept_text_token(id);
+}
+
+void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+
+    if (!ptr || !len) {
+        ctx->audio_decoder->set_modalities({});
+        return;
+    }
+
+    std::vector<mtmd_output_modality> modalities(ptr, ptr + len);
+    ctx->audio_decoder->set_modalities(modalities);
 }

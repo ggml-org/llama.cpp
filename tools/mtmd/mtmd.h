@@ -99,6 +99,10 @@ struct mtmd_context_params {
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    // audio output parameters (for TTS-style multimodal models)
+    const char * vocoder_path;
+    const char * tokenizer_path;
 };
 
 MTMD_API const char * mtmd_default_marker(void);
@@ -224,7 +228,7 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 
 // get output embeddings from the last encode pass
 // the reading size (in bytes) is equal to:
-// llama_model_n_embd_inp(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
+// llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 
 // Set callback for all future logging events.
@@ -235,6 +239,28 @@ MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
 // test function, to be used in test-mtmd-c-api.c
 MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
+
+//
+// Audio output API
+//
+enum mtmd_output_modality {
+    MTMD_OUTPUT_MODALITY_TEXT,
+    MTMD_OUTPUT_MODALITY_AUDIO,
+    MTMD_OUTPUT_MODALITY_END,
+};
+
+MTMD_API bool mtmd_support_audio_output(mtmd_context * ctx);
+MTMD_API int mtmd_audio_output_get_sample_rate(mtmd_context * ctx);
+MTMD_API int mtmd_audio_output_decode(mtmd_context * ctx,
+                                      const float * embedding,
+                                      size_t n_embd,
+                                      float * out_embedding);
+MTMD_API mtmd_output_modality mtmd_get_output_modality(mtmd_context * ctx);
+MTMD_API int mtmd_get_n_audio_samples(mtmd_context * ctx);
+MTMD_API int mtmd_get_audio_samples(mtmd_context * ctx, int16_t * samples);
+MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id);
+MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len);
+MTMD_API void mtmd_audio_output_start_new_turn(mtmd_context * ctx);
 
 #ifdef __cplusplus
 } // extern "C"
