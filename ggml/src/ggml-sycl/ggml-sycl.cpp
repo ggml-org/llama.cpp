@@ -232,17 +232,12 @@ struct fp16_weight_cache {
         }
         slab_ready = true;
         try {
-            slab_ptr = static_cast<char *>(sycl::malloc_device(limit_bytes, queue));
+            slab_ptr = static_cast<char *>(ggml_sycl_malloc_device(limit_bytes, queue, "fp16_weight_slab"));
         } catch (...) {
             slab_ptr = nullptr;
         }
         if (slab_ptr) {
-            int slab_device = ggml_sycl_get_device_id_from_queue(queue);
-            ggml_sycl::alloc_registry::instance().register_alloc(slab_ptr, limit_bytes,
-                                                                 slab_device,
-                                                                 ggml_sycl::alloc_type::DEVICE);
-            ggml_sycl::unified_cache_add_runtime_bytes(slab_device, limit_bytes, ggml_sycl::runtime_category::OTHER);
-            slab_device_id = slab_device;
+            slab_device_id = ggml_sycl_get_device_id_from_queue(queue);
             slab_size = limit_bytes;
             GGML_LOG_INFO("[SYCL] FP16 weight cache: allocated %.1fMB VRAM slab\n",
                           limit_bytes / (1024.0f * 1024.0f));
@@ -5966,7 +5961,7 @@ static void * arena_device_alloc(size_t bytes, int device_id, sycl::queue & queu
             return ptr;
         }
     }
-    return sycl::malloc_device(bytes, queue);
+    return ggml_sycl_malloc_device(bytes, queue, "arena_device_alloc_fallback");
 }
 
 static void arena_device_free(void * ptr, size_t bytes, int device_id, sycl::queue & queue, bool from_arena) {
@@ -7680,11 +7675,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_probe_buffer_type_alloc_buffer(gg
                                                                               size_t                     size) {
     auto * ctx = (ggml_backend_sycl_probe_buffer_context *) buft->context;
     ggml_sycl_set_device(ctx->device);
-    void * ptr = nullptr;
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx->device, size);
-    ptr = ggml_sycl_malloc_device_raw(size, *ctx->stream, "probe_buffer");
+    void * ptr = ggml_sycl_malloc_device(size, *ctx->stream, "probe_buffer");
     if (ptr == nullptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, size);
         return nullptr;
     }
     auto * alloc_ctx = new ggml_backend_sycl_probe_alloc_context{ ptr, ctx->stream };
@@ -9587,11 +9579,8 @@ static sycl::event ggml_sycl_fill_onednn_packed(sycl::queue &                   
     void * src_dev = const_cast<void *>(src);
     void * tmp_dev = nullptr;
     if (!ctx->src_is_device) {
-        const int runtime_device = ggml_sycl_get_device_id_from_queue(queue);
-        ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, src_size);
-        tmp_dev = ggml_sycl_malloc_device_raw(src_size, queue, "onednn_tmp");
+        tmp_dev = ggml_sycl_malloc_device(src_size, queue, "onednn_tmp");
         if (!tmp_dev) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src_size);
             return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
         }
         queue.memcpy(tmp_dev, src, src_size).wait();
@@ -9602,7 +9591,6 @@ static sycl::event ggml_sycl_fill_onednn_packed(sycl::queue &                   
     if (dtype == dnnl::memory::data_type::undef || ctx->stride_k <= 0 || ctx->stride_n <= 0 || ctx->pack_m <= 0 ||
         ctx->ncols <= 0 || ctx->nrows <= 0) {
         if (tmp_dev) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(queue), src_size);
             sycl::free(tmp_dev, queue);
         }
         return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
@@ -9626,7 +9614,6 @@ static sycl::event ggml_sycl_fill_onednn_packed(sycl::queue &                   
         if (dst_size < packed_bytes) {
             GGML_LOG_ERROR("[ONEDNN] pack dst too small: dst=%zu packed=%zu\n", dst_size, packed_bytes);
             if (tmp_dev) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(queue), src_size);
                 sycl::free(tmp_dev, queue);
             }
             return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
@@ -9650,7 +9637,6 @@ static sycl::event ggml_sycl_fill_onednn_packed(sycl::queue &                   
     }
 
     if (tmp_dev) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(queue), src_size);
         sycl::free(tmp_dev, queue);
     }
     return sycl::event{};
@@ -13813,10 +13799,8 @@ static enum ggml_status ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_
                 // Host alloc failed, fall through to device attempt
             }
         }
-        ggml_sycl::unified_cache_add_runtime_bytes(i, size);
-        buf = (char *) ggml_sycl_malloc_device_raw(size, *stream, "tensor_data_device");
+        buf = (char *) ggml_sycl_malloc_device(size, *stream, "tensor_data_device");
         if (!buf) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(i, size);
             char err_buf[1024];
             snprintf(err_buf, 1023, "%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
             throw std::runtime_error(err_buf);
@@ -14295,10 +14279,8 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
             if (stream == nullptr) {
                 stream = &dpct::get_current_device().default_queue();
             }
-            ggml_sycl::unified_cache_add_runtime_bytes(device, padded_size);
-            char * buf = static_cast<char *>(ggml_sycl_malloc_device_raw(padded_size, *stream, "tp_buffer_alloc"));
+            char * buf = static_cast<char *>(ggml_sycl_malloc_device(padded_size, *stream, "tp_buffer_alloc"));
             if (!buf) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, padded_size);
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n", padded_size,
                         device, tensor->name);
                 return GGML_STATUS_ALLOC_FAILED;
@@ -14391,10 +14373,8 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(ggml_backend_buf
             if (stream == nullptr) {
                 stream = &dpct::get_current_device().default_queue();
             }
-            ggml_sycl::unified_cache_add_runtime_bytes(device, padded_size);
-            char * buf = static_cast<char *>(ggml_sycl_malloc_device_raw(padded_size, *stream, "tp_buffer_alloc"));
+            char * buf = static_cast<char *>(ggml_sycl_malloc_device(padded_size, *stream, "tp_buffer_alloc"));
             if (!buf) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, padded_size);
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n", padded_size,
                         device, tensor->name);
                 return GGML_STATUS_ALLOC_FAILED;
@@ -19629,13 +19609,12 @@ static void tp_device1_worker_thread_func() {
             fprintf(stderr, "SYCL TP WORKER: Allocating buffers for layer %d (input_q8=%zu, hidden=%zu, output=%zu)\n",
                     work.layer, input_q8_size, hidden_size, output_size);
         }
-        ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-        char *  input_q8_dev  = (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "ffn_buffers_tp");
-        float * gate_out      = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
-        float * up_out        = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
-        float * hidden_out    = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_tp");
-        char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device_raw(hidden_q8_size, *stream, "ffn_buffers_tp");
-        float * partial_out   = (float *) ggml_sycl_malloc_device_raw(output_size, *stream, "ffn_buffers_tp");
+        char *  input_q8_dev  = (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "ffn_buffers_tp");
+        float * gate_out      = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
+        float * up_out        = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
+        float * hidden_out    = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_tp");
+        char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device(hidden_q8_size, *stream, "ffn_buffers_tp");
+        float * partial_out   = (float *) ggml_sycl_malloc_device(output_size, *stream, "ffn_buffers_tp");
 
         float * result_buf = (float *) ggml_sycl_host_malloc(output_size);
         if (g_ggml_sycl_tp_debug) {
@@ -19648,7 +19627,6 @@ static void tp_device1_worker_thread_func() {
         }
         if (!input_q8_dev || !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out || !result_buf) {
             fprintf(stderr, "SYCL TP WORKER: Buffer allocation failed for layer %d\n", work.layer);
-            ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
             if (input_q8_dev) {
                 sycl::free(input_q8_dev, *stream);
             }
@@ -19932,16 +19910,8 @@ static void init_dev1_kv_cache(int layer, int64_t max_seq_len, int64_t n_heads_k
 
     dev1_kv_cache_entry entry;
     const int           cache_device = ggml_sycl_get_device_id_from_queue(*stream);
-    ggml_sycl::unified_cache_add_runtime_bytes(cache_device, cache_size);
-    entry.k_cache = (float *) ggml_sycl_malloc_device_raw(cache_size, *stream, "tp_dev1_kv_cache");
-    if (!entry.k_cache) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(cache_device, cache_size);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(cache_device, cache_size);
-    entry.v_cache = (float *) ggml_sycl_malloc_device_raw(cache_size, *stream, "tp_dev1_kv_cache");
-    if (!entry.v_cache) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(cache_device, cache_size);
-    }
+    entry.k_cache = (float *) ggml_sycl_malloc_device(cache_size, *stream, "tp_dev1_kv_cache");
+    entry.v_cache = (float *) ggml_sycl_malloc_device(cache_size, *stream, "tp_dev1_kv_cache");
     entry.seq_pos     = 0;
     entry.max_seq_len = cache_max_seq;
     entry.n_heads_kv  = n_heads_kv;
@@ -20245,11 +20215,8 @@ static void ggml_sycl_mul_mat_tp_column_parallel_post(ggml_backend_sycl_context 
         fprintf(stderr, "TP DEBUG L31 STAGING PRE-MALLOC: weight d=%f %s\n", d_f, (d_f > 100.0f) ? "CORRUPTED" : "OK");
     }
     // Allocate on device 1
-    ggml_sycl::unified_cache_add_runtime_bytes(device, src1_size);
-    float * input_dev1 = (float *) ggml_sycl_malloc_device_raw(src1_size, *stream, "tp_input_staging");
-    if (!input_dev1) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, src1_size);
-    }
+    float * input_dev1 = (float *) ggml_sycl_malloc_device(src1_size, *stream, "tp_input_staging");
+
     // DEBUG: Check L31 weight AFTER malloc_device and print allocated address
     if (check_staging) {
         uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
@@ -20665,19 +20632,17 @@ void ggml_sycl_tp_launch_async_ffn(ggml_backend_sycl_context & ctx,
 
     const size_t output_size = N_out * batch * sizeof(float);
     const size_t total_bytes = input_q8_size + hidden_q8_size + output_size + hidden_size * 3;
-    ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-    char *  input_q8_dev  = (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "ffn_buffers_async");
-    float * gate_out      = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
-    float * up_out        = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
-    float * hidden_out    = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers_async");
-    char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device_raw(hidden_q8_size, *stream, "ffn_buffers_async");
-    float * partial_out   = (float *) ggml_sycl_malloc_device_raw(output_size, *stream, "ffn_buffers_async");
+    char *  input_q8_dev  = (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "ffn_buffers_async");
+    float * gate_out      = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
+    float * up_out        = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
+    float * hidden_out    = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers_async");
+    char *  hidden_q8_dev = (char *) ggml_sycl_malloc_device(hidden_q8_size, *stream, "ffn_buffers_async");
+    float * partial_out   = (float *) ggml_sycl_malloc_device(output_size, *stream, "ffn_buffers_async");
     // Allocate DEDICATED result buffer for this async job (not shared!)
     // Each layer needs its own buffer to avoid races between concurrent async jobs
     float * result_buf    = (float *) ggml_sycl_host_malloc(output_size);
     if (!input_q8_dev || !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out || !result_buf) {
         GGML_SYCL_DEBUG("SYCL TP ASYNC: Buffer allocation failed for layer %d\n", layer);
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
         if (input_q8_dev) {
             sycl::free(input_q8_dev, *stream);
         }
@@ -21648,24 +21613,22 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                         const size_t  attn_q8_size          = batch * n_embd_q_shard_padded * q8_1_ts / q8_1_bs;
                         const size_t  total_bytes =
                             input_q8_size + q_out_size + k_out_size + v_out_size + q_out_size + attn_q8_size + dst_size;
-                        ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
                         char * input_q8_dev =
-                            (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "attn_buffers_tp");
+                            (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "attn_buffers_tp");
                         // Q, K, V output buffers (float)
-                        float * q_out      = (float *) ggml_sycl_malloc_device_raw(q_out_size, *stream, "attn_buffers_tp");
-                        float * k_out      = (float *) ggml_sycl_malloc_device_raw(k_out_size, *stream, "attn_buffers_tp");
-                        float * v_out      = (float *) ggml_sycl_malloc_device_raw(v_out_size, *stream, "attn_buffers_tp");
+                        float * q_out      = (float *) ggml_sycl_malloc_device(q_out_size, *stream, "attn_buffers_tp");
+                        float * k_out      = (float *) ggml_sycl_malloc_device(k_out_size, *stream, "attn_buffers_tp");
+                        float * v_out      = (float *) ggml_sycl_malloc_device(v_out_size, *stream, "attn_buffers_tp");
                         // Attention output buffer (same size as Q since it's the per-head output)
-                        float * attn_out   = (float *) ggml_sycl_malloc_device_raw(q_out_size, *stream, "attn_buffers_tp");
+                        float * attn_out   = (float *) ggml_sycl_malloc_device(q_out_size, *stream, "attn_buffers_tp");
                         // For O projection, need to quantize attn_out
-                        char * attn_q8_dev = (char *) ggml_sycl_malloc_device_raw(attn_q8_size, *stream, "attn_buffers_tp");
+                        char * attn_q8_dev = (char *) ggml_sycl_malloc_device(attn_q8_size, *stream, "attn_buffers_tp");
                         // Output buffer for O projection (partial result)
-                        float * partial_out = (float *) ggml_sycl_malloc_device_raw(dst_size, *stream, "attn_buffers_tp");
+                        float * partial_out = (float *) ggml_sycl_malloc_device(dst_size, *stream, "attn_buffers_tp");
 
                         if (!input_q8_dev || !q_out || !k_out || !v_out || !attn_out || !attn_q8_dev || !partial_out) {
                             fprintf(stderr, "SYCL TP: ERROR - failed to allocate attention buffers on device %d\n",
                                     device);
-                            ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
                             if (input_q8_dev) {
                                 sycl::free(input_q8_dev, *stream);
                             }
@@ -21852,12 +21815,8 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
 
                             // Allocate attention scores buffer [n_heads_q, n_query_tokens, kv_seq_len]
                             const size_t scores_size = n_heads_q * n_query_tokens * kv_seq_len * sizeof(float);
-                            ggml_sycl::unified_cache_add_runtime_bytes(device, scores_size);
                             float * attn_scores =
-                                (float *) ggml_sycl_malloc_device_raw(scores_size, *stream, "attn_scores");
-                            if (!attn_scores) {
-                                ggml_sycl::unified_cache_sub_runtime_bytes(device, scores_size);
-                            }
+                                (float *) ggml_sycl_malloc_device(scores_size, *stream, "attn_scores");
                             if (attn_scores && k_cache && v_cache && kv_seq_len > 0) {
                                 // Compute attention scores: Q @ K^T / sqrt(head_dim) with GQA
                                 // Q comes from q_out (current batch), K comes from cache (full sequence)
@@ -22221,13 +22180,11 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
         ggml_sycl_set_device(device);
         queue_ptr stream = ctx.stream(device, 0);
         // Allocate buffers on target device
-        ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-        float * src1_ddf_dev = (float *) ggml_sycl_malloc_device_raw(src1_float_slice_size, *stream, "tp_row_src1_ddf");
-        char *  src1_ddq_dev = (char *) ggml_sycl_malloc_device_raw(src1_q8_size, *stream, "tp_row_src1_ddq");
-        float * partial_out  = (float *) ggml_sycl_malloc_device_raw(dst_size, *stream, "tp_row_partial_out");
+        float * src1_ddf_dev = (float *) ggml_sycl_malloc_device(src1_float_slice_size, *stream, "tp_row_src1_ddf");
+        char *  src1_ddq_dev = (char *) ggml_sycl_malloc_device(src1_q8_size, *stream, "tp_row_src1_ddq");
+        float * partial_out  = (float *) ggml_sycl_malloc_device(dst_size, *stream, "tp_row_partial_out");
         if (!src1_ddf_dev || !src1_ddq_dev || !partial_out) {
             fprintf(stderr, "SYCL TP: ERROR - failed to allocate temp buffers on device %d\n", device);
-            ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
             if (src1_ddf_dev) {
                 sycl::free(src1_ddf_dev, *stream);
             }
@@ -22318,10 +22275,8 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
 
             stream->memcpy(host_buf, partial_out, dst_size).wait();
             ggml_sycl_set_device(main_device);
-            ggml_sycl::unified_cache_add_runtime_bytes(main_device, dst_size);
-            float * temp_add = (float *) ggml_sycl_malloc_device_raw(dst_size, *main_stream, "temp_add");
+            float * temp_add = (float *) ggml_sycl_malloc_device(dst_size, *main_stream, "temp_add");
             if (!temp_add) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(main_device, dst_size);
                 GGML_LOG_ERROR("SYCL TP: ERROR - failed to allocate temp_add buffer (%zu bytes)\n", dst_size);
                 ggml_sycl_set_device(device);
                 stream = ctx.stream(device, 0);
@@ -23805,10 +23760,8 @@ static bool convert_tensor_layout(ggml_tensor * tensor,
             }
             return false;
         }
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id, tiled_bytes);
-        void * tiled_buf = ggml_sycl_malloc_device_raw(tiled_bytes, *stream, "xmx_tiled_buf");
+        void * tiled_buf = ggml_sycl_malloc_device(tiled_bytes, *stream, "xmx_tiled_buf");
         if (!tiled_buf) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id, tiled_bytes);
             return false;
         }
 
@@ -23843,14 +23796,11 @@ static bool convert_tensor_layout(ggml_tensor * tensor,
                 device_staging = nullptr;
             }
             if (!device_staging) {
-                ggml_sycl::unified_cache_add_runtime_bytes(device_id, aos_expert_size);
                 device_staging =
-                    ggml_sycl_malloc_device_t<uint8_t>(aos_expert_size, *stream, "xmx_tiled_device_staging");
+                    static_cast<uint8_t *>(ggml_sycl_malloc_device(aos_expert_size, *stream, "xmx_tiled_device_staging"));
                 if (device_staging) {
                     extra->xmx_mxfp4_tiled_aos_staging[device_id]      = device_staging;
                     extra->xmx_mxfp4_tiled_aos_staging_size[device_id] = aos_expert_size;
-                } else {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(device_id, aos_expert_size);
                 }
             }
             if (!device_staging) {
@@ -24423,10 +24373,8 @@ static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
     }
 
     // Fallback: runtime allocation via malloc_device
-    ggml_sycl::unified_cache_add_runtime_bytes(device, bytes);
-    void * table = ggml_sycl_malloc_device_raw(bytes, queue, "moe_ptr_table");
+    void * table = ggml_sycl_malloc_device(bytes, queue, "moe_ptr_table");
     if (!table) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, bytes);
         GGML_LOG_ERROR("[MOE] Failed to allocate expert pointer table (%zu bytes)\n", count * sizeof(void *));
         return;
     }
@@ -24650,12 +24598,10 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
                 ggml_sycl::alloc_registry::instance().unregister_alloc(entry.device_ids);
                 sycl::free(entry.device_ids, *stream);
             }
-            ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-            entry.device_ids    = ggml_sycl_malloc_device_raw(ids_bytes, *stream, "moe_ids_device");
+            entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *stream, "moe_ids_device");
             entry.device_bytes  = ids_bytes;
             entry.from_prealloc = false;
             if (!entry.device_ids) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
                 return nullptr;
             }
         }
@@ -25569,12 +25515,10 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
                         ggml_sycl::alloc_registry::instance().unregister_alloc(ids_entry.device_ids);
                         sycl::free(ids_entry.device_ids, *ctx.stream());
                     }
-                    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, ids_bytes);
-                    ids_entry.device_ids    = ggml_sycl_malloc_device_raw(ids_bytes, *ctx.stream(), "moe_ids_device");
+                    ids_entry.device_ids    = ggml_sycl_malloc_device(ids_bytes, *ctx.stream(), "moe_ids_device");
                     ids_entry.device_bytes  = ids_bytes;
                     ids_entry.from_prealloc = false;
                     if (!ids_entry.device_ids) {
-                        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ids_bytes);
                         GGML_LOG_ERROR("[GRAPH-PRELOAD] Failed to allocate device ids for %s (%zu bytes)\n", src0->name,
                                        ids_bytes);
                         return false;
@@ -26995,13 +26939,11 @@ static void ensure_split_persistent_resources(
     // Allocate device-local progress counter: kernel writes via atomic_ref(device),
     // host reads via OOQ D2H memcpy (BCS engine bypasses GPU L2 cache).
     if (!r.progress_counter) {
-        r.progress_counter = sycl::malloc_device<int>(1, primary_queue);
+        r.progress_counter = static_cast<int *>(ggml_sycl_malloc_device(sizeof(int), primary_queue, "split_progress_counter"));
         if (!r.progress_counter) {
-            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for progress_counter\n");
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] malloc_device failed for progress_counter\n");
             return;
         }
-        int pri_dev = ggml_sycl_get_device_id_from_queue(primary_queue);
-        ggml_sycl::unified_cache_add_runtime_bytes(pri_dev, sizeof(int), ggml_sycl::runtime_category::GRAPH);
     }
     // Allocate host-pinned staging for D2H progress reads.
     if (!r.h_progress) {
@@ -27014,13 +26956,11 @@ static void ensure_split_persistent_resources(
     // Allocate device-local merge_complete: host writes via H2D memcpy on coord OOQ,
     // kernel reads via device-scope atomic_ref. Both on same device = coherent.
     if (!r.merge_complete) {
-        r.merge_complete = sycl::malloc_device<int>(1, primary_queue);
+        r.merge_complete = static_cast<int *>(ggml_sycl_malloc_device(sizeof(int), primary_queue, "split_merge_complete"));
         if (!r.merge_complete) {
-            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for merge_complete\n");
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] malloc_device failed for merge_complete\n");
             return;
         }
-        int pri_dev = ggml_sycl_get_device_id_from_queue(primary_queue);
-        ggml_sycl::unified_cache_add_runtime_bytes(pri_dev, sizeof(int), ggml_sycl::runtime_category::GRAPH);
     }
     // Safe on primary_queue: runs before kernel launch, no concurrent access
     int zero = 0;
@@ -27037,15 +26977,14 @@ static void ensure_split_persistent_resources(
             }
             sycl::free(r.q8_staging, secondary_queue);
         }
-        r.q8_staging = sycl::malloc_device<char>(need_q8, secondary_queue);
+        r.q8_staging = static_cast<char *>(ggml_sycl_malloc_device(need_q8, secondary_queue, "split_q8_staging"));
         if (!r.q8_staging) {
-            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] sycl::malloc_device failed for q8_staging (%d bytes)\n",
+            GGML_LOG_WARN("[PERSISTENT-TG-SPLIT] malloc_device failed for q8_staging (%d bytes)\n",
                           need_q8);
             r.q8_staging_size = 0;
             return;
         }
         r.q8_staging_size = need_q8;
-        ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, need_q8, ggml_sycl::runtime_category::STAGING);
     }
 
     // Create OOQ on primary device for coordinator D2H/H2D memcpy operations.
@@ -27363,12 +27302,8 @@ static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::
             }
             sycl::free(g_split_secondary_gpu.q8_dev, *q);
         }
-        g_split_secondary_gpu.q8_dev = (char *) sycl::malloc_device(q8_bytes, *q);
+        g_split_secondary_gpu.q8_dev = static_cast<char *>(ggml_sycl_malloc_device(q8_bytes, *q, "split_sec_q8_dev"));
         g_split_secondary_gpu.q8_size = g_split_secondary_gpu.q8_dev ? q8_bytes : 0;
-        if (g_split_secondary_gpu.q8_size > 0) {
-            ggml_sycl::unified_cache_add_runtime_bytes(sec_device, g_split_secondary_gpu.q8_size,
-                                                       ggml_sycl::runtime_category::STAGING);
-        }
     }
     if (g_split_secondary_gpu.f32_size < f32_bytes) {
         if (g_split_secondary_gpu.f32_dev) {
@@ -27378,12 +27313,8 @@ static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::
             }
             sycl::free(g_split_secondary_gpu.f32_dev, *q);
         }
-        g_split_secondary_gpu.f32_dev = (float *) sycl::malloc_device(f32_bytes, *q);
+        g_split_secondary_gpu.f32_dev = static_cast<float *>(ggml_sycl_malloc_device(f32_bytes, *q, "split_sec_f32_dev"));
         g_split_secondary_gpu.f32_size = g_split_secondary_gpu.f32_dev ? f32_bytes : 0;
-        if (g_split_secondary_gpu.f32_size > 0) {
-            ggml_sycl::unified_cache_add_runtime_bytes(sec_device, g_split_secondary_gpu.f32_size,
-                                                       ggml_sycl::runtime_category::STAGING);
-        }
     }
 }
 
@@ -39849,10 +39780,8 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
     const size_t aligned_buf_size = (buffer_size + 255) & ~size_t(255);
     const size_t total_size       = static_cast<size_t>(soa_mmvq_count) * aligned_buf_size;
 
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, total_size);
-    void * bulk_ptr = ggml_sycl_malloc_device_raw(total_size, *stream, "mmvq_soa_buffer_bulk");
+    void * bulk_ptr = ggml_sycl_malloc_device(total_size, *stream, "mmvq_soa_buffer_bulk");
     if (!bulk_ptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, total_size);
         GGML_LOG_ERROR("[MMVQ-SOA-GRAPH] Failed to allocate bulk Q8_1 buffer (%.1f MB)\n",
                        total_size / (1024.0 * 1024.0));
         return;
