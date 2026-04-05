@@ -779,13 +779,11 @@ inline tensor_usage infer_tensor_usage(const char * name) {
 tensor_usage ggml_sycl_get_tensor_usage(const ggml_tensor * tensor);
 layout_mode  ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device);
 layout_mode  ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int device, bool host_weights);
-bool         ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int device, layout_mode * out);
 void *       ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, layout_mode target);
 void *       ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
                                              int                 device,
                                              layout_mode         target,
                                              bool                prefer_host);
-void ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, layout_mode target, const char * context);
 bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                                     const ggml_tensor *          src0,
                                     const ggml_tensor *          ids,

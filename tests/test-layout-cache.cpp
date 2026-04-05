@@ -319,9 +319,10 @@ static bool test_mul_mat_layout_choice_coalesced(int device_id) {
         return false;
     }
 
-    layout_mode chosen_layout = GGML_LAYOUT_AOS;
-    if (!ggml_sycl_get_layout_choice_for_tensor(weight, device_id, &chosen_layout)) {
-        printf("FAIL: missing layout choice for weight after mul_mat\n");
+    auto resolved_layout = ggml_sycl_resolve(weight, device_id);
+    layout_mode chosen_layout = resolved_layout ? static_cast<layout_mode>(resolved_layout.layout) : GGML_LAYOUT_AOS;
+    if (!resolved_layout) {
+        printf("FAIL: missing cache entry for weight after mul_mat\n");
         ggml_backend_buffer_free(weight_buf);
         ggml_backend_buffer_free(input_buf);
         ggml_backend_buffer_free(output_buf);

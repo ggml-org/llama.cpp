@@ -4625,199 +4625,6 @@ static std::unordered_map<
     weight_cache_allocator<std::pair<const ggml_sycl_weight_tensor_key, ggml_sycl_weight_tensor_cache_entry>>>
     g_sycl_weight_tensor_cache;
 
-struct ggml_sycl_layout_choice_key {
-    ggml_sycl_cache_id id     = {};
-    int                device = -1;
-};
-
-struct ggml_sycl_layout_choice_key_hash {
-    size_t operator()(const ggml_sycl_layout_choice_key & k) const {
-        size_t h = 0;
-        h        = ggml_sycl_hash_combine(h, ggml_sycl::detail::cache_id_hash{}(k.id));
-        h        = ggml_sycl_hash_combine(h, std::hash<int>()(k.device));
-        return h;
-    }
-};
-
-struct ggml_sycl_layout_choice_key_eq {
-    bool operator()(const ggml_sycl_layout_choice_key & a, const ggml_sycl_layout_choice_key & b) const {
-        return a.device == b.device && ggml_sycl::detail::cache_id_equal(a.id, b.id);
-    }
-};
-
-static std::mutex g_sycl_layout_choice_mutex;
-static std::unordered_map<ggml_sycl_layout_choice_key,
-                          layout_mode,
-                          ggml_sycl_layout_choice_key_hash,
-                          ggml_sycl_layout_choice_key_eq>
-                                                            g_sycl_layout_choices;
-static std::array<std::atomic<bool>, GGML_SYCL_MAX_DEVICES> g_sycl_layout_choices_finalized = {};
-
-struct ggml_sycl_layout_mismatch_key {
-    ggml_sycl_cache_id id     = {};
-    int                device = -1;
-    layout_mode        layout = GGML_LAYOUT_AOS;
-};
-
-struct ggml_sycl_layout_mismatch_key_hash {
-    size_t operator()(const ggml_sycl_layout_mismatch_key & k) const {
-        size_t h = 0;
-        h        = ggml_sycl_hash_combine(h, ggml_sycl::detail::cache_id_hash{}(k.id));
-        h        = ggml_sycl_hash_combine(h, std::hash<int>()(k.device));
-        h        = ggml_sycl_hash_combine(h, std::hash<int>()((int) k.layout));
-        return h;
-    }
-};
-
-struct ggml_sycl_layout_mismatch_key_eq {
-    bool operator()(const ggml_sycl_layout_mismatch_key & a, const ggml_sycl_layout_mismatch_key & b) const {
-        return a.device == b.device && a.layout == b.layout && ggml_sycl::detail::cache_id_equal(a.id, b.id);
-    }
-};
-
-static std::mutex g_sycl_layout_mismatch_mutex;
-static std::
-    unordered_set<ggml_sycl_layout_mismatch_key, ggml_sycl_layout_mismatch_key_hash, ggml_sycl_layout_mismatch_key_eq>
-        g_sycl_layout_mismatch_once;
-
-static void ggml_sycl_clear_layout_choices() {
-    std::lock_guard<std::mutex> lock(g_sycl_layout_choice_mutex);
-    g_sycl_layout_choices.clear();
-    for (int i = 0; i < GGML_SYCL_MAX_DEVICES; ++i) {
-        g_sycl_layout_choices_finalized[i].store(false, std::memory_order_relaxed);
-    }
-}
-
-static bool ggml_sycl_layout_choices_finalized_for_device(int device) {
-    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
-        return false;
-    }
-    return g_sycl_layout_choices_finalized[device].load(std::memory_order_acquire);
-}
-
-static void ggml_sycl_set_layout_choices_finalized(int device, bool value) {
-    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
-        return;
-    }
-    g_sycl_layout_choices_finalized[device].store(value, std::memory_order_release);
-}
-
-static bool ggml_sycl_get_layout_choice(const ggml_sycl_cache_id & key_id, int device, layout_mode * out) {
-    if (!key_id.valid || !out) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_sycl_layout_choice_mutex);
-    ggml_sycl_layout_choice_key key{ key_id, device };
-    auto                        it = g_sycl_layout_choices.find(key);
-    if (it == g_sycl_layout_choices.end()) {
-        return false;
-    }
-    *out = it->second;
-    return true;
-}
-
-static void ggml_sycl_register_layout_choice(const ggml_sycl_cache_id & key_id,
-                                             int                        device,
-                                             layout_mode                layout,
-                                             ggml_type                  type,
-                                             const char *               name) {
-    if (!key_id.valid) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_sycl_layout_choice_mutex);
-    ggml_sycl_layout_choice_key key{ key_id, device };
-    auto                        it = g_sycl_layout_choices.find(key);
-    if (it == g_sycl_layout_choices.end()) {
-        g_sycl_layout_choices.emplace(key, layout);
-        return;
-    }
-    if (it->second != layout) {
-        // When layouts conflict, keep the higher-priority one. This can happen when
-        // benchmarks or applications run multiple batch sizes without reloading the model.
-        // Priority order: ONEDNN_PACKED > XMX_GEMM_TILED > XMX_TILED > COALESCED > SOA > AOS
-        // (ONEDNN_WOQ is treated as a specialized layout with AOS-level priority).
-        if (ggml_sycl_layout_priority(layout) > ggml_sycl_layout_priority(it->second)) {
-            GGML_SYCL_DEBUG("[LAYOUT] upgrading %s from %s to %s (higher priority)\n", name ? name : "unknown",
-                            ggml_sycl_layout_mode_name(it->second), ggml_sycl_layout_mode_name(layout));
-            it->second = layout;
-        } else if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[LAYOUT] keeping %s at %s (ignoring lower-priority %s)\n", name ? name : "unknown",
-                            ggml_sycl_layout_mode_name(it->second), ggml_sycl_layout_mode_name(layout));
-        }
-    }
-
-    (void) type;
-}
-
-// Force a layout choice regardless of priority. Use sparingly.
-static void ggml_sycl_force_layout_choice(const ggml_sycl_cache_id & key_id,
-                                          int                        device,
-                                          layout_mode                layout,
-                                          const char *               name) {
-    if (!key_id.valid) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_sycl_layout_choice_mutex);
-    ggml_sycl_layout_choice_key key{ key_id, device };
-    auto                        it = g_sycl_layout_choices.find(key);
-    if (it == g_sycl_layout_choices.end()) {
-        g_sycl_layout_choices.emplace(key, layout);
-        return;
-    }
-    if (it->second != layout) {
-        GGML_SYCL_DEBUG("[LAYOUT] forcing %s from %s to %s\n", name ? name : "unknown",
-                        ggml_sycl_layout_mode_name(it->second), ggml_sycl_layout_mode_name(layout));
-        it->second = layout;
-    }
-}
-
-static void ggml_sycl_assert_layout_choice(const ggml_sycl_cache_id & key_id,
-                                           int                        device,
-                                           layout_mode                requested,
-                                           const char *               name,
-                                           const char *               context) {
-    if (!ggml_sycl_layout_choices_finalized_for_device(device)) {
-        return;
-    }
-    if (!key_id.valid) {
-        GGML_LOG_WARN("[SYCL] Layout check: missing cache key in %s for %s device=%d — continuing\n",
-                      context ? context : "unknown", name ? name : "unknown", device);
-        return;
-    }
-    layout_mode chosen = GGML_LAYOUT_AOS;
-    if (!ggml_sycl_get_layout_choice(key_id, device, &chosen)) {
-        GGML_LOG_WARN("[SYCL] Layout check: missing registry in %s for %s device=%d requested=%s — continuing\n",
-                      context ? context : "unknown", name ? name : "unknown", device,
-                      ggml_sycl_layout_mode_name(requested));
-        return;
-    }
-    if (chosen != requested) {
-        GGML_LOG_WARN("[SYCL] Layout mismatch in %s for %s device=%d: chosen=%s requested=%s — continuing with requested\n",
-                      context ? context : "unknown", name ? name : "unknown", device,
-                      ggml_sycl_layout_mode_name(chosen), ggml_sycl_layout_mode_name(requested));
-    }
-}
-
-static void ggml_sycl_log_layout_mismatch_once(const ggml_sycl_cache_id & key_id,
-                                               int                        device,
-                                               layout_mode                requested,
-                                               layout_mode                chosen,
-                                               const char *               name,
-                                               const char *               context) {
-    if (!key_id.valid) {
-        return;
-    }
-    std::lock_guard<std::mutex>   lock(g_sycl_layout_mismatch_mutex);
-    ggml_sycl_layout_mismatch_key key{ key_id, device, requested };
-    if (g_sycl_layout_mismatch_once.emplace(key).second) {
-        GGML_SYCL_DEBUG(
-            "[LAYOUT] skip kernel in %s for %s model=%llu name_hash=0x%llx device=%d chosen=%s requested=%s\n",
-            context ? context : "unknown", name ? name : "unknown", (unsigned long long) key_id.model_id,
-            (unsigned long long) key_id.name_hash, device, ggml_sycl_layout_mode_name(chosen),
-            ggml_sycl_layout_mode_name(requested));
-    }
-}
-
 // Forward declaration — full definition with API functions below.
 static std::atomic<bool> g_all_weights_host{ false };
 
@@ -4847,7 +4654,6 @@ void ggml_backend_sycl_set_model_loading(bool loading) {
             }
 
             g_sycl_layouts_epoch.fetch_add(1, std::memory_order_acq_rel);
-            ggml_sycl_clear_layout_choices();
             ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::registry_only);
 
             // Eager arena reservation: create the unified cache (and its VRAM arena)
@@ -5447,74 +5253,7 @@ ggml_sycl_cache_id ggml_backend_sycl_get_tensor_cache_key(const ggml_tensor * te
     return id;
 }
 
-void ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, layout_mode target, const char * context) {
-    if (!tensor || !ggml_sycl_tensor_is_weight(tensor)) {
-        return;
-    }
-    if (!ggml_sycl_layout_choices_finalized_for_device(device)) {
-        return;
-    }
-    // Skip assertion for host-pinned buffers.  Budget-aware allocation may route
-    // weight chunks to HOST_PINNED while the layout registry holds SOA/COALESCED.
-    // The unified cache materializes the correct layout on-demand at dispatch time.
-    if (!ggml_sycl_is_device_vram_buffer(tensor)) {
-        return;
-    }
-    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-    ggml_sycl_assert_layout_choice(key, device, target, tensor->name, context);
-}
-
 static bool ggml_sycl_layout_override_active(layout_mode & override_layout);
-
-bool ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int device, layout_mode * out) {
-    if (!tensor || !out || !ggml_sycl_tensor_is_weight(tensor)) {
-        return false;
-    }
-    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-    if (!key.valid) {
-        return false;
-    }
-    if (!ggml_sycl_get_layout_choice(key, device, out)) {
-        // Missing layout choice: derive a fallback based on policy and register it.
-        const tensor_usage usage  = ggml_sycl_get_tensor_usage(tensor);
-        layout_mode        target = layout_policy::get_with_override(tensor->type, usage, device);
-
-        layout_mode override_layout = GGML_LAYOUT_AOS;
-        const bool  has_override    = ggml_sycl_layout_override_active(override_layout);
-        if (!has_override && tensor->type == GGML_TYPE_Q6_K && tensor->name &&
-            std::strstr(tensor->name, "output.weight") != nullptr) {
-            // Prefer COALESCED for output.weight to enable faster matvec kernels; falls back via adjust_layout.
-            target = GGML_LAYOUT_COALESCED;
-        }
-
-        if (has_override) {
-            const layout_mode adjusted = ggml_sycl_adjust_layout_for_tensor(tensor, override_layout, device);
-            if (adjusted == override_layout) {
-                target = override_layout;
-            } else if (g_ggml_sycl_debug) {
-                GGML_SYCL_DEBUG("[LAYOUT] Override layout=%d unsupported for %s; using %s\n", (int) override_layout,
-                                tensor->name ? tensor->name : "?", ggml_sycl_layout_mode_name(target));
-            }
-        }
-
-        target = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED && target != GGML_LAYOUT_ONEDNN_WOQ &&
-            !ggml_sycl_reorder_enabled()) {
-            target = GGML_LAYOUT_AOS;
-        }
-        *out = target;
-        return true;
-    }
-    const layout_mode adjusted = ggml_sycl_adjust_layout_for_tensor(tensor, *out, device);
-    if (adjusted != *out) {
-        GGML_LOG_ERROR("[LAYOUT] choice invalid for %s model=%llu name_hash=0x%llx device=%d chosen=%s adjusted=%s\n",
-                       tensor->name ? tensor->name : "unknown", (unsigned long long) key.model_id,
-                       (unsigned long long) key.name_hash, device, ggml_sycl_layout_mode_name(*out),
-                       ggml_sycl_layout_mode_name(adjusted));
-        GGML_ASSERT(adjusted == *out);
-    }
-    return true;
-}
 
 // Tensor inventory storage for tiered memory placement
 static std::mutex                                  g_tensor_inventory_mutex;
@@ -19314,12 +19053,6 @@ static bool ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx,
                     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache(*stream);
                     ggml_sycl_cache_id         cache_key =
                         cache ? ggml_backend_sycl_get_weight_cache_key(src0, i) : ggml_sycl_cache_id{};
-                    // Only assert layout for DEVICE_VRAM buffers.  HOST_PINNED
-                    // buffers store AOS but the layout registry may hold SOA/COALESCED;
-                    // the unified cache materializes the correct layout on demand.
-                    if (cache_key.valid && ggml_sycl_is_device_vram_buffer(src0)) {
-                        ggml_sycl_assert_layout_choice(cache_key, i, src0_layout, src0->name, "mul_mat streaming");
-                    }
                     size_t  stream_unit_bytes  = src0_row_bytes;
                     int64_t stream_unit_rows   = 1;
                     size_t  total_stream_bytes = src0_row_bytes * static_cast<size_t>(row_diff);
@@ -25741,18 +25474,6 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             GGML_LOG_ERROR("[MOE] Missing cache key for %s expert=%ld layer=%d\n", src0->name, (long) e, layer_id);
             GGML_ASSERT(expert_cache_key.valid && "missing MoE cache key");
             return false;
-        }
-        // When force_cache_aos is set, the caller is explicitly overriding the layout
-        // for host-resident weights that may have a different finalized layout choice.
-        // This happens when model exceeds VRAM and weights fall to host memory.
-        // Skip the assertion but log the override.
-        if (!force_cache_aos) {
-            ggml_sycl_assert_layout_choice(expert_cache_key, device, layout, src0->name,
-                                           "ggml_sycl_update_moe_ptr_table");
-        } else {
-            // Log the override but don't assert — the layout will be AoS for host staging
-            ggml_sycl_log_layout_mismatch_once(expert_cache_key, device, layout, layout, src0->name,
-                                               "ggml_sycl_update_moe_ptr_table(force_cache_aos)");
         }
         ggml_sycl::cache_layout_request req{};
         req.key      = expert_cache_key;
@@ -34142,9 +33863,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const bool allow_moe_reorder_dispatch =
                     (src0->type == GGML_TYPE_MXFP4) && (effective == GGML_LAYOUT_AOS) && (layout == chosen);
                 if (!allow_moe_aos_fallback && !allow_moe_reorder_dispatch) {
-                    ggml_sycl_cache_id mismatch_key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-                    ggml_sycl_log_layout_mismatch_once(mismatch_key, ctx.device, layout, chosen, src0->name,
-                                                       "ggml_sycl_mul_mat_id_vec_q");
                     return false;
                 }
                 if (allow_moe_reorder_dispatch) {
