@@ -11655,9 +11655,6 @@ class HunYuanModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-# HunYuanVLForConditionalGeneration is registered on both HunYuanModel (text) and
-# HunyuanOCRVisionModel (mmproj) — the converter dispatches to the correct one
-# based on whether --mmproj is passed.
 @ModelBase.register("HunYuanVLForConditionalGeneration")
 class HunyuanOCRVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
