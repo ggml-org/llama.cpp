@@ -498,7 +498,6 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
                 constexpr int mcpy_int = max_cpy / sizeof(int);
                 static_assert(VDR_Q4_0_Q8_1_MMQ == 4, "bad VDR_Q4_0_Q8_1_MMQ");
 
-
                 int tmp0[4], tmp1[4];  
 
                 #pragma unroll
