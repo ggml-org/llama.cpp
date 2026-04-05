@@ -3046,6 +3046,38 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     result.status = cache_layout_status::FAILED;
                     return result;
                 }
+                // During graph_compute, do NOT evict device-resident entries for a
+                // layout switch.  S1-PRELOAD stores weights in COALESCED layout on
+                // device; warmup's finalize_layouts may request a different layout
+                // (e.g. oneDNN for PP).  Evicting the device entry and creating a
+                // host-resident AOS replacement:
+                //   (a) destroys the arena-backed allocation permanently (pool memory
+                //       cannot be individually freed/reclaimed)
+                //   (b) the new device alloc fails with OOM (arena consumed all VRAM)
+                // Return the existing device entry — the caller's dispatch can handle
+                // the layout difference (COALESCED data is readable as AOS for
+                // fallback paths, and the kernel dispatch will query the actual entry
+                // layout for correct interpretation).
+                if (g_graph_compute_active.load(std::memory_order_acquire) &&
+                    !entry.host_resident && entry.device_ptr && entry.state == cache_entry_state::READY) {
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] layout switch blocked (graph active, device-resident) "
+                        "model=%llu name_hash=0x%llx have=%d want=%d\n",
+                        (unsigned long long) request.key.model_id, (unsigned long long) request.key.name_hash,
+                        (int) entry.layout, (int) request.layout);
+                    // Return the existing entry as-is — caller uses cached layout.
+                    entry.access_count++;
+                    entry.last_access = time_++;
+                    result.device_ptr    = entry.device_ptr;
+                    result.size          = entry.size;
+                    result.layout        = entry.layout;  // Actual cached layout (may differ from request)
+                    result.status        = cache_layout_status::READY;
+                    result.host_resident = entry.host_resident;
+                    result.location      = entry.location;
+                    result.onednn_pack_m = entry.onednn_pack_m;
+                    result.event         = submit_barrier(deps);
+                    return result;
+                }
                 if (entry.pinned) {
                     GGML_SYCL_DEBUG(
                         "[UNIFIED-CACHE] layout switch: unpinning model=%llu name_hash=0x%llx have=%d want=%d\n",
@@ -3219,9 +3251,15 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
         // Allocate new entry if not found or was cleaned up due to FAILED state
         if (it == entries_.end()) {
-            // Determine allocation cost: pool may need a new chunk (256 MB) or can sub-allocate (0 cost)
-            const bool   pool_can_fit = layout_pool_ && layout_pool_->can_fit(request.dst_size);
-            const size_t alloc_cost   = (layout_pool_ && !pool_can_fit) ? layout_pool_->get_default_chunk_size() :
+            // Determine allocation cost: pool may need a new chunk (256 MB) or can sub-allocate (0 cost).
+            // Arena-backed pools sub-allocate from the arena's pre-reserved weight zone —
+            // no new sycl::malloc_device calls needed — so alloc_cost is always 0.
+            // Without this, the driver-reported free VRAM (near zero after arena reservation)
+            // incorrectly forces all weights to host, defeating the arena.
+            const bool   pool_can_fit      = layout_pool_ && layout_pool_->can_fit(request.dst_size);
+            const bool   pool_arena_backed = layout_pool_ && layout_pool_->is_arena_backed();
+            const size_t alloc_cost   = pool_arena_backed ? 0 :
+                                        (layout_pool_ && !pool_can_fit) ? layout_pool_->get_default_chunk_size() :
                                                                           (pool_can_fit ? 0 : request.dst_size);
 
             // Defer get_host_cache() to avoid acquiring g_cache_rw_mutex eagerly.

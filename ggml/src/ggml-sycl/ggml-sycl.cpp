@@ -26634,7 +26634,20 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
                         target = GGML_LAYOUT_SOA;
                     }
                 } else {
+                    // Default is AOS for non-decode (PP/warmup), but if S1-PRELOAD
+                    // already cached this weight with a higher-priority layout
+                    // (COALESCED or SOA), use that instead.  Requesting AOS when
+                    // COALESCED is cached triggers a layout mismatch eviction in
+                    // ensure_cached_layout, which fails with DEVICE_LOST when a
+                    // VRAM arena has consumed all device memory.
                     target = GGML_LAYOUT_AOS;
+                    auto * preload_cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
+                    if (preload_cache && cache_key.valid) {
+                        auto wpr = preload_cache->get_weight_ptr(cache_key);
+                        if (wpr && wpr.layout != GGML_LAYOUT_AOS) {
+                            target = wpr.layout;
+                        }
+                    }
                 }
             } else {
                 if (!ggml_sycl_get_layout_choice_for_tensor(src, ctx.device, &target)) {

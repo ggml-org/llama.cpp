@@ -74,6 +74,15 @@ class sycl_device_pool {
         arena_ = arena;
     }
 
+    // Returns true when the pool sub-allocates from a VRAM arena rather
+    // than calling sycl::malloc_device for each chunk.  Callers can skip
+    // driver-level free-VRAM checks when this is true — the arena already
+    // owns the device memory and pool growth doesn't need new allocations.
+    bool is_arena_backed() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return arena_ != nullptr;
+    }
+
     // Set BCS (copy engine) queue for draining before chunk allocations.
     // sycl::malloc_device stalls BCS H2D events permanently if called
     // with pending async BCS operations.
