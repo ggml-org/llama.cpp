@@ -2398,7 +2398,10 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
 
                 // Copy new data (only if on device, host_cache already filled host buffer)
                 if (!is_host_resident) {
-                    copy_to_device(new_device_ptr, src_ptr, size).wait();
+                    sycl::event copy_evt = copy_to_device(new_device_ptr, src_ptr, size);
+                    it->second.has_ready_event = true;
+                    it->second.ready_event     = copy_evt;
+                    it->second.state           = cache_entry_state::IN_PROGRESS;
                 }
 
                 // Update entry with new allocation
@@ -2426,7 +2429,10 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                     "re-uploading\n",
                     (unsigned long long) key_id.model_id, (unsigned long long) key_id.name_hash,
                     (unsigned long long) it->second.content_hash, (unsigned long long) new_hash);
-                copy_to_device(it->second.device_ptr, src_ptr, size).wait();
+                sycl::event copy_evt = copy_to_device(it->second.device_ptr, src_ptr, size);
+                it->second.has_ready_event = true;
+                it->second.ready_event     = copy_evt;
+                it->second.state           = cache_entry_state::IN_PROGRESS;
                 it->second.content_hash = new_hash;
                 it->second.src_ptr      = src_ptr;
             } else {
@@ -2461,6 +2467,8 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
     void *         device_ptr       = nullptr;
     bool           is_host_resident = false;
     cache_location entry_location   = cache_location::DEVICE;
+    bool           has_copy_event   = false;
+    sycl::event    copy_evt;
 
     if (!use_host_fallback) {
         try {
@@ -2510,8 +2518,9 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
             return nullptr;
         }
     } else {
-        // Copy data from source to device
-        copy_to_device(device_ptr, src_ptr, size).wait();
+        // Copy data from source to device — deferred completion via ready_event
+        has_copy_event = true;
+        copy_evt       = copy_to_device(device_ptr, src_ptr, size);
     }
 
     // Compute content hash for new entry (only computed once on cache miss)
@@ -2531,8 +2540,14 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
     entry.last_access     = time_++;
     entry.pinned          = false;
     entry.hot             = false;
-    entry.state           = cache_entry_state::READY;
-    entry.has_ready_event = false;
+    if (has_copy_event) {
+        entry.state           = cache_entry_state::IN_PROGRESS;
+        entry.has_ready_event = true;
+        entry.ready_event     = copy_evt;
+    } else {
+        entry.state           = cache_entry_state::READY;
+        entry.has_ready_event = false;
+    }
     entry.host_resident   = is_host_resident;
     entry.location        = entry_location;
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
