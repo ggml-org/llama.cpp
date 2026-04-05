@@ -1031,11 +1031,17 @@ namespace console {
 
         if (!end_of_stream && !line.empty()) {
             // remove the trailing newline for history storage
+            bool append_nl = false;
             if (!line.empty() && line.back() == '\n') {
                 line.pop_back();
+                append_nl = true;
             }
             // TODO: maybe support multiline history entries?
             history.add(line);
+
+            if (append_nl) {
+                line += '\n';
+            }
         }
 
         fflush(out);
