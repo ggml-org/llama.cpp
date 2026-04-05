@@ -1359,7 +1359,6 @@ class TensorNameMap:
             "visual.merger.mlp.{bid}", # qwen2vl
             "mlp_AR.linear_{bid}", # PaddleOCR-VL
             "merger.mlp.{bid}",
-            "mm.{bid}",  # HunyuanOCR perceiver projector
             "vit.perceive.proj.{bid}", # HunyuanOCR (proj.0 = conv1, proj.2 = conv2)
         ),
 
