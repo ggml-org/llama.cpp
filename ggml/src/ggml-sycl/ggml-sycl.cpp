@@ -4780,23 +4780,53 @@ static void ggml_sycl_assert_layout_choice(const ggml_sycl_cache_id & key_id,
         return;
     }
     if (!key_id.valid) {
-        GGML_LOG_ERROR("[LAYOUT] missing cache key in %s for %s device=%d\n", context ? context : "unknown",
+        GGML_LOG_ERROR("[LAYOUT-ASSERT] missing cache key in %s for %s device=%d\n", context ? context : "unknown",
                        name ? name : "unknown", device);
         GGML_ASSERT(key_id.valid);
     }
     layout_mode chosen = GGML_LAYOUT_AOS;
     if (!ggml_sycl_get_layout_choice(key_id, device, &chosen)) {
-        GGML_LOG_ERROR("[LAYOUT] missing choice in %s for %s model=%llu name_hash=0x%llx device=%d request=%s\n",
-                       context ? context : "unknown", name ? name : "unknown", (unsigned long long) key_id.model_id,
-                       (unsigned long long) key_id.name_hash, device, ggml_sycl_layout_mode_name(requested));
+        // Query cache entry to see what layout it actually has
+        const char * cache_layout_str = "no_cache";
+        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+        if (cache) {
+            auto wpr = cache->get_weight_ptr(key_id);
+            if (wpr) {
+                cache_layout_str = ggml_sycl_layout_mode_name(wpr.layout);
+            }
+        }
+        GGML_LOG_ERROR("[LAYOUT-ASSERT] missing registry entry in %s for %s "
+                       "model=%llu name_hash=0x%llx device=%d "
+                       "dispatch_requested=%s cache_entry_layout=%s\n",
+                       context ? context : "unknown", name ? name : "unknown",
+                       (unsigned long long) key_id.model_id,
+                       (unsigned long long) key_id.name_hash, device,
+                       ggml_sycl_layout_mode_name(requested), cache_layout_str);
         GGML_ASSERT(false && "missing layout choice");
     }
     if (chosen != requested) {
+        // Query cache entry to see what layout it actually has
+        const char * cache_layout_str = "no_cache";
+        bool         cache_on_device  = false;
+        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+        if (cache) {
+            auto wpr = cache->get_weight_ptr(key_id);
+            if (wpr) {
+                cache_layout_str = ggml_sycl_layout_mode_name(wpr.layout);
+                cache_on_device  = wpr.on_device;
+            }
+        }
         GGML_LOG_ERROR(
-            "[LAYOUT] request mismatch in %s for %s model=%llu name_hash=0x%llx device=%d chosen=%s requested=%s\n",
-            context ? context : "unknown", name ? name : "unknown", (unsigned long long) key_id.model_id,
-            (unsigned long long) key_id.name_hash, device, ggml_sycl_layout_mode_name(chosen),
-            ggml_sycl_layout_mode_name(requested));
+            "[LAYOUT-ASSERT] mismatch in %s for %s "
+            "model=%llu name_hash=0x%llx device=%d "
+            "registry_chosen=%s dispatch_requested=%s "
+            "cache_entry_layout=%s cache_on_device=%d\n",
+            context ? context : "unknown", name ? name : "unknown",
+            (unsigned long long) key_id.model_id,
+            (unsigned long long) key_id.name_hash, device,
+            ggml_sycl_layout_mode_name(chosen),
+            ggml_sycl_layout_mode_name(requested),
+            cache_layout_str, (int) cache_on_device);
         GGML_ASSERT(chosen == requested);
     }
 }
@@ -10975,6 +11005,13 @@ static void ggml_sycl_preload_model_weights() {
                     layout_mode preload_layout = use_coalesced ? GGML_LAYOUT_COALESCED
                                                : use_soa      ? GGML_LAYOUT_SOA
                                                                : GGML_LAYOUT_AOS;
+                    // Respect the same layout constraints that finalize_layouts
+                    // and inference dispatch enforce.  Without this, S1-PRELOAD
+                    // stores COALESCED but finalize_layouts downgrades to AOS
+                    // (unified kernel requires AOS input), causing a layout
+                    // mismatch that evicts the device entry and triggers OOM.
+                    preload_layout = ggml_sycl_adjust_layout_for_tensor(
+                        tensor, preload_layout, device);
                     size_t      dst_size       = src_size;
 
                     ggml_sycl_reorder_fill_ctx reorder_ctx{};
@@ -11722,15 +11759,26 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         }
         return nullptr;
     }
+    // The cache may return a different layout than requested (e.g. during graph
+    // compute when a device-resident S1-PRELOAD entry survives a layout switch).
+    // Use the actual cached layout for metadata and dispatch decisions.
+    const layout_mode actual_layout = (result.layout != GGML_LAYOUT_AOS) ? result.layout : resolved;
+    if (actual_layout != resolved) {
+        // Update the layout registry to match what the cache actually holds,
+        // preventing assertion mismatches during kernel dispatch.
+        if (cache_key.valid) {
+            ggml_sycl_force_layout_choice(cache_key, device, actual_layout, tensor->name);
+        }
+    }
     if (!layout_was_upgraded) {
         if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-            ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, result.device_ptr, result.size,
+            ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, result.device_ptr, result.size,
                                                result.xmx_info, result.onednn_pack_m);
         }
     }
     const bool keep_aos = ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type);
-    if (resolved != GGML_LAYOUT_AOS && !keep_aos) {
-        ggml_sycl_drop_non_target_cache_entries(cache, cache_key, resolved);
+    if (actual_layout != GGML_LAYOUT_AOS && !keep_aos) {
+        ggml_sycl_drop_non_target_cache_entries(cache, cache_key, actual_layout);
     }
     return result.device_ptr;
 }
@@ -27551,16 +27599,15 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
         has_override    = true;
     }
 
-    const bool  layout_finalized      = ggml_sycl_layout_choices_finalized_for_device(ctx_.device);
-    bool        enforce_layout_choice = layout_finalized && !has_override && ggml_sycl_tensor_is_weight(src0);
+    // Use resolve().layout to determine the materialized layout — no finalization gate needed.
+    bool        enforce_layout_choice = !has_override && ggml_sycl_tensor_is_weight(src0);
     layout_mode chosen_layout         = GGML_LAYOUT_AOS;
     if (enforce_layout_choice) {
-        if (!ggml_sycl_get_layout_choice_for_tensor(src0, ctx_.device, &chosen_layout)) {
-            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx_.device);
-            GGML_LOG_ERROR("[ORCHESTRATOR] Missing layout choice for %s (model=%llu name_hash=0x%llx device=%d)\n",
-                           src0->name ? src0->name : "?", (unsigned long long) key.model_id,
-                           (unsigned long long) key.name_hash, ctx_.device);
-            GGML_ABORT("orchestrator missing layout choice");
+        auto resolved = ggml_sycl_resolve(src0, ctx_.device);
+        if (resolved) {
+            chosen_layout = resolved.layout;
+        } else {
+            enforce_layout_choice = false;
         }
         const bool dmmv_batch1 = (src1->ne[1] == 1) && can_use_dequantize_mul_mat_vec(src0, src1, dst, ctx_.device);
         if (dmmv_batch1 && chosen_layout != GGML_LAYOUT_AOS && !ggml_sycl_dmmv_allow_reordered_layouts()) {
@@ -30338,23 +30385,22 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             override_layout = *forced_layout;
             has_override    = true;
         }
-        const bool layout_finalized = ggml_sycl_layout_choices_finalized_for_device(ctx.device);
         // Only enforce layout choices for quantized types that support reordering.
         // Float types (F32, F16, BF16) don't have reordered layouts and should
         // always use their default kernel paths regardless of layout finalization.
         const bool type_has_reorder_support =
             (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K ||
              src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);
+        // Use resolve().layout — no finalization gate needed.
         bool enforce_layout_choice =
-            layout_finalized && !has_override && ggml_sycl_tensor_is_weight(src0) && type_has_reorder_support;
+            !has_override && ggml_sycl_tensor_is_weight(src0) && type_has_reorder_support;
         layout_mode chosen_layout = GGML_LAYOUT_AOS;
         if (enforce_layout_choice) {
-            if (!ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen_layout)) {
-                ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-                GGML_LOG_ERROR("[MUL_MAT] Missing layout choice for %s (model=%llu name_hash=0x%llx device=%d)\n",
-                               src0->name ? src0->name : "?", (unsigned long long) key.model_id,
-                               (unsigned long long) key.name_hash, ctx.device);
-                GGML_ABORT("MUL_MAT dispatch missing layout choice");
+            auto resolved = ggml_sycl_resolve(src0, ctx.device);
+            if (resolved) {
+                chosen_layout = resolved.layout;
+            } else {
+                enforce_layout_choice = false;
             }
             const bool dmmv_batch1 = (src1->ne[1] == 1) && can_use_dequantize_mul_mat_vec(src0, src1, dst, ctx.device);
             if (dmmv_batch1 && chosen_layout != GGML_LAYOUT_AOS && !ggml_sycl_dmmv_allow_reordered_layouts()) {
@@ -34270,18 +34316,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             GGML_SYCL_DEBUG("[MoE] Skipping layout=%d (override=%d)\n", (int) layout, (int) override_layout);
             return false;
         }
-        if (!has_override && ggml_sycl_layout_choices_finalized_for_device(ctx.device)) {
-            ggml_sycl_cache_id choice_key{};
-            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra)) {
-                if (n_experts > 0) {
-                    choice_key = ggml_sycl_get_moe_expert_cache_key(src0, extra, 0);
-                }
-            }
-            if (!choice_key.valid) {
-                choice_key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-            }
-            layout_mode chosen = GGML_LAYOUT_AOS;
-            if (choice_key.valid && ggml_sycl_get_layout_choice(choice_key, ctx.device, &chosen) && chosen != layout) {
+        if (!has_override) {
+            // Use resolve().layout to get the materialized layout from the cache.
+            auto resolved_moe = ggml_sycl_resolve(src0, ctx.device);
+            layout_mode chosen = resolved_moe ? resolved_moe.layout : GGML_LAYOUT_AOS;
+            if (resolved_moe && chosen != layout) {
                 const auto * extra_gpu = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
                 const layout_mode effective = extra_gpu ? get_effective_layout_mode(extra_gpu) : GGML_LAYOUT_AOS;
                 // Allow AOS fallback for MXFP4 MoE when the chosen layout (SOA/COALESCED)
@@ -34296,7 +34335,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 const bool allow_moe_reorder_dispatch =
                     (src0->type == GGML_TYPE_MXFP4) && (effective == GGML_LAYOUT_AOS) && (layout == chosen);
                 if (!allow_moe_aos_fallback && !allow_moe_reorder_dispatch) {
-                    ggml_sycl_log_layout_mismatch_once(choice_key, ctx.device, layout, chosen, src0->name,
+                    ggml_sycl_cache_id mismatch_key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
+                    ggml_sycl_log_layout_mismatch_once(mismatch_key, ctx.device, layout, chosen, src0->name,
                                                        "ggml_sycl_mul_mat_id_vec_q");
                     return false;
                 }
@@ -40568,15 +40608,14 @@ static bool check_graph_compatibility(ggml_backend_sycl_context & ctx, ggml_cgra
                             }
                         }
                     }
-                    // Check for unmaterialized expert weights: the layout registry
-                    // may say SOA/COALESCED but the actual data is still AOS because
-                    // VRAM was exhausted during model load. Graph preloading would
-                    // try to cache all experts and crash on OOM.
+                    // Check for unmaterialized expert weights: resolve() returns the
+                    // actual materialized layout.  If the data is still AOS (e.g., VRAM
+                    // exhausted during model load), graph preloading would crash on OOM.
                     if (graph_compatible && src0->type == GGML_TYPE_MXFP4) {
+                        auto resolved_graph = ggml_sycl_resolve(src0, ctx.device);
+                        const layout_mode chosen = resolved_graph ? resolved_graph.layout : GGML_LAYOUT_AOS;
                         const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
                         const layout_mode effective = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
-                        layout_mode chosen = GGML_LAYOUT_AOS;
-                        ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen);
                         if (chosen != GGML_LAYOUT_AOS && effective == GGML_LAYOUT_AOS) {
                             static bool logged_once = false;
                             if (!logged_once) {
@@ -43807,9 +43846,9 @@ full_build:
 
                     if (is_quantized_weight) {
                         if (ggml_sycl_tensor_is_weight(weight_tensor)) {
-                            layout_mode chosen = GGML_LAYOUT_AOS;
-                            if (ggml_sycl_get_layout_choice_for_tensor(weight_tensor, ctx.device, &chosen)) {
-                                weight_layout = chosen;
+                            auto resolved_ptg = ggml_sycl_resolve(weight_tensor, ctx.device);
+                            if (resolved_ptg) {
+                                weight_layout = resolved_ptg.layout;
                             }
                         }
                         if (weight_layout != GGML_LAYOUT_AOS && weight_layout != GGML_LAYOUT_SOA) {
