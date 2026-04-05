@@ -67,6 +67,10 @@ causal-verify-logits: causal-run-original-model causal-run-converted-model
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/compare-logits.py
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 
+causal-verify-logits-no-org: causal-run-converted-model
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/compare-logits.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
+
 causal-run-original-embeddings:
 	@./scripts/causal/run-casual-gen-embeddings-org.py
 

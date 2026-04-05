@@ -3377,10 +3377,11 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             add = cgraph->nodes[node_idx+2];
         }
 
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+        // fused rms_norm only supports F32
+        if (rms_norm->src[0]->type != GGML_TYPE_F32 || rms_norm->type != GGML_TYPE_F32) {
+            return false;
+        }
 
-        //rms norm only supports F32
         if (mul->src[0]->type != GGML_TYPE_F32 ||
             mul->src[1]->type != GGML_TYPE_F32 ||
             mul->type != GGML_TYPE_F32) {
