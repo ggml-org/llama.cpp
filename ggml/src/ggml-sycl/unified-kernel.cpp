@@ -4363,7 +4363,7 @@ static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from
 
 // Arena-routed device memory allocation helpers.
 // Persistent allocs go to the WEIGHT zone (not reset between tokens).
-// Scratch allocs go to the COMPUTE zone (reset between tokens).
+// Scratch allocs go to the SCRATCH zone (reset between tokens).
 // When arena is OFF, both fall back to sycl::malloc_device.
 // Callers set from_arena so the matching free routes correctly.
 
