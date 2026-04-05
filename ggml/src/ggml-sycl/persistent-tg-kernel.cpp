@@ -301,7 +301,7 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &                           
     // Allocate device-accessible memory for the resolved weights array.
     // The kernel reads layer_weights[i] on-device, so this must be in USM.
     const size_t weights_bytes = args.n_layers * sizeof(LayerWeights);
-    LayerWeights * dev_weights = static_cast<LayerWeights *>(sycl::malloc_device(weights_bytes, q));
+    LayerWeights * dev_weights = static_cast<LayerWeights *>(ggml_sycl_malloc_device(weights_bytes, q, "ptg_dev_weights"));
     GGML_ASSERT(dev_weights != nullptr);
     q.memcpy(dev_weights, resolved_weights.data(), weights_bytes).wait();
 

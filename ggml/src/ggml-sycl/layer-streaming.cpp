@@ -101,15 +101,12 @@ bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
             }
         }
         if (!buffers_[i]) {
-            buffers_[i] = sycl::malloc_device(buffer_size_, queue);
+            buffers_[i] = ggml_sycl_malloc_device(buffer_size_, queue, "layer_stream_buf");
             buffers_from_arena_ = false;
         }
         if (buffers_[i]) {
             alloc_registry::instance().register_alloc(buffers_[i], buffer_size_,
                                                       device_id_, alloc_type::DEVICE);
-            if (!buffers_from_arena_) {
-                unified_cache_add_runtime_bytes(device_id_, buffer_size_, runtime_category::STAGING);
-            }
         }
         if (!buffers_[i]) {
             GGML_LOG_ERROR("[LAYER-STREAM] Failed to allocate buffer %d (%.1f MB)\n",

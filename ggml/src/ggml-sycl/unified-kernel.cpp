@@ -4377,7 +4377,7 @@ static void * device_alloc_persistent(size_t bytes, sycl::queue & queue, int dev
             return ptr;
         }
     }
-    return sycl::malloc_device(bytes, queue);
+    return ggml_sycl_malloc_device(bytes, queue, "uk_persistent");
 }
 
 static void * device_alloc_scratch(size_t bytes, sycl::queue & queue, int device_id, bool & from_arena) {
@@ -4390,7 +4390,7 @@ static void * device_alloc_scratch(size_t bytes, sycl::queue & queue, int device
             return ptr;
         }
     }
-    return sycl::malloc_device(bytes, queue);
+    return ggml_sycl_malloc_device(bytes, queue, "uk_scratch");
 }
 
 static void device_free(void * ptr, sycl::queue & queue, bool from_arena) {

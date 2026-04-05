@@ -863,7 +863,7 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
             }
         }
         if (!scores_from_arena_) {
-            scores_dev_ = sycl::malloc_device<float>(M, compute_q);
+            scores_dev_ = static_cast<float *>(ggml_sycl_malloc_device(M * sizeof(float), compute_q, "scores_dev"));
         }
         scores_dev_n_ = M;
         scores_queue_ = &compute_q;
