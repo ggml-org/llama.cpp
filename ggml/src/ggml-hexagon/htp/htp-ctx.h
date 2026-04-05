@@ -27,33 +27,22 @@ struct htp_mmap {
 struct htp_context {
     dspqueue_t             queue;
     dma_queue *            dma[HTP_MAX_NTHREADS];
+    struct htp_mmap        mmap[HTP_MAX_MMAPS];
     worker_pool_context_t  worker_pool;
     uint32_t               n_threads;
 
-    int         thread_id;
-    int         thread_prio;
+    int                    thread_id;
+    int                    thread_prio;
 
-    uint8_t *   vtcm_base;
-    size_t      vtcm_size;
-    uint32_t    vtcm_rctx;
-    atomic_bool vtcm_valid;
+    int                    hmx_enabled;       // Runtime flag: HMX initialisation succeeded
 
-    // HMX acceleration fields (v73+, enabled by compile-time HTP_HAS_HMX)
-#ifdef HTP_HAS_HMX
-    int         hmx_enabled;       // Runtime flag: HMX initialisation succeeded
-    size_t      vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
-#endif
+    uint8_t *              vtcm_base;
+    size_t                 vtcm_size;
+    uint32_t               vtcm_rctx;
+    atomic_bool            vtcm_valid;
+    size_t                 vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
 
-    uint32_t    opmask;
-
-    struct htp_mmap mmap[HTP_MAX_MMAPS];
-
-    struct {
-        struct htp_general_req req;
-        struct htp_op_buf      bufs[HTP_OP_MAX_BUFS];
-        struct htp_tensor      tens[HTP_OP_MAX_TENSORS];
-        struct htp_op_req       ops[HTP_OP_MAX_REQS];
-    } op_stage;
+    uint32_t               opmask;
 };
 
 #endif /* HTP_CTX_H */

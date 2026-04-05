@@ -599,14 +599,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
     int err;
     while (1) {
-        uint8_t  *m_ptr  = (uint8_t *) &ctx->op_stage;
-        uint32_t  m_size = sizeof(ctx->op_stage);
+        struct htp_general_req req;
+        uint32_t r_size = sizeof(req);
 
-        struct dspqueue_buffer dbufs[2];
-        uint32_t        n_dbufs = 2;
-        uint32_t        flags   = 0;
+        struct dspqueue_buffer dbuf;
+        uint32_t n_dbufs = 1;
+        uint32_t flags   = 0;
 
-        err = dspqueue_read_noblock(queue, &flags, n_dbufs, &n_dbufs, dbufs, m_size, &m_size, (uint8_t *) m_ptr);
+        err = dspqueue_read_noblock(queue, &flags, n_dbufs, &n_dbufs, &dbuf, r_size, &r_size, (uint8_t *) &req);
         if (err == AEE_EWOULDBLOCK) {
             return;
         }
@@ -616,28 +616,31 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             return;
         }
 
-        const uint32_t h_size = sizeof(struct htp_general_req);
+        if (r_size < sizeof(req) || n_dbufs != 1) {
+            FARF(ERROR, "invalid request : size %u n-dbufs %u", r_size, n_dbufs);
+            continue;
+        }
 
-        struct htp_general_req* h = (struct htp_general_req*) m_ptr; m_ptr += h_size;
-        const uint32_t n_bufs = h->n_bufs;
-        const uint32_t n_tens = h->n_tensors;
-        const uint32_t n_ops  = h->n_ops;
+        const uint32_t n_bufs = req.n_bufs;
+        const uint32_t n_tens = req.n_tensors;
+        const uint32_t n_ops  = req.n_ops;
 
         const uint32_t b_size = sizeof(struct htp_op_buf) * n_bufs;
         const uint32_t t_size = sizeof(struct htp_tensor) * n_tens;
         const uint32_t o_size = sizeof(struct htp_op_req) * n_ops;
 
-        if (m_size < h_size + b_size + t_size + o_size) {
-            FARF(ERROR, "invalid opreq batch size %u", m_size);
+        if (dbuf.size < b_size + t_size + o_size) {
+            FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
             continue;
         }
 
+        uint8_t * m_ptr = dbuf.ptr;
         struct htp_op_buf* bufs = (struct htp_op_buf*) m_ptr; m_ptr += b_size;
         struct htp_tensor* tens = (struct htp_tensor*) m_ptr; m_ptr += t_size;
         struct htp_op_req*  ops = (struct htp_op_req*) m_ptr;
 
-        FARF(HIGH, "processing opreq batch: n-bufs %u n-tensors %u n-ops %u : m-size %u h-size %u b-size %u t-size %u o-size %u",
-                n_bufs, n_tens, n_ops, m_size, h_size, b_size, t_size, o_size);
+        FARF(HIGH, "processing opreq batch: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u",
+                n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
 
         for (uint32_t i=0; i < n_bufs; i++) {
             prep_op_buf(ctx, i, &bufs[i]);
@@ -670,10 +673,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         vtcm_release(ctx);
 
-        // Prep response struct
         struct htp_general_rsp rsp;
-        rsp.status      = HTP_STATUS_OK; // FIXME
-        err = dspqueue_write(queue, 0, 0, NULL /* n_bufs, bufs */, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
+        rsp.status = HTP_STATUS_OK; // FIXME
+
+        dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+        err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
         if (err != 0) {
             FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
         }
