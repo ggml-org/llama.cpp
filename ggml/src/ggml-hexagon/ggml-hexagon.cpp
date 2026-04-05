@@ -51,8 +51,10 @@ static int    opt_experimental = 0;
 static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
 
 // Enable all stages by default
-static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
-static int opt_opsync = 0;  // synchronous ops
+static int opt_opmask   = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
+static int opt_opsync   = 0;  // synchronous ops
+static int opt_opbatch  = 1024; // max number of ops in a batched request
+static int opt_opqueue  = 16;   // max number of pending op batches
 
 #define HEX_VERBOSE(...) \
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
@@ -1931,7 +1933,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     // Allocate buffers and state for OpReq batching
     this->orb  = new op_request_batch(this);
-    this->oshm = new op_shared_mem(this, HTP_OP_MAX_REQS, 4);
+    this->oshm = new op_shared_mem(this, opt_opbatch, opt_opqueue);
 }
 
 void ggml_hexagon_session::release() noexcept(true) {
@@ -3178,6 +3180,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_hostbuf = getenv("GGML_HEXAGON_HOSTBUF");
     const char * str_opmask  = getenv("GGML_HEXAGON_OPMASK");
     const char * str_opsync  = getenv("GGML_HEXAGON_OPSYNC");
+    const char * str_opbatch = getenv("GGML_HEXAGON_OPBATCH");
+    const char * str_opqueue = getenv("GGML_HEXAGON_OPQUEUE");
     const char * str_profile = getenv("GGML_HEXAGON_PROFILE");
     const char * str_etm     = getenv("GGML_HEXAGON_ETM");
     const char * str_nhvx    = getenv("GGML_HEXAGON_NHVX");
@@ -3188,13 +3192,16 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_experimental = str_experimental ? atoi(str_experimental) : 0;
     opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
     opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
-    opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0) : opt_opmask;
-    opt_opsync       = str_opsync  ? atoi(str_opsync)  : 0;
+    opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0)  : opt_opmask;
+    opt_opsync       = str_opsync  ? atoi(str_opsync)              : opt_opsync;
+    opt_opbatch      = str_opbatch ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
+    opt_opqueue      = str_opqueue ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
     opt_profile      = str_profile ? atoi(str_profile) : 0;
     opt_etm          = str_etm     ? atoi(str_etm)     : 0;
     opt_nhvx         = str_nhvx    ? strtoul(str_nhvx, NULL, 0) : opt_nhvx;
     opt_use_hmx      = str_use_hmx ? atoi(str_use_hmx) : opt_use_hmx;
     opt_ndev         = str_ndev    ? strtoul(str_ndev, NULL, 0) : opt_ndev;
+    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
 
     if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
         opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
@@ -3207,12 +3214,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         opt_arch = strtoul(str_arch, NULL, 0);
     }
 
-    opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) : 1;
-
     reg->context = new ggml_hexagon_registry(reg);
-
-    HEX_VERBOSE("ggml-hex: size-of-general-req %zu size-of-general-rsp %zu\n", sizeof(struct htp_general_req),
-                sizeof(struct htp_general_rsp));
 }
 
 static const struct ggml_backend_reg_i ggml_backend_hexagon_reg_i = {
