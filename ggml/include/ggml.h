@@ -559,6 +559,7 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_GATHER,
 
         GGML_OP_UNARY,
 

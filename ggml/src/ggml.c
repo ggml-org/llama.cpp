@@ -1040,6 +1040,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV7",
     "SOLVE_TRI",
     "GATED_DELTA_NET",
+    "GATHER",
 
     "UNARY",
 
@@ -1057,7 +1058,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -5198,6 +5199,30 @@ static struct ggml_tensor * ggml_fill_impl(
 
     result->op = GGML_OP_FILL;
     result->src[0] = a;
+
+    return result;
+}
+
+// ggml_gather
+
+struct ggml_tensor * ggml_gather(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * ids) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+
+    // higher dims must match
+    GGML_ASSERT(a->ne[1] == ids->ne[1]);
+    GGML_ASSERT(a->ne[2] == ids->ne[2]);
+    GGML_ASSERT(a->ne[3] == ids->ne[3]);
+
+    // output: dim0 is number of indices, rest matches source
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ids->ne[0], a->ne[1], a->ne[2], a->ne[3]);      
+
+    result->op     = GGML_OP_GATHER;
+    result->src[0] = a;
+    result->src[1] = ids;
 
     return result;
 }
