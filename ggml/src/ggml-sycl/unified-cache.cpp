@@ -1080,6 +1080,53 @@ unified_cache::~unified_cache() {
     scratch_pool_size_ = 0;
     scratch_pool_off_.store(0, std::memory_order_relaxed);
 
+    // Free oneDNN scratch buffers BEFORE arena destroy (arena_.owns() needs live arena).
+    if (onednn_weights_scratch_) {
+        if (!(had_arena && arena_.owns(onednn_weights_scratch_))) {
+            try {
+                sycl::free(onednn_weights_scratch_, queue_);
+            } catch (...) {
+            }
+        }
+        onednn_weights_scratch_ = nullptr;
+    }
+    if (onednn_activations_scratch_) {
+        if (!(had_arena && arena_.owns(onednn_activations_scratch_))) {
+            try {
+                sycl::free(onednn_activations_scratch_, queue_);
+            } catch (...) {
+            }
+        }
+        onednn_activations_scratch_ = nullptr;
+    }
+
+    // Free reorder temp buffer BEFORE arena destroy.
+    if (reorder_temp_buffer_) {
+        if (!(had_arena && arena_.owns(reorder_temp_buffer_))) {
+            alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
+            saturating_sub_used(reorder_temp_size_);
+            try {
+                sycl::free(reorder_temp_buffer_, queue_);
+            } catch (...) {
+            }
+        }
+        reorder_temp_buffer_ = nullptr;
+        reorder_temp_size_   = 0;
+    }
+
+    // Free persistent scratch buffers BEFORE arena destroy.
+    for (auto & pair : persistent_scratches_) {
+        if (pair.second.device_ptr) {
+            if (!(had_arena && arena_.owns(pair.second.device_ptr))) {
+                try {
+                    sycl::free(pair.second.device_ptr, queue_);
+                } catch (...) {
+                }
+            }
+        }
+    }
+    persistent_scratches_.clear();
+
     // Destroy the VRAM arena (frees the pre-allocated chunks).
     arena_.destroy();
 
@@ -1137,45 +1184,6 @@ unified_cache::~unified_cache() {
         }
     }
     deferred_frees_.clear();
-
-    // Free oneDNN scratch buffers
-    if (onednn_weights_scratch_) {
-        try {
-            sycl::free(onednn_weights_scratch_, queue_);
-        } catch (...) {
-        }
-        onednn_weights_scratch_ = nullptr;
-    }
-    if (onednn_activations_scratch_) {
-        try {
-            sycl::free(onednn_activations_scratch_, queue_);
-        } catch (...) {
-        }
-        onednn_activations_scratch_ = nullptr;
-    }
-
-    // Free reorder temp buffer
-    if (reorder_temp_buffer_) {
-        alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
-        saturating_sub_used(reorder_temp_size_);
-        try {
-            sycl::free(reorder_temp_buffer_, queue_);
-        } catch (...) {
-        }
-        reorder_temp_buffer_ = nullptr;
-        reorder_temp_size_   = 0;
-    }
-
-    // Free persistent scratch buffers
-    for (auto & pair : persistent_scratches_) {
-        if (pair.second.device_ptr) {
-            try {
-                sycl::free(pair.second.device_ptr, queue_);
-            } catch (...) {
-            }
-        }
-    }
-    persistent_scratches_.clear();
 
     // Free partial row entries (multi-device tensor split)
     for (auto & pair : partial_cache_) {
@@ -5532,8 +5540,12 @@ void * unified_cache::promote_to_device(const unified_cache_key & key, size_t si
     if (arena_.active()) {
         device_ptr = arena_.zone_alloc(vram_zone_id::WEIGHT, size);
         from_arena = (device_ptr != nullptr);
-    }
-    if (!device_ptr) {
+        if (!device_ptr) {
+            // Arena owns ALL VRAM — no raw malloc_device possible.
+            // Return nullptr so caller falls back to host.
+            return nullptr;
+        }
+    } else {
         try {
             device_ptr = sycl::malloc_device(size, queue_);
         } catch (...) {
@@ -8614,54 +8626,80 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
     // compute buffer (not cached weights), so it should not be gated by the
     // weight-cache available() budget.  When all weights are device-resident
     // (must_device=true), available() is near-zero but the device still has
-    // physical VRAM for scratch.  If the device truly lacks memory,
-    // sycl::malloc_device will fail and we handle it in the catch blocks below.
+    // physical VRAM for scratch.  When arena is active, scratch comes from the
+    // pre-reserved ONEDNN zone.  Otherwise, sycl::malloc_device is used and
+    // failure is handled in the catch blocks below.
     const size_t total_needed = weights_size + activations_size;
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN scratch: need %.1f MB, cache-available %.1f MB (bypassing budget check)\n",
                     total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
 
     // Allocate weights scratch
-    try {
-        onednn_weights_scratch_ = sycl::malloc_device(weights_size, queue_);
+    if (arena_.active()) {
+        onednn_weights_scratch_ = arena_.zone_alloc(vram_zone_id::ONEDNN, weights_size);
         if (!onednn_weights_scratch_) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN weights scratch (%.1f MB)\n",
-                            weights_size / (1024.0f * 1024.0f));
+            GGML_LOG_WARN("[UNIFIED-CACHE] Arena ONEDNN zone full for weights scratch (%.1f MB)\n",
+                          weights_size / (1024.0f * 1024.0f));
             return false;
         }
-        alloc_registry::instance().register_alloc(onednn_weights_scratch_, weights_size,
-                                                  ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
         onednn_weights_scratch_size_ = weights_size;
-    } catch (const sycl::exception & e) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN weights scratch allocation failed: %s\n", e.what());
-        return false;
+    } else {
+        try {
+            onednn_weights_scratch_ = sycl::malloc_device(weights_size, queue_);
+            if (!onednn_weights_scratch_) {
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN weights scratch (%.1f MB)\n",
+                                weights_size / (1024.0f * 1024.0f));
+                return false;
+            }
+            alloc_registry::instance().register_alloc(onednn_weights_scratch_, weights_size,
+                                                      ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
+            onednn_weights_scratch_size_ = weights_size;
+        } catch (const sycl::exception & e) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN weights scratch allocation failed: %s\n", e.what());
+            return false;
+        }
     }
 
     // Allocate activations scratch
-    try {
-        onednn_activations_scratch_ = sycl::malloc_device(activations_size, queue_);
+    if (arena_.active()) {
+        onednn_activations_scratch_ = arena_.zone_alloc(vram_zone_id::ONEDNN, activations_size);
         if (!onednn_activations_scratch_) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN activations scratch (%.1f MB)\n",
-                            activations_size / (1024.0f * 1024.0f));
-            // Cleanup weights
-            alloc_registry::instance().unregister_alloc(onednn_weights_scratch_);
+            GGML_LOG_WARN("[UNIFIED-CACHE] Arena ONEDNN zone full for activations scratch (%.1f MB)\n",
+                          activations_size / (1024.0f * 1024.0f));
+            // Cleanup weights (arena-owned, just null the pointer — no sycl::free)
+            onednn_weights_scratch_      = nullptr;
+            onednn_weights_scratch_size_ = 0;
+            return false;
+        }
+        onednn_activations_scratch_size_ = activations_size;
+    } else {
+        try {
+            onednn_activations_scratch_ = sycl::malloc_device(activations_size, queue_);
+            if (!onednn_activations_scratch_) {
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN activations scratch (%.1f MB)\n",
+                                activations_size / (1024.0f * 1024.0f));
+                // Cleanup weights
+                alloc_registry::instance().unregister_alloc(onednn_weights_scratch_);
+                sycl::free(onednn_weights_scratch_, queue_);
+                onednn_weights_scratch_      = nullptr;
+                onednn_weights_scratch_size_ = 0;
+                return false;
+            }
+            alloc_registry::instance().register_alloc(onednn_activations_scratch_, activations_size,
+                                                      ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
+            onednn_activations_scratch_size_ = activations_size;
+        } catch (const sycl::exception & e) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN activations scratch allocation failed: %s\n", e.what());
             sycl::free(onednn_weights_scratch_, queue_);
             onednn_weights_scratch_      = nullptr;
             onednn_weights_scratch_size_ = 0;
             return false;
         }
-        alloc_registry::instance().register_alloc(onednn_activations_scratch_, activations_size,
-                                                  ggml_sycl_get_device_id_from_queue(queue_), alloc_type::DEVICE);
-        onednn_activations_scratch_size_ = activations_size;
-    } catch (const sycl::exception & e) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN activations scratch allocation failed: %s\n", e.what());
-        sycl::free(onednn_weights_scratch_, queue_);
-        onednn_weights_scratch_      = nullptr;
-        onednn_weights_scratch_size_ = 0;
-        return false;
     }
 
-    // Track in budget
-    used_.fetch_add(total_needed, std::memory_order_relaxed);
+    // Track in budget (skip when arena-backed — budget already charged at arena reservation)
+    if (!arena_.active()) {
+        used_.fetch_add(total_needed, std::memory_order_relaxed);
+    }
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved oneDNN scratch: weights=%.1f MB, activations=%.1f MB\n",
                     weights_size / (1024.0f * 1024.0f), activations_size / (1024.0f * 1024.0f));
@@ -8691,18 +8729,32 @@ bool unified_cache::reserve_reorder_temp(size_t size_bytes) {
 
     // Free existing if resizing
     if (reorder_temp_buffer_) {
-        alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
-        try {
-            sycl::free(reorder_temp_buffer_, queue_);
-        } catch (...) {
+        if (!arena_.owns(reorder_temp_buffer_)) {
+            alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
+            try {
+                sycl::free(reorder_temp_buffer_, queue_);
+            } catch (...) {
+            }
+            saturating_sub_used(reorder_temp_size_);
         }
-        saturating_sub_used(reorder_temp_size_);
         reorder_temp_buffer_ = nullptr;
         reorder_temp_size_   = 0;
     }
 
     // Allocate temp buffer for GPU-side AOS→SOA reorder.
     // Called from moe_hybrid_init_once under std::call_once — single-threaded.
+    if (arena_.active()) {
+        reorder_temp_buffer_ = arena_.zone_alloc(vram_zone_id::COMPUTE, size_bytes);
+        if (!reorder_temp_buffer_) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] Arena COMPUTE zone full for reorder temp (%.1f MB)\n",
+                          size_bytes / (1024.0f * 1024.0f));
+            return false;
+        }
+        reorder_temp_size_ = size_bytes;
+        GGML_LOG_INFO("[UNIFIED-CACHE] Reserved GPU reorder temp buffer (arena): %.1f MB\n",
+                      size_bytes / (1024.0f * 1024.0f));
+        return true;
+    }
     try {
         reorder_temp_buffer_ = sycl::malloc_device(size_bytes, queue_);
         if (!reorder_temp_buffer_) {
@@ -8804,45 +8856,55 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Persistent scratch '%s' resize: %.1f MB -> %.1f MB\n", buffer_name.c_str(),
                         entry.size / (1024.0f * 1024.0f), size_bytes / (1024.0f * 1024.0f));
         if (entry.device_ptr) {
-            try {
-                sycl::free(entry.device_ptr, queue_);
-            } catch (...) {
+            if (!arena_.owns(entry.device_ptr)) {
+                try {
+                    sycl::free(entry.device_ptr, queue_);
+                } catch (...) {
+                }
+                saturating_sub_used(entry.size);
             }
-            saturating_sub_used(entry.size);
         }
         persistent_scratches_.erase(it);
     }
 
-    // Check if we have budget
-    if (size_bytes > available()) {
-        // Try to evict to make room
-        size_t freed = evict(size_bytes - available());
-        if (freed < size_bytes - available()) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] Cannot reserve persistent scratch '%s': need %.1f MB, available %.1f MB\n",
-                           buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
-            return false;
-        }
-    }
-
     // Allocate device memory
     void * ptr = nullptr;
-    try {
-        ptr = sycl::malloc_device(size_bytes, queue_);
+    if (arena_.active()) {
+        ptr = arena_.zone_alloc(vram_zone_id::COMPUTE, size_bytes);
         if (!ptr) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to allocate persistent scratch '%s' (%.1f MB)\n",
-                           buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f));
+            GGML_LOG_WARN("[UNIFIED-CACHE] Arena COMPUTE zone full for persistent scratch '%s' (%.1f MB)\n",
+                          buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f));
             return false;
         }
-        alloc_registry::instance().register_alloc(ptr, size_bytes, ggml_sycl_get_device_id_from_queue(queue_),
-                                                  alloc_type::DEVICE);
-    } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[UNIFIED-CACHE] Persistent scratch '%s' allocation failed: %s\n", buffer_name.c_str(),
-                       e.what());
-        return false;
+    } else {
+        // Check if we have budget
+        if (size_bytes > available()) {
+            // Try to evict to make room
+            size_t freed = evict(size_bytes - available());
+            if (freed < size_bytes - available()) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] Cannot reserve persistent scratch '%s': need %.1f MB, available %.1f MB\n",
+                               buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
+                return false;
+            }
+        }
+        try {
+            ptr = sycl::malloc_device(size_bytes, queue_);
+            if (!ptr) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to allocate persistent scratch '%s' (%.1f MB)\n",
+                               buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f));
+                return false;
+            }
+            alloc_registry::instance().register_alloc(ptr, size_bytes, ggml_sycl_get_device_id_from_queue(queue_),
+                                                      alloc_type::DEVICE);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] Persistent scratch '%s' allocation failed: %s\n", buffer_name.c_str(),
+                           e.what());
+            return false;
+        }
+        // Track in budget (skip when arena-backed)
+        used_.fetch_add(size_bytes, std::memory_order_relaxed);
     }
 
-    // Track in budget and store entry
-    used_.fetch_add(size_bytes, std::memory_order_relaxed);
     persistent_scratches_[buffer_name] = { ptr, size_bytes, pin };
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved persistent scratch '%s': %.1f MB (pinned=%d)\n", buffer_name.c_str(),
@@ -8871,11 +8933,13 @@ void unified_cache::release_persistent_scratch(const std::string & buffer_name) 
 
     auto & entry = it->second;
     if (entry.device_ptr) {
-        try {
-            sycl::free(entry.device_ptr, queue_);
-        } catch (...) {
+        if (!arena_.owns(entry.device_ptr)) {
+            try {
+                sycl::free(entry.device_ptr, queue_);
+            } catch (...) {
+            }
+            saturating_sub_used(entry.size);
         }
-        saturating_sub_used(entry.size);
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Released persistent scratch '%s' (%.1f MB)\n", buffer_name.c_str(),
                         entry.size / (1024.0f * 1024.0f));
     }
@@ -9345,13 +9409,23 @@ bool unified_cache::reserve_compute_arena(size_t arena_bytes) {
             // Budget already charged when arena was reserved — don't double-count.
             return true;
         }
-        GGML_LOG_WARN("[COMPUTE-ARENA] Arena compute zone (%.1f MB) < requested (%.1f MB), "
-                      "falling back to direct alloc\n",
-                      zone_cap / (1024.0 * 1024.0), arena_bytes / (1024.0 * 1024.0));
+        // Arena owns ALL VRAM — no raw malloc_device possible.
+        // Use the available zone capacity even if smaller than requested.
+        if (zone_cap > 0) {
+            compute_arena_ptr_  = arena_.offset_to_ptr(0);
+            compute_arena_size_ = zone_cap;
+            compute_arena_off_.store(0, std::memory_order_relaxed);
+            GGML_LOG_WARN("[COMPUTE-ARENA] Arena compute zone (%.1f MB) < requested (%.1f MB), "
+                          "using available capacity\n",
+                          zone_cap / (1024.0 * 1024.0), arena_bytes / (1024.0 * 1024.0));
+            return true;
+        }
+        GGML_LOG_ERROR("[COMPUTE-ARENA] Arena compute zone is 0 bytes, cannot reserve\n");
+        return false;
     }
 
     // Free existing arena if resizing.
-    if (compute_arena_ptr_ && !arena_.active()) {
+    if (compute_arena_ptr_) {
         try {
             sycl::free(compute_arena_ptr_, queue_);
         } catch (...) {}
