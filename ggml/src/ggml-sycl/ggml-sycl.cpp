@@ -12868,13 +12868,17 @@ static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_typ
     // alloc_buffer headroom check.  Without this, ggml thinks it can allocate
     // the full safe limit, but alloc_buffer rejects allocations that leave
     // less than 512 MB free → the scheduler doesn't know to fall back early.
-    constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
-    size_t free_vram = 0, total_vram = 0;
-    ggml_backend_sycl_get_device_memory(ctx->device, &free_vram, &total_vram);
-    if (free_vram > COMPUTE_HEADROOM) {
-        size_t effective = free_vram - COMPUTE_HEADROOM;
-        if (effective < limit) {
-            limit = effective;
+    // When arena is active, the RUNTIME zone already reserves compute space,
+    // so the headroom subtraction would incorrectly underestimate capacity.
+    if (!ggml_sycl::vram_arena_enabled()) {
+        constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
+        size_t free_vram = 0, total_vram = 0;
+        ggml_backend_sycl_get_device_memory(ctx->device, &free_vram, &total_vram);
+        if (free_vram > COMPUTE_HEADROOM) {
+            size_t effective = free_vram - COMPUTE_HEADROOM;
+            if (effective < limit) {
+                limit = effective;
+            }
         }
     }
 
@@ -13873,7 +13877,8 @@ static enum ggml_status ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_
         // Check VRAM headroom before allocating.  Reserve 512 MB for compute
         // scratch (oneDNN FP16 workspace, graph temporaries).  Without this,
         // models that fill VRAM leave zero space for compute → GGML_ABORT.
-        {
+        // When arena is active, the RUNTIME zone already reserves compute space.
+        if (!ggml_sycl::vram_arena_enabled()) {
             constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
             size_t free_vram = 0, total_vram = 0;
             ggml_backend_sycl_get_device_memory(i, &free_vram, &total_vram);
@@ -16779,8 +16784,6 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             *actual_size = rounded_size;
             return ptr;
         }
-        // Arena full or not reserved — fall back to unified cache.
-
         // Arena full or not reserved — fall back to unified cache.
         // When VRAM is available, this returns device memory.  When VRAM is
         // full (weights + KV consumed most of it), the cache automatically
