@@ -11534,7 +11534,6 @@ class HunYuanModel(TextModel):
         This is the first entry in eos_token_id when it's a list."""
         gen_cfg_path = self.dir_model / "generation_config.json"
         if gen_cfg_path.is_file():
-            import json
             with open(gen_cfg_path, encoding="utf-8") as f:
                 gen_cfg = json.load(f)
             eos = gen_cfg.get("eos_token_id")
