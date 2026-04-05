@@ -161,7 +161,7 @@ struct ggml_backend_hexagon_buffer_type_context {
     std::string            name;
 };
 
-struct ggml_backend_hexagon_buffer_context {
+struct ggml_hexagon_shared_buffer {
     ggml_hexagon_session * sess;
     uint8_t *              base;
     size_t                 size;
@@ -239,7 +239,7 @@ struct ggml_backend_hexagon_buffer_context {
         this->base = NULL;
     }
 
-    ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool pinned = false) {
+    ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, size_t size, bool pinned = false) {
         size += 4 * 1024;  // extra page for padding
 
         this->sess   = sess;
@@ -251,7 +251,7 @@ struct ggml_backend_hexagon_buffer_context {
         alloc(size, pinned);
     }
 
-    ~ggml_backend_hexagon_buffer_context() {
+    ~ggml_hexagon_shared_buffer() {
         free();
     }
 };
@@ -261,21 +261,21 @@ static ggml_hexagon_session * ggml_backend_hexagon_buffer_get_sess(ggml_backend_
 }
 
 static void ggml_backend_hexagon_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    auto ctx = static_cast<ggml_backend_hexagon_buffer_context *>(buffer->context);
-    delete ctx;
+    auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
+    delete sbuf;
 }
 
 static void * ggml_backend_hexagon_buffer_get_base(ggml_backend_buffer_t buffer) {
-    auto ctx = static_cast<ggml_backend_hexagon_buffer_context *>(buffer->context);
-    return ctx->base;
+    auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
+    return sbuf->base;
 }
 
 static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    auto ctx  = static_cast<ggml_backend_hexagon_buffer_context *>(buffer->context);
-    auto sess = ctx->sess;
+    auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
+    auto sess = sbuf->sess;
 
     HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu usage %d\n", sess->name.c_str(),
-                tensor->name, (void *) ctx->base, tensor->data, ggml_nbytes(tensor), (int) buffer->usage);
+                tensor->name, (void *) sbuf->base, tensor->data, ggml_nbytes(tensor), (int) buffer->usage);
 
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         return GGML_STATUS_SUCCESS; // nothing to do for the view
@@ -1334,8 +1334,8 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                    const void *          data,
                                                    size_t                offset,
                                                    size_t                size) {
-    auto ctx  = (ggml_backend_hexagon_buffer_context *) buffer->context;
-    auto sess = ctx->sess;
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
 
     HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu\n", sess->name.c_str(), tensor->name, data,
                 offset, size);
@@ -1377,11 +1377,10 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                    void *                data,
                                                    size_t                offset,
                                                    size_t                size) {
-    auto ctx  = (ggml_backend_hexagon_buffer_context *) buffer->context;
-    auto sess = ctx->sess;
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
 
-    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->name.c_str(), tensor->name, data,
-                offset, size);
+    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->name.c_str(), tensor->name, data, offset, size);
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
@@ -1425,10 +1424,10 @@ static bool ggml_backend_hexagon_buffer_cpy_tensor(ggml_backend_buffer_t      bu
 }
 
 static void ggml_backend_hexagon_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    auto ctx  = (ggml_backend_hexagon_buffer_context *) buffer->context;
-    auto sess = ctx->sess;
-    HEX_VERBOSE("ggml-hex: %s clear-buff base %p size %zu\n", sess->name.c_str(), (void *) ctx->base, ctx->size);
-    memset(ctx->base, value, ctx->size);
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+    HEX_VERBOSE("ggml-hex: %s clear-buff base %p size %zu\n", sess->name.c_str(), (void *) sbuf->base, sbuf->size);
+    memset(sbuf->base, value, sbuf->size);
 }
 
 static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
@@ -1455,8 +1454,8 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size);
-        return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
+        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
+        return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
         return nullptr;
@@ -1467,8 +1466,8 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size);
-        return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
+        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
+        return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
         return nullptr;
@@ -1520,7 +1519,7 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
 // Backend session implementation
 
 struct op_shared_mem {
-    ggml_backend_hexagon_buffer_context *buf;
+    ggml_hexagon_shared_buffer *buf;
 
     uint64_t  block_mask;
     size_t    block_size;
@@ -1539,7 +1538,7 @@ struct op_shared_mem {
         const size_t max_blocks = sizeof(block_mask) * 8; // 1 bit per block
         n_blocks   = max_pending < max_blocks ? max_pending : max_blocks;
 
-        buf = new ggml_backend_hexagon_buffer_context(sess, block_size * n_blocks, true /* pinned */);
+        buf = new ggml_hexagon_shared_buffer(sess, block_size * n_blocks, true /* pinned */);
 
         if (opt_verbose) {
             GGML_LOG_INFO("ggml-hex: %s allocated shared buf %zu : block-size %zu max-batch %zu max-pending %zu\n",
@@ -1590,28 +1589,28 @@ struct op_request_batch {
     bool full()  const { return n_ops == n_reqs_max; }
 
     // add buffer and return its index
-    int add_buffer(ggml_backend_hexagon_buffer_context * s_buf) {
-        auto p = b_map.find(s_buf->fd);
+    int add_buffer(ggml_hexagon_shared_buffer * sbuf) {
+        auto p = b_map.find(sbuf->fd);
         if (p != b_map.end()) { return p->second; }
 
         int bi = n_bufs++;
         GGML_ASSERT(n_bufs < HTP_OP_MAX_BUFS); // TODO: better error handling
 
-        b_map.insert({s_buf->fd, bi});
+        b_map.insert({sbuf->fd, bi});
 
         htp_op_buf *b = &bufs[bi];
-        b->base = (uint64_t) s_buf->base;
-        b->fd   = s_buf->fd;
-        b->size = s_buf->size;
+        b->base = (uint64_t) sbuf->base;
+        b->fd   = sbuf->fd;
+        b->size = sbuf->size;
 
-        HEX_VERBOSE("ggml-hex: add-buffer #%u : fd %d base %p size %lu\n", bi, b->fd, (void*) s_buf->base, (unsigned long) b->size);
+        HEX_VERBOSE("ggml-hex: add-buffer #%u : fd %d base %p size %lu\n", bi, b->fd, (void*) sbuf->base, (unsigned long) b->size);
 
         return bi;
     }
 
     // add tensor and return its index
     int add_tensor(const ggml_tensor * t) {
-        auto s_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
+        auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
 
         auto p = t_map.find(t);
         if (p != t_map.end()) { return p->second; }
@@ -1621,11 +1620,11 @@ struct op_request_batch {
 
         t_map.insert({t, ti});
 
-        uint64_t t_offset = (uint8_t *) t->data - s_buf->base;
+        uint64_t t_offset = (uint8_t *) t->data - sbuf->base;
         size_t   t_size   = ggml_nbytes(t);
 
         htp_tensor *h = &tens[ti];
-        h->bi    = add_buffer(s_buf);
+        h->bi    = add_buffer(sbuf);
         h->data  = t_offset;
         h->size  = t_size;
         h->type  = t->type;
