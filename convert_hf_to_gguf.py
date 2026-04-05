@@ -11642,6 +11642,10 @@ class HunYuanModel(TextModel):
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024) # 256k context length
                 self.gguf_writer.add_context_length(256 * 1024) # 256k context length
 
+                # if any of our assumptions about the values are wrong, something has changed and this may need to be updated
+                assert base == 10000.0 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024] , \
+                    "HunYuan dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "lm_head.weight":
             if self.hparams.get("tie_word_embeddings", False):
