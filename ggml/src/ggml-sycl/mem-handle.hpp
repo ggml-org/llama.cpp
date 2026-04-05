@@ -49,8 +49,12 @@ struct resolved_ptr {
 //         Used for scratch/KV/staging buffers that are never moved by the cache.
 
 enum class mem_handle_kind : uint8_t {
-    WEIGHT = 0,  // Cache-managed, generation-checked
-    DIRECT = 1,  // Raw pointer, never stale
+    WEIGHT         = 0,  // Cache-managed, generation-checked
+    DIRECT         = 1,  // Raw pointer, never stale
+    ARENA_RUNTIME  = 2,  // Handle into RUNTIME zone (ggml compute buffers)
+    ARENA_SCRATCH  = 3,  // Handle into SCRATCH zone (pool_leg per-op scratch)
+    ARENA_ONEDNN   = 4,  // Handle into ONEDNN zone (oneDNN scratchpad)
+    ARENA_HOST     = 5,  // Handle into host-pinned pool
 };
 
 class mem_handle {
@@ -71,6 +75,16 @@ public:
     // Create a DIRECT handle from a raw pointer.
     // resolve() always returns this pointer without checking the cache.
     static mem_handle from_direct(void * ptr, ggml_layout_mode layout, bool on_device);
+
+    // Create an arena zone handle.
+    // zone_id maps to vram_zone_id (COMPUTE=0, KV=1, ONEDNN=2).
+    // The handle kind is derived from zone_id:
+    //   COMPUTE -> ARENA_RUNTIME, KV -> ARENA_SCRATCH, ONEDNN -> ARENA_ONEDNN.
+    static mem_handle from_arena_zone(int zone_id, size_t offset, size_t size,
+                                      int device_id, uint64_t generation);
+
+    // Create a host-pinned pool handle.
+    static mem_handle from_host_pool(size_t offset, size_t size, uint64_t generation);
 
     // Resolve the current pointer.  Hot path (~3 ns):
     //   if (kind == DIRECT || gen_ == cache_generation())
@@ -94,13 +108,34 @@ public:
     // True if this is a cache-managed WEIGHT handle (not a raw DIRECT pointer).
     bool is_weight() const { return kind_ == mem_handle_kind::WEIGHT; }
 
+    // True if this is any arena-backed handle.
+    bool is_arena() const {
+        return kind_ >= mem_handle_kind::ARENA_RUNTIME &&
+               kind_ <= mem_handle_kind::ARENA_HOST;
+    }
+
+    // Arena-specific accessors (meaningful only for arena handles).
+    int      zone_id()    const { return zone_id_; }
+    size_t   offset()     const { return offset_; }
+    size_t   size()       const { return size_; }
+    uint64_t generation() const { return arena_gen_; }
+
 private:
     // Slow path: re-query the unified cache for the current pointer.
     resolved_ptr resolve_slow() const;
 
+    // Slow path for arena handles: resolve base + offset from arena.
+    resolved_ptr resolve_arena() const;
+
     mem_handle_kind    kind_   = mem_handle_kind::DIRECT;
     int                device_ = 0;
     unified_cache_key  key_    = {};
+
+    // Arena-specific fields (only used for ARENA_* kinds).
+    int      zone_id_   = 0;       // Which zone (maps to vram_zone_id)
+    size_t   offset_    = 0;       // Offset within the zone
+    size_t   size_      = 0;       // Allocation size
+    uint64_t arena_gen_ = 0;       // Arena generation (for invalidation)
 
     // Mutable because resolve() is logically const (returns the current
     // pointer) but updates the cache as a side effect.

@@ -54,12 +54,57 @@ mem_handle mem_handle::from_direct(void * ptr, ggml_layout_mode layout, bool on_
     return h;
 }
 
+mem_handle mem_handle::from_arena_zone(int zone_id, size_t offset, size_t size,
+                                       int device_id, uint64_t generation) {
+    mem_handle h;
+    // Map zone_id to the appropriate arena handle kind.
+    // vram_zone_id: COMPUTE=0, KV=1, ONEDNN=2, WEIGHT=3
+    switch (zone_id) {
+        case 0:  h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;  // COMPUTE zone
+        case 1:  h.kind_ = mem_handle_kind::ARENA_SCRATCH; break;  // KV zone (scratch)
+        case 2:  h.kind_ = mem_handle_kind::ARENA_ONEDNN;  break;  // ONEDNN zone
+        default: h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;  // Fallback
+    }
+    h.device_    = device_id;
+    h.zone_id_   = zone_id;
+    h.offset_    = offset;
+    h.size_      = size;
+    h.arena_gen_ = generation;
+    h.gen_       = 0;  // Force first resolve
+    h.cached_    = {};
+    return h;
+}
+
+mem_handle mem_handle::from_host_pool(size_t offset, size_t size, uint64_t generation) {
+    mem_handle h;
+    h.kind_      = mem_handle_kind::ARENA_HOST;
+    h.device_    = -1;  // Host, no device
+    h.zone_id_   = -1;
+    h.offset_    = offset;
+    h.size_      = size;
+    h.arena_gen_ = generation;
+    h.gen_       = 0;
+    h.cached_    = {};
+    return h;
+}
+
 // === resolve ===
 
 resolved_ptr mem_handle::resolve() const {
     // DIRECT handles are never stale.
     if (kind_ == mem_handle_kind::DIRECT) {
         return cached_;
+    }
+
+    // Arena handles: check arena generation, then resolve base + offset.
+    if (kind_ >= mem_handle_kind::ARENA_RUNTIME &&
+        kind_ <= mem_handle_kind::ARENA_HOST) {
+        // If we have a cached pointer and the generation hasn't changed,
+        // return immediately.
+        if (cached_.ptr != nullptr && gen_ == arena_gen_) {
+            return cached_;
+        }
+        return resolve_arena();
     }
 
     // WEIGHT handle: compare cached generation against global.
@@ -90,6 +135,51 @@ resolved_ptr mem_handle::resolve_slow() const {
     // Update cached state
     cached_ = { result.ptr, result.layout, result.on_device };
     gen_    = cache_generation();
+    return cached_;
+}
+
+// === resolve_arena ===
+// Resolve an arena handle by querying the arena base pointer from unified_cache,
+// then adding the zone start + offset.  Returns nullptr if the arena has been
+// recreated (generation mismatch).
+
+resolved_ptr mem_handle::resolve_arena() const {
+    if (kind_ == mem_handle_kind::ARENA_HOST) {
+        // TODO: Host pool base resolution will be wired when the host arena
+        // is implemented.  For now, return null — callers should not create
+        // ARENA_HOST handles until the host pool is live.
+        return {};
+    }
+
+    // Device arena: query unified_cache for the vram_arena.
+    unified_cache * cache = get_unified_cache_for_device(device_);
+    if (!cache) {
+        return {};
+    }
+
+    vram_arena & arena = cache->get_arena();
+    if (!arena.active()) {
+        return {};
+    }
+
+    // Check generation: if the arena was destroyed and recreated, our handle
+    // is stale.
+    uint64_t current_gen = cache->arena_generation();
+    if (arena_gen_ != current_gen) {
+        return {};
+    }
+
+    // Resolve: zone_alloc returned an offset within the arena, but our offset_
+    // is the raw arena offset (base-relative).  Use offset_to_ptr directly.
+    void * ptr = arena.offset_to_ptr(offset_);
+    if (!ptr) {
+        return {};
+    }
+
+    // Cache the resolved pointer.  Arena handles are always on-device with
+    // AOS layout (arena zones hold raw allocations, not cache-managed weights).
+    cached_ = { ptr, GGML_LAYOUT_AOS, true };
+    gen_    = arena_gen_;
     return cached_;
 }
 

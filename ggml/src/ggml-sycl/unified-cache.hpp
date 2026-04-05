@@ -52,11 +52,12 @@ bool vram_arena_enabled();
 // oneDNN scratch: carved from a fixed region between KV and Weight zones.
 
 enum class vram_zone_id : uint8_t {
-    COMPUTE  = 0,  // Per-token scratch, bump-right, reset between tokens
-    KV       = 1,  // KV cache, bump-right, grows with context
+    KV       = 0,  // KV cache, bump-right, grows with context
+    WEIGHT   = 1,  // Weight cache, bump-left from end, free-list reclaim
     ONEDNN   = 2,  // oneDNN FP16 scratch, fixed region
-    WEIGHT   = 3,  // Weight cache, bump-left from end, free-list reclaim
-    COUNT    = 4,
+    RUNTIME  = 3,  // Runtime allocations (KV buffers, staging, MoE pools)
+    SCRATCH  = 4,  // Per-token scratch, bump-right, reset between tokens
+    COUNT    = 5,
 };
 
 struct vram_free_block {
@@ -93,7 +94,7 @@ class vram_arena {
     // compute_bytes: fixed compute scratch zone size
     // onednn_bytes:  fixed oneDNN scratch zone size (0 to skip)
     bool reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
-                 size_t compute_bytes, size_t onednn_bytes);
+                 size_t scratch_bytes, size_t onednn_bytes, size_t runtime_bytes);
 
     // Is arena active?
     bool active() const { return arena_base_ != nullptr; }
@@ -132,6 +133,7 @@ class vram_arena {
     // Zone capacity and usage.
     size_t zone_capacity(vram_zone_id zone) const;
     size_t zone_used(vram_zone_id zone) const;
+    const vram_zone & get_zone(vram_zone_id zone) const { return zones_[static_cast<int>(zone)]; }
 
     // Number of chunks (1 if single alloc, 2 if split).
     int chunk_count() const { return n_chunks_; }
@@ -1356,6 +1358,11 @@ class unified_cache {
     vram_arena &       get_arena()       { return arena_; }
     const vram_arena & get_arena() const { return arena_; }
 
+    // Arena generation: monotonically increasing counter, bumped when the arena
+    // is destroyed/recreated.  Used by mem_handle to detect stale arena handles.
+    uint64_t arena_generation() const { return arena_generation_; }
+    void     arena_generation_bump()  { ++arena_generation_; }
+
     // Register the compute queue so deferred frees wait for in-flight kernels.
     // Without this, evicted VRAM pointers can be freed while GPU kernels on the
     // compute queue still reference them → GPU page fault → DEVICE_LOST.
@@ -1690,6 +1697,11 @@ class unified_cache {
     // reserve_compute_arena, reserve_onednn_scratch, and reserve_scratch_pool.
     // Gated by GGML_SYCL_VRAM_ARENA=1 env var.
     vram_arena arena_;
+
+    // Arena generation counter: incremented when the arena is destroyed/recreated.
+    // mem_handle arena handles store the generation at creation time; on resolve(),
+    // a mismatch means the handle is stale (arena was recycled).
+    uint64_t arena_generation_ = 0;
 
     // Compute arena: pre-reserved VRAM for compute scratch buffers.
     // Single sycl::malloc_device allocation made BEFORE S1-PRELOAD fills VRAM.
