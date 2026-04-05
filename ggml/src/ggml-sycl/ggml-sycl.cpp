@@ -5554,11 +5554,6 @@ bool ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int devi
             !ggml_sycl_reorder_enabled()) {
             target = GGML_LAYOUT_AOS;
         }
-        if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[LAYOUT] missing choice for %s; registering fallback %s\n",
-                            tensor->name ? tensor->name : "?", ggml_sycl_layout_mode_name(target));
-        }
-        ggml_sycl_register_layout_choice(key, device, target, tensor->type, tensor->name);
         *out = target;
         return true;
     }
@@ -11020,13 +11015,6 @@ static void ggml_sycl_preload_model_weights() {
                         total_bytes += dst_size;
                         // Track for pinning + data_device update after finalize
                         dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
-                        // Register layout choice so inference dispatch uses the
-                        // same layout we uploaded.  Without this, the dispatch
-                        // derives a fallback that may differ from preload_layout,
-                        // triggering an assertion crash.
-                        ggml_sycl_register_layout_choice(
-                            cache_key, device, preload_layout,
-                            tensor->type, tensor->name);
                     } else {
                         dense_failed++;
                     }
@@ -11712,31 +11700,19 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         if (resolved != GGML_LAYOUT_AOS) {
             GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s not streamable, falling back to AoS\n",
                           (int) resolved, tensor->name);
-            if (cache_key.valid) {
-                ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
-            }
             return nullptr;
         }
     }
     if (had_exception || result.status != ggml_sycl::cache_layout_status::READY || result.device_ptr == nullptr) {
         GGML_LOG_WARN("[UNIFIED-CACHE] Failed to cache layout=%d for %s, falling back to AoS\n", (int) resolved,
                       tensor->name);
-        if (resolved != GGML_LAYOUT_AOS && cache_key.valid) {
-            ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
-        }
         return nullptr;
     }
     // The cache may return a different layout than requested (e.g. during graph
     // compute when a device-resident S1-PRELOAD entry survives a layout switch).
     // Use the actual cached layout for metadata and dispatch decisions.
     const layout_mode actual_layout = (result.layout != GGML_LAYOUT_AOS) ? result.layout : resolved;
-    if (actual_layout != resolved) {
-        // Update the layout registry to match what the cache actually holds,
-        // preventing assertion mismatches during kernel dispatch.
-        if (cache_key.valid) {
-            ggml_sycl_force_layout_choice(cache_key, device, actual_layout, tensor->name);
-        }
-    }
+    // Layout registry update removed — unified cache is the source of truth.
     if (!layout_was_upgraded) {
         if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
             ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, result.device_ptr, result.size,
@@ -12216,7 +12192,6 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     if (use_unified_cache && is_moe_expert) {
         ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx->device);
         if (cache_key.valid) {
-            ggml_sycl_register_layout_choice(cache_key, ctx->device, GGML_LAYOUT_AOS, tensor->type, tensor->name);
             // Register the full MoE tensor's device pointer as a DENSE_WEIGHT AOS
             // entry in the unified cache so resolve_weight() can find it directly.
             // This is only for device-resident tensors (not host-pinned).
@@ -25007,9 +24982,7 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             target = GGML_LAYOUT_AOS;
         }
 
-        if (key.valid) {
-            ggml_sycl_register_layout_choice(key, ctx.device, target, tensor->type, ggml_get_name(tensor));
-        }
+        GGML_UNUSED(key);
     }
     for (const auto & entry : moe_layouts) {
         const ggml_tensor * tensor    = entry.first;
@@ -25026,25 +24999,11 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             // host-resident weights when model exceeds VRAM. Register the base_key
             // layout choice so the unified cache can handle on-demand loading.
             // Per-expert keys will be created lazily when the tensor gets an extra.
-            if (base_key.valid) {
-                ggml_sycl_register_layout_choice(base_key, ctx.device, target, tensor->type, ggml_get_name(tensor));
-                if (g_ggml_sycl_debug) {
-                    GGML_SYCL_DEBUG("[LAYOUT] MoE tensor %s registered with base_key only (host-resident, no extra)\n",
-                                    tensor->name ? tensor->name : "?");
-                }
-            }
+            GGML_UNUSED(base_key);
             continue;
         }
-
-        for (int64_t e = 0; e < n_experts; ++e) {
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
-            if (key.valid) {
-                ggml_sycl_register_layout_choice(key, ctx.device, target, tensor->type, ggml_get_name(tensor));
-            }
-        }
-        if (base_key.valid) {
-            ggml_sycl_register_layout_choice(base_key, ctx.device, target, tensor->type, ggml_get_name(tensor));
-        }
+        GGML_UNUSED(extra);
+        GGML_UNUSED(base_key);
     }
     GGML_SYCL_DEBUG("[DEBUG-FINALIZE] Starting second loop (layout materialization)...\n");
     const bool eager_materialize = !ggml_backend_sycl_weights_evictable();
@@ -25077,9 +25036,6 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
                     GGML_ASSERT(cached && "failed to materialize chosen layout");
                 }
                 all_ok = false;
-                if (cache_key.valid) {
-                    ggml_sycl_force_layout_choice(cache_key, ctx.device, GGML_LAYOUT_AOS, ggml_get_name(tensor));
-                }
                 target = GGML_LAYOUT_AOS;
             }
             if (target != GGML_LAYOUT_AOS) {
@@ -25900,19 +25856,6 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             GGML_LOG_ERROR("[MOE] Missing cache key for %s expert=%ld layer=%d\n", src0->name, (long) e, layer_id);
             GGML_ASSERT(expert_cache_key.valid && "missing MoE cache key");
             return false;
-        }
-        // When MoE multi-GPU is active, secondary devices may not have had
-        // layout choices registered during finalize_layouts() (which only
-        // runs for the primary device).  Register on-the-fly ALWAYS — even
-        // when force_cache_aos is set — so that subsequent dispatch paths on
-        // the secondary device can find a valid layout choice and avoid the
-        // "missing layout choice" assertion.
-        if (ggml_sycl_layout_choices_finalized_for_device(device)) {
-            layout_mode existing = GGML_LAYOUT_AOS;
-            if (!ggml_sycl_get_layout_choice(expert_cache_key, device, &existing)) {
-                const layout_mode reg_layout = force_cache_aos ? GGML_LAYOUT_AOS : layout;
-                ggml_sycl_register_layout_choice(expert_cache_key, device, reg_layout, src0->type, src0->name);
-            }
         }
         // When force_cache_aos is set, the caller is explicitly overriding the layout
         // for host-resident weights that may have a different finalized layout choice.
@@ -43853,13 +43796,6 @@ full_build:
                         const layout_mode soa_layout =
                             ggml_sycl_adjust_layout_for_tensor(weight_tensor, GGML_LAYOUT_SOA, ctx.device);
                         if (soa_layout == GGML_LAYOUT_SOA) {
-                            ggml_sycl_cache_id cache_key =
-                                ggml_backend_sycl_get_weight_cache_key(weight_tensor, ctx.device);
-                            if (cache_key.valid) {
-                                ggml_sycl_register_layout_choice(cache_key, ctx.device, GGML_LAYOUT_SOA,
-                                                                 weight_tensor->type, weight_tensor->name);
-                            }
-
                             // Prefer a concrete SoA/Coalesced pointer for persistent DMMV.
                             {
                                 auto resolved_ptg = ggml_sycl_resolve(weight_tensor, ctx.device);
@@ -43870,9 +43806,6 @@ full_build:
 
                             if (preferred_layout_ptr != nullptr) {
                                 weight_layout = GGML_LAYOUT_SOA;
-                            } else if (cache_key.valid) {
-                                ggml_sycl_register_layout_choice(cache_key, ctx.device, GGML_LAYOUT_AOS,
-                                                                 weight_tensor->type, weight_tensor->name);
                             }
                         }
                     }
