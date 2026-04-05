@@ -10608,6 +10608,117 @@ void ggml_compute_forward_gated_delta_net(
     }
 }
 
+static void ggml_compute_forward_gather_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    
+    GGML_TENSOR_BINARY_OP_LOCALS
+    
+    assert(src0->type == GGML_TYPE_F32);
+    assert(src1->type == GGML_TYPE_I32);
+    assert(nb0  == sizeof(float));
+    assert(nb00 == sizeof(float));
+    assert(nb10 == sizeof(int32_t));
+    
+    const int nr  = ggml_nrows(src1);
+    const int nth = params->nth;
+    const int ith = params->ith;
+    
+    const int dr  = (nr + nth - 1) / nth;
+    const int ir0 = dr * ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+    
+    for (int ir = ir0; ir < ir1; ir++) {
+        const int i3 = ir / (ne01 * ne02);
+        const int i2 = (ir / ne01) % ne02;
+        const int i1 = ir % ne01;
+        
+        const float * src0_row = (const float *)((const char *)src0->data
+            + i3 * nb03 + i2 * nb02 + i1 * nb01);
+        
+        const int32_t * src1_row = (const int32_t *)((const char *)src1->data
+            + i3 * nb13 + i2 * nb12 + i1 * nb11);
+        
+        float * dst_row = (float *)((char *)dst->data
+            + i3 * nb3 + i2 * nb2 + i1 * nb1);
+        
+        for (int64_t j = 0; j < ne10; j++) {
+            const int32_t id = src1_row[j];
+            
+            GGML_ASSERT(id >= 0 && id < ne00);
+            
+            dst_row[j] = src0_row[id];
+        }
+    }
+}
+
+static void ggml_compute_forward_gather_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    
+    GGML_TENSOR_BINARY_OP_LOCALS
+    
+    assert(src0->type == GGML_TYPE_F16);
+    assert(src1->type == GGML_TYPE_I32);
+    assert(nb0  == sizeof(ggml_fp16_t));
+    assert(nb00 == sizeof(ggml_fp16_t));
+    assert(nb10 == sizeof(int32_t));
+    
+    const int nr  = ggml_nrows(src1);
+    const int nth = params->nth;
+    const int ith = params->ith;
+    
+    const int dr  = (nr + nth - 1) / nth;
+    const int ir0 = dr * ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+    
+    for (int ir = ir0; ir < ir1; ir++) {
+        const int i3 = ir / (ne01 * ne02);
+        const int i2 = (ir / ne01) % ne02;
+        const int i1 = ir % ne01;
+        
+        const ggml_fp16_t * src0_row = (const ggml_fp16_t *)((const char *)src0->data
+            + i3 * nb03 + i2 * nb02 + i1 * nb01);
+        
+        const int32_t * src1_row = (const int32_t *)((const char *)src1->data
+            + i3 * nb13 + i2 * nb12 + i1 * nb11);
+        
+        ggml_fp16_t * dst_row = (ggml_fp16_t *)((char *)dst->data
+            + i3 * nb3 + i2 * nb2 + i1 * nb1);
+        
+        for (int64_t j = 0; j < ne10; j++) {
+            const int32_t id = src1_row[j];
+            
+            GGML_ASSERT(id >= 0 && id < ne00);
+            
+            dst_row[j] = src0_row[id];
+        }
+    }
+}
+
+void ggml_compute_forward_gather(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_gather_f32(params, dst);
+            break;
+        case GGML_TYPE_F16:
+            ggml_compute_forward_gather_f16(params, dst);
+            break;
+        default:
+            GGML_ABORT("unsupported type for ggml_compute_forward_gather: %s",
+                       ggml_type_name(dst->src[0]->type));
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(

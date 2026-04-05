@@ -5204,26 +5204,24 @@ static struct ggml_tensor * ggml_fill_impl(
 }
 
 // ggml_gather
-
 struct ggml_tensor * ggml_gather(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * ids) {
+        struct ggml_tensor  * b) {
+    
     GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
-    GGML_ASSERT(ids->type == GGML_TYPE_I32);
-
-    // higher dims must match
-    GGML_ASSERT(a->ne[1] == ids->ne[1]);
-    GGML_ASSERT(a->ne[2] == ids->ne[2]);
-    GGML_ASSERT(a->ne[3] == ids->ne[3]);
-
-    // output: dim0 is number of indices, rest matches source
-    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ids->ne[0], a->ne[1], a->ne[2], a->ne[3]);      
-
+    GGML_ASSERT(b->type == GGML_TYPE_I32);
+    
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, b->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+    
     result->op     = GGML_OP_GATHER;
     result->src[0] = a;
-    result->src[1] = ids;
-
+    result->src[1] = b;
+    
     return result;
 }
 
