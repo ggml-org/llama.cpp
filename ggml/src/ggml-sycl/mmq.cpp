@@ -6904,7 +6904,7 @@ void ggml_sycl_op_mul_mat_q(
     layout_mode chosen = GGML_LAYOUT_AOS;
     auto resolved_lc = ggml_sycl_resolve(src0, device_id);
     if (resolved_lc) { chosen = static_cast<layout_mode>(resolved_lc.layout); }
-    const bool explicit_layout = (chosen != GGML_LAYOUT_AOS);
+    const bool explicit_layout = bool(resolved_lc);
     if (explicit_layout) {
         if (chosen == GGML_LAYOUT_SOA) {
             mode = reorder_mode::SOA;

@@ -4904,39 +4904,6 @@ static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor *
                                                              ggml_tensor_extra_gpu * extra,
                                                              int                     expert_id);
 
-static bool ggml_sycl_has_missing_layout_choice_for_tensor(const ggml_tensor * tensor, int device) {
-    if (!tensor || !ggml_sycl_tensor_is_weight(tensor)) {
-        return false;
-    }
-
-    const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
-    if (usage == tensor_usage::MOE_EXPERT_WEIGHT) {
-        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        if (!extra) {
-            return true;
-        }
-        const int64_t n_experts = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
-        for (int64_t e = 0; e < n_experts; ++e) {
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
-            if (!key.valid) {
-                return true;
-            }
-            layout_mode dummy = GGML_LAYOUT_AOS;
-            if (!ggml_sycl_get_layout_choice(key, device, &dummy)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-    if (!key.valid) {
-        return true;
-    }
-    layout_mode dummy = GGML_LAYOUT_AOS;
-    return !ggml_sycl_get_layout_choice(key, device, &dummy);
-}
-
 static bool ggml_sycl_tensor_layout_dirty(const ggml_tensor * tensor) {
     if (!tensor || !ggml_sycl_tensor_is_weight(tensor)) {
         return false;
@@ -4966,25 +4933,6 @@ static bool ggml_sycl_graph_has_dirty_weights(ggml_cgraph * cgraph) {
         }
     }
 
-    return false;
-}
-
-static bool ggml_sycl_graph_has_missing_layout_choices(ggml_cgraph * cgraph, int device) {
-    if (!cgraph) {
-        return false;
-    }
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        ggml_tensor * node = cgraph->nodes[i];
-        if (!node) {
-            continue;
-        }
-        for (int s = 0; s < GGML_MAX_SRC; ++s) {
-            ggml_tensor * src = node->src[s];
-            if (ggml_sycl_has_missing_layout_choice_for_tensor(src, device)) {
-                return true;
-            }
-        }
-    }
     return false;
 }
 
@@ -11398,23 +11346,6 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         }
     }
 
-    // If a higher-priority layout was already registered for this tensor, use it instead.
-    // This can happen when llama-bench runs multiple batch sizes (PP then TG) without
-    // reloading the model - the PP test might register COALESCED while TG requests SOA.
-    // Track whether we upgraded so we can skip updating tensor layout metadata —
-    // callers may depend on the tensor's layout info reflecting the originally-cached
-    // data format, not the upgraded one.
-    bool layout_was_upgraded = false;
-    if (!strict_aos && ggml_sycl_layout_choices_finalized_for_device(device)) {
-        layout_mode chosen = GGML_LAYOUT_AOS;
-        if (ggml_sycl_get_layout_choice(cache_key, device, &chosen)) {
-            if (ggml_sycl_layout_priority(chosen) > ggml_sycl_layout_priority(resolved)) {
-                // Use the higher-priority registered layout instead
-                layout_was_upgraded = true;
-                resolved = chosen;
-            }
-        }
-    }
     const size_t src_size = ggml_nbytes(tensor);
     size_t       dst_size = 0;
     if (resolved == GGML_LAYOUT_AOS) {
@@ -11482,8 +11413,7 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
             if (resolved == GGML_LAYOUT_ONEDNN_PACKED && view.onednn_pack_m != onednn_pack_m) {
                 return nullptr;
             }
-            if (!layout_was_upgraded) {
-                auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
                 ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, view.ptr, view.size, view.xmx_info,
                                                    view.onednn_pack_m);
             }
@@ -11583,19 +11513,15 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
             if (extra->layout.data_ptr != nullptr && extra->layout.mode == resolved &&
                 extra->layout.device_id == device && extra->layout.size >= dst_size) {
-                if (!layout_was_upgraded) {
-                    ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, extra->layout.data_ptr,
+                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, extra->layout.data_ptr,
                                                        extra->layout.size, xmx_info, onednn_pack_m);
-                }
                 return extra->layout.data_ptr;
             }
         }
         if (resolved == GGML_LAYOUT_AOS) {
-            if (!layout_was_upgraded) {
-                if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-                    ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, const_cast<void *>(src_ptr),
+            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, const_cast<void *>(src_ptr),
                                                        src_size, xmx_info, onednn_pack_m);
-                }
             }
             return const_cast<void *>(src_ptr);
         }
@@ -11645,11 +11571,9 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     {
         void * cached_ptr = cache->lookup(cache_key, resolved);
         if (cached_ptr) {
-            if (!layout_was_upgraded) {
-                if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-                    ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
-                                                       onednn_pack_m);
-                }
+            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
+                                                   onednn_pack_m);
             }
             GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d HIT ptr=%p\n", tensor->name ? tensor->name : "(null)",
                             (int) resolved, cached_ptr);
@@ -11712,12 +11636,9 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
     // compute when a device-resident S1-PRELOAD entry survives a layout switch).
     // Use the actual cached layout for metadata and dispatch decisions.
     const layout_mode actual_layout = (result.layout != GGML_LAYOUT_AOS) ? result.layout : resolved;
-    // Layout registry update removed — unified cache is the source of truth.
-    if (!layout_was_upgraded) {
-        if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-            ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, result.device_ptr, result.size,
-                                               result.xmx_info, result.onednn_pack_m);
-        }
+    if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+        ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, result.device_ptr, result.size,
+                                           result.xmx_info, result.onednn_pack_m);
     }
     const bool keep_aos = ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type);
     if (actual_layout != GGML_LAYOUT_AOS && !keep_aos) {
@@ -24776,8 +24697,7 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
     if (ctx.layouts_finalized) {
         static const bool force_scan = (std::getenv("GGML_SYCL_FORCE_LAYOUT_SCAN") != nullptr);
         if (force_scan) {
-            if (!ggml_sycl_graph_has_missing_layout_choices(cgraph, ctx.device) &&
-                !ggml_sycl_graph_has_dirty_weights(cgraph)) {
+            if (!ggml_sycl_graph_has_dirty_weights(cgraph)) {
                 GGML_SYCL_DEBUG("[DEBUG-FINALIZE] layouts already finalized (scan), returning\n");
                 return;
             }
@@ -24973,38 +24893,6 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
         }
     }
 
-    for (const auto & entry : chosen_layouts) {
-        const ggml_tensor * tensor = entry.first;
-        layout_mode         target = entry.second;
-        ggml_sycl_cache_id  key    = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
-        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED && target != GGML_LAYOUT_ONEDNN_WOQ &&
-            !ggml_sycl_reorder_enabled()) {
-            target = GGML_LAYOUT_AOS;
-        }
-
-        GGML_UNUSED(key);
-    }
-    for (const auto & entry : moe_layouts) {
-        const ggml_tensor * tensor    = entry.first;
-        layout_mode         target    = entry.second.layout;
-        const int64_t       n_experts = entry.second.n_experts;
-        ggml_sycl_cache_id  base_key  = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
-        auto *              extra     = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        if (target != GGML_LAYOUT_AOS && target != GGML_LAYOUT_ONEDNN_PACKED && target != GGML_LAYOUT_ONEDNN_WOQ &&
-            !ggml_sycl_reorder_enabled()) {
-            target = GGML_LAYOUT_AOS;
-        }
-        if (!extra) {
-            // MoE tensor doesn't have GPU extra metadata yet - this happens for
-            // host-resident weights when model exceeds VRAM. Register the base_key
-            // layout choice so the unified cache can handle on-demand loading.
-            // Per-expert keys will be created lazily when the tensor gets an extra.
-            GGML_UNUSED(base_key);
-            continue;
-        }
-        GGML_UNUSED(extra);
-        GGML_UNUSED(base_key);
-    }
     GGML_SYCL_DEBUG("[DEBUG-FINALIZE] Starting second loop (layout materialization)...\n");
     const bool eager_materialize = !ggml_backend_sycl_weights_evictable();
     if (!eager_materialize) {
@@ -25079,9 +24967,6 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
     }
     ctx.layouts_finalized = eager_materialize ? all_ok : true;
     g_sycl_layouts_dirty_count.store(0, std::memory_order_release);
-    if (!chosen_layouts.empty() || !moe_layouts.empty()) {
-        ggml_sycl_set_layout_choices_finalized(ctx.device, true);
-    }
     if (g_ggml_sycl_debug && converted_count > 0) {
         GGML_SYCL_DEBUG("[LAYOUT] Finalized %d tensors to optimal layouts%s\n", converted_count,
                         all_ok ? "" : " [incomplete]");
