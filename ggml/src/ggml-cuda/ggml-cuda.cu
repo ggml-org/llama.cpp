@@ -82,7 +82,6 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
-#include <unordered_set>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -3041,47 +3040,11 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
-//compute a FNV-1a over all nodes and srcs which should change when a cuda graph cannot be reused
-static uint64_t ggml_cuda_graph_hash(ggml_cgraph * cgraph) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    constexpr uint64_t prime = 0x100000001b3ULL;
-
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        const ggml_tensor * node = cgraph->nodes[i];
-
-        h ^= (uintptr_t)node->data;
-        h *= prime;
-
-        for (int s = 0; s < GGML_MAX_SRC; s++) {
-            if (node->src[s]) {
-                h ^= (uintptr_t)node->src[s]->data;
-                h *= prime;
-            }
-        }
-
-        // Hash first 16 bytes of op_params
-        const uint64_t * params = (const uint64_t *)node->op_params;
-        h ^= params[0];
-        h *= prime;
-        h ^= params[1];
-        h *= prime;
-    }
-
-    return h;
-}
-
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
-
-    if (graph->props_stable >= 2 && graph->props.size() == (size_t)cgraph->n_nodes) {
-        if (ggml_cuda_graph_hash(cgraph) == graph->last_props_hash) {
-            return false;
-        }
-        graph->props_stable = 0;
-    }
 
     // Check if the graph size has changed
     if (graph->props.size() != (size_t)cgraph->n_nodes) {
@@ -3091,12 +3054,16 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
-    std::unordered_set<ggml_tensor *> seen_node;
-    std::vector<ggml_tensor *> srcs_extra;
+
+    const int32_t flag_seen = GGML_TENSOR_FLAG_UNUSED;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        cgraph->nodes[i]->flags |= flag_seen;
+    }
+
+    size_t extra_idx = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool props_match = true;
-
-        seen_node.insert(cgraph->nodes[i]);
 
         if (!res) {
             props_match = ggml_cuda_graph_node_properties_match(cgraph->nodes[i], &graph->props[i]);
@@ -3108,35 +3075,30 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
 
         for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
             ggml_tensor * src = cgraph->nodes[i]->src[src_idx];
-            if (src && seen_node.find(src) == seen_node.end()) {
-                srcs_extra.push_back(src);
+            if (src && !(src->flags & flag_seen)) {
+                if (extra_idx >= graph->extra.size()) {
+                    graph->extra.push_back({});
+                    res = true;
+                }
+
+                if (!res) {
+                    if (!ggml_cuda_graph_node_properties_match(src, &graph->extra[extra_idx])) {
+                        res = true;
+                    }
+                }
+                ggml_cuda_graph_node_set_properties(&graph->extra[extra_idx], src);
+                extra_idx++;
             }
         }
     }
 
-    if (graph->extra.size() != (size_t) srcs_extra.size()) {
+    if (graph->extra.size() != extra_idx) {
         res = true;
-        graph->extra.resize(srcs_extra.size());
+        graph->extra.resize(extra_idx);
     }
 
-    for (size_t i = 0; i < srcs_extra.size(); ++i) {
-        bool props_match = true;
-
-        if (!res) {
-            props_match = ggml_cuda_graph_node_properties_match(srcs_extra[i], &graph->extra[i]);
-        }
-
-        if (!props_match) {
-            res = true;
-        }
-        ggml_cuda_graph_node_set_properties(&graph->extra[i], srcs_extra[i]);
-    }
-
-    if (!res) {
-        graph->props_stable++;
-        graph->last_props_hash = ggml_cuda_graph_hash(cgraph);
-    } else {
-        graph->props_stable = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        cgraph->nodes[i]->flags &= ~flag_seen;
     }
 
     return res;
