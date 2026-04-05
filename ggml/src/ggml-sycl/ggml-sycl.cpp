@@ -23276,9 +23276,6 @@ static void reorder_qw_q4_0(uint8_t * data_device,
     sycl::event copy_event;
 
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
-    if (!g_ggml_sycl_use_async_mem_op) {
-        copy_event.wait();
-    }
 
     GGML_ASSERT((size % sizeof(block_q4_0) == 0));
     GGML_ASSERT((offset % sizeof(block_q4_0) == 0));
@@ -23313,9 +23310,6 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     uint8_t *   tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
-    if (!g_ggml_sycl_use_async_mem_op) {
-        copy_event.wait();
-    }
     auto * qs_ptr = data_device;
 
     auto * scales_ptr = qs_ptr + QK_K / 2 * nblocks;
@@ -23346,9 +23340,6 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
-    if (!g_ggml_sycl_use_async_mem_op) {
-        copy_event.wait();
-    }
 
     auto *       ql_ptr        = data_device;
     auto *       qh_ptr        = ql_ptr + (QK_K / 2) * nblocks;
@@ -23436,9 +23427,6 @@ static void reorder_qw_q8_0(uint8_t * data_device,
     sycl::event copy_event;
 
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
-    if (!g_ggml_sycl_use_async_mem_op) {
-        copy_event.wait();
-    }
 
     GGML_ASSERT((size % sizeof(block_q8_0) == 0));
     GGML_ASSERT((offset % sizeof(block_q8_0) == 0));
@@ -23481,9 +23469,6 @@ static void reorder_qw_mxfp4(uint8_t *       data_device,
     uint8_t *   tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
-    if (!g_ggml_sycl_use_async_mem_op) {
-        copy_event.wait();
-    }
     GGML_ASSERT((size % sizeof(block_mxfp4) == 0));
     GGML_ASSERT((offset % sizeof(block_mxfp4) == 0));
     const size_t num_blocks  = size / sizeof(block_mxfp4);
@@ -36382,12 +36367,15 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggm
 
 static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
+    GGML_LOG_INFO("[ARENA-DEBUG] synchronize ENTER\n");
     ggml_backend_sycl_context * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     if (ggml_sycl::unified_alloc_strict_mode()) {
         (void) ggml_sycl::unified_alloc_validate_registry(sycl_ctx->device, "pre_synchronize");
     }
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+    GGML_LOG_INFO("[ARENA-DEBUG] synchronize: calling stream->wait_and_throw()\n");
     auto err = CHECK_TRY_ERROR(stream->wait_and_throw());
+    GGML_LOG_INFO("[ARENA-DEBUG] synchronize: wait_and_throw() returned err=%d\n", err);
     if (err != 0) {
         // Dump VRAM diagnostics before aborting
         const int dev = sycl_ctx->device;
@@ -38775,6 +38763,20 @@ gpu_dispatch:
 
         GGML_ASSERT(ok);
 
+        // Periodic drain: prevent Level Zero DirectSubmission command list overflow.
+        // Without this, ~999+ commands accumulate on the in-order queue and
+        // queue.wait() hangs indefinitely.  Drain every N nodes as a safety net.
+        // Skip during graph recording (recording captures commands, not executes them).
+        {
+            static int drain_interval = []() {
+                const char * env = std::getenv("GGML_SYCL_DRAIN_INTERVAL");
+                return env ? std::atoi(env) : 256;
+            }();
+            if (!g_ggml_sycl_graph_recording && drain_interval > 0
+                && (i % drain_interval) == (drain_interval - 1)) {
+                try { sycl_ctx->stream()->wait(); } catch (...) {}
+            }
+        }
 
         // NOTE: MoE engine timeout guard removed — requires patched xe.ko with
         // CONFIG_DRM_XE_JOB_TIMEOUT_MAX=600000 (10 minutes). Without the patched
@@ -39168,6 +39170,8 @@ gpu_dispatch:
                           compute_ms, cgraph->n_nodes);
         }
     }
+
+    GGML_LOG_INFO("[ARENA-DEBUG] graph_compute_impl DONE, returning to caller\n");
 
     // MoE per-phase profiling: end token timing
     if (g_moe_profile_enabled) {
