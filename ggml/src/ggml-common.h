@@ -176,7 +176,7 @@ typedef sycl::half2 ggml_half2;
 
 #define QK1_0 128
 typedef struct {
-    ggml_half d;               // delta
+    ggml_half d;           // delta
     uint8_t qs[QK1_0 / 8]; // bits / quants
 } block_q1_0;
 static_assert(sizeof(block_q1_0) == sizeof(ggml_half) + QK1_0 / 8, "wrong q1_0 block size/padding");
