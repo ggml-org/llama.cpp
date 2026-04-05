@@ -17,16 +17,8 @@ dense_layer_scheduler::dense_layer_scheduler(sycl::queue & compute_queue, size_t
     device_id_(ggml_sycl_get_device_id_from_queue(compute_queue)),
     slot_size_(max_layer_size) {
     // Allocate two VRAM slots for double buffering
-    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot_size_);
-    vram_slot_[0] = ggml_sycl_malloc_device_raw(slot_size_, compute_queue_, "dense_scheduler_slot");
-    if (!vram_slot_[0]) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot_size_);
-    vram_slot_[1] = ggml_sycl_malloc_device_raw(slot_size_, compute_queue_, "dense_scheduler_slot");
-    if (!vram_slot_[1]) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
-    }
+    vram_slot_[0] = ggml_sycl_malloc_device(slot_size_, compute_queue_, "dense_scheduler_slot");
+    vram_slot_[1] = ggml_sycl_malloc_device(slot_size_, compute_queue_, "dense_scheduler_slot");
 
     if (!vram_slot_[0] || !vram_slot_[1]) {
         GGML_LOG_ERROR("[SYCL] Failed to allocate dense scheduler VRAM slots (%.1f MB each)\n",

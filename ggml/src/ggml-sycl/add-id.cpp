@@ -86,10 +86,8 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     std::memcpy(host_staging, src1->data, src1_bytes);
 
     // Allocate device staging buffer
-    ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, src1_bytes);
-    src1_staging = ggml_sycl_malloc_device_raw(src1_bytes, q, "add_id:device_staging");
+    src1_staging = ggml_sycl_malloc_device(src1_bytes, q, "add_id:device_staging");
     if (!src1_staging) {
-      ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
       GGML_LOG_ERROR("[ADD_ID] Failed to allocate device staging for mmap src1 (%zu bytes)\n", src1_bytes);
       ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
       return;

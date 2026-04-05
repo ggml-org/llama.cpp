@@ -349,11 +349,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
             GGML_SYCL_DEBUG("[STAGING] Allocating %zu bytes on device %d using tp_queue=%p...\n", size, device,
                             (void *) tp_queue);
             // Allocate device memory on this specific device using shared-context queue.
-            // Use _raw to bypass unified_cache_allocate — manual budget tracking below.
-            ggml_sycl::unified_cache_add_runtime_bytes(device, size);
-            void * staged = ggml_sycl_malloc_device_raw(size, *tp_queue, "tp_staging_device");
+            void * staged = ggml_sycl_malloc_device(size, *tp_queue, "tp_staging_device");
             if (staged == nullptr) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, size);
                 GGML_LOG_ERROR("[STAGING] malloc_device returned nullptr for %zu bytes on device %d\n", size, device);
                 return nullptr;
             }
@@ -975,19 +972,11 @@ void ggml_sycl_tp_cache_ffn_norm(int          layer,
             ggml_sycl_set_device(g_sycl_tp_config.devices[0]);
         }
         // Allocate new buffers
-        ggml_sycl::unified_cache_add_runtime_bytes(g_sycl_tp_config.devices[0], size);
-        entry.data = ggml_sycl_malloc_device_raw(size, *stream, "tp_device_entry");
-        if (!entry.data) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(g_sycl_tp_config.devices[0], size);
-        }
+        entry.data = ggml_sycl_malloc_device(size, *stream, "tp_device_entry");
         int dev1   = g_sycl_tp_config.devices[1];
         ggml_sycl_set_device(dev1);
         queue_ptr stream1 = &ggml_sycl_get_device(dev1).default_queue();
-        ggml_sycl::unified_cache_add_runtime_bytes(dev1, size);
-        entry.data_dev1   = ggml_sycl_malloc_device_raw(size, *stream1, "tp_device_entry");
-        if (!entry.data_dev1) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(dev1, size);
-        }
+        entry.data_dev1   = ggml_sycl_malloc_device(size, *stream1, "tp_device_entry");
         ggml_sycl_set_device(g_sycl_tp_config.devices[0]);
         if (!entry.data || !entry.data_dev1) {
             GGML_LOG_ERROR("SYCL TP: Failed to allocate FFN norm cache buffers for layer %d\n", layer);
@@ -1313,21 +1302,18 @@ tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(int       layer,
     size_t partial_size   = new_N_out * new_batch_max * sizeof(float);
     size_t total_bytes    = input_q8_size + hidden_q8_size + partial_size + hidden_size * 3;
 
-    // Allocate all buffers.
-    // Use _raw to bypass unified_cache_allocate — manual budget tracking below.
-    ggml_sycl::unified_cache_add_runtime_bytes(device, total_bytes);
-    bufs->input_q8_dev  = (char *) ggml_sycl_malloc_device_raw(input_q8_size, *stream, "ffn_buffers");
-    bufs->gate_out      = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers");
-    bufs->up_out        = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers");
-    bufs->hidden_out    = (float *) ggml_sycl_malloc_device_raw(hidden_size, *stream, "ffn_buffers");
-    bufs->hidden_q8_dev = (char *) ggml_sycl_malloc_device_raw(hidden_q8_size, *stream, "ffn_buffers");
-    bufs->partial_out   = (float *) ggml_sycl_malloc_device_raw(partial_size, *stream, "ffn_buffers");
+    // Allocate all buffers via cache-managed allocator.
+    bufs->input_q8_dev  = (char *) ggml_sycl_malloc_device(input_q8_size, *stream, "ffn_buffers");
+    bufs->gate_out      = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers");
+    bufs->up_out        = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers");
+    bufs->hidden_out    = (float *) ggml_sycl_malloc_device(hidden_size, *stream, "ffn_buffers");
+    bufs->hidden_q8_dev = (char *) ggml_sycl_malloc_device(hidden_q8_size, *stream, "ffn_buffers");
+    bufs->partial_out   = (float *) ggml_sycl_malloc_device(partial_size, *stream, "ffn_buffers");
 
     // Check allocation success
     if (!bufs->input_q8_dev || !bufs->gate_out || !bufs->up_out || !bufs->hidden_out || !bufs->hidden_q8_dev ||
         !bufs->partial_out) {
         GGML_LOG_ERROR("SYCL TP: Failed to allocate persistent FFN buffers for layer %d\n", layer);
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
         // Partial cleanup
         if (bufs->input_q8_dev) {
             sycl::free(bufs->input_q8_dev, *stream);
@@ -1565,16 +1551,8 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
         auto & q = dpct::get_in_order_queue();
 
         // INT16 = 2 bytes per element
-        ggml_sycl::unified_cache_add_runtime_bytes(dev, alloc_size * sizeof(int16_t));
         g_tp_quant_comm_bufs.dev_q[i]      = ggml_sycl_malloc_device_t<int16_t>(alloc_size, q, "tp_quant_comm");
-        if (!g_tp_quant_comm_bufs.dev_q[i]) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(dev, alloc_size * sizeof(int16_t));
-        }
-        ggml_sycl::unified_cache_add_runtime_bytes(dev, 2 * sizeof(float));
         g_tp_quant_comm_bufs.dev_minmax[i] = ggml_sycl_malloc_device_t<float>(2, q, "tp_quant_comm");
-        if (!g_tp_quant_comm_bufs.dev_minmax[i]) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(dev, 2 * sizeof(float));
-        }
 
         if (!g_tp_quant_comm_bufs.dev_q[i] || !g_tp_quant_comm_bufs.dev_minmax[i]) {
             GGML_LOG_ERROR("SYCL TP: Failed to allocate quant comm device buffers on device %d\n", dev);

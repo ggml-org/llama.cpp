@@ -27627,12 +27627,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
                     }
                     sycl::free(s_second_out_dev, *stream_second);
                 }
-                s_second_out_dev = (float *) sycl::malloc_device(second_out_bytes, *stream_second);
+                s_second_out_dev = static_cast<float *>(ggml_sycl_malloc_device(second_out_bytes, *stream_second, "split_second_out_dev"));
                 s_second_out_dev_sz = s_second_out_dev ? second_out_bytes : 0;
-                if (s_second_out_dev_sz > 0) {
-                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, s_second_out_dev_sz,
-                                                               ggml_sycl::runtime_category::STAGING);
-                }
             }
             if (!s_second_out_dev) return false;
 
@@ -31149,12 +31145,8 @@ static void dispatch_experts_secondary_gpu_impl(
                 }
                 sycl::free(dev_q8_1[s], sec_ctx);
             }
-            dev_q8_1[s]    = sycl::malloc_device(needed_q81, *target_queue);
+            dev_q8_1[s]    = ggml_sycl_malloc_device(needed_q81, *target_queue, "moe_dev_q8_1");
             dev_q8_1_sz[s] = needed_q81;
-            if (dev_q8_1[s]) {
-                ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_q81,
-                                                           ggml_sycl::runtime_category::STAGING);
-            }
         }
         if (!dev_out[s] || needed_out > dev_out_sz[s]) {
             int sec_dev = ggml_sycl_get_device_id_from_queue(*target_queue);
@@ -31165,12 +31157,8 @@ static void dispatch_experts_secondary_gpu_impl(
                 }
                 sycl::free(dev_out[s], sec_ctx);
             }
-            dev_out[s]    = sycl::malloc_device<float>(N, *target_queue);
+            dev_out[s]    = static_cast<float *>(ggml_sycl_malloc_device(N * sizeof(float), *target_queue, "moe_dev_out"));
             dev_out_sz[s] = needed_out;
-            if (dev_out[s]) {
-                ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_out,
-                                                           ggml_sycl::runtime_category::STAGING);
-            }
         }
         if (!dev_q8_1[s] || !dev_out[s]) {
             GGML_LOG_WARN(
@@ -31347,12 +31335,8 @@ static void dispatch_experts_secondary_gpu_impl(
                     }
                     sycl::free(ring.dev_reduce, sec_ctx);
                 }
-                ring.dev_reduce    = sycl::malloc_device<float>(N, *target_queue);
+                ring.dev_reduce    = static_cast<float *>(ggml_sycl_malloc_device(N * sizeof(float), *target_queue, "moe_ring_dev_reduce"));
                 ring.dev_reduce_sz = needed_out;
-                if (ring.dev_reduce) {
-                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, needed_out,
-                                                               ggml_sycl::runtime_category::STAGING);
-                }
             }
             if (!ring.out_reduce || needed_out > ring.out_reduce_sz) {
                 if (ring.out_reduce) { sycl::free(ring.out_reduce, pri_ctx); }
@@ -31368,12 +31352,8 @@ static void dispatch_experts_secondary_gpu_impl(
                     }
                     sycl::free(ring.gate_dev, sec_ctx);
                 }
-                ring.gate_dev    = sycl::malloc_device<float>(MERGE_RING_SIZE, *target_queue);
+                ring.gate_dev    = static_cast<float *>(ggml_sycl_malloc_device(MERGE_RING_SIZE * sizeof(float), *target_queue, "moe_ring_gate_dev"));
                 ring.gate_dev_sz = MERGE_RING_SIZE * sizeof(float);
-                if (ring.gate_dev) {
-                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, ring.gate_dev_sz,
-                                                               ggml_sycl::runtime_category::STAGING);
-                }
             }
 
             if (ring.dev_reduce && ring.out_reduce && ring.gate_dev) {
@@ -31414,13 +31394,8 @@ static void dispatch_experts_secondary_gpu_impl(
                         }
                         sycl::free(ring.dev_agg, sec_ctx);
                     }
-                    ring.dev_agg    = sycl::malloc_device<float>(
-                        (ptr_table_bytes + sizeof(float) - 1) / sizeof(float), *target_queue);
+                    ring.dev_agg    = static_cast<float *>(ggml_sycl_malloc_device(ptr_table_bytes, *target_queue, "moe_ring_dev_agg"));
                     ring.dev_agg_sz = ptr_table_bytes;
-                    if (ring.dev_agg) {
-                        ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, ptr_table_bytes,
-                                                                   ggml_sycl::runtime_category::STAGING);
-                    }
                 }
                 float ** ptr_table_dev = reinterpret_cast<float **>(ring.dev_agg);
                 float *  ptr_table_host[MERGE_RING_SIZE];
@@ -31492,12 +31467,8 @@ static void dispatch_experts_secondary_gpu_impl(
                     }
                     sycl::free(ring.dev_agg, sec_ctx);
                 }
-                ring.dev_agg    = sycl::malloc_device<float>(chunk_sz * static_cast<size_t>(N), *target_queue);
+                ring.dev_agg    = static_cast<float *>(ggml_sycl_malloc_device(agg_bytes, *target_queue, "moe_ring_dev_agg"));
                 ring.dev_agg_sz = agg_bytes;
-                if (ring.dev_agg) {
-                    ggml_sycl::unified_cache_add_runtime_bytes(sec_dev, agg_bytes,
-                                                               ggml_sycl::runtime_category::STAGING);
-                }
             }
             if (!ring.out_agg || agg_bytes > ring.out_agg_sz) {
                 if (ring.out_agg) { sycl::free(ring.out_agg, pri_ctx); }
@@ -32880,12 +32851,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             }
                             sycl::free(s_probe_dev, *stream);
                         }
-                        s_probe_dev = sycl::malloc_device(expert_bytes, *stream);
+                        s_probe_dev = ggml_sycl_malloc_device(expert_bytes, *stream, "moe_probe_dev");
                         s_probe_sz  = expert_bytes;
-                        if (s_probe_dev) {
-                            ggml_sycl::unified_cache_add_runtime_bytes(probe_dev, expert_bytes,
-                                                                       ggml_sycl::runtime_category::STAGING);
-                        }
                         if (g_moe_profile_enabled) {
                             fprintf(stderr, "[MOE-PROBE] Alloc probe buf: %zu bytes (%p), "
                                     "layout=AOS, type=%d, K=%lld, N=%lld\n",
@@ -38144,14 +38111,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         pipe.scratch_size[b] = 0;
                     }
                     // Allocate new buffer
-                    try {
-                        pipe.scratch_buf[b]  = sycl::malloc_device(max_weight_bytes, *pipe.dma_queue);
-                        pipe.scratch_size[b] = max_weight_bytes;
-                        ggml_sycl::unified_cache_add_runtime_bytes(pipe_dev, max_weight_bytes,
-                                                                   ggml_sycl::runtime_category::STAGING);
-                    } catch (const sycl::exception & e) {
-                        GGML_LOG_WARN("[SYCL] PP pipeline: scratch buf[%d] alloc failed (%.1f MB): %s\n",
-                                      b, max_weight_bytes / (1024.0 * 1024.0), e.what());
+                    pipe.scratch_buf[b]  = ggml_sycl_malloc_device(max_weight_bytes, *pipe.dma_queue, "pp_pipeline_scratch");
+                    pipe.scratch_size[b] = max_weight_bytes;
+                    if (!pipe.scratch_buf[b]) {
+                        GGML_LOG_WARN("[SYCL] PP pipeline: scratch buf[%d] alloc failed (%.1f MB)\n",
+                                      b, max_weight_bytes / (1024.0 * 1024.0));
                         pipe.enabled = false;
                         break;
                     }
@@ -39910,69 +39874,23 @@ static void ggml_sycl_xmx_moe_pre_allocate_buffers(ggml_backend_sycl_context & c
     const size_t expert_scale_bytes =
         static_cast<size_t>(max_out_dim) * static_cast<size_t>(max_blocks) * sizeof(sycl::half);
     const size_t sorted_ids_bytes = static_cast<size_t>(max_total_pairs) * sizeof(int32_t);
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, tokens_f16_bytes);
     buffers.tokens_f16_input =
         ggml_sycl_malloc_device_t<sycl::half>(max_n_input_rows * max_in_dim, *stream, "moe_graph_tokens_f16");
-    if (!buffers.tokens_f16_input) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, tokens_f16_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, tokens_sorted_bytes);
     buffers.tokens_sorted =
         ggml_sycl_malloc_device_t<sycl::half>(max_total_pairs * max_in_dim, *stream, "moe_graph_tokens_sorted");
-    if (!buffers.tokens_sorted) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, tokens_sorted_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, token_map_bytes);
     buffers.token_map = ggml_sycl_malloc_device_t<MoETokenMapping>(max_total_pairs, *stream, "moe_graph_token_map");
-    if (!buffers.token_map) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, token_map_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, expert_counts_bytes);
     buffers.expert_counts = ggml_sycl_malloc_device_t<int32_t>(max_n_experts, *stream, "moe_graph_expert_counts");
-    if (!buffers.expert_counts) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, expert_counts_bytes);
-    }
-
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, expert_offsets_bytes);
     buffers.expert_offsets = ggml_sycl_malloc_device_t<int32_t>(max_n_experts + 1, *stream, "moe_graph_expert_offsets");
-    if (!buffers.expert_offsets) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, expert_offsets_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, expert_write_bytes);
     buffers.expert_write_pos = ggml_sycl_malloc_device_t<int32_t>(max_n_experts, *stream, "moe_graph_expert_write_pos");
-    if (!buffers.expert_write_pos) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, expert_write_bytes);
-    }
-
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, sorted_output_bytes);
     buffers.sorted_output =
         ggml_sycl_malloc_device_t<sycl::half>(max_total_pairs * max_out_dim, *stream, "moe_graph_sorted_output");
-    if (!buffers.sorted_output) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, sorted_output_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, q_tokens_bytes);
     buffers.q_tokens = ggml_sycl_malloc_device_t<int8_t>(max_total_pairs * max_in_dim, *stream, "moe_graph_q_tokens");
-    if (!buffers.q_tokens) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, q_tokens_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, token_scales_bytes);
     buffers.token_scales =
         ggml_sycl_malloc_device_t<sycl::half>(max_total_pairs * max_blocks, *stream, "moe_graph_token_scales");
-    if (!buffers.token_scales) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, token_scales_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, expert_scale_bytes);
     buffers.expert_scale_buf =
         ggml_sycl_malloc_device_t<sycl::half>(max_out_dim * max_blocks, *stream, "moe_graph_expert_scales");
-    if (!buffers.expert_scale_buf) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, expert_scale_bytes);
-    }
-    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, sorted_ids_bytes);
     buffers.sorted_token_ids =
         ggml_sycl_malloc_device_t<int32_t>(max_total_pairs, *stream, "moe_graph_sorted_token_ids");
-    if (!buffers.sorted_token_ids) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, sorted_ids_bytes);
-    }
     if (max_n_experts <= ggml_backend_sycl_context::xmx_moe_buffers_t::MAX_EXPERTS) {
         buffers.allocate_tile_mapping(*stream);
     }

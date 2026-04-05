@@ -1549,9 +1549,7 @@ inline bool ggml_sycl_is_device_ptr(const void * ptr) {
 
 template <typename T>
 inline T * ggml_sycl_malloc_device_t(size_t count, const sycl::queue & queue, const char * tag) {
-    // Use _raw: most callers of _t also do manual add_runtime_bytes.
-    // The routed ggml_sycl_malloc_device would double-count in those cases.
-    return static_cast<T *>(ggml_sycl_malloc_device_raw(sizeof(T) * count, queue, tag));
+    return static_cast<T *>(ggml_sycl_malloc_device(sizeof(T) * count, queue, tag));
 }
 
 template <typename T>
@@ -1566,15 +1564,7 @@ inline T * ggml_sycl_malloc_shared_t(size_t count, const sycl::queue & queue, co
 
 #if GGML_SYCL_MAX_DEVICES > 0
 inline void * ggml_sycl_malloc_device_tracked_bytes(size_t bytes, sycl::queue & queue, const char * tag) {
-    const int device_id = ggml_sycl_get_device_id_from_queue(queue);
-    ggml_sycl::unified_cache_add_runtime_bytes(device_id, bytes);
-    // Use _raw to bypass the unified_cache_allocate route in ggml_sycl_malloc_device,
-    // since this function already manages its own budget tracking via add/sub_runtime_bytes.
-    void * ptr = ggml_sycl_malloc_device_raw(bytes, queue, tag);
-    if (!ptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id, bytes);
-    }
-    return ptr;
+    return ggml_sycl_malloc_device(bytes, queue, tag);
 }
 
 inline void ggml_sycl_free_device_tracked_bytes(void * ptr, size_t bytes, sycl::queue & queue) {
@@ -2995,18 +2985,8 @@ struct ggml_backend_sycl_context {
         // Called once during initialization - enables graph recording with fixed addresses
         void allocate_tile_mapping(sycl::queue & q) {
             if (!expert_tile_offsets) {
-                ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(q),
-                                                           (MAX_EXPERTS + 1) * sizeof(int32_t));
                 expert_tile_offsets = ggml_sycl_malloc_device_t<int32_t>(MAX_EXPERTS + 1, q, "moe_tile_mapping");
-                if (!expert_tile_offsets) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(q),
-                                                               (MAX_EXPERTS + 1) * sizeof(int32_t));
-                }
-                ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(q), sizeof(int32_t));
                 total_tiles         = ggml_sycl_malloc_device_t<int32_t>(1, q, "moe_tile_mapping");
-                if (!total_tiles) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(q), sizeof(int32_t));
-                }
             }
         }
 
