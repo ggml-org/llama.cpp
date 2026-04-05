@@ -559,17 +559,12 @@ void reorder_q4_0_aos_to_coalesced_sycl(const void *    src,
             });
     });
 
-    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
-        stream->submit([&](sycl::handler & cgh) {
-            cgh.depends_on(convert_event);
-            cgh.host_task([temp, total_bytes, stream]() {
-                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-            });
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
         });
-    } else {
-        convert_event.wait();
-        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-    }
+    });
 }
 
 // =============================================================================
@@ -646,17 +641,12 @@ void reorder_q8_0_aos_to_coalesced_sycl(const void *    src,
             });
     });
 
-    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
-        stream->submit([&](sycl::handler & cgh) {
-            cgh.depends_on(convert_event);
-            cgh.host_task([temp, total_bytes, stream]() {
-                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-            });
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
         });
-    } else {
-        convert_event.wait();
-        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-    }
+    });
 }
 
 // =============================================================================
@@ -731,17 +721,12 @@ void reorder_mxfp4_aos_to_coalesced_sycl(const void *    src,
             });
     });
 
-    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
-        stream->submit([&](sycl::handler & cgh) {
-            cgh.depends_on(convert_event);
-            cgh.host_task([temp, total_bytes, stream]() {
-                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-            });
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
         });
-    } else {
-        convert_event.wait();
-        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-    }
+    });
 }
 
 // =============================================================================
@@ -840,17 +825,12 @@ void reorder_q6_k_aos_to_coalesced_sycl(const void *    src,
             });
     });
 
-    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
-        stream->submit([&](sycl::handler & cgh) {
-            cgh.depends_on(convert_event);
-            cgh.host_task([temp, total_bytes, stream]() {
-                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-            });
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
         });
-    } else {
-        convert_event.wait();
-        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
-    }
+    });
 }
 
 // =============================================================================
