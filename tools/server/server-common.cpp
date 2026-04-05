@@ -1633,13 +1633,15 @@ json convert_anthropic_to_oai(const json & body) {
         }
     }
 
-    // Handle Anthropic-specific thinking param
+    // Handle thinking param (Anthropic-compatible)
     if (body.contains("thinking")) {
         json thinking = json_value(body, "thinking", json::object());
         std::string thinking_type = json_value(thinking, "type", std::string());
         if (thinking_type == "enabled") {
             int budget_tokens = json_value(thinking, "budget_tokens", 10000);
             oai_body["thinking_budget_tokens"] = budget_tokens;
+        } else if (thinking_type == "disabled") {
+            oai_body["thinking_budget_tokens"] = 0;
         }
     }
 
