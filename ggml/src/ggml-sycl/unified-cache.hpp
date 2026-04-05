@@ -76,90 +76,7 @@ struct vram_zone {
     std::mutex                   free_list_mutex;
 };
 
-class vram_arena {
-  public:
-    vram_arena() = default;
-    ~vram_arena();
-
-    // Non-copyable, non-movable
-    vram_arena(const vram_arena &)             = delete;
-    vram_arena & operator=(const vram_arena &) = delete;
-    vram_arena(vram_arena &&)                  = delete;
-    vram_arena & operator=(vram_arena &&)      = delete;
-
-    // Reserve VRAM arena using 2-chunk split to avoid BMG driver hang
-    // with large (>5.5 GB) single allocations.  chunk0 = compute+oneDNN+KV,
-    // chunk1 = weights.  Returns false on allocation failure.
-    //
-    // compute_bytes: fixed compute scratch zone size
-    // onednn_bytes:  fixed oneDNN scratch zone size (0 to skip)
-    bool reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
-                 size_t scratch_bytes, size_t onednn_bytes, size_t runtime_bytes);
-
-    // Is arena active?
-    bool active() const { return arena_base_ != nullptr; }
-
-    // Base pointer
-    void * base() const { return arena_base_; }
-
-    // Total arena size
-    size_t total_size() const { return arena_size_; }
-
-    // Sub-allocate from a zone.  Returns nullptr on failure.
-    // For WEIGHT zone: bump-left from end; checks free-list first (best-fit).
-    // For others: bump-right from zone start.
-    // align: must be power of 2 (default 256 for GPU coalescing).
-    void * zone_alloc(vram_zone_id zone, size_t size, size_t align = 256);
-
-    // Reset a zone's bump pointer (e.g., compute zone between tokens).
-    void zone_reset(vram_zone_id zone);
-
-    // Reclaim weight space: add to free-list for reuse.
-    // offset: offset from arena base.  size: bytes to reclaim.
-    void weight_reclaim(size_t offset, size_t size);
-
-    // Check if a pointer belongs to this arena.
-    bool owns(const void * ptr) const;
-
-    // Check if a pointer belongs to a specific zone.
-    bool zone_owns(vram_zone_id zone, const void * ptr) const;
-
-    // Convert pointer to arena offset (returns SIZE_MAX if not owned).
-    size_t ptr_to_offset(const void * ptr) const;
-
-    // Convert arena offset to pointer.
-    void * offset_to_ptr(size_t offset) const;
-
-    // Zone capacity and usage.
-    size_t zone_capacity(vram_zone_id zone) const;
-    size_t zone_used(vram_zone_id zone) const;
-    const vram_zone & get_zone(vram_zone_id zone) const { return zones_[static_cast<int>(zone)]; }
-
-    // Number of chunks (1 if single alloc, 2 if split).
-    int chunk_count() const { return n_chunks_; }
-
-    // Destroy arena (free all chunks).
-    void destroy();
-
-    // Abandon arena without freeing (for shutdown when SYCL context is invalid).
-    void abandon();
-
-  private:
-    void *     arena_base_ = nullptr;  // Base pointer (first chunk)
-    size_t     arena_size_ = 0;        // Total arena size across all chunks
-
-    // Chunk tracking (1 or 2 chunks)
-    struct chunk {
-        void * ptr  = nullptr;
-        size_t size = 0;
-    };
-    chunk  chunks_[2] = {};
-    int    n_chunks_   = 0;
-
-    sycl::queue * queue_ = nullptr;
-
-    vram_zone zones_[static_cast<int>(vram_zone_id::COUNT)];
-};
+// vram_arena functionality is merged into unified_cache — see arena_* methods.
 
 // === Priority-based static placement planner (P4) ===
 //
@@ -1354,9 +1271,55 @@ class unified_cache {
     // made on this queue's context, e.g. GPU-side reorder temp buffers).
     sycl::queue & get_queue() { return queue_; }
 
-    // Access the VRAM arena (valid only when vram_arena_enabled()).
-    vram_arena &       get_arena()       { return arena_; }
-    const vram_arena & get_arena() const { return arena_; }
+    // === Arena methods (merged from vram_arena) ===
+
+    // Reserve VRAM arena using 1- or 2-chunk allocation.
+    bool arena_reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
+                       size_t scratch_bytes, size_t onednn_bytes, size_t runtime_bytes);
+
+    // Is arena active?
+    bool arena_active() const { return arena_base_ != nullptr; }
+
+    // Base pointer.
+    void * arena_base() const { return arena_base_; }
+
+    // Total arena size.
+    size_t arena_total_size() const { return arena_size_; }
+
+    // Sub-allocate from a zone.
+    void * zone_alloc(vram_zone_id zone, size_t size, size_t align = 256);
+
+    // Reset a zone's bump pointer.
+    void zone_reset(vram_zone_id zone);
+
+    // Reclaim weight space.
+    void weight_reclaim(size_t offset, size_t size);
+
+    // Check if a pointer belongs to the VRAM arena.
+    bool vram_owns(const void * ptr) const;
+
+    // Check if a pointer belongs to a specific zone.
+    bool zone_owns(vram_zone_id zone, const void * ptr) const;
+
+    // Convert pointer to arena offset (SIZE_MAX if not owned).
+    size_t ptr_to_offset(const void * ptr) const;
+
+    // Convert arena offset to pointer.
+    void * offset_to_ptr(size_t offset) const;
+
+    // Zone capacity and usage.
+    size_t zone_capacity(vram_zone_id zone) const;
+    size_t zone_used(vram_zone_id zone) const;
+    const vram_zone & get_zone(vram_zone_id zone) const { return arena_zones_[static_cast<int>(zone)]; }
+
+    // Number of chunks (1 if single alloc, 2 if split).
+    int chunk_count() const { return arena_n_chunks_; }
+
+    // Destroy arena (free all chunks).
+    void arena_destroy();
+
+    // Abandon arena without freeing (for shutdown when SYCL context is invalid).
+    void arena_abandon();
 
     // Arena generation: monotonically increasing counter, bumped when the arena
     // is destroyed/recreated.  Used by mem_handle to detect stale arena handles.
@@ -1704,11 +1667,19 @@ class unified_cache {
     // The pool is destroyed (freeing all chunks) in the unified_cache destructor.
     std::unique_ptr<ggml_sycl::sycl_device_pool> layout_pool_;
 
-    // VRAM arena: single pre-allocated VRAM block with zone-based sub-allocation.
-    // When active, replaces individual malloc_device calls in allocate_slot,
-    // reserve_compute_arena, reserve_onednn_scratch, and reserve_scratch_pool.
+    // VRAM arena data members (merged from vram_arena class).
+    // Single pre-allocated VRAM block with zone-based sub-allocation.
     // Gated by GGML_SYCL_VRAM_ARENA=1 env var.
-    vram_arena arena_;
+    void *     arena_base_ = nullptr;
+    size_t     arena_size_ = 0;
+    struct arena_chunk {
+        void * ptr  = nullptr;
+        size_t size = 0;
+    };
+    arena_chunk arena_chunks_[2] = {};
+    int         arena_n_chunks_  = 0;
+    sycl::queue * arena_queue_   = nullptr;
+    vram_zone   arena_zones_[static_cast<int>(vram_zone_id::COUNT)];
 
     // Arena generation counter: incremented when the arena is destroyed/recreated.
     // mem_handle arena handles store the generation at creation time; on resolve(),

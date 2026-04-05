@@ -12571,9 +12571,9 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             // to the CPU backend (regular malloc) — then oneDNN rejects the non-USM
             // pointers and the attention GEMM fails.
             size_t effective_available = cache->available();
-            if (ggml_sycl::vram_arena_enabled() && cache->get_arena().active()) {
-                const size_t kv_zone_cap  = cache->get_arena().zone_capacity(ggml_sycl::vram_zone_id::KV);
-                const size_t kv_zone_used = cache->get_arena().zone_used(ggml_sycl::vram_zone_id::KV);
+            if (ggml_sycl::vram_arena_enabled() && cache->arena_active()) {
+                const size_t kv_zone_cap  = cache->zone_capacity(ggml_sycl::vram_zone_id::KV);
+                const size_t kv_zone_used = cache->zone_used(ggml_sycl::vram_zone_id::KV);
                 effective_available = kv_zone_cap > kv_zone_used ? kv_zone_cap - kv_zone_used : 0;
             }
             GGML_SYCL_DEBUG("[KV-AUTO-DBG] dev=%d size=%.1f MB available=%.1f MB -> %s\n",
@@ -12615,10 +12615,10 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     // and sub-allocate directly from the pre-reserved RUNTIME zone.
     if (ggml_sycl::vram_arena_enabled()) {
         auto * cache = ggml_sycl::get_unified_cache_for_device(buft_ctx->device);
-        if (cache && cache->get_arena().active()) {
+        if (cache && cache->arena_active()) {
             if (is_compute_buft) {
                 // Route compute buffers through RUNTIME zone
-                void * ptr = cache->get_arena().zone_alloc(
+                void * ptr = cache->zone_alloc(
                     ggml_sycl::vram_zone_id::RUNTIME, size);
                 if (ptr) {
                     ggml_backend_sycl_buffer_context * ctx =
@@ -12634,9 +12634,9 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             }
             if (is_kv_buft) {
                 // KV allocation: use KV zone capacity instead of available()
-                const size_t kv_cap  = cache->get_arena().zone_capacity(
+                const size_t kv_cap  = cache->zone_capacity(
                     ggml_sycl::vram_zone_id::KV);
-                const size_t kv_used = cache->get_arena().zone_used(
+                const size_t kv_used = cache->zone_used(
                     ggml_sycl::vram_zone_id::KV);
                 const size_t kv_avail = kv_cap > kv_used ? kv_cap - kv_used : 0;
                 if (size <= kv_avail) {

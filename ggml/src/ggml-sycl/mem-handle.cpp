@@ -154,14 +154,13 @@ resolved_ptr mem_handle::resolve_arena() const {
         return cached_;
     }
 
-    // Device arena: query unified_cache for the vram_arena.
+    // Device arena: query unified_cache for arena methods.
     unified_cache * cache = get_unified_cache_for_device(device_);
     if (!cache) {
         return {};
     }
 
-    vram_arena & arena = cache->get_arena();
-    if (!arena.active()) {
+    if (!cache->arena_active()) {
         return {};
     }
 
@@ -174,7 +173,7 @@ resolved_ptr mem_handle::resolve_arena() const {
 
     // Resolve: zone_alloc returned an offset within the arena, but our offset_
     // is the raw arena offset (base-relative).  Use offset_to_ptr directly.
-    void * ptr = arena.offset_to_ptr(offset_);
+    void * ptr = cache->offset_to_ptr(offset_);
     if (!ptr) {
         return {};
     }

@@ -2707,18 +2707,18 @@ struct ggml_backend_sycl_context {
         // the SCRATCH zone via pool_leg.
         if (ggml_sycl::vram_arena_enabled()) {
             auto * cache = ggml_sycl::get_unified_cache_for_device(device);
-            if (cache && cache->get_arena().active()) {
+            if (cache && cache->arena_active()) {
                 // Reuse existing arena allocation if large enough.
                 if (entry.arena_ptr && entry.arena_size >= scratchpad_size) {
                     return dnnl::memory(scratchpad_md, eng, entry.arena_ptr);
                 }
                 // Need larger allocation — reset ONEDNN zone and re-allocate.
                 if (entry.arena_ptr) {
-                    cache->get_arena().zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
+                    cache->zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
                     entry.arena_ptr  = nullptr;
                     entry.arena_size = 0;
                 }
-                void * ptr = cache->get_arena().zone_alloc(
+                void * ptr = cache->zone_alloc(
                     ggml_sycl::vram_zone_id::ONEDNN, scratchpad_size);
                 if (ptr) {
                     entry.arena_ptr  = ptr;
@@ -2759,17 +2759,17 @@ struct ggml_backend_sycl_context {
         // Arena path: pre-allocate from the ONEDNN zone.
         if (ggml_sycl::vram_arena_enabled()) {
             auto * cache = ggml_sycl::get_unified_cache_for_device(device);
-            if (cache && cache->get_arena().active()) {
+            if (cache && cache->arena_active()) {
                 if (entry.arena_ptr && entry.arena_size >= size) {
                     return;  // Already large enough.
                 }
                 if (entry.arena_ptr) {
-                    cache->get_arena().zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
+                    cache->zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
                     entry.arena_ptr  = nullptr;
                     entry.arena_size = 0;
                 }
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-allocating scratchpad from ONEDNN zone: %zu bytes\n", size);
-                void * ptr = cache->get_arena().zone_alloc(
+                void * ptr = cache->zone_alloc(
                     ggml_sycl::vram_zone_id::ONEDNN, size);
                 if (ptr) {
                     entry.arena_ptr  = ptr;

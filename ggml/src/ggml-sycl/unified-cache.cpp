@@ -65,7 +65,7 @@ struct runtime_alloc_record {
     alloc_handle  handle{};
     sycl::queue * queue            = nullptr;
     bool          uses_pinned_pool = false;
-    bool          from_arena       = false;  // True if sub-allocated from vram_arena (KV zone)
+    bool          from_arena       = false;  // True if sub-allocated from arena (KV zone)
     std::string   cohort_id;
 };
 
@@ -948,24 +948,24 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
             runtime_zone = static_cast<size_t>(std::max(0, std::atoi(env))) * 1024 * 1024;
         }
 
-        if (arena_.reserve(queue_, budget_bytes, max_alloc, scratch_zone, onednn_zone, runtime_zone)) {
+        if (arena_reserve(queue_, budget_bytes, max_alloc, scratch_zone, onednn_zone, runtime_zone)) {
             // Point compute_arena at the arena's SCRATCH zone immediately so
             // pool_leg can route through it.  Without this, pool_leg falls back
             // to sycl::malloc_device which can return low-VA pointers that the
             // L0 driver doesn't recognize as USM (compute-runtime bug).
-            const auto & cz_info = arena_.get_zone(vram_zone_id::SCRATCH);
-            compute_arena_ptr_  = arena_.offset_to_ptr(cz_info.start);
+            const auto & cz_info = get_zone(vram_zone_id::SCRATCH);
+            compute_arena_ptr_  = offset_to_ptr(cz_info.start);
             compute_arena_size_ = cz_info.size;
             compute_arena_off_.store(0, std::memory_order_relaxed);
             GGML_LOG_INFO("[VRAM-ARENA] Active on device %d: %d chunk(s), %.1f MB total\n",
-                          dev_id, arena_.chunk_count(), arena_.total_size() / (1024.0 * 1024.0));
+                          dev_id, chunk_count(), arena_total_size() / (1024.0 * 1024.0));
             GGML_LOG_INFO("[VRAM-ARENA] Scratch zone: %p + %.1f MB (offset %.1f MB from base)\n",
                           compute_arena_ptr_, compute_arena_size_ / (1024.0 * 1024.0),
                           cz_info.start / (1024.0 * 1024.0));
             // Bind layout pool to the arena so new layout allocations come from the
             // arena's weight zone instead of allocating separate chunks.
             if (layout_pool_) {
-                layout_pool_->set_arena(&arena_);
+                layout_pool_->set_arena(this);
             }
         } else {
             GGML_LOG_WARN("[VRAM-ARENA] Failed on device %d, falling back to per-entry allocation\n", dev_id);
@@ -1033,7 +1033,7 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
     // Env var GGML_SYCL_ASYNC_EVICT=0 disables.
     {
         const char * env  = std::getenv("GGML_SYCL_ASYNC_EVICT");
-        bool         dflt = arena_.active();  // Default ON when arena active
+        bool         dflt = arena_active();  // Default ON when arena active
         async_evict_enabled_ = env ? (std::string(env) != "0") : dflt;
         if (async_evict_enabled_) {
             GGML_LOG_INFO("[UNIFIED-CACHE] Async DMA eviction enabled (preserves layouts during migration)\n");
@@ -1059,7 +1059,7 @@ unified_cache::~unified_cache() {
             layout_pool_->abandon();
         }
         // Abandon arena without calling sycl::free — context is invalid.
-        arena_.abandon();
+        arena_abandon();
         compute_arena_ptr_ = nullptr;
         host_pool_ptr_     = nullptr;
         return;
@@ -1082,12 +1082,12 @@ unified_cache::~unified_cache() {
     }
 
     // Check arena state before destroying anything.
-    const bool had_arena = arena_.active();
+    const bool had_arena = arena_active();
 
     // Free all cached entries (skip pool-allocated and arena-owned entries)
     for (auto & pair : entries_) {
         if (pair.second.device_ptr && !pair.second.pool_allocated &&
-            !(had_arena && arena_.owns(pair.second.device_ptr))) {
+            !(had_arena && vram_owns(pair.second.device_ptr))) {
             try {
                 sycl::free(pair.second.device_ptr, queue_);
             } catch (...) {
@@ -1096,7 +1096,7 @@ unified_cache::~unified_cache() {
     }
 
     // Free compute arena BEFORE destroying the VRAM arena (which would invalidate owns check).
-    if (compute_arena_ptr_ && !(had_arena && arena_.owns(compute_arena_ptr_))) {
+    if (compute_arena_ptr_ && !(had_arena && vram_owns(compute_arena_ptr_))) {
         try {
             sycl::free(compute_arena_ptr_, queue_);
         } catch (...) {}
@@ -1107,7 +1107,7 @@ unified_cache::~unified_cache() {
     compute_arena_off_.store(0, std::memory_order_relaxed);
 
     // Free scratch pool BEFORE destroying the VRAM arena (which would invalidate owns check).
-    if (scratch_pool_ptr_ && !(had_arena && arena_.owns(scratch_pool_ptr_))) {
+    if (scratch_pool_ptr_ && !(had_arena && vram_owns(scratch_pool_ptr_))) {
         try {
             sycl::free(scratch_pool_ptr_, queue_);
         } catch (...) {}
@@ -1124,9 +1124,9 @@ unified_cache::~unified_cache() {
         host_pool_size_ = 0;
     }
 
-    // Free oneDNN scratch buffers BEFORE arena destroy (arena_.owns() needs live arena).
+    // Free oneDNN scratch buffers BEFORE arena destroy (vram_owns() needs live arena).
     if (onednn_weights_scratch_) {
-        if (!(had_arena && arena_.owns(onednn_weights_scratch_))) {
+        if (!(had_arena && vram_owns(onednn_weights_scratch_))) {
             try {
                 sycl::free(onednn_weights_scratch_, queue_);
             } catch (...) {
@@ -1135,7 +1135,7 @@ unified_cache::~unified_cache() {
         onednn_weights_scratch_ = nullptr;
     }
     if (onednn_activations_scratch_) {
-        if (!(had_arena && arena_.owns(onednn_activations_scratch_))) {
+        if (!(had_arena && vram_owns(onednn_activations_scratch_))) {
             try {
                 sycl::free(onednn_activations_scratch_, queue_);
             } catch (...) {
@@ -1146,7 +1146,7 @@ unified_cache::~unified_cache() {
 
     // Free reorder temp buffer BEFORE arena destroy.
     if (reorder_temp_buffer_) {
-        if (!(had_arena && arena_.owns(reorder_temp_buffer_))) {
+        if (!(had_arena && vram_owns(reorder_temp_buffer_))) {
             alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
             saturating_sub_used(reorder_temp_size_);
             try {
@@ -1161,7 +1161,7 @@ unified_cache::~unified_cache() {
     // Free persistent scratch buffers BEFORE arena destroy.
     for (auto & pair : persistent_scratches_) {
         if (pair.second.device_ptr) {
-            if (!(had_arena && arena_.owns(pair.second.device_ptr))) {
+            if (!(had_arena && vram_owns(pair.second.device_ptr))) {
                 try {
                     sycl::free(pair.second.device_ptr, queue_);
                 } catch (...) {
@@ -1172,7 +1172,7 @@ unified_cache::~unified_cache() {
     persistent_scratches_.clear();
 
     // Destroy the VRAM arena (frees the pre-allocated chunks).
-    arena_.destroy();
+    arena_destroy();
 
     // Destroy layout pool before SYCL context goes away.
     // The pool's reset() returns physical bytes freed so we can decrement used_.
@@ -4091,9 +4091,9 @@ void * unified_cache::allocate_slot(const ggml_sycl_cache_id & key,
         }
     }
 
-    if (!device_ptr && arena_.active()) {
+    if (!device_ptr && arena_active()) {
         // VRAM arena path: sub-allocate from the weight zone.
-        device_ptr = arena_.zone_alloc(vram_zone_id::WEIGHT, size);
+        device_ptr = zone_alloc(vram_zone_id::WEIGHT, size);
         if (device_ptr) {
             is_pool_alloc = true;  // Arena-owned: don't free individually.
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] allocate_slot: arena weight zone alloc %zu bytes\n", size);
@@ -5425,13 +5425,13 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
             // prestage loop) are still writing to nearby pages in the same L0
             // allocation region.  Deferred frees are processed at safe sync points
             // (after queue drains) where no BCS work is in-flight.
-            const bool is_arena = arena_.owns(ptr);
+            const bool is_arena = vram_owns(ptr);
             const bool is_pool  = !is_arena && layout_pool_ && layout_pool_->owns(ptr);
             if (is_arena) {
                 // Arena entries: reclaim space in weight zone free-list.
-                size_t offset = arena_.ptr_to_offset(ptr);
+                size_t offset = ptr_to_offset(ptr);
                 if (offset != SIZE_MAX) {
-                    arena_.weight_reclaim(offset, entry_size);
+                    weight_reclaim(offset, entry_size);
                 }
                 // No budget adjustment — arena bytes stay in used_ until arena is destroyed.
             } else if (!is_pool) {
@@ -5508,12 +5508,12 @@ size_t unified_cache::finalize_evictions_locked() {
         // Reclaim device VRAM
         void * ptr        = entry.device_ptr;
         size_t entry_size = entry.size;
-        const bool is_arena = arena_.owns(ptr);
+        const bool is_arena = vram_owns(ptr);
         const bool is_pool  = !is_arena && layout_pool_ && layout_pool_->owns(ptr);
         if (is_arena) {
-            size_t offset = arena_.ptr_to_offset(ptr);
+            size_t offset = ptr_to_offset(ptr);
             if (offset != SIZE_MAX) {
-                arena_.weight_reclaim(offset, entry_size);
+                weight_reclaim(offset, entry_size);
             }
         } else if (!is_pool) {
             enqueue_deferred_free(ptr, entry_size);
@@ -5596,8 +5596,8 @@ void * unified_cache::promote_to_device(const unified_cache_key & key, size_t si
     // Allocate device memory (arena or direct)
     void * device_ptr = nullptr;
     bool   from_arena = false;
-    if (arena_.active()) {
-        device_ptr = arena_.zone_alloc(vram_zone_id::WEIGHT, size);
+    if (arena_active()) {
+        device_ptr = zone_alloc(vram_zone_id::WEIGHT, size);
         from_arena = (device_ptr != nullptr);
         if (!device_ptr) {
             // Arena owns ALL VRAM — no raw malloc_device possible.
@@ -5977,7 +5977,7 @@ void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping deferred free for pool-owned ptr=%p size=%zu\n", ptr, size);
         return;
     }
-    if (arena_.owns(ptr)) {
+    if (vram_owns(ptr)) {
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping deferred free for arena-owned ptr=%p size=%zu\n", ptr, size);
         return;
     }
@@ -6031,7 +6031,7 @@ void unified_cache::process_deferred_frees() {
         }
 
         if (it->ptr) {
-            const bool is_arena = arena_.owns(it->ptr);
+            const bool is_arena = vram_owns(it->ptr);
             const bool is_pool  = !is_arena && layout_pool_ && layout_pool_->owns(it->ptr);
             if (is_arena) {
                 // Arena entries: just remove from deferred list, no sycl::free needed.
@@ -7289,8 +7289,8 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
         // eliminating separate sycl::malloc_device calls during context creation.
         if (req.intent.role == alloc_role::KV && vram_arena_enabled()) {
             auto * cache = get_unified_cache_for_device(req.device);
-            if (cache && cache->get_arena().active()) {
-                ptr = cache->get_arena().zone_alloc(vram_zone_id::KV, alloc_size);
+            if (cache && cache->arena_active()) {
+                ptr = cache->zone_alloc(vram_zone_id::KV, alloc_size);
                 if (ptr) {
                     from_arena = true;
                     GGML_SYCL_DEBUG("[UNIFIED-ALLOC] KV arena alloc: dev=%d size=%.1f MB ptr=%p\n",
@@ -8626,15 +8626,15 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
     }
 
     // VRAM arena path: sub-allocate from the oneDNN zone.
-    if (arena_.active()) {
+    if (arena_active()) {
         const size_t total_needed = weights_size + activations_size;
-        size_t zone_cap = arena_.zone_capacity(vram_zone_id::ONEDNN);
+        size_t zone_cap = zone_capacity(vram_zone_id::ONEDNN);
         if (total_needed <= zone_cap) {
             // Reset the oneDNN zone to reclaim any previous allocation.
-            arena_.zone_reset(vram_zone_id::ONEDNN);
+            zone_reset(vram_zone_id::ONEDNN);
 
-            void * w = arena_.zone_alloc(vram_zone_id::ONEDNN, weights_size);
-            void * a = w ? arena_.zone_alloc(vram_zone_id::ONEDNN, activations_size) : nullptr;
+            void * w = zone_alloc(vram_zone_id::ONEDNN, weights_size);
+            void * a = w ? zone_alloc(vram_zone_id::ONEDNN, activations_size) : nullptr;
             if (w && a) {
                 onednn_weights_scratch_          = w;
                 onednn_weights_scratch_size_     = weights_size;
@@ -8646,7 +8646,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
                 return true;
             }
             // Reset zone on partial failure.
-            arena_.zone_reset(vram_zone_id::ONEDNN);
+            zone_reset(vram_zone_id::ONEDNN);
         }
         GGML_LOG_WARN("[UNIFIED-CACHE] oneDNN scratch arena zone too small (need %.1f MB, have %.1f MB), "
                       "falling back to direct alloc\n",
@@ -8655,7 +8655,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
 
     // Free existing if resizing — subtract old sizes from budget first
     const size_t old_total = onednn_weights_scratch_size_ + onednn_activations_scratch_size_;
-    if (onednn_weights_scratch_ && !arena_.owns(onednn_weights_scratch_)) {
+    if (onednn_weights_scratch_ && !vram_owns(onednn_weights_scratch_)) {
         try {
             sycl::free(onednn_weights_scratch_, queue_);
         } catch (...) {
@@ -8666,7 +8666,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         onednn_weights_scratch_      = nullptr;
         onednn_weights_scratch_size_ = 0;
     }
-    if (onednn_activations_scratch_ && !arena_.owns(onednn_activations_scratch_)) {
+    if (onednn_activations_scratch_ && !vram_owns(onednn_activations_scratch_)) {
         try {
             sycl::free(onednn_activations_scratch_, queue_);
         } catch (...) {
@@ -8677,7 +8677,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         onednn_activations_scratch_      = nullptr;
         onednn_activations_scratch_size_ = 0;
     }
-    if (old_total > 0 && !arena_.active()) {
+    if (old_total > 0 && !arena_active()) {
         saturating_sub_used(old_total);
     }
 
@@ -8693,8 +8693,8 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
                     total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
 
     // Allocate weights scratch
-    if (arena_.active()) {
-        onednn_weights_scratch_ = arena_.zone_alloc(vram_zone_id::ONEDNN, weights_size);
+    if (arena_active()) {
+        onednn_weights_scratch_ = zone_alloc(vram_zone_id::ONEDNN, weights_size);
         if (!onednn_weights_scratch_) {
             GGML_LOG_WARN("[UNIFIED-CACHE] Arena ONEDNN zone full for weights scratch (%.1f MB)\n",
                           weights_size / (1024.0f * 1024.0f));
@@ -8719,8 +8719,8 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
     }
 
     // Allocate activations scratch
-    if (arena_.active()) {
-        onednn_activations_scratch_ = arena_.zone_alloc(vram_zone_id::ONEDNN, activations_size);
+    if (arena_active()) {
+        onednn_activations_scratch_ = zone_alloc(vram_zone_id::ONEDNN, activations_size);
         if (!onednn_activations_scratch_) {
             GGML_LOG_WARN("[UNIFIED-CACHE] Arena ONEDNN zone full for activations scratch (%.1f MB)\n",
                           activations_size / (1024.0f * 1024.0f));
@@ -8756,7 +8756,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
     }
 
     // Track in budget (skip when arena-backed — budget already charged at arena reservation)
-    if (!arena_.active()) {
+    if (!arena_active()) {
         used_.fetch_add(total_needed, std::memory_order_relaxed);
     }
 
@@ -8788,7 +8788,7 @@ bool unified_cache::reserve_reorder_temp(size_t size_bytes) {
 
     // Free existing if resizing
     if (reorder_temp_buffer_) {
-        if (!arena_.owns(reorder_temp_buffer_)) {
+        if (!vram_owns(reorder_temp_buffer_)) {
             alloc_registry::instance().unregister_alloc(reorder_temp_buffer_);
             try {
                 sycl::free(reorder_temp_buffer_, queue_);
@@ -8802,8 +8802,8 @@ bool unified_cache::reserve_reorder_temp(size_t size_bytes) {
 
     // Allocate temp buffer for GPU-side AOS→SOA reorder.
     // Called from moe_hybrid_init_once under std::call_once — single-threaded.
-    if (arena_.active()) {
-        reorder_temp_buffer_ = arena_.zone_alloc(vram_zone_id::SCRATCH, size_bytes);
+    if (arena_active()) {
+        reorder_temp_buffer_ = zone_alloc(vram_zone_id::SCRATCH, size_bytes);
         if (!reorder_temp_buffer_) {
             GGML_LOG_WARN("[UNIFIED-CACHE] Arena SCRATCH zone full for reorder temp (%.1f MB)\n",
                           size_bytes / (1024.0f * 1024.0f));
@@ -8915,7 +8915,7 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Persistent scratch '%s' resize: %.1f MB -> %.1f MB\n", buffer_name.c_str(),
                         entry.size / (1024.0f * 1024.0f), size_bytes / (1024.0f * 1024.0f));
         if (entry.device_ptr) {
-            if (!arena_.owns(entry.device_ptr)) {
+            if (!vram_owns(entry.device_ptr)) {
                 try {
                     sycl::free(entry.device_ptr, queue_);
                 } catch (...) {
@@ -8928,8 +8928,8 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
 
     // Allocate device memory
     void * ptr = nullptr;
-    if (arena_.active()) {
-        ptr = arena_.zone_alloc(vram_zone_id::SCRATCH, size_bytes);
+    if (arena_active()) {
+        ptr = zone_alloc(vram_zone_id::SCRATCH, size_bytes);
         if (!ptr) {
             GGML_LOG_WARN("[UNIFIED-CACHE] Arena SCRATCH zone full for persistent scratch '%s' (%.1f MB)\n",
                           buffer_name.c_str(), size_bytes / (1024.0f * 1024.0f));
@@ -8992,7 +8992,7 @@ void unified_cache::release_persistent_scratch(const std::string & buffer_name) 
 
     auto & entry = it->second;
     if (entry.device_ptr) {
-        if (!arena_.owns(entry.device_ptr)) {
+        if (!vram_owns(entry.device_ptr)) {
             try {
                 sycl::free(entry.device_ptr, queue_);
             } catch (...) {
@@ -9456,12 +9456,12 @@ bool unified_cache::reserve_compute_arena(size_t arena_bytes) {
     }
 
     // VRAM arena path: scratch zone is already pre-allocated.
-    if (arena_.active()) {
-        size_t zone_cap = arena_.zone_capacity(vram_zone_id::SCRATCH);
+    if (arena_active()) {
+        size_t zone_cap = zone_capacity(vram_zone_id::SCRATCH);
         if (zone_cap >= arena_bytes) {
             // Point compute_arena at the arena's scratch zone base.
-            const auto & szone = arena_.get_zone(vram_zone_id::SCRATCH);
-            compute_arena_ptr_  = arena_.offset_to_ptr(szone.start);
+            const auto & szone = get_zone(vram_zone_id::SCRATCH);
+            compute_arena_ptr_  = offset_to_ptr(szone.start);
             compute_arena_size_ = zone_cap;
             compute_arena_off_.store(0, std::memory_order_relaxed);
             GGML_LOG_INFO("[COMPUTE-ARENA] Using VRAM arena scratch zone: %.1f MB (offset=%.1f MB)\n",
@@ -9472,8 +9472,8 @@ bool unified_cache::reserve_compute_arena(size_t arena_bytes) {
         // Arena owns ALL VRAM — no raw malloc_device possible.
         // Use the available zone capacity even if smaller than requested.
         if (zone_cap > 0) {
-            const auto & szone = arena_.get_zone(vram_zone_id::SCRATCH);
-            compute_arena_ptr_  = arena_.offset_to_ptr(szone.start);
+            const auto & szone = get_zone(vram_zone_id::SCRATCH);
+            compute_arena_ptr_  = offset_to_ptr(szone.start);
             compute_arena_size_ = zone_cap;
             compute_arena_off_.store(0, std::memory_order_relaxed);
             GGML_LOG_WARN("[COMPUTE-ARENA] Arena scratch zone (%.1f MB) < requested (%.1f MB), "
@@ -9600,10 +9600,10 @@ bool unified_cache::reserve_scratch_pool(size_t pool_bytes) {
     // Free existing pool if it exists but is too small.
     // Arena-owned pointers must NOT be sycl::free'd — reclaim to the weight zone instead.
     if (scratch_pool_ptr_) {
-        if (arena_.active() && arena_.owns(scratch_pool_ptr_)) {
-            size_t offset = arena_.ptr_to_offset(scratch_pool_ptr_);
+        if (arena_active() && vram_owns(scratch_pool_ptr_)) {
+            size_t offset = ptr_to_offset(scratch_pool_ptr_);
             if (offset != SIZE_MAX) {
-                arena_.weight_reclaim(offset, scratch_pool_size_);
+                weight_reclaim(offset, scratch_pool_size_);
             }
             // Budget was charged to the arena's bulk reservation — don't sub from used_.
         } else {
@@ -9618,8 +9618,8 @@ bool unified_cache::reserve_scratch_pool(size_t pool_bytes) {
     }
 
     // VRAM arena path: sub-allocate from the weight zone (persistent allocation).
-    if (arena_.active()) {
-        void * ptr = arena_.zone_alloc(vram_zone_id::WEIGHT, pool_bytes);
+    if (arena_active()) {
+        void * ptr = zone_alloc(vram_zone_id::WEIGHT, pool_bytes);
         if (ptr) {
             scratch_pool_ptr_  = ptr;
             scratch_pool_size_ = pool_bytes;
@@ -9774,10 +9774,10 @@ void unified_cache_arena_free(int device_id, void * ptr, size_t size) {
 
 void * unified_cache_arena_alloc_weight(int device_id, size_t size) {
     auto * cache = get_unified_cache_for_device(device_id);
-    if (!cache || !cache->get_arena().active()) {
+    if (!cache || !cache->arena_active()) {
         return nullptr;
     }
-    return cache->get_arena().zone_alloc(vram_zone_id::WEIGHT, size, 64);
+    return cache->zone_alloc(vram_zone_id::WEIGHT, size, 64);
 }
 
 void unified_cache_arena_reset(int device_id) {
@@ -9807,26 +9807,26 @@ size_t unified_cache_compute_arena_used(int device_id) {
 
 size_t unified_cache_kv_arena_capacity(int device_id) {
     auto * cache = get_unified_cache_for_device(device_id);
-    if (!cache || !cache->get_arena().active()) {
+    if (!cache || !cache->arena_active()) {
         return 0;
     }
-    return cache->get_arena().zone_capacity(vram_zone_id::KV);
+    return cache->zone_capacity(vram_zone_id::KV);
 }
 
 size_t unified_cache_kv_arena_used(int device_id) {
     auto * cache = get_unified_cache_for_device(device_id);
-    if (!cache || !cache->get_arena().active()) {
+    if (!cache || !cache->arena_active()) {
         return 0;
     }
-    return cache->get_arena().zone_used(vram_zone_id::KV);
+    return cache->zone_used(vram_zone_id::KV);
 }
 
 void * unified_cache_kv_arena_alloc(int device_id, size_t size) {
     auto * cache = get_unified_cache_for_device(device_id);
-    if (!cache || !cache->get_arena().active()) {
+    if (!cache || !cache->arena_active()) {
         return nullptr;
     }
-    return cache->get_arena().zone_alloc(vram_zone_id::KV, size);
+    return cache->zone_alloc(vram_zone_id::KV, size);
 }
 
 memory_location query_location(const void * ptr, int device_hint) {
@@ -9869,23 +9869,22 @@ memory_location query_location(const void * ptr, int device_hint) {
         int dev = (loc.device >= 0) ? loc.device : device_hint;
         if (dev >= 0) {
             auto * cache = get_unified_cache_for_device(dev);
-            if (cache && cache->get_arena().active()) {
-                auto & arena = cache->get_arena();
-                if (arena.owns(ptr)) {
+            if (cache && cache->arena_active()) {
+                if (cache->vram_owns(ptr)) {
                     loc.from_arena = true;
-                    if (arena.zone_owns(vram_zone_id::SCRATCH, ptr)) {
+                    if (cache->zone_owns(vram_zone_id::SCRATCH, ptr)) {
                         loc.zone = vram_zone_id::SCRATCH;
                         loc.role = alloc_role::COMPUTE;
-                    } else if (arena.zone_owns(vram_zone_id::RUNTIME, ptr)) {
+                    } else if (cache->zone_owns(vram_zone_id::RUNTIME, ptr)) {
                         loc.zone = vram_zone_id::RUNTIME;
                         loc.role = alloc_role::COMPUTE;
-                    } else if (arena.zone_owns(vram_zone_id::KV, ptr)) {
+                    } else if (cache->zone_owns(vram_zone_id::KV, ptr)) {
                         loc.zone = vram_zone_id::KV;
                         loc.role = alloc_role::KV;
-                    } else if (arena.zone_owns(vram_zone_id::ONEDNN, ptr)) {
+                    } else if (cache->zone_owns(vram_zone_id::ONEDNN, ptr)) {
                         loc.zone = vram_zone_id::ONEDNN;
                         loc.role = alloc_role::COMPUTE;
-                    } else if (arena.zone_owns(vram_zone_id::WEIGHT, ptr)) {
+                    } else if (cache->zone_owns(vram_zone_id::WEIGHT, ptr)) {
                         loc.zone = vram_zone_id::WEIGHT;
                         loc.role = alloc_role::WEIGHT;
                     }
@@ -10188,31 +10187,27 @@ bool vram_arena_enabled() {
 
 // --- Device pool arena helpers (called from device-pool.hpp inline methods) ---
 
-void * device_pool_arena_alloc(vram_arena * arena, size_t size, size_t align) {
-    if (!arena || !arena->active()) {
+void * device_pool_arena_alloc(unified_cache * cache, size_t size, size_t align) {
+    if (!cache || !cache->arena_active()) {
         return nullptr;
     }
-    return arena->zone_alloc(vram_zone_id::WEIGHT, size, align);
+    return cache->zone_alloc(vram_zone_id::WEIGHT, size, align);
 }
 
-bool device_pool_arena_owns(const vram_arena * arena, const void * ptr) {
-    if (!arena || !arena->active()) {
+bool device_pool_arena_owns(const unified_cache * cache, const void * ptr) {
+    if (!cache || !cache->arena_active()) {
         return false;
     }
-    return arena->owns(ptr);
+    return cache->vram_owns(ptr);
 }
 
-vram_arena::~vram_arena() {
-    destroy();
-}
-
-bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
+bool unified_cache::arena_reserve(sycl::queue & queue, size_t budget_bytes, size_t max_alloc_size,
                          size_t scratch_bytes, size_t onednn_bytes, size_t runtime_bytes) {
     if (arena_base_) {
         return true;  // Already reserved.
     }
 
-    queue_ = &queue;
+    arena_queue_ = &queue;
 
     // Align zone sizes to 256 bytes.
     scratch_bytes = (scratch_bytes + 255) & ~size_t(255);
@@ -10237,8 +10232,8 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
         if (ptr) {
             alloc_registry::instance().register_alloc(ptr, alloc_size, dev_id, alloc_type::DEVICE);
 
-            chunks_[0]  = { ptr, alloc_size };
-            n_chunks_   = 1;
+            arena_chunks_[0]  = { ptr, alloc_size };
+            arena_n_chunks_   = 1;
             arena_base_ = ptr;
             arena_size_ = alloc_size;
 
@@ -10253,19 +10248,19 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
             const size_t tail_bytes = onednn_bytes + runtime_bytes + scratch_bytes;
             const size_t shared_bytes = alloc_size > tail_bytes ? alloc_size - tail_bytes : 0;
 
-            auto & kz = zones_[static_cast<int>(vram_zone_id::KV)];
+            auto & kz = arena_zones_[static_cast<int>(vram_zone_id::KV)];
             kz.start  = 0; kz.size = shared_bytes; kz.used.store(0, std::memory_order_relaxed);
 
-            auto & wz = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
+            auto & wz = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)];
             wz.start  = 0; wz.size = shared_bytes; wz.used.store(0, std::memory_order_relaxed);
 
-            auto & oz = zones_[static_cast<int>(vram_zone_id::ONEDNN)];
+            auto & oz = arena_zones_[static_cast<int>(vram_zone_id::ONEDNN)];
             oz.start  = shared_bytes; oz.size = onednn_bytes; oz.used.store(0, std::memory_order_relaxed);
 
-            auto & rz = zones_[static_cast<int>(vram_zone_id::RUNTIME)];
+            auto & rz = arena_zones_[static_cast<int>(vram_zone_id::RUNTIME)];
             rz.start  = shared_bytes + onednn_bytes; rz.size = runtime_bytes; rz.used.store(0, std::memory_order_relaxed);
 
-            auto & sz = zones_[static_cast<int>(vram_zone_id::SCRATCH)];
+            auto & sz = arena_zones_[static_cast<int>(vram_zone_id::SCRATCH)];
             sz.start  = shared_bytes + onednn_bytes + runtime_bytes; sz.size = scratch_bytes;
             sz.used.store(0, std::memory_order_relaxed);
 
@@ -10313,9 +10308,9 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
     alloc_registry::instance().register_alloc(p1, chunk1_size, dev_id, alloc_type::DEVICE);
 
     // chunk0: scratch+runtime+oneDNN+KV, chunk1: weights
-    chunks_[0]  = { p0, chunk0_size };
-    chunks_[1]  = { p1, chunk1_size };
-    n_chunks_   = 2;
+    arena_chunks_[0]  = { p0, chunk0_size };
+    arena_chunks_[1]  = { p1, chunk1_size };
+    arena_n_chunks_   = 2;
     arena_base_ = p0;
     arena_size_ = chunk0_size + chunk1_size;
 
@@ -10326,31 +10321,31 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
     const size_t kv_size = chunk0_size > fixed_tail ? chunk0_size - fixed_tail : 0;
 
     size_t off = 0;
-    auto & kz  = zones_[static_cast<int>(vram_zone_id::KV)];
+    auto & kz  = arena_zones_[static_cast<int>(vram_zone_id::KV)];
     kz.start   = off;
     kz.size    = kv_size;
     kz.used.store(0, std::memory_order_relaxed);
     off += kz.size;
 
-    auto & oz  = zones_[static_cast<int>(vram_zone_id::ONEDNN)];
+    auto & oz  = arena_zones_[static_cast<int>(vram_zone_id::ONEDNN)];
     oz.start   = off;
     oz.size    = std::min(onednn_bytes, chunk0_size - off);
     oz.used.store(0, std::memory_order_relaxed);
     off += oz.size;
 
-    auto & rz  = zones_[static_cast<int>(vram_zone_id::RUNTIME)];
+    auto & rz  = arena_zones_[static_cast<int>(vram_zone_id::RUNTIME)];
     rz.start   = off;
     rz.size    = std::min(runtime_bytes, chunk0_size > off ? chunk0_size - off : size_t(0));
     rz.used.store(0, std::memory_order_relaxed);
     off += rz.size;
 
-    auto & sz  = zones_[static_cast<int>(vram_zone_id::SCRATCH)];
+    auto & sz  = arena_zones_[static_cast<int>(vram_zone_id::SCRATCH)];
     sz.start   = off;
     sz.size    = std::min(scratch_bytes, chunk0_size > off ? chunk0_size - off : size_t(0));
     sz.used.store(0, std::memory_order_relaxed);
 
     // Weight zone occupies all of chunk1.
-    auto & wz  = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
+    auto & wz  = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)];
     wz.start   = chunk0_size;  // Logical offset at chunk boundary
     wz.size    = chunk1_size;
     wz.used.store(0, std::memory_order_relaxed);
@@ -10364,12 +10359,12 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
     return true;
 }
 
-void * vram_arena::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
+void * unified_cache::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
     if (!arena_base_ || size == 0) {
         return nullptr;
     }
 
-    auto & z = zones_[static_cast<int>(zone)];
+    auto & z = arena_zones_[static_cast<int>(zone)];
 
     if (align == 0 || (align & (align - 1)) != 0) {
         align = 256;
@@ -10426,10 +10421,10 @@ void * vram_arena::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
         // No free-list hit.  Bump-left from end of zone.
         const size_t aligned_size = (size + align - 1) & ~(align - 1);
 
-        if (n_chunks_ == 1) {
+        if (arena_n_chunks_ == 1) {
             // Collision check: KV used + weight used must not exceed shared zone.
             // Safe: KV allocation (context creation) and weight allocation (model load) never overlap in practice.
-            const auto & kz = zones_[static_cast<int>(vram_zone_id::KV)];
+            const auto & kz = arena_zones_[static_cast<int>(vram_zone_id::KV)];
             size_t prev = z.used.fetch_add(aligned_size, std::memory_order_relaxed);
             size_t kv_used = kz.used.load(std::memory_order_relaxed);
             if (kv_used + prev + aligned_size > z.size) {
@@ -10457,9 +10452,9 @@ void * vram_arena::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
     // Non-weight zones: bump-right from zone start.
     const size_t aligned_size = (size + align - 1) & ~(align - 1);
 
-    if (zone == vram_zone_id::KV && n_chunks_ == 1) {
+    if (zone == vram_zone_id::KV && arena_n_chunks_ == 1) {
         // Collision check against weight zone.
-        const auto & wz = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
+        const auto & wz = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)];
         size_t prev = z.used.fetch_add(aligned_size, std::memory_order_relaxed);
         size_t weight_used = wz.used.load(std::memory_order_relaxed);
         if (prev + aligned_size + weight_used > z.size) {
@@ -10479,12 +10474,12 @@ void * vram_arena::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
     return offset_to_ptr(z.start + prev);
 }
 
-void vram_arena::zone_reset(vram_zone_id zone) {
-    zones_[static_cast<int>(zone)].used.store(0, std::memory_order_relaxed);
+void unified_cache::zone_reset(vram_zone_id zone) {
+    arena_zones_[static_cast<int>(zone)].used.store(0, std::memory_order_relaxed);
 }
 
-void vram_arena::weight_reclaim(size_t offset, size_t size) {
-    auto & wz = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
+void unified_cache::weight_reclaim(size_t offset, size_t size) {
+    auto & wz = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)];
     std::lock_guard<std::mutex> lock(wz.free_list_mutex);
 
     // Insert sorted by offset, then coalesce adjacent blocks.
@@ -10510,21 +10505,21 @@ void vram_arena::weight_reclaim(size_t offset, size_t size) {
     }
 }
 
-bool vram_arena::owns(const void * ptr) const {
+bool unified_cache::vram_owns(const void * ptr) const {
     if (!arena_base_ || !ptr) {
         return false;
     }
-    for (int i = 0; i < n_chunks_; i++) {
-        auto base = reinterpret_cast<uintptr_t>(chunks_[i].ptr);
+    for (int i = 0; i < arena_n_chunks_; i++) {
+        auto base = reinterpret_cast<uintptr_t>(arena_chunks_[i].ptr);
         auto p    = reinterpret_cast<uintptr_t>(ptr);
-        if (p >= base && p < base + chunks_[i].size) {
+        if (p >= base && p < base + arena_chunks_[i].size) {
             return true;
         }
     }
     return false;
 }
 
-bool vram_arena::zone_owns(vram_zone_id zone, const void * ptr) const {
+bool unified_cache::zone_owns(vram_zone_id zone, const void * ptr) const {
     if (!arena_base_ || !ptr) {
         return false;
     }
@@ -10532,83 +10527,83 @@ bool vram_arena::zone_owns(vram_zone_id zone, const void * ptr) const {
     if (off == SIZE_MAX) {
         return false;
     }
-    const auto & z = zones_[static_cast<int>(zone)];
+    const auto & z = arena_zones_[static_cast<int>(zone)];
     return off >= z.start && off < z.start + z.size;
 }
 
-size_t vram_arena::ptr_to_offset(const void * ptr) const {
+size_t unified_cache::ptr_to_offset(const void * ptr) const {
     if (!ptr) {
         return SIZE_MAX;
     }
-    for (int i = 0; i < n_chunks_; i++) {
-        auto base = reinterpret_cast<uintptr_t>(chunks_[i].ptr);
+    for (int i = 0; i < arena_n_chunks_; i++) {
+        auto base = reinterpret_cast<uintptr_t>(arena_chunks_[i].ptr);
         auto p    = reinterpret_cast<uintptr_t>(ptr);
-        if (p >= base && p < base + chunks_[i].size) {
+        if (p >= base && p < base + arena_chunks_[i].size) {
             if (i == 0) {
                 return static_cast<size_t>(p - base);
             }
-            return chunks_[0].size + static_cast<size_t>(p - base);
+            return arena_chunks_[0].size + static_cast<size_t>(p - base);
         }
     }
     return SIZE_MAX;
 }
 
-void * vram_arena::offset_to_ptr(size_t offset) const {
-    if (n_chunks_ == 1) {
+void * unified_cache::offset_to_ptr(size_t offset) const {
+    if (arena_n_chunks_ == 1) {
         return static_cast<uint8_t *>(arena_base_) + offset;
     }
-    if (offset < chunks_[0].size) {
-        return static_cast<uint8_t *>(chunks_[0].ptr) + offset;
+    if (offset < arena_chunks_[0].size) {
+        return static_cast<uint8_t *>(arena_chunks_[0].ptr) + offset;
     }
-    size_t chunk1_off = offset - chunks_[0].size;
-    return static_cast<uint8_t *>(chunks_[1].ptr) + chunk1_off;
+    size_t chunk1_off = offset - arena_chunks_[0].size;
+    return static_cast<uint8_t *>(arena_chunks_[1].ptr) + chunk1_off;
 }
 
-size_t vram_arena::zone_capacity(vram_zone_id zone) const {
-    return zones_[static_cast<int>(zone)].size;
+size_t unified_cache::zone_capacity(vram_zone_id zone) const {
+    return arena_zones_[static_cast<int>(zone)].size;
 }
 
-size_t vram_arena::zone_used(vram_zone_id zone) const {
-    return zones_[static_cast<int>(zone)].used.load(std::memory_order_relaxed);
+size_t unified_cache::zone_used(vram_zone_id zone) const {
+    return arena_zones_[static_cast<int>(zone)].used.load(std::memory_order_relaxed);
 }
 
-void vram_arena::destroy() {
-    if (!queue_) {
+void unified_cache::arena_destroy() {
+    if (!arena_queue_) {
         return;
     }
-    for (int i = 0; i < n_chunks_; i++) {
-        if (chunks_[i].ptr) {
+    for (int i = 0; i < arena_n_chunks_; i++) {
+        if (arena_chunks_[i].ptr) {
             try {
-                sycl::free(chunks_[i].ptr, *queue_);
+                sycl::free(arena_chunks_[i].ptr, *arena_queue_);
             } catch (...) {}
-            chunks_[i] = {};
+            arena_chunks_[i] = {};
         }
     }
     arena_base_ = nullptr;
     arena_size_ = 0;
-    n_chunks_   = 0;
+    arena_n_chunks_   = 0;
     for (int i = 0; i < static_cast<int>(vram_zone_id::COUNT); i++) {
-        zones_[i].start = 0;
-        zones_[i].size  = 0;
-        zones_[i].used.store(0, std::memory_order_relaxed);
-        zones_[i].free_list.clear();
+        arena_zones_[i].start = 0;
+        arena_zones_[i].size  = 0;
+        arena_zones_[i].used.store(0, std::memory_order_relaxed);
+        arena_zones_[i].free_list.clear();
     }
 }
 
-void vram_arena::abandon() {
+void unified_cache::arena_abandon() {
     // Null everything without calling sycl::free — used during shutdown
     // when the SYCL context is already invalid.
-    for (int i = 0; i < n_chunks_; i++) {
-        chunks_[i] = {};
+    for (int i = 0; i < arena_n_chunks_; i++) {
+        arena_chunks_[i] = {};
     }
     arena_base_ = nullptr;
     arena_size_ = 0;
-    n_chunks_   = 0;
+    arena_n_chunks_   = 0;
     for (int i = 0; i < static_cast<int>(vram_zone_id::COUNT); i++) {
-        zones_[i].start = 0;
-        zones_[i].size  = 0;
-        zones_[i].used.store(0, std::memory_order_relaxed);
-        zones_[i].free_list.clear();
+        arena_zones_[i].start = 0;
+        arena_zones_[i].size  = 0;
+        arena_zones_[i].used.store(0, std::memory_order_relaxed);
+        arena_zones_[i].free_list.clear();
     }
 }
 
@@ -10709,10 +10704,10 @@ placement_plan compute_placement_plan(
     size_t remaining = vram_budget;
     if (vram_arena_enabled()) {
         auto * cache = get_unified_cache_for_device(device_id);
-        if (cache && cache->get_arena().active()) {
-            const size_t scratch_reserve = cache->get_arena().zone_capacity(vram_zone_id::SCRATCH);
-            const size_t onednn_reserve  = cache->get_arena().zone_capacity(vram_zone_id::ONEDNN);
-            const size_t runtime_reserve = cache->get_arena().zone_capacity(vram_zone_id::RUNTIME);
+        if (cache && cache->arena_active()) {
+            const size_t scratch_reserve = cache->zone_capacity(vram_zone_id::SCRATCH);
+            const size_t onednn_reserve  = cache->zone_capacity(vram_zone_id::ONEDNN);
+            const size_t runtime_reserve = cache->zone_capacity(vram_zone_id::RUNTIME);
             const size_t total_reserve   = scratch_reserve + onednn_reserve + runtime_reserve;
             if (remaining > total_reserve) {
                 remaining -= total_reserve;
@@ -10842,10 +10837,10 @@ placement_plan compute_multi_device_plan(
         // per-device budget so weights don't fill space needed for compute.
         if (vram_arena_enabled()) {
             auto * cache = get_unified_cache_for_device(device_budgets[d].device_id);
-            if (cache && cache->get_arena().active()) {
-                const size_t reserve = cache->get_arena().zone_capacity(vram_zone_id::SCRATCH)
-                                     + cache->get_arena().zone_capacity(vram_zone_id::ONEDNN)
-                                     + cache->get_arena().zone_capacity(vram_zone_id::RUNTIME);
+            if (cache && cache->arena_active()) {
+                const size_t reserve = cache->zone_capacity(vram_zone_id::SCRATCH)
+                                     + cache->zone_capacity(vram_zone_id::ONEDNN)
+                                     + cache->zone_capacity(vram_zone_id::RUNTIME);
                 remaining[d] = remaining[d] > reserve ? remaining[d] - reserve : 0;
             }
         }

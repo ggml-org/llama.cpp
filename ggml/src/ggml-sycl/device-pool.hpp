@@ -35,15 +35,15 @@ namespace ggml_sycl {
 
 // Forward-declare to avoid circular include with unified-cache.hpp
 size_t unified_cache_total_available_bytes(int device);
-class vram_arena;
+class unified_cache;
 enum class vram_zone_id : uint8_t;
 
-// Arena-backed allocation helper (defined in unified-cache.cpp where vram_arena is complete).
+// Arena-backed allocation helper (defined in unified-cache.cpp where unified_cache is complete).
 // Returns nullptr if the arena is inactive or the zone is full.
-void * device_pool_arena_alloc(vram_arena * arena, size_t size, size_t align);
+void * device_pool_arena_alloc(unified_cache * cache, size_t size, size_t align);
 
 // Arena-backed ownership check (defined in unified-cache.cpp).
-bool device_pool_arena_owns(const vram_arena * arena, const void * ptr);
+bool device_pool_arena_owns(const unified_cache * cache, const void * ptr);
 
 class sycl_device_pool {
   public:
@@ -65,13 +65,13 @@ class sycl_device_pool {
     sycl_device_pool(sycl_device_pool &&)                  = delete;
     sycl_device_pool & operator=(sycl_device_pool &&)      = delete;
 
-    // Bind the pool to a VRAM arena.  When set, allocate() routes to the
-    // arena's weight zone instead of allocating new chunks.  The arena must
-    // outlive the pool (guaranteed because both are members of unified_cache
-    // and the pool is destroyed first).
-    void set_arena(vram_arena * arena) {
+    // Bind the pool to a unified_cache.  When set, allocate() routes to the
+    // cache's arena weight zone instead of allocating new chunks.  The cache
+    // must outlive the pool (guaranteed because both are the same object or
+    // the pool is a member of unified_cache and destroyed first).
+    void set_arena(unified_cache * cache) {
         std::lock_guard<std::mutex> lock(mutex_);
-        arena_ = arena;
+        arena_ = cache;
     }
 
     // Returns true when the pool sub-allocates from a VRAM arena rather
@@ -351,7 +351,7 @@ class sycl_device_pool {
     int                  alloc_count_ = 0;
     bool                 abandoned_   = false;
     bool                 sealed_     = false;
-    vram_arena *         arena_      = nullptr;  // Optional arena backing (set by unified_cache)
+    unified_cache *      arena_      = nullptr;  // Optional arena backing (set by unified_cache)
     sycl::queue *        bcs_queue_  = nullptr;  // BCS queue for drain before chunk alloc
     mutable std::mutex   mutex_;
 };
