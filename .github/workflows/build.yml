@@ -996,7 +996,7 @@ jobs:
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ubuntu-cpu-riscv64-native:
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
 
     steps:
       - name: Install dependencies
@@ -1004,23 +1004,20 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 cmake build-essential libssl-dev wget git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
 
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
+          if ! which rustc; then
+            # Install Rust stable version
+            sudo apt-get install -y rustup
+            rustup install stable
+            rustup default stable
+          fi
 
           git lfs install
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
 
       - name: Check environment
         run: |
@@ -1031,25 +1028,17 @@ jobs:
           cmake --version
           rustc --version
 
-      - name: Setup ccache
-        run: |
-          # Set unique cache directory for this job
-          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
-          mkdir -p "$CCACHE_DIR"
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-          # Configure ccache for optimal performance
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-
-          # Enable more aggressive caching
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          # Export for subsequent steps
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+      # FIXME: Enable when ggml-org/ccache-action works on riscv64
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.21
+      #   with:
+      #     key: ubuntu-cpu-riscv64-native
+      #     evict-old-files: 1d
+      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
