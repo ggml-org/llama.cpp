@@ -229,7 +229,10 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     # Force WARP_SIZE=32 for Intel to match MMQ tile sizes (32) and fix division-by-zero
     # issues in load_tiles_q4_0. Intel hardware supports subgroup size 32.
     add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
-    # target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
+    # Enable stateless addressing for >4GB device allocations (required for VRAM arena).
+    # Without this, kernels use 32-bit offsets and hang when reading beyond 4GB.
+    # See: https://github.com/intel/compute-runtime/blob/master/programmers-guide/ALLOCATIONS_GREATER_THAN_4GB.md
+    target_link_options(ggml-sycl PRIVATE  -Xs   "-cl-intel-greater-than-4GB-buffer-required")
 elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
 elseif (GGML_SYCL_TARGET STREQUAL "AMD")
