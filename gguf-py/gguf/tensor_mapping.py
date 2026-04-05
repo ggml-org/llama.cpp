@@ -1822,17 +1822,14 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_MM_PRE_NORM: (
-            "mm.pre_norm", # hunyuanocr
             "vit.perceive.before_rms", # HunyuanOCR
         ),
 
         MODEL_TENSOR.V_TOK_IMG_BEGIN: (
-            "mm.image_begin", # hunyuanocr
             "vit.perceive.image_begin", # HunyuanOCR
         ),
 
         MODEL_TENSOR.V_TOK_IMG_END: (
-            "mm.image_end", # hunyuanocr
             "vit.perceive.image_end", # HunyuanOCR
         ),
 

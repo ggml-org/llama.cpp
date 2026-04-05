@@ -11670,17 +11670,13 @@ class HunyuanOCRVisionModel(MmprojModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        assert self.hparams_vision is not None
         hparams = self.hparams_vision
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANOCR)
         self.gguf_writer.add_vision_use_gelu(True)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-5))
         self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
-        # dynamic resolution
-        min_pixels = self.preprocessor_config.get("min_pixels", 256 * 256)
-        max_pixels = self.preprocessor_config.get("max_pixels", hparams.get("max_image_size", 2048) ** 2)
-        self.gguf_writer.add_vision_min_pixels(min_pixels)
-        self.gguf_writer.add_vision_max_pixels(max_pixels)
+        self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith("vit."):
@@ -11689,7 +11685,7 @@ class HunyuanOCRVisionModel(MmprojModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         # force conv weights to F16 to avoid bf16 IM2COL issues on Metal
-        if "mm.0." in new_name or "mm.2." in new_name:
+        if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
             return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 

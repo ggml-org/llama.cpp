@@ -1418,9 +1418,6 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
-                        // ref: https://huggingface.co/tencent/HunyuanOCR/blob/main/config.json (vision_config.hidden_act = "gelu")
-                        hparams.ffn_op = FFN_GELU;
-                        log_ffn_op = "gelu";
                         hparams.set_warmup_n_tokens(28*28);
                     } break;
                 case PROJECTOR_TYPE_LFM2A:
