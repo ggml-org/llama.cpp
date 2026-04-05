@@ -1416,8 +1416,8 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
-                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
                         // ref: https://huggingface.co/tencent/HunyuanOCR/blob/main/config.json (vision_config.hidden_act = "gelu")
                         hparams.ffn_op = FFN_GELU;
                         log_ffn_op = "gelu";
