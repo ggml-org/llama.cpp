@@ -72,7 +72,7 @@ jobs:
 
       - name: Setup Vulkan SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan-llvmpipe
+        uses: ./.github/actions/linux-setup-vulkan
         with:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
