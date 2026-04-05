@@ -759,6 +759,11 @@ private:
             return false;
         }
 
+        if (ctx == nullptr) {
+            SRV_ERR("failed to create context for model, '%s'\n", params_base.model.path.c_str());
+            return false;
+        }
+
         vocab = llama_model_get_vocab(model);
 
         n_ctx = llama_n_ctx(ctx);
