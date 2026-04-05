@@ -7675,7 +7675,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_probe_buffer_type_alloc_buffer(gg
                                                                               size_t                     size) {
     auto * ctx = (ggml_backend_sycl_probe_buffer_context *) buft->context;
     ggml_sycl_set_device(ctx->device);
-    void * ptr = ggml_sycl_malloc_device(size, *ctx->stream, "probe_buffer");
+    // Use _raw: probe runs during static init before the unified cache exists.
+    void * ptr = ggml_sycl_malloc_device_raw(size, *ctx->stream, "probe_buffer");
     if (ptr == nullptr) {
         return nullptr;
     }
