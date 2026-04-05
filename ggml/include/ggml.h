@@ -1654,6 +1654,10 @@ extern "C" {
             struct ggml_tensor  * b,  // row indices
             struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
 
+    // a     [ne00, ne01, ne02, ne03]
+    // b I32 [n_idx, ne01, ne02, ne03]
+    //
+    // return [n_idx, ne01, ne02, ne03]
     GGML_API struct ggml_tensor * ggml_gather(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
