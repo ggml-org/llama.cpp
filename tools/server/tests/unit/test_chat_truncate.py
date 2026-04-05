@@ -1,4 +1,4 @@
-import re
+import os
 import pytest
 import time
 from utils import *
@@ -27,7 +27,7 @@ def _asst_msg(i: int, repeat: int = 1) -> str:
 
 
 def _get_messages(n_turns: int = 128, include_final_user: bool = True, include_image: bool = False, repeat: int = 1) -> list[dict]:
-    msgs = [{"role": "system", "content": SYSTEM}]
+    msgs: list[dict] = [{"role": "system", "content": SYSTEM}]
     for i in range(1, n_turns + 1):
         msgs.append({"role": "user",      "content": _user_msg(i, include_image=include_image, repeat=repeat)})
         msgs.append({"role": "assistant", "content": _asst_msg(i, repeat=repeat)})
@@ -391,3 +391,116 @@ def test_chat_truncate_after_sleep_wake():
     assert res_props.body["is_sleeping"] == False
 
 
+# TODO remove this test later, only  to check timing pattern during development of the truncation cache. It can be useful to keep a simplified version of this test in the future to detect regressions in the cache performance pattern (fast bisect on first truncation, then fast cache hits, then bisect again when conversation grows enough). For now, it also serves to validate that the cache is effective with the big model (Gemma 3 4B) where the timing contrast is more visible.
+# Set USE_BIG_MODEL=1 to run the cache timing test with a larger model (Gemma 3 4B).
+## The big model makes the bisect vs cache-hit
+## timing contrast much more visible as it has larger ctx.
+## Uses /apply-template endpoint (no inference) so timing reflects only tokenization + truncation.
+## Example: USE_BIG_MODEL=1 python -m pytest unit/test_chat_truncate.py::test_chat_truncate_cache_timing -v -s
+USE_BIG_MODEL = os.environ.get("USE_BIG_MODEL", "0") == "1"
+
+def test_chat_truncate_cache_timing():
+    """
+    Timing test for the truncation cache using /apply-template (no inference overhead).
+
+    Sends messages one turn at a time, growing the conversation like a real chat.
+    Measures request latency to observe the pattern:
+      - Below threshold: fast (no truncation needed)
+      - First truncation: slow (bisect search with full tokenization)
+      - Subsequent turns: fast (cache prefix-hit applies base_drop cheaply)
+      - Until conversation grows enough to need another bisect search
+
+    Set USE_BIG_MODEL=1 env var to use Gemma 3 4B (256k vocab, 32k ctx) for sharper timing contrast.
+    """
+    global server
+    if USE_BIG_MODEL:
+        server = ServerProcess()
+        server.model_hf_repo = "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+        server.model_hf_file = None
+        # Use a moderate ctx so threshold is reachable with ~100 short turns.
+        # n_ctx=4096, max_keep=0.5 → target=2048, threshold=2048.
+        # Each turn ≈ 20 tokens → ~100 turns to hit threshold.
+        # After truncation drops to target, ~50 turns of headroom before next truncation.
+        # This gives: first few requests grow, then truncation (expensive bisect over ~100 turns),
+        # then ~50 cache-hit requests, then truncation again.
+        server.n_ctx = 4096
+    else:
+        server.n_ctx = 2048
+
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.5
+    server.n_slots = 1
+    server.n_predict = 1
+    server.jinja = True
+    server.start()
+
+    assert server.n_ctx is not None and server.n_slots is not None
+
+    # Pre-fill conversation to just below threshold so truncation triggers after a few requests.
+    # With n_ctx=4096, max_keep=0.5: threshold=target=2048.
+    # Pre-fill ~90 turns ≈ 1800 tokens, then each new turn adds ~20 tokens.
+    # After ~12 more turns we cross 2048 → truncation fires.
+    msgs = [{"role": "system", "content": SYSTEM}]
+    timings = []
+
+    n_prefill = 90 if USE_BIG_MODEL else 30
+    msg_text = "Please explain this topic." * (3 if USE_BIG_MODEL else 2)
+    for j in range(1, n_prefill + 1):
+        msgs.append({"role": "user",      "content": f"[U{j:04d}] {msg_text}"})
+        msgs.append({"role": "assistant", "content": f"[A{j:04d}] Sure."})
+
+    n_requests = 40
+
+    for i in range(1, n_requests + 1):
+        # Add one user turn per request (like a real chat)
+        turn_id = n_prefill + i
+        msgs.append({"role": "user", "content": f"[U{turn_id:04d}] {msg_text}"})
+
+        t0 = time.time()
+        res = server.make_request("POST", "/apply-template", data={
+            "messages": list(msgs),
+        })
+        elapsed_ms = (time.time() - t0) * 1000
+        assert res.status_code == 200, f"Request {i} failed with status {res.status_code}: {res.body}"
+
+        prompt = res.body["prompt"]
+        prompt_len = len(prompt)
+        n_turns_total = sum(1 for m in msgs if m["role"] == "user")
+        timings.append((elapsed_ms, prompt_len, n_turns_total))
+
+        # Append assistant reply for this turn
+        msgs.append({"role": "assistant", "content": f"[A{turn_id:04d}] Sure."})
+
+    # Detect truncation events based on timing pattern, not prompt_chars
+    # (prompt_chars can be the same for both "truncation" and "cache hit that also truncated")
+    # Instead: a request is a "truncation" if prompt_chars dropped from the previous,
+    # and "cache hit" if prompt_chars grew (base_drop applied cheaply, conversation grew a bit).
+    prev_len = 0
+    events = []
+    for idx, (ms, pl, nt) in enumerate(timings):
+        if idx == 0:
+            events.append("")
+        elif pl < prev_len:
+            events.append("truncation")
+        elif pl > prev_len:
+            events.append("cache hit")
+        else:
+            events.append("cache hit (same size)")
+        prev_len = pl
+
+    # Print markdown table
+    model_name = "gemma-3-4b" if USE_BIG_MODEL else "stories260K"
+    print(f"\n### Truncation cache timing ({model_name})\n")
+    print("| req |     ms | prompt_chars | user_turns | event |")
+    print("|----:|-------:|-------------:|-----------:|:------|")
+    for idx, (ms, pl, nt) in enumerate(timings):
+        event = events[idx]
+        if event == "truncation":
+            print(f"| **{idx+1:>3}** | **{ms:>6.1f}** | **{pl:>12}** | **{nt:>10}** | **{event}** |")
+        else:
+            print(f"| {idx+1:>3} | {ms:>6.1f} | {pl:>12} | {nt:>10} | {event} |")
+
+    # Basic sanity: at least some requests should have been truncated
+    prompt_lengths = [pl for _, pl, _ in timings]
+    assert any(pl < prev for prev, pl in zip(prompt_lengths, prompt_lengths[1:])), \
+        "Expected truncation to reduce prompt length at least once"

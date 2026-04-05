@@ -900,7 +900,8 @@ json oaicompat_chat_params_parse(
     const server_chat_params & opt,
     const llama_vocab * vocab,
     mtmd_context * mctx,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    chat_truncate_memory & truncate_cache)
 {
     json llama_params;
 
@@ -1064,8 +1065,9 @@ json oaicompat_chat_params_parse(
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         int32_t target    = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
         int32_t threshold = chat_truncate_threshold(opt.n_ctx_seq, n_predict_with_server_priority, target);
-        chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target, threshold, has_media, mctx,
-                               has_media ? &out_files : nullptr);
+        chat_truncate_cached(inputs, opt.tmpls.get(), vocab, out_files, truncate_cache,
+                             opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority,
+                             target, threshold, has_media, mctx);
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
@@ -2065,8 +2067,69 @@ server_tokens format_prompt_rerank(
 }
 
 //
-// Chat truncation helpers
+// Chat truncation helpers (TODO hash helpers are AI generated and to be revised)
 //
+
+static inline void hash_combine(size_t & h, size_t v) {
+    h ^= v + 0x9e3779b9 + (h << 6) + (h >> 2);
+}
+
+static inline void hash_str(size_t & h, const std::string & s) {
+    hash_combine(h, std::hash<std::string>{}(s));
+}
+
+static void hash_message(size_t & h, const common_chat_msg & msg) {
+    hash_str(h, msg.role);
+    hash_str(h, msg.content);
+    for (const auto & part : msg.content_parts) {
+        hash_str(h, part.type);
+        hash_str(h, part.text);
+    }
+    for (const auto & tc : msg.tool_calls) {
+        hash_str(h, tc.name);
+        hash_str(h, tc.arguments);
+        hash_str(h, tc.id);
+    }
+    hash_str(h, msg.reasoning_content);
+    hash_str(h, msg.tool_name);
+    hash_str(h, msg.tool_call_id);
+}
+
+chat_hashes chat_compute_hashes(
+    const std::vector<common_chat_msg> & messages,
+    const std::vector<raw_buffer>      & files)
+{
+    // Find second-to-last user message index for prefix boundary
+    size_t last_user        = SIZE_MAX;
+    size_t second_last_user = SIZE_MAX;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (messages[i].role == "user") {
+            second_last_user = last_user;
+            last_user = i;
+        }
+    }
+
+    size_t h           = 0;
+    size_t prefix_hash = 0;
+    size_t file_cursor = 0;
+
+    for (size_t i = 0; i < messages.size(); ++i) {
+        hash_message(h, messages[i]);
+        // Fold in media file sizes for media markers in this message
+        for (const auto & part : messages[i].content_parts) {
+            if (part.type == "media_marker" && file_cursor < files.size()) {
+                hash_combine(h, files[file_cursor].size());
+                ++file_cursor;
+            }
+        }
+        // Snapshot prefix hash right after the second-to-last user message
+        if (i == second_last_user) {
+            prefix_hash = h;
+        }
+    }
+
+    return { h, prefix_hash, messages.size() };
+}
 
 int32_t chat_truncate_threshold(int32_t n_ctx, int32_t n_predict, int32_t target) {
     return (n_predict > 0) ? n_ctx - n_predict : target;
@@ -2150,7 +2213,31 @@ static std::vector<TurnSpan> chat_build_droppable_turns(
     return turns;
 }
 
-void chat_truncate_messages(
+void apply_cached_drop(
+    common_chat_templates_inputs & inputs,
+    std::vector<raw_buffer>      * out_files,
+    size_t                         n_drop)
+{
+    if (n_drop == 0) return;
+
+    const auto turns = chat_build_droppable_turns(inputs);
+    if (turns.empty()) return;
+    if (n_drop > turns.size()) n_drop = turns.size();
+
+    const size_t msg_begin = turns[0].msg_first;
+    const size_t msg_end   = turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count;
+    inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)msg_begin,
+                          inputs.messages.begin() + (ptrdiff_t)msg_end);
+
+    if (out_files) {
+        const size_t file_begin = turns[0].file_offset;
+        const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+        out_files->erase(out_files->begin() + (ptrdiff_t)file_begin,
+                         out_files->begin() + (ptrdiff_t)file_end);
+    }
+}
+
+size_t chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
@@ -2161,7 +2248,7 @@ void chat_truncate_messages(
     std::vector<raw_buffer>      * out_files)
 {
     const auto turns = chat_build_droppable_turns(inputs);
-    if (turns.empty()) return;
+    if (turns.empty()) return 0;
 
     // Count positions after hypothetically dropping n_drop turns.
     // n_drop == 0 means count the current (unmodified) inputs.
@@ -2187,7 +2274,7 @@ void chat_truncate_messages(
         return chat_n_tokens(tmp, tmpls, vocab);
     };
 
-    if (count_after_drop(0) < threshold) return;
+    if (count_after_drop(0) < threshold) return 0;
 
     const size_t n_drop = chat_bisect_n_drop(turns.size(), count_after_drop, target);
 
@@ -2200,4 +2287,59 @@ void chat_truncate_messages(
         const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
         out_files->erase(out_files->begin() + (ptrdiff_t)file_begin, out_files->begin() + (ptrdiff_t)file_end);
     }
+
+    return n_drop;
+}
+
+chat_truncate_cache_result chat_truncate_cached(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    std::vector<raw_buffer>      & out_files,
+    chat_truncate_memory         & cache,
+    int32_t                        n_ctx,
+    float                          max_keep,
+    int32_t                        n_predict,
+    int32_t                        target,
+    int32_t                        threshold,
+    bool                           has_media,
+    mtmd_context                 * mctx)
+{
+    const auto hashes = chat_compute_hashes(inputs.messages, out_files);
+    std::lock_guard<std::mutex> lock(cache.mtx);
+    cache.invalidate_if_config_changed(n_ctx, max_keep, n_predict);
+
+    // 1. Exact match: same conversation as a previous request
+    auto it = cache.cache.find(hashes.full_hash);
+    if (it != cache.cache.end() && it->second.n_messages == hashes.n_messages) {
+        SRV_INF("truncation cache exact hit, n_drop = %zu\n", it->second.n_drop);
+        apply_cached_drop(inputs, has_media ? &out_files : nullptr, it->second.n_drop);
+        return CHAT_TRUNCATE_CACHE_EXACT;
+    }
+
+    // 2. Prefix match: messages[0..second_to_last_user] matches a previous full state
+    if (hashes.prefix_hash != 0
+        && (it = cache.cache.find(hashes.prefix_hash)) != cache.cache.end()) {
+        const size_t base_drop = it->second.n_drop;
+        SRV_INF("truncation cache prefix hit, base_drop = %zu\n", base_drop);
+        apply_cached_drop(inputs, has_media ? &out_files : nullptr, base_drop);
+        size_t extra = chat_truncate_messages(inputs, tmpls, vocab, target, threshold,
+                                              has_media, mctx, has_media ? &out_files : nullptr);
+        SRV_INF("truncation cache prefix hit, extra = %zu, total n_drop = %zu\n", extra, base_drop + extra);
+        cache.cache[hashes.full_hash] = { base_drop + extra, hashes.n_messages };
+        if (cache.cache.size() > chat_truncate_memory::MAX_ENTRIES) {
+            cache.cache.clear();
+        }
+        return CHAT_TRUNCATE_CACHE_PREFIX;
+    }
+
+    // 3. No match: compute from scratch
+    SRV_INF("%s\n", "truncation cache miss");
+    size_t n_drop = chat_truncate_messages(inputs, tmpls, vocab, target, threshold,
+                                           has_media, mctx, has_media ? &out_files : nullptr);
+    cache.cache[hashes.full_hash] = { n_drop, hashes.n_messages };
+    if (cache.cache.size() > chat_truncate_memory::MAX_ENTRIES) {
+        cache.cache.clear();
+    }
+    return CHAT_TRUNCATE_CACHE_MISS;
 }

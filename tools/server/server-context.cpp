@@ -537,6 +537,7 @@ public:
 
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
+    mutable chat_truncate_memory truncate_cache;
 
     ~server_context_impl() {
         if (!sleeping) {
@@ -3584,7 +3585,8 @@ void server_routes::init_routes() {
             meta->chat_params,
             ctx_server.vocab,
             ctx_server.mctx,
-            files);
+            files,
+            ctx_server.truncate_cache);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3604,7 +3606,8 @@ void server_routes::init_routes() {
             meta->chat_params,
             ctx_server.vocab,
             ctx_server.mctx,
-            files);
+            files,
+            ctx_server.truncate_cache);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3624,7 +3627,8 @@ void server_routes::init_routes() {
             meta->chat_params,
             ctx_server.vocab,
             ctx_server.mctx,
-            files);
+            files,
+            ctx_server.truncate_cache);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3644,7 +3648,8 @@ void server_routes::init_routes() {
             meta->chat_params,
             ctx_server.vocab,
             ctx_server.mctx,
-            files);
+            files,
+            ctx_server.truncate_cache);
 
         json prompt = body_parsed.at("prompt");
         llama_tokens tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true);
@@ -3662,7 +3667,8 @@ void server_routes::init_routes() {
             meta->chat_params,
             ctx_server.vocab,
             ctx_server.mctx,
-            files);
+            files,
+            ctx_server.truncate_cache);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;
     };

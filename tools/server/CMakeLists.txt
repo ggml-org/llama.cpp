@@ -60,3 +60,13 @@ target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+
+# Test for chat truncation cache
+if (LLAMA_BUILD_TESTS)
+    add_executable(test-chat-truncate-cache tests/unit/test_chat_truncate_cache.cpp)
+    target_include_directories(test-chat-truncate-cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../mtmd ${CMAKE_SOURCE_DIR})
+    target_link_libraries(test-chat-truncate-cache PRIVATE server-context)
+    add_test(NAME test-chat-truncate-cache COMMAND test-chat-truncate-cache)
+    set_property(TEST test-chat-truncate-cache PROPERTY LABELS "server")
+endif()

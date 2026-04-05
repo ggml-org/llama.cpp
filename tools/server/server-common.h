@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 #include <cinttypes>
+#include <mutex>
+#include <unordered_map>
 
 using json = nlohmann::ordered_json;
 
@@ -293,6 +295,33 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
+// Cache for chat truncation: avoids recomputing n_drop when the conversation
+// hasn't changed (exact match) or only appended a new user turn (prefix match).
+struct chat_truncate_memory {
+    struct entry {
+        size_t n_drop     = 0; // turns dropped for this conversation state
+        size_t n_messages = 0; // collision guard
+    };
+    static constexpr size_t MAX_ENTRIES = 64;
+
+    std::unordered_map<size_t, entry> cache; // full_hash → entry
+    // invalidation keys (config is global)
+    int32_t cached_n_ctx      = 0;
+    float   cached_max_keep   = 0;
+    int32_t cached_n_predict  = 0;
+    std::mutex mtx;
+
+    void invalidate_if_config_changed(int32_t n_ctx, float max_keep, int32_t n_predict) {
+        if (!cache.empty()
+            && (cached_n_ctx != n_ctx || cached_max_keep != max_keep || cached_n_predict != n_predict)) {
+            cache.clear();
+        }
+        cached_n_ctx     = n_ctx;
+        cached_max_keep  = max_keep;
+        cached_n_predict = n_predict;
+    }
+};
+
 // global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
@@ -319,7 +348,8 @@ json oaicompat_chat_params_parse(
     const server_chat_params & opt,
     const llama_vocab * vocab,
     mtmd_context * mctx,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    chat_truncate_memory & truncate_cache);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json & body);
@@ -414,7 +444,8 @@ int32_t chat_n_tokens(
 // The most recent turn is always kept.
 // threshold: truncation only fires when current count >= threshold (>= target).
 // For media requests (has_media=true), uses process_mtmd_prompt().
-void chat_truncate_messages(
+// Returns the number of turns dropped (0 if no truncation needed).
+size_t chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
@@ -423,3 +454,46 @@ void chat_truncate_messages(
     bool                           has_media = false,
     mtmd_context                 * mctx      = nullptr,
     std::vector<raw_buffer>      * out_files = nullptr);
+
+struct chat_hashes {
+    size_t full_hash;   // hash of all messages
+    size_t prefix_hash; // hash of messages[0..second_to_last_user_idx] (0 if < 2 user messages)
+    size_t n_messages;  // total message count (collision guard)
+};
+
+// Compute full and prefix hashes of the message list in a single pass.
+// For multimodal, also folds in media file sizes.
+chat_hashes chat_compute_hashes(
+    const std::vector<common_chat_msg> & messages,
+    const std::vector<raw_buffer>      & files);
+
+// Apply a cached n_drop by rebuilding droppable turns (cheap, no tokenization) and erasing.
+void apply_cached_drop(
+    common_chat_templates_inputs & inputs,
+    std::vector<raw_buffer>      * out_files,
+    size_t                         n_drop);
+
+enum chat_truncate_cache_result {
+    CHAT_TRUNCATE_CACHE_EXACT,
+    CHAT_TRUNCATE_CACHE_PREFIX,
+    CHAT_TRUNCATE_CACHE_MISS,
+};
+
+// Truncate messages using the cache. Handles 3 paths:
+//   exact match  → apply cached n_drop, no tokenization
+//   prefix match → apply cached base_drop, then compute extra truncation
+//   miss         → compute from scratch
+// Returns which cache path was taken.
+chat_truncate_cache_result chat_truncate_cached(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    std::vector<raw_buffer>      & out_files,
+    chat_truncate_memory         & cache,
+    int32_t                        n_ctx,
+    float                          max_keep,
+    int32_t                        n_predict,
+    int32_t                        target,
+    int32_t                        threshold,
+    bool                           has_media = false,
+    mtmd_context                 * mctx      = nullptr);
