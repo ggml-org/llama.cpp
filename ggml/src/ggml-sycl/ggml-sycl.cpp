@@ -37717,7 +37717,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             // Once the guard is active, eviction is blocked and weights can't be
             // freed.  Without this pre-eviction, models that barely fit in VRAM
             // leave zero room for compute scratch → ABORT in batched mul_mat.
-            {
+            // Pre-eviction: ensure VRAM headroom for compute scratch.
+            // Skip during graph recording — evict_and_flush calls queue.wait()
+            // which deadlocks when the recording queue is active.
+            if (!g_ggml_sycl_graph_recording) {
                 auto * cache = ggml_sycl::get_unified_cache_for_device(device);
                 if (cache) {
                     constexpr size_t min_scratch_headroom = 512ull * 1024ull * 1024ull;

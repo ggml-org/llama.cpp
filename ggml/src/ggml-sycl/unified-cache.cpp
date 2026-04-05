@@ -9990,6 +9990,13 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
                           alloc_size / (1024.0 * 1024.0), e.what());
             ptr = nullptr;
         }
+        if (ptr) {
+            // Register in alloc_registry so ggml_sycl_get_alloc_type() returns DEVICE
+            // for arena sub-pointers. Without this, graph_prestage_leaf_tensors and
+            // other code paths treat arena pointers as unknown → host memcpy from device → hang.
+            int dev_id = ggml_sycl_get_device_id_from_queue(queue);
+            alloc_registry::instance().register_alloc(ptr, alloc_size, dev_id, alloc_type::DEVICE);
+        }
     }
 
     if (!ptr) {
@@ -10006,6 +10013,7 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
 
         void * p0 = nullptr;
         void * p1 = nullptr;
+        int dev_id = ggml_sycl_get_device_id_from_queue(queue);
         try {
             p0 = sycl::malloc_device(chunk0_size, queue);
         } catch (...) { p0 = nullptr; }
@@ -10014,15 +10022,18 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
                           chunk0_size / (1024.0 * 1024.0));
             return false;
         }
+        alloc_registry::instance().register_alloc(p0, chunk0_size, dev_id, alloc_type::DEVICE);
         try {
             p1 = sycl::malloc_device(chunk1_size, queue);
         } catch (...) { p1 = nullptr; }
         if (!p1) {
+            alloc_registry::instance().unregister_alloc(p0);
             sycl::free(p0, queue);
             GGML_LOG_WARN("[VRAM-ARENA] 2-chunk: second chunk (%.1f MB) failed\n",
                           chunk1_size / (1024.0 * 1024.0));
             return false;
         }
+        alloc_registry::instance().register_alloc(p1, chunk1_size, dev_id, alloc_type::DEVICE);
 
         // chunk0: compute+oneDNN+KV, chunk1: weights
         chunks_[0] = { p0, chunk0_size };
