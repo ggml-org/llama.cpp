@@ -15,6 +15,8 @@ A coding agent optimized for local models, built entirely inside [llama.cpp](htt
 >
 > With vision enabled, the agent can process hundreds of images in a single session, classify animals by family, read text from screenshots, and analyze UI layouts. All locally, all with a 4B model.
 >
+> https://github.com/user-attachments/assets/16b62565-e3b1-4967-820f-750c0aec0f3a
+>
 > | Variant | Effective Params | GGUF Size | Vision | Best for |
 > |---------|-----------------|-----------|--------|----------|
 > | [E4B](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) | 4.5B | ~5 GB | Yes | Laptops, on-device |
