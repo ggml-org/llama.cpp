@@ -151,11 +151,11 @@ jobs:
           path: llama-agent-bin-win-x64.zip
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
     needs: [macOS-arm64, ubuntu-x64, windows-x64]
+    if: ${{ github.event.inputs.create_release == 'true' && !cancelled() && needs.macOS-arm64.result == 'success' && needs.ubuntu-x64.result == 'success' }}
     steps:
       - uses: actions/checkout@v4
         with:
