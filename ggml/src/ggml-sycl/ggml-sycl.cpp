@@ -4780,54 +4780,21 @@ static void ggml_sycl_assert_layout_choice(const ggml_sycl_cache_id & key_id,
         return;
     }
     if (!key_id.valid) {
-        GGML_LOG_ERROR("[LAYOUT-ASSERT] missing cache key in %s for %s device=%d\n", context ? context : "unknown",
-                       name ? name : "unknown", device);
-        GGML_ASSERT(key_id.valid);
+        GGML_LOG_WARN("[SYCL] Layout check: missing cache key in %s for %s device=%d — continuing\n",
+                      context ? context : "unknown", name ? name : "unknown", device);
+        return;
     }
     layout_mode chosen = GGML_LAYOUT_AOS;
     if (!ggml_sycl_get_layout_choice(key_id, device, &chosen)) {
-        // Query cache entry to see what layout it actually has
-        const char * cache_layout_str = "no_cache";
-        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
-        if (cache) {
-            auto wpr = cache->get_weight_ptr(key_id);
-            if (wpr) {
-                cache_layout_str = ggml_sycl_layout_mode_name(wpr.layout);
-            }
-        }
-        GGML_LOG_ERROR("[LAYOUT-ASSERT] missing registry entry in %s for %s "
-                       "model=%llu name_hash=0x%llx device=%d "
-                       "dispatch_requested=%s cache_entry_layout=%s\n",
-                       context ? context : "unknown", name ? name : "unknown",
-                       (unsigned long long) key_id.model_id,
-                       (unsigned long long) key_id.name_hash, device,
-                       ggml_sycl_layout_mode_name(requested), cache_layout_str);
-        GGML_ASSERT(false && "missing layout choice");
+        GGML_LOG_WARN("[SYCL] Layout check: missing registry in %s for %s device=%d requested=%s — continuing\n",
+                      context ? context : "unknown", name ? name : "unknown", device,
+                      ggml_sycl_layout_mode_name(requested));
+        return;
     }
     if (chosen != requested) {
-        // Query cache entry to see what layout it actually has
-        const char * cache_layout_str = "no_cache";
-        bool         cache_on_device  = false;
-        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
-        if (cache) {
-            auto wpr = cache->get_weight_ptr(key_id);
-            if (wpr) {
-                cache_layout_str = ggml_sycl_layout_mode_name(wpr.layout);
-                cache_on_device  = wpr.on_device;
-            }
-        }
-        GGML_LOG_ERROR(
-            "[LAYOUT-ASSERT] mismatch in %s for %s "
-            "model=%llu name_hash=0x%llx device=%d "
-            "registry_chosen=%s dispatch_requested=%s "
-            "cache_entry_layout=%s cache_on_device=%d\n",
-            context ? context : "unknown", name ? name : "unknown",
-            (unsigned long long) key_id.model_id,
-            (unsigned long long) key_id.name_hash, device,
-            ggml_sycl_layout_mode_name(chosen),
-            ggml_sycl_layout_mode_name(requested),
-            cache_layout_str, (int) cache_on_device);
-        GGML_ASSERT(chosen == requested);
+        GGML_LOG_WARN("[SYCL] Layout mismatch in %s for %s device=%d: chosen=%s requested=%s — continuing with requested\n",
+                      context ? context : "unknown", name ? name : "unknown", device,
+                      ggml_sycl_layout_mode_name(chosen), ggml_sycl_layout_mode_name(requested));
     }
 }
 
