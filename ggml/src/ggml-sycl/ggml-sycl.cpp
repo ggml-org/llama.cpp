@@ -16638,8 +16638,19 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
                 *actual_size = rounded_size;
                 return ptr;
             }
-            // Arena full — no fallback.  Caller must handle nullptr.
-            GGML_SYCL_DEBUG("[POOL-LEG] arena full: requested %zu bytes\n", rounded_size);
+            // Arena full — fall back to raw device allocation.
+            // The arena's bump pointer never reclaims within a single graph_compute,
+            // so PP graphs with many nodes can exhaust the 256 MB compute zone.
+            // Without this fallback, nullptr propagates to GPU kernels causing a
+            // page fault and hang (the GPU kernel accesses address 0).
+            GGML_SYCL_DEBUG("[POOL-LEG] arena full (requested %zu bytes), falling back to malloc_device\n",
+                            rounded_size);
+            ptr = ggml_sycl_malloc_device_raw(rounded_size, *qptr, "pool_leg:arena_overflow");
+            if (ptr) {
+                *actual_size = rounded_size;
+                return ptr;
+            }
+            GGML_LOG_WARN("[POOL-LEG] arena overflow alloc also failed (%zu bytes)\n", rounded_size);
             return nullptr;
         }
 
@@ -16736,10 +16747,15 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             return;
         }
 
-        // When VRAM arena is active, ALL allocs came from the arena — nothing
-        // to cache or free.  This should not be reached (arena_owns above
-        // catches arena pointers), but guard against stale pointers.
+        // When VRAM arena is active, non-arena pointers are overflow
+        // allocations from ggml_sycl_malloc_device (arena was full).
+        // These MUST be freed to avoid VRAM leaks.  Unregister from
+        // alloc_registry first since ggml_sycl_malloc_device registered them.
         if (arena_mode_) {
+            ggml_sycl::alloc_registry::instance().unregister_alloc(ptr);
+            try {
+                sycl::free(ptr, *qptr);
+            } catch (...) {}
             return;
         }
 
@@ -22026,10 +22042,10 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                     float *   dst_ptr     = (float *) ggml_sycl_get_data_ptr(dst, main_device);
                                     quantized_allreduce(main_device, device, main_stream, stream, dst_ptr, partial_out,
                                                         dst_elements, do_attn_dbg);
-                                    // DEBUG: Always check first few ATTN quantized outputs
+                                    // DEBUG: Check first few ATTN quantized outputs
                                     static int quant_attn_dbg = 0;
 
-                                    if (quant_attn_dbg++ < 6) {
+                                    if (g_ggml_sycl_tp_debug && quant_attn_dbg++ < 6) {
                                         float total_sample[4];
                                         main_stream->memcpy(total_sample, dst_ptr, 4 * sizeof(float)).wait();
                                         fprintf(stderr,
