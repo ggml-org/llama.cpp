@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <cstring>
 #include <fstream>
 #include <future>
@@ -8406,6 +8407,7 @@ struct ggml_backend_sycl_buffer_context {
     std::string             name;
     bool                    supports_soa_reorder;  // Device capability (not tensor state)
     size_t                  size_bytes = 0;
+    bool                    from_arena = false;  // Arena-allocated: skip sycl::free
     ggml_sycl::alloc_handle managed_alloc{};
     // Track both tensor and extra so we can null tensor->extra on reset
     std::vector<std::pair<ggml_tensor *, ggml_tensor_extra_gpu *>> tensor_extras;
@@ -8427,8 +8429,12 @@ struct ggml_backend_sycl_buffer_context {
     }
 
     ~ggml_backend_sycl_buffer_context() {
-        // Free TP compute buffer pointers
-        if (is_tp_compute_buffer) {
+        // Arena allocations are sub-allocated from a single large block —
+        // the arena owns the memory, so we must NOT free individual pointers.
+        if (from_arena) {
+            // Nothing to free — arena will reclaim on reset/destroy.
+        } else if (is_tp_compute_buffer) {
+            // Free TP compute buffer pointers
             std::unordered_set<uint64_t> freed;
             for (int dev_id = 0; dev_id < GGML_SYCL_MAX_DEVICES; ++dev_id) {
                 const auto & h = tp_allocs[dev_id];
@@ -10456,16 +10462,20 @@ static void ggml_sycl_preload_model_weights() {
             // which can monopolize the compute engine and trigger GT resets.
             sycl::queue * bcs_q = &cache->get_bcs_queue();
 
-            // Yield counter: periodically wait + finalize to prevent unbounded
-            // CCS command list growth that triggers xe driver GT engine resets.
-            // With pool allocation (force_pool), per-tensor malloc_device is
-            // eliminated so submissions are much faster — yield less often.
-            // Yield every 64 tensors to create xe job boundaries and prevent
-            // >10s command list accumulation on BCS.  For 120B models with
-            // ~250 MB/tensor, 64 tensors = ~16 GB at 8 GB/s = ~2s per batch.
-            // Previous value of 128 was too close to the 10s xe timeout.
-            constexpr size_t S1_YIELD_INTERVAL = 64;
-            size_t           s1_submit_count   = 0;
+            // Sliding event window: bound in-flight BCS commands to prevent
+            // DirectSubmission ring buffer saturation.  Each queue.memcpy()
+            // is a separate L0 command submission (transfers are not batched).
+            // Instead of periodic queue.wait() drains (global barriers that
+            // create GPU idle gaps), we wait only on the OLDEST event when
+            // the window fills.  In-order queue guarantee: completing event N
+            // implies all events <= N are complete.
+            constexpr size_t S1_MAX_IN_FLIGHT_DEFAULT = 16;
+            size_t s1_max_in_flight = S1_MAX_IN_FLIGHT_DEFAULT;
+            if (const char * env = std::getenv("GGML_SYCL_S1_MAX_IN_FLIGHT")) {
+                s1_max_in_flight = std::max<size_t>(4, std::min<size_t>(64, std::atoi(env)));
+            }
+            std::deque<sycl::event> s1_in_flight;
+            size_t s1_drain_count = 0;
 
             // Submit all H2D copies for this device without waiting
             for (size_t idx : indices) {
@@ -10519,10 +10529,24 @@ static void ggml_sycl_preload_model_weights() {
                         req.force_pool       = true;  // Pool alloc: avoid per-expert GEM_CREATE
 
                         auto result = cache->ensure_cached_layout(req, {}, bcs_q);
-                        if (result.status == ggml_sycl::cache_layout_status::READY ||
-                            result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                        if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                             any_cached = true;
                             total_bytes += expert_size;
+                            s1_in_flight.push_back(result.event);
+                        } else if (result.status == ggml_sycl::cache_layout_status::READY) {
+                            any_cached = true;
+                            total_bytes += expert_size;
+                        }
+                        // Back-pressure: wait on oldest event when window full
+                        while (s1_in_flight.size() >= s1_max_in_flight) {
+                            s1_in_flight.front().wait();
+                            s1_in_flight.pop_front();
+                            s1_drain_count++;
+                            if (s1_drain_count % s1_max_in_flight == 0) {
+                                cache->finalize_pending_fills();
+                                cache->process_deferred_frees_public();
+                                ggml_sycl_watchdog_heartbeat();
+                            }
                         }
                     }
                     if (any_cached) {
@@ -10652,39 +10676,42 @@ static void ggml_sycl_preload_model_weights() {
                     }
 
                     auto result = cache->ensure_cached_layout(req, {}, bcs_q);
-                    if (result.status == ggml_sycl::cache_layout_status::READY ||
-                        result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
                         dense_cached++;
                         total_bytes += dst_size;
-                        // Track for pinning + data_device update after finalize
+                        dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
+                        s1_in_flight.push_back(result.event);
+                    } else if (result.status == ggml_sycl::cache_layout_status::READY) {
+                        dense_cached++;
+                        total_bytes += dst_size;
                         dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
                     } else {
                         dense_failed++;
                     }
                 }
 
-                // Periodic yield: flush ALL queues (CCS + BCS + DMA) to prevent
-                // unbounded command list growth during S1-PRELOAD.
-                // For 120B models with ~5 GB of attention weights, this prevents
-                // the xe driver GT engine reset triggered by >640ms engine monopolization.
-                // CCS compute queue added: reorder kernels submit to CCS, not BCS.
-                s1_submit_count++;
-                if (s1_submit_count % S1_YIELD_INTERVAL == 0) {
-                    try {
-                        cache->get_queue().wait();       // CCS compute queue
-                        cache->get_bcs_queue().wait();
-                        stream.wait();
+                // Back-pressure: wait on oldest event when window full
+                while (s1_in_flight.size() >= s1_max_in_flight) {
+                    s1_in_flight.front().wait();
+                    s1_in_flight.pop_front();
+                    s1_drain_count++;
+                    if (s1_drain_count % s1_max_in_flight == 0) {
                         cache->finalize_pending_fills();
                         cache->process_deferred_frees_public();
-                    } catch (...) {
+                        ggml_sycl_watchdog_heartbeat();
                     }
-                    ggml_sycl_watchdog_heartbeat();
                 }
             }
 
-            // Final wait for remaining H2D copies on this device (all queues)
+            // Drain remaining in-flight events from sliding window
+            for (auto & evt : s1_in_flight) {
+                evt.wait();
+            }
+            s1_in_flight.clear();
+
+            // Safety net: drain all queues in case of untracked submissions
             try {
-                cache->get_queue().wait();       // CCS compute queue
+                cache->get_queue().wait();
                 cache->get_bcs_queue().wait();
                 stream.wait();
             } catch (const sycl::exception & e) {
@@ -12537,16 +12564,27 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     ggml_sycl_mem_type effective_mem_type = buft_ctx->mem_type;
     if (buft_ctx->mem_policy == GGML_SYCL_MEM_POLICY_KV_AUTO) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(buft_ctx->device)) {
-            const size_t available = cache->available();
+            // When the arena is active, check KV zone capacity instead of the
+            // weight-budget available().  The KV zone is pre-reserved inside the
+            // arena and has dedicated capacity.  Without this check, available()
+            // returns near-zero after weights fill the budget, causing KV to spill
+            // to the CPU backend (regular malloc) — then oneDNN rejects the non-USM
+            // pointers and the attention GEMM fails.
+            size_t effective_available = cache->available();
+            if (ggml_sycl::vram_arena_enabled() && cache->get_arena().active()) {
+                const size_t kv_zone_cap  = cache->get_arena().zone_capacity(ggml_sycl::vram_zone_id::KV);
+                const size_t kv_zone_used = cache->get_arena().zone_used(ggml_sycl::vram_zone_id::KV);
+                effective_available = kv_zone_cap > kv_zone_used ? kv_zone_cap - kv_zone_used : 0;
+            }
             GGML_SYCL_DEBUG("[KV-AUTO-DBG] dev=%d size=%.1f MB available=%.1f MB -> %s\n",
-                          buft_ctx->device, size / (1024.0 * 1024.0), available / (1024.0 * 1024.0),
-                          size > available ? "HOST" : "DEVICE");
-            if (size > available) {
+                          buft_ctx->device, size / (1024.0 * 1024.0), effective_available / (1024.0 * 1024.0),
+                          size > effective_available ? "HOST" : "DEVICE");
+            if (size > effective_available) {
                 effective_mem_type = GGML_SYCL_MEM_HOST;
             }
             if (g_ggml_sycl_debug) {
                 GGML_SYCL_DEBUG("[SYCL] KV alloc policy: size=%zu available=%.1f MB -> %s\n", size,
-                                available / (1024.0f * 1024.0f),
+                                effective_available / (1024.0f * 1024.0f),
                                 effective_mem_type == GGML_SYCL_MEM_DEVICE ? "device" : "host");
             }
         } else {
@@ -12571,6 +12609,46 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     const ggml_sycl::runtime_category alloc_cat =
         is_compute_buft ? ggml_sycl::runtime_category::COMPUTE
                         : (is_kv_buft ? ggml_sycl::runtime_category::KV_CACHE : ggml_sycl::runtime_category::OTHER);
+
+    // === Arena fast-path: route compute buffers through RUNTIME zone ===
+    // When the arena is active, compute buffers bypass all budget/headroom logic
+    // and sub-allocate directly from the pre-reserved RUNTIME zone.
+    if (ggml_sycl::vram_arena_enabled()) {
+        auto * cache = ggml_sycl::get_unified_cache_for_device(buft_ctx->device);
+        if (cache && cache->get_arena().active()) {
+            if (is_compute_buft) {
+                // Route compute buffers through RUNTIME zone
+                void * ptr = cache->get_arena().zone_alloc(
+                    ggml_sycl::vram_zone_id::RUNTIME, size);
+                if (ptr) {
+                    ggml_backend_sycl_buffer_context * ctx =
+                        new ggml_backend_sycl_buffer_context(
+                            buft_ctx->device, ptr, buft_ctx->stream, size);
+                    ctx->from_arena = true;  // Don't sycl::free this
+                    return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface,
+                        ctx, size);
+                }
+                // RUNTIME zone full — fall through to legacy path
+                GGML_LOG_WARN("[SYCL] RUNTIME zone full (%.1f MB request), falling back\n",
+                              size / (1024.0 * 1024.0));
+            }
+            if (is_kv_buft) {
+                // KV allocation: use KV zone capacity instead of available()
+                const size_t kv_cap  = cache->get_arena().zone_capacity(
+                    ggml_sycl::vram_zone_id::KV);
+                const size_t kv_used = cache->get_arena().zone_used(
+                    ggml_sycl::vram_zone_id::KV);
+                const size_t kv_avail = kv_cap > kv_used ? kv_cap - kv_used : 0;
+                if (size <= kv_avail) {
+                    // KV fits in arena — let the existing KV allocation path handle it
+                    effective_mem_type = GGML_SYCL_MEM_DEVICE;
+                } else {
+                    effective_mem_type = GGML_SYCL_MEM_HOST;
+                }
+                // Fall through to existing allocation logic
+            }
+        }
+    }
 
     // In TP mode, use the shared-context queue for the main allocation if available.
     queue_ptr alloc_stream = buft_ctx->stream;
@@ -12641,10 +12719,14 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             // with weights leaves zero space for compute scratch → GGML_ABORT in
             // batched mul_mat.  The ggml backend scheduler will route the remaining
             // tensors to a host backend automatically when this allocation fails.
+            // When arena is active, the RUNTIME zone already reserves compute space,
+            // so the headroom check is unnecessary and would incorrectly reject
+            // device allocations.
             constexpr size_t COMPUTE_HEADROOM = 512ULL * 1024 * 1024;
             size_t free_vram = 0, total_vram = 0;
             ggml_backend_sycl_get_device_memory(buft_ctx->device, &free_vram, &total_vram);
-            if (buft_ctx->allow_shared_fallback
+            if (!ggml_sycl::vram_arena_enabled()
+                && buft_ctx->allow_shared_fallback
                 && size + COMPUTE_HEADROOM > free_vram) {
                 GGML_LOG_INFO("[SYCL] Buffer alloc (%.1f MB) would leave < 512 MB headroom "
                               "(free=%.1f MB) — routing to host-pinned\n",
@@ -16691,17 +16773,13 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         void * ptr;
 
-        // Try the pre-reserved compute arena first.  The arena is allocated
-        // BEFORE S1-PRELOAD so it always has VRAM available even after weights
-        // fill the budget.  Arena pointers are bump-allocated and reset between
-        // graph_compute calls — they must NOT enter pool_leg's free-list.
+        // Try the pre-reserved compute arena first.
         ptr = ggml_sycl::unified_cache_arena_alloc(device, rounded_size);
         if (ptr) {
             *actual_size = rounded_size;
-            // Note: arena allocs are NOT tracked in pool_size — the arena
-            // manages its own memory and resets between graph_compute calls.
             return ptr;
         }
+        // Arena full or not reserved — fall back to unified cache.
 
         // Arena full or not reserved — fall back to unified cache.
         // When VRAM is available, this returns device memory.  When VRAM is
