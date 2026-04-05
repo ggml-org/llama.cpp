@@ -143,6 +143,7 @@ static bool ggml_sycl_cpu_get_rows_direct(ggml_backend_sycl_context & ctx,
                 src0_host.resize(src0_bytes);
                 src0_host_ptr = src0_host.data();
             }
+            // Category C: synchronous wait required — CPU fallback reads src0 on host immediately.
             stream->memcpy(src0_host_ptr, src0_orig, src0_bytes).wait();
             src0->data = src0_host_ptr;
         }
@@ -155,6 +156,7 @@ static bool ggml_sycl_cpu_get_rows_direct(ggml_backend_sycl_context & ctx,
                 src1_host.resize(src1_bytes);
                 src1_host_ptr = src1_host.data();
             }
+            // Category C: synchronous wait required — CPU fallback reads src1 on host immediately.
             stream->memcpy(src1_host_ptr, src1_orig, src1_bytes).wait();
             src1->data = src1_host_ptr;
         }
@@ -181,6 +183,8 @@ static bool ggml_sycl_cpu_get_rows_direct(ggml_backend_sycl_context & ctx,
         ggml_compute_forward_get_rows(&params, dst);
 
         if (ptr_is_device(dst_orig)) {
+            // Category C: synchronous wait required — must complete H2D copy-back
+            // before restoring original tensor pointers below.
             stream->memcpy(dst_orig, dst->data, dst_bytes).wait();
         }
         ok = true;
@@ -1598,6 +1602,8 @@ static sycl::event get_rows_stream_copy(sycl::queue &                    queue,
             cache->defer_host_free(host_slice, slice_bytes, evt);
         } else {
             if (!ggml_sycl_graph_recording_active()) {
+                // Category C: synchronous wait required — must complete D2H copy
+                // before freeing host_slice below (no unified cache to defer free).
                 evt.wait();
             }
             ggml_sycl_free_host_tracked_bytes(host_slice, slice_bytes, queue);
@@ -1643,6 +1649,8 @@ static sycl::event get_rows_stream_slice(sycl::queue &                    queue,
     if (!deps.empty()) {
         sycl::event dep_evt = ggml_sycl_submit_marker<ggml_sycl_get_rows_marker_kernel>(queue, deps);
         if (!queue.has_property<sycl::property::queue::in_order>() && !ggml_sycl_graph_recording_active()) {
+            // Category C: synchronous wait required — out-of-order queue needs
+            // explicit drain to honour deps before launching the slice kernel.
             dep_evt.wait();
         }
     }
@@ -1820,6 +1828,8 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 const sycl::usm::alloc alloc    = ggml_sycl_get_alloc_type(src1_i32);
                 alloc_name = ggml_sycl_usm_alloc_name(alloc);
                 if (alloc != sycl::usm::alloc::unknown) {
+                    // Category C: synchronous wait required — CPU inspects row indices
+                    // immediately after to decide dispatch strategy.
                     ctx.stream()->memcpy(host_ids, src1_i32, sizeof(int32_t) * (size_t) n_copy).wait();
                     copied = true;
                     if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
@@ -1882,6 +1892,8 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                             throw sycl::exception(sycl::make_error_code(sycl::errc::invalid),
                                                   "GET_ROWS requires host indices; disabling graphs");
                         }
+                        // Category C: synchronous wait required — CPU reads row_indices
+                        // immediately to build DMA stream schedule and segment layout.
                         ctx.stream()->memcpy(row_indices.data(), src1_i32, n_rows_total * sizeof(int32_t)).wait();
                     } else {
                         std::memcpy(row_indices.data(), src1_i32, n_rows_total * sizeof(int32_t));
@@ -1941,12 +1953,12 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                         }
                         sycl::event seq_evt =
                             ctx.stream()->memcpy(seq_device, seq_host.data(), rows_per_slice * sizeof(int32_t));
+                        // Use event dependency instead of synchronous wait.
+                        // The in-order queue already serializes, but passing
+                        // the event to stream_dma makes the dependency explicit
+                        // and avoids a full queue drain.
                         std::vector<sycl::event> stream_deps;
-                        if (ggml_sycl_graph_recording_active()) {
-                            stream_deps.push_back(seq_evt);
-                        } else {
-                            seq_evt.wait();
-                        }
+                        stream_deps.push_back(seq_evt);
 
                         stream_ctx.backend_ctx    = &ctx;
                         stream_ctx.src0           = src0;

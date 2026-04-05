@@ -736,7 +736,8 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
         float *       dst_d  = (float *) ggml_sycl_get_data_ptr(dst, device);
 
-        // Load scalar from device memory
+        // Category C: synchronous wait required — CPU reads scalar from device
+        // to pass as a captured kernel argument in the parallel_for below.
         float scalar;
         stream->memcpy(&scalar, ggml_sycl_get_data_ptr(src1, device), sizeof(float)).wait();
 
@@ -750,7 +751,8 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
         sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
 
-        // Load scalar from device memory (src1 is F32)
+        // Category C: synchronous wait required — CPU reads scalar from device
+        // to pass as a captured kernel argument in the parallel_for below.
         float scalar_f32;
         stream->memcpy(&scalar_f32, ggml_sycl_get_data_ptr(src1, device), sizeof(float)).wait();
         sycl::half scalar = sycl::half(scalar_f32);
@@ -765,7 +767,8 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
         sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
 
-        // Load scalar from device memory
+        // Category C: synchronous wait required — CPU reads scalar from device
+        // to pass as a captured kernel argument in the parallel_for below.
         sycl::half scalar;
         stream->memcpy(&scalar, ggml_sycl_get_data_ptr(src1, device), sizeof(sycl::half)).wait();
 
