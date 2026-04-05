@@ -12233,15 +12233,11 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         }
     }
     if (use_unified_cache && should_materialize && !has_preconverted_tiled) {
-        // Prefer existing layout choice if already finalized/registered.
-
-        layout_mode chosen_layout = adjusted_layout;
-        if (ggml_sycl_get_layout_choice_for_tensor(tensor, ctx->device, &chosen_layout)) {
-            adjusted_layout = chosen_layout;
-        } else {
-            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx->device);
-            if (cache_key.valid) {
-                ggml_sycl_register_layout_choice(cache_key, ctx->device, adjusted_layout, tensor->type, tensor->name);
+        // Prefer existing cached layout from resolve() (single source of truth).
+        {
+            auto resolved = ggml_sycl_resolve(tensor, ctx->device);
+            if (resolved) {
+                adjusted_layout = static_cast<layout_mode>(resolved.layout);
             }
         }
 
@@ -26617,11 +26613,14 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
                     }
                 }
             } else {
-                if (!ggml_sycl_get_layout_choice_for_tensor(src, ctx.device, &target)) {
-                    GGML_LOG_ERROR("[GRAPH-PRELOAD-WEIGHTS] missing layout choice for %s\n", src->name);
-                    return false;
+                // Use resolved layout from unified cache (single source of truth).
+                auto resolved = ggml_sycl_resolve(src, ctx.device);
+                if (resolved) {
+                    target = static_cast<layout_mode>(resolved.layout);
+                } else {
+                    // No cache entry yet — use policy-derived layout.
+                    target = ggml_sycl_adjust_layout_for_tensor(src, target, ctx.device);
                 }
-                target = ggml_sycl_adjust_layout_for_tensor(src, target, ctx.device);
             }
             auto it = target_layouts.find(cache_key);
             if (it == target_layouts.end()) {

@@ -6902,8 +6902,9 @@ void ggml_sycl_op_mul_mat_q(
     int64_t layout_row_low = 0;
 
     layout_mode chosen = GGML_LAYOUT_AOS;
-    const bool explicit_layout =
-        ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen);
+    auto resolved_lc = ggml_sycl_resolve(src0, device_id);
+    if (resolved_lc) { chosen = static_cast<layout_mode>(resolved_lc.layout); }
+    const bool explicit_layout = (chosen != GGML_LAYOUT_AOS);
     if (explicit_layout) {
         if (chosen == GGML_LAYOUT_SOA) {
             mode = reorder_mode::SOA;

@@ -2145,11 +2145,17 @@ inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int devi
 
     layout_mode target = GGML_LAYOUT_AOS;
 
-    if (ggml_sycl_tensor_is_weight(tensor)) {
-        // Layout choice registry may override the requested target.
-        // This handles weight tensors that may not have been visited during finalize_layouts.
-        if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &target)) {
-            target = GGML_LAYOUT_AOS;
+    if (ggml_sycl_tensor_is_weight(tensor) && ggml_sycl::unified_cache_enabled()) {
+        // Use the resolved layout from the unified cache (single source of truth).
+        auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+        if (cache) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            if (key.valid) {
+                auto wpr = cache->get_weight_ptr(key);
+                if (wpr) {
+                    target = wpr.layout;
+                }
+            }
         }
     }
 
@@ -2382,40 +2388,31 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         if (!unified_aos_request && resolved != target) {
             return nullptr;
         }
-        // Ensure layout choice is registered (with fallback for weights not visited during finalization).
-        // This handles weight tensors accessed via fused operations.
-        layout_mode registered_layout = GGML_LAYOUT_AOS;
-        if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &registered_layout)) {
-            // If no layout choice exists, allow AoS to fall back to raw storage.
-            // Also allow SOA/COALESCED in S1 mode — cache creates it on demand.
-            const bool s1_reordered_ok = ggml_backend_sycl_all_weights_host() &&
+        // Check actual cached layout via resolve() (single source of truth).
+        // The unified cache owns layout decisions — no separate registry needed.
+        {
+            auto resolved = ggml_sycl_resolve(tensor, device);
+            layout_mode actual_layout = resolved ? static_cast<layout_mode>(resolved.layout) : GGML_LAYOUT_AOS;
+            const bool s1_mode = ggml_backend_sycl_all_weights_host();
+            const bool s1_reordered_ok = s1_mode &&
                 (target == GGML_LAYOUT_SOA || target == GGML_LAYOUT_COALESCED);
-            if (target != GGML_LAYOUT_AOS && !s1_reordered_ok) {
-                if (out_source) {
-                    *out_source = "no_layout_choice";
+
+            if (!resolved) {
+                // No cache entry — allow AoS fallback or S1 on-demand creation.
+                if (target != GGML_LAYOUT_AOS && !s1_reordered_ok) {
+                    if (out_source) {
+                        *out_source = "no_cache_entry";
+                    }
+                    return nullptr;
                 }
-                return nullptr;
-            }
-            if (out_source) {
-                *out_source = "no_layout_choice_aos";
-            }
-        } else {
-            // Verify the registered layout matches the requested target.
-            // Exception: In S1 mode (all_weights_host), SOA/COALESCED is requested
-            // but only the PP layout (e.g. ONEDNN_PACKED) was registered during warmup.
-            // Allow through — the unified cache materializes it on demand.
-            const bool s1_reordered_request = ggml_backend_sycl_all_weights_host() &&
-                (target == GGML_LAYOUT_SOA || target == GGML_LAYOUT_COALESCED);
-            if (!unified_aos_request && !s1_reordered_request && registered_layout != target) {
+                if (out_source) {
+                    *out_source = "no_cache_entry_aos";
+                }
+            } else if (!unified_aos_request && !s1_reordered_ok && actual_layout != target) {
                 if (out_source) {
                     *out_source = "layout_mismatch";
                 }
                 return nullptr;
-            }
-            if (unified_aos_request && registered_layout != target && g_ggml_sycl_debug) {
-                GGML_SYCL_DEBUG(
-                    "[LAYOUT] unified AoS request bypassing registered layout=%d for %s\n",
-                    (int) registered_layout, tensor->name ? tensor->name : "(null)");
             }
         }
     }

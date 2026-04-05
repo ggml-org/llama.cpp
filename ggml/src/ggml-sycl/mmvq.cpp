@@ -3920,8 +3920,9 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         }
     }
     if (ctx.layouts_finalized && !mxfp4_moe_reorder_dispatch) {
-        layout_mode chosen = GGML_LAYOUT_AOS;
-        if (ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen) && chosen != layout) {
+        auto resolved_lc = ggml_sycl_resolve(src0, ctx.device);
+        layout_mode chosen = resolved_lc ? static_cast<layout_mode>(resolved_lc.layout) : GGML_LAYOUT_AOS;
+        if (chosen != layout) {
             const bool allow_aos_fallback =
                 forced_layout && layout == GGML_LAYOUT_AOS &&
                 (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);

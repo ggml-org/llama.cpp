@@ -3560,11 +3560,9 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) src0->extra;
     layout_mode             mode  = GGML_LAYOUT_AOS;
-    layout_mode             chosen = GGML_LAYOUT_AOS;
-    if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
-        mode = chosen;
-    } else {
-        mode = get_effective_layout_mode(extra);
+    {
+        auto resolved_lc = ggml_sycl_resolve(src0, device_id);
+        mode = resolved_lc ? static_cast<layout_mode>(resolved_lc.layout) : get_effective_layout_mode(extra);
     }
 
     if (src0->type == GGML_TYPE_Q4_0) {

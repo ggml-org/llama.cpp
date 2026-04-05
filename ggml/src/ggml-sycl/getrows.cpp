@@ -1712,10 +1712,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const bool              layout_ok = (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 ||
                                          src0->type == GGML_TYPE_Q6_K);
     layout_mode             layout    = GGML_LAYOUT_AOS;
-    layout_mode             chosen    = GGML_LAYOUT_AOS;
-    if (ggml_sycl_get_layout_choice_for_tensor(src0, device, &chosen)) {
-        layout = chosen;
-    } else if (layout_ok && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
+    if (layout_ok && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
         layout = mode;
     }
     const void *            layout_base = nullptr;
