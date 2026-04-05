@@ -1186,6 +1186,8 @@ struct ggml_cuda_graph {
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
+    uint64_t last_props_hash = 0;  // FNV hash of node properties from last successful check
+    int      props_stable = 0;     // consecutive checks with no change
     std::vector<ggml_cuda_graph_node_properties> props;
 
     // these are extra tensors (inputs) that participate in the ggml graph but are not nodes

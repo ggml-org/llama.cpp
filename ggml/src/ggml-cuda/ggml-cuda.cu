@@ -3041,11 +3041,47 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
+//compute a FNV-1a over all nodes and srcs which should change when a cuda graph cannot be reused
+static uint64_t ggml_cuda_graph_hash(ggml_cgraph * cgraph) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    constexpr uint64_t prime = 0x100000001b3ULL;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+
+        h ^= (uintptr_t)node->data;
+        h *= prime;
+
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            if (node->src[s]) {
+                h ^= (uintptr_t)node->src[s]->data;
+                h *= prime;
+            }
+        }
+
+        // Hash first 16 bytes of op_params
+        const uint64_t * params = (const uint64_t *)node->op_params;
+        h ^= params[0];
+        h *= prime;
+        h ^= params[1];
+        h *= prime;
+    }
+
+    return h;
+}
+
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+
+    if (graph->props_stable >= 2 && graph->props.size() == (size_t)cgraph->n_nodes) {
+        if (ggml_cuda_graph_hash(cgraph) == graph->last_props_hash) {
+            return false;
+        }
+        graph->props_stable = 0;
+    }
 
     // Check if the graph size has changed
     if (graph->props.size() != (size_t)cgraph->n_nodes) {
@@ -3094,6 +3130,13 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
             res = true;
         }
         ggml_cuda_graph_node_set_properties(&graph->extra[i], srcs_extra[i]);
+    }
+
+    if (!res) {
+        graph->props_stable++;
+        graph->last_props_hash = ggml_cuda_graph_hash(cgraph);
+    } else {
+        graph->props_stable = 0;
     }
 
     return res;
