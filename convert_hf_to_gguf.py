@@ -11687,9 +11687,9 @@ class HunyuanOCRVisionModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        # force conv weights to F16 to avoid bf16 IM2COL issues on Metal
+        # force conv weights to F32 or F16 to avoid BF16 IM2COL issues on Metal
         if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
-            return gguf.GGMLQuantizationType.F16
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
