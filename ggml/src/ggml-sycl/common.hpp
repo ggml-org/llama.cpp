@@ -2652,6 +2652,10 @@ struct ggml_backend_sycl_context {
     struct dnnl_scratchpad_entry {
         std::vector<std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> buffers;
         ggml_sycl_pool_alloc<uint8_t> *                             current = nullptr;
+        // Arena-backed scratchpad (ONEDNN zone): persistent allocation that
+        // avoids pool_leg pressure on the SCRATCH zone.
+        void * arena_ptr  = nullptr;
+        size_t arena_size = 0;
     };
 
     dnnl::stream stream_dnnl(int device, int _stream) {
@@ -2699,6 +2703,33 @@ struct ggml_backend_sycl_context {
         }
         auto & entry = scratchpad_map[q];
 
+        // Arena path: allocate from the ONEDNN zone to avoid exhausting
+        // the SCRATCH zone via pool_leg.
+        if (ggml_sycl::vram_arena_enabled()) {
+            auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+            if (cache && cache->get_arena().active()) {
+                // Reuse existing arena allocation if large enough.
+                if (entry.arena_ptr && entry.arena_size >= scratchpad_size) {
+                    return dnnl::memory(scratchpad_md, eng, entry.arena_ptr);
+                }
+                // Need larger allocation — reset ONEDNN zone and re-allocate.
+                if (entry.arena_ptr) {
+                    cache->get_arena().zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
+                    entry.arena_ptr  = nullptr;
+                    entry.arena_size = 0;
+                }
+                void * ptr = cache->get_arena().zone_alloc(
+                    ggml_sycl::vram_zone_id::ONEDNN, scratchpad_size);
+                if (ptr) {
+                    entry.arena_ptr  = ptr;
+                    entry.arena_size = scratchpad_size;
+                    return dnnl::memory(scratchpad_md, eng, ptr);
+                }
+                // ONEDNN zone full — fall through to pool_leg path.
+            }
+        }
+
+        // Pool_leg fallback path.
         if (entry.current == nullptr || scratchpad_size > entry.current->actual_size) {
             auto buffer = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
             buffer->alloc(scratchpad_size);
@@ -2724,6 +2755,32 @@ struct ggml_backend_sycl_context {
         std::lock_guard<std::mutex> lock(dnnl_mutex);
 
         auto & entry = scratchpad_map[q];
+
+        // Arena path: pre-allocate from the ONEDNN zone.
+        if (ggml_sycl::vram_arena_enabled()) {
+            auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+            if (cache && cache->get_arena().active()) {
+                if (entry.arena_ptr && entry.arena_size >= size) {
+                    return;  // Already large enough.
+                }
+                if (entry.arena_ptr) {
+                    cache->get_arena().zone_reset(ggml_sycl::vram_zone_id::ONEDNN);
+                    entry.arena_ptr  = nullptr;
+                    entry.arena_size = 0;
+                }
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-allocating scratchpad from ONEDNN zone: %zu bytes\n", size);
+                void * ptr = cache->get_arena().zone_alloc(
+                    ggml_sycl::vram_zone_id::ONEDNN, size);
+                if (ptr) {
+                    entry.arena_ptr  = ptr;
+                    entry.arena_size = size;
+                    return;
+                }
+                // Fall through to pool_leg path.
+            }
+        }
+
+        // Pool_leg fallback path.
         if (entry.current == nullptr || size > entry.current->actual_size) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-allocating scratchpad pool: %zu bytes\n", size);
             auto buffer = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
