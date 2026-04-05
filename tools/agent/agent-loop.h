@@ -252,6 +252,7 @@ private:
     // Compaction state
     int32_t     last_prompt_tokens_ = 0;
     bool        last_completion_overflowed_ = false;
+
     std::string previous_summary_;
 
     // Session persistence

@@ -699,10 +699,12 @@ common_peg_parser analyze_tools::build_tool_parser_tag_gemma4_dict(parser_build_
         }
 
         // Full parser: call:name{args}
-        auto func_parser = p.atomic(
-            p.tool_open(p.literal(function.name_prefix) + p.tool_name(p.literal(name)) + p.literal("{")) +
+        // Only wrap tool_open in atomic() so tool_args can stream incrementally
+        // during partial parsing (matching how TAG_WITH_JSON parsers work).
+        auto func_parser =
+            p.atomic(p.tool_open(p.literal(function.name_prefix) + p.tool_name(p.literal(name)) + p.literal("{"))) +
             p.tool_args(args_seq) +
-            p.tool_close(p.literal("}")));
+            p.tool_close(p.literal("}"));
 
         tool_choice |= p.rule("tool-" + name, func_parser);
     });
