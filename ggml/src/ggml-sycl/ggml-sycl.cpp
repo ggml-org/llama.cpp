@@ -7675,8 +7675,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_probe_buffer_type_alloc_buffer(gg
                                                                               size_t                     size) {
     auto * ctx = (ggml_backend_sycl_probe_buffer_context *) buft->context;
     ggml_sycl_set_device(ctx->device);
-    // Use _raw: probe runs during static init before the unified cache exists.
-    void * ptr = ggml_sycl_malloc_device_raw(size, *ctx->stream, "probe_buffer");
+    void * ptr = ggml_sycl_malloc_device(size, *ctx->stream, "probe_buffer");
     if (ptr == nullptr) {
         return nullptr;
     }
@@ -7978,6 +7977,12 @@ static ggml_sycl_device_info ggml_sycl_init() {
         // pool, making subsequent get_memory_info() report artificially low
         // free_mem.  This pre-probe snapshot is the ground truth.
         info.devices[i].free_vram_at_init = free_vram;
+
+        // Pre-initialize unified cache for this device before the probe.
+        // The probe allocation routes through unified_cache_allocate, which
+        // needs the cache to exist.  Creating it here avoids a static init
+        // deadlock when cache creation is triggered inside a probe callback.
+        ggml_sycl::get_unified_cache_for_device(i);
 
         size_t probe_upper = info.devices[i].max_alloc_size;
         if (free_vram > 0 && free_vram < probe_upper) {
