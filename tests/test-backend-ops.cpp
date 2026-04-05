@@ -6705,6 +6705,53 @@ static std::string var_to_str(const std::array<int32_t, GGML_MAX_OP_PARAMS / siz
     return oss.str();
 }
 
+struct test_gather : public test_case {
+    const ggml_type type;
+    const int64_t m;  // source dim0 (valid index range)
+    const int64_t n;  // number of indices to gather
+    const int64_t r;  // rows (ne1)
+    
+    std::string vars() override {
+        return VARS_TO_STR4(type, m, n, r);
+    }
+    
+    test_gather(ggml_type type = GGML_TYPE_F32,
+                int64_t m = 10,
+                int64_t n = 3,
+                int64_t r = 1)
+        : type(type), m(m), n(n), r(r) {}
+    
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * in = ggml_new_tensor_4d(ctx, type, m, r, 1, 1);
+        ggml_set_name(in, "in");
+        ggml_set_input(in);
+        
+        ggml_tensor * ids = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, n, r, 1, 1);
+        ggml_set_name(ids, "ids");
+        ggml_set_input(ids);
+        
+        ggml_tensor * out = ggml_gather(ctx, in, ids);
+        ggml_set_name(out, "out");
+        
+        return out;
+    }
+    
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                const int num = ggml_nelements(t);
+                std::vector<int32_t> data(num);
+                for (int i = 0; i < num; i++) {
+                    data[i] = rand() % m;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, num * sizeof(int32_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 
 struct test_generic_op : public test_case {
     const ggml_op op;
@@ -8576,6 +8623,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 1 }, { 32, 128, 4, 1 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 200, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 384, 64, 4, 4 }));
+    test_cases.emplace_back(new test_gather(GGML_TYPE_F32, 10, 3, 1));
+    test_cases.emplace_back(new test_gather(GGML_TYPE_F16, 10, 3, 1));
+    test_cases.emplace_back(new test_gather(GGML_TYPE_F32, 10, 3, 10));
+    test_cases.emplace_back(new test_gather(GGML_TYPE_F32, 65536, 2048, 1));
 
     for (int tfrm : {0, 1, 2}) {
         for (bool circular : {false, true}) {
