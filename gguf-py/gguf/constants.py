@@ -734,6 +734,7 @@ class MODEL_TENSOR(IntEnum):
     V_LAYER_OUT_SCALE    = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
+    V_MM_PRE_NORM        = auto() # hunyuanocr
     V_MM_POST_NORM       = auto()
     V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
@@ -769,6 +770,8 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
+    V_TOK_IMG_BEGIN      = auto() # hunyuanocr
+    V_TOK_IMG_END        = auto() # hunyuanocr
     V_STD_BIAS           = auto() # gemma4
     V_STD_SCALE          = auto() # gemma4
     V_SAM_POS_EMBD       = auto() # Deepseek-OCR
@@ -1246,6 +1249,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
+    MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
+    MODEL_TENSOR.V_TOK_IMG_BEGIN:           "mm.image_begin",
+    MODEL_TENSOR.V_TOK_IMG_END:             "mm.image_end",
     MODEL_TENSOR.V_STD_BIAS:                "v.std_bias", # gemma4
     MODEL_TENSOR.V_STD_SCALE:               "v.std_scale", # gemma4
     # DeepSeek-OCR SAM
@@ -1393,6 +1399,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_GATE,
         MODEL_TENSOR.V_TOK_BOI,
         MODEL_TENSOR.V_TOK_EOI,
+        MODEL_TENSOR.V_MM_PRE_NORM,
+        MODEL_TENSOR.V_TOK_IMG_BEGIN,
+        MODEL_TENSOR.V_TOK_IMG_END,
         MODEL_TENSOR.V_STD_BIAS,
         MODEL_TENSOR.V_STD_SCALE,
         MODEL_TENSOR.V_SAM_POS_EMBD,
@@ -4113,6 +4122,7 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
+    HUNYUANOCR     = "hunyuanocr"
 
 
 # Items here are (block size, type size)
