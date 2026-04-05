@@ -972,6 +972,28 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         }
     }
 
+    // Host-pinned memory pool — optional, enabled via GGML_SYCL_HOST_POOL_MB.
+    {
+        size_t host_pool_mb = 0;
+        if (const char * env = std::getenv("GGML_SYCL_HOST_POOL_MB")) {
+            host_pool_mb = static_cast<size_t>(std::max(0, std::atoi(env)));
+        }
+        if (host_pool_mb > 0) {
+            const size_t pool_bytes = host_pool_mb * 1024 * 1024;
+            try {
+                host_pool_ptr_  = sycl::malloc_host(pool_bytes, queue_);
+                host_pool_size_ = pool_bytes;
+                GGML_LOG_INFO("[UNIFIED-CACHE] Host-pinned pool: %.1f MB\n",
+                              pool_bytes / (1024.0 * 1024.0));
+            } catch (const sycl::exception & e) {
+                GGML_LOG_WARN("[UNIFIED-CACHE] Failed to allocate host pool (%.1f MB): %s\n",
+                              pool_bytes / (1024.0 * 1024.0), e.what());
+                host_pool_ptr_  = nullptr;
+                host_pool_size_ = 0;
+            }
+        }
+    }
+
     // Create a separate in-order DMA queue for cache operations (CCS engine).
     // This keeps cache DMA/fill work off the compute queue, preventing
     // >20s accumulated queue work that triggers L0 DirectSubmission timeouts.
@@ -1039,6 +1061,7 @@ unified_cache::~unified_cache() {
         // Abandon arena without calling sycl::free — context is invalid.
         arena_.abandon();
         compute_arena_ptr_ = nullptr;
+        host_pool_ptr_     = nullptr;
         return;
     }
 
@@ -1054,6 +1077,7 @@ unified_cache::~unified_cache() {
             layout_pool_->abandon();
         }
         compute_arena_ptr_ = nullptr;
+        host_pool_ptr_     = nullptr;
         return;
     }
 
@@ -1092,6 +1116,13 @@ unified_cache::~unified_cache() {
     scratch_pool_ptr_  = nullptr;
     scratch_pool_size_ = 0;
     scratch_pool_off_.store(0, std::memory_order_relaxed);
+
+    // Free host-pinned pool (not arena-owned — always sycl::malloc_host).
+    if (host_pool_ptr_) {
+        try { sycl::free(host_pool_ptr_, queue_); } catch (...) {}
+        host_pool_ptr_  = nullptr;
+        host_pool_size_ = 0;
+    }
 
     // Free oneDNN scratch buffers BEFORE arena destroy (arena_.owns() needs live arena).
     if (onednn_weights_scratch_) {
@@ -9667,6 +9698,25 @@ void unified_cache::reset_scratch_pool() {
     scratch_pool_off_.store(0, std::memory_order_relaxed);
 }
 
+// --- Host-Pinned Memory Pool ---
+
+void * unified_cache::host_pool_alloc(size_t size) {
+    if (!host_pool_ptr_ || size == 0) {
+        return nullptr;
+    }
+    const size_t aligned = (size + 255) & ~size_t(255);
+    size_t off = host_pool_off_.fetch_add(aligned, std::memory_order_relaxed);
+    if (off + aligned > host_pool_size_) {
+        host_pool_off_.fetch_sub(aligned, std::memory_order_relaxed);
+        return nullptr;
+    }
+    return static_cast<uint8_t *>(host_pool_ptr_) + off;
+}
+
+void unified_cache::host_pool_reset() {
+    host_pool_off_.store(0, std::memory_order_relaxed);
+}
+
 // --- Expert Allocation ---
 
 unified_cache::vram_alloc_result unified_cache::allocate_expert(size_t size) {
@@ -9904,6 +9954,11 @@ void unified_cache_reset_scratch_pool(int device_id) {
     if (cache) {
         cache->reset_scratch_pool();
     }
+}
+
+void * unified_cache_host_pool_alloc(int device_id, size_t size) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    return cache ? cache->host_pool_alloc(size) : nullptr;
 }
 
 unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size) {

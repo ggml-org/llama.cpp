@@ -145,10 +145,11 @@ resolved_ptr mem_handle::resolve_slow() const {
 
 resolved_ptr mem_handle::resolve_arena() const {
     if (kind_ == mem_handle_kind::ARENA_HOST) {
-        // TODO: Host pool base resolution will be wired when the host arena
-        // is implemented.  For now, return null — callers should not create
-        // ARENA_HOST handles until the host pool is live.
-        return {};
+        unified_cache * cache = get_unified_cache_for_device(device_);
+        if (!cache || !cache->host_pool_base()) {
+            return {};
+        }
+        return { static_cast<uint8_t *>(cache->host_pool_base()) + offset_ };
     }
 
     // Device arena: query unified_cache for the vram_arena.
