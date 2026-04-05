@@ -11670,6 +11670,7 @@ class HunyuanOCRVisionModel(MmprojModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        assert self.hparams_vision is not None
         hparams = self.hparams_vision
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANOCR)
         self.gguf_writer.add_vision_use_gelu(True)
