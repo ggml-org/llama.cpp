@@ -10096,33 +10096,66 @@ bool vram_arena::reserve(sycl::queue & queue, size_t budget_bytes, size_t max_al
     compute_bytes = (compute_bytes + 255) & ~size_t(255);
     onednn_bytes  = (onednn_bytes + 255) & ~size_t(255);
 
-    // Default: 2-chunk split to avoid BMG driver hang with large (>5.5 GB)
-    // single allocations.  chunk0 = compute + oneDNN + KV, chunk1 = weights.
-    // Each chunk stays safely under the driver threshold.
-    //
-    // chunk0 sized to hold compute + oneDNN + remaining space for KV,
-    // capped at half the budget so neither chunk triggers the BMG bug.
-    // chunk1 gets the rest for weights.
-    const size_t fixed_zones  = compute_bytes + onednn_bytes;
-    const size_t half_budget  = budget_bytes / 2;
-    // chunk0: at least fixed_zones, at most half_budget, never > max_alloc_size.
-    size_t chunk0_size = std::max(fixed_zones, half_budget);
-    chunk0_size        = std::min(chunk0_size, max_alloc_size);
-    chunk0_size        = (chunk0_size + 255) & ~size_t(255);
-    // chunk1: rest of budget, capped at max_alloc_size.
-    size_t chunk1_size = (budget_bytes > chunk0_size) ? budget_bytes - chunk0_size : 0;
-    chunk1_size        = std::min(chunk1_size, max_alloc_size);
-    chunk1_size        = (chunk1_size + 255) & ~size_t(255);
+    // Try single-chunk first.  All zones share one contiguous allocation.
+    // Falls back to 2-chunk (compute+oneDNN vs weights) if single alloc fails.
+    int dev_id = ggml_sycl_get_device_id_from_queue(queue);
 
-    if (chunk0_size == 0 || chunk1_size == 0) {
-        GGML_LOG_WARN("[VRAM-ARENA] Budget too small for 2-chunk split (%.1f MB)\n",
-                      budget_bytes / (1024.0 * 1024.0));
+    void * ptr = nullptr;
+    size_t alloc_size = budget_bytes;
+
+    if (alloc_size <= max_alloc_size) {
+        try {
+            ptr = sycl::malloc_device(alloc_size, queue);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_WARN("[VRAM-ARENA] Single alloc (%.1f MB) failed: %s\n",
+                          alloc_size / (1024.0 * 1024.0), e.what());
+            ptr = nullptr;
+        }
+        if (ptr) {
+            alloc_registry::instance().register_alloc(ptr, alloc_size, dev_id, alloc_type::DEVICE);
+
+            chunks_[0]  = { ptr, alloc_size };
+            n_chunks_   = 1;
+            arena_base_ = ptr;
+            arena_size_ = alloc_size;
+
+            // Single-chunk zone layout: [Compute] [oneDNN] [KV→] [...free...] [←Weight]
+            size_t off = 0;
+            auto & cz = zones_[static_cast<int>(vram_zone_id::COMPUTE)];
+            cz.start  = off; cz.size = compute_bytes; cz.used.store(0, std::memory_order_relaxed);
+            off += compute_bytes;
+
+            auto & oz = zones_[static_cast<int>(vram_zone_id::ONEDNN)];
+            oz.start  = off; oz.size = onednn_bytes; oz.used.store(0, std::memory_order_relaxed);
+            off += onednn_bytes;
+
+            auto & kz = zones_[static_cast<int>(vram_zone_id::KV)];
+            kz.start  = off; kz.size = alloc_size - off; kz.used.store(0, std::memory_order_relaxed);
+
+            auto & wz = zones_[static_cast<int>(vram_zone_id::WEIGHT)];
+            wz.start  = off; wz.size = alloc_size - off; wz.used.store(0, std::memory_order_relaxed);
+
+            GGML_LOG_INFO("[VRAM-ARENA] Reserved single chunk: %.1f MB "
+                          "(compute=%.1f, oneDNN=%.1f, shared KV+weight=%.1f MB)\n",
+                          alloc_size / (1024.0 * 1024.0), compute_bytes / (1024.0 * 1024.0),
+                          onednn_bytes / (1024.0 * 1024.0), (alloc_size - off) / (1024.0 * 1024.0));
+            return true;
+        }
+    }
+
+    // Fallback: 2-chunk split (50% + 40% of budget).
+    const size_t chunk0_size = (budget_bytes * 50) / 100;
+    const size_t chunk1_size = (budget_bytes * 40) / 100;
+
+    if (chunk0_size > max_alloc_size || chunk1_size > max_alloc_size) {
+        GGML_LOG_WARN("[VRAM-ARENA] 2-chunk sizes (%.1f + %.1f MB) exceed max_alloc (%.1f MB)\n",
+                      chunk0_size / (1024.0 * 1024.0), chunk1_size / (1024.0 * 1024.0),
+                      max_alloc_size / (1024.0 * 1024.0));
         return false;
     }
 
     void * p0 = nullptr;
     void * p1 = nullptr;
-    int dev_id = ggml_sycl_get_device_id_from_queue(queue);
     try {
         p0 = sycl::malloc_device(chunk0_size, queue);
     } catch (...) { p0 = nullptr; }
