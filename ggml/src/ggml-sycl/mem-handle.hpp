@@ -84,7 +84,7 @@ public:
                                       int device_id, uint64_t generation);
 
     // Create a host-pinned pool handle.
-    static mem_handle from_host_pool(size_t offset, size_t size, uint64_t generation);
+    static mem_handle from_host_pool(size_t offset, size_t size, int device_id, uint64_t generation);
 
     // Resolve the current pointer.  Hot path (~3 ns):
     //   if (kind == DIRECT || gen_ == cache_generation())

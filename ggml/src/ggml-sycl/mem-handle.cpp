@@ -75,10 +75,10 @@ mem_handle mem_handle::from_arena_zone(int zone_id, size_t offset, size_t size,
     return h;
 }
 
-mem_handle mem_handle::from_host_pool(size_t offset, size_t size, uint64_t generation) {
+mem_handle mem_handle::from_host_pool(size_t offset, size_t size, int device_id, uint64_t generation) {
     mem_handle h;
     h.kind_      = mem_handle_kind::ARENA_HOST;
-    h.device_    = -1;  // Host, no device
+    h.device_    = device_id;
     h.zone_id_   = -1;
     h.offset_    = offset;
     h.size_      = size;
@@ -149,7 +149,9 @@ resolved_ptr mem_handle::resolve_arena() const {
         if (!cache || !cache->host_pool_base()) {
             return {};
         }
-        return { static_cast<uint8_t *>(cache->host_pool_base()) + offset_ };
+        cached_ = { static_cast<uint8_t *>(cache->host_pool_base()) + offset_, GGML_LAYOUT_AOS, false };
+        gen_    = arena_gen_;
+        return cached_;
     }
 
     // Device arena: query unified_cache for the vram_arena.
