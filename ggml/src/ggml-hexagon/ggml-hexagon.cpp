@@ -53,8 +53,8 @@ static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX onl
 // Enable all stages by default
 static int opt_opmask   = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
 static int opt_opsync   = 0;  // synchronous ops
-static int opt_opbatch  = 1024; // max number of ops in a batched request
-static int opt_opqueue  = 16;   // max number of pending op batches
+static int opt_opbatch  = 1024; // max number of ops in a batch
+static int opt_opqueue  = 16;   // max number of pending batches
 
 #define HEX_VERBOSE(...) \
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
@@ -114,8 +114,8 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
 
 // ** backend sessions
 
-struct op_request_batch;
-struct op_shared_mem;
+struct ggml_hexagon_opbatch;
+struct ggml_hexagon_opshm;
 
 struct ggml_hexagon_session {
     std::string      name;
@@ -130,9 +130,9 @@ struct ggml_hexagon_session {
     bool             valid_queue;
     bool             valid_iface;
 
-    std::atomic<int> op_pending;
-    op_request_batch *orb;
-    op_shared_mem    *oshm;
+    std::atomic<int>      op_pending;
+    ggml_hexagon_opbatch *op_batch;
+    ggml_hexagon_opshm   *op_shm;
 
     ggml_backend_buffer_type buffer_type        = {};
     ggml_backend_buffer_type repack_buffer_type = {};
@@ -149,7 +149,7 @@ struct ggml_hexagon_session {
     void flush(bool all = true);
 
     void flush_pending(bool all = false);
-    void flush_orb(op_request_batch *orb);
+    void flush_batch();
 };
 
 // ** backend buffers
@@ -1520,7 +1520,7 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
 
 // Backend session implementation
 
-struct op_shared_mem {
+struct ggml_hexagon_opshm {
     ggml_hexagon_shared_buffer *sbuf;
 
     std::vector<bool> block_mask;
@@ -1530,7 +1530,7 @@ struct op_shared_mem {
     int       fd()       const { return this->sbuf->fd;   }
     size_t    n_blocks() const { return this->block_mask.size(); }
 
-    op_shared_mem(ggml_hexagon_session *sess, size_t max_batch, size_t max_pending) {
+    ggml_hexagon_opshm(ggml_hexagon_session *sess, size_t max_batch, size_t max_pending) {
         size_t n_bufs    = HTP_OP_MAX_BUFS;
         size_t n_ops     = max_batch;
         size_t n_tensors = n_ops + n_ops * HTP_OP_MAX_INPUTS;
@@ -1549,7 +1549,7 @@ struct op_shared_mem {
         }
     }
 
-    ~op_shared_mem() {
+    ~ggml_hexagon_opshm() {
         delete sbuf;
     }
 
@@ -1573,7 +1573,7 @@ struct op_shared_mem {
     }
 };
 
-struct op_request_batch {
+struct ggml_hexagon_opbatch {
     const char* name;
 
     std::vector<htp_op_buf> buffers;
@@ -1597,7 +1597,7 @@ struct op_request_batch {
         t_map.clear();
     }
 
-    op_request_batch(ggml_hexagon_session *sess, size_t max_batch) {
+    ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t max_batch) {
         name = sess->c_name();
      
         this->max_batch = max_batch;
@@ -1715,7 +1715,7 @@ struct op_request_batch {
         memcpy(t_ptr, (void *) tensors.data(), t_size);
         memcpy(o_ptr, (void *) ops.data(),     o_size);
 
-        HEX_VERBOSE("ggml-hex: %s orb-flush : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
+        HEX_VERBOSE("ggml-hex: %s op-batch-flush : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
                 name, n_bufs, n_tens, n_ops, b_size, t_size, o_size);
 
         if (opt_verbose > 1) {
@@ -1765,7 +1765,7 @@ void ggml_hexagon_session::flush_pending(bool all) {
             GGML_ABORT("ggml-hex: %s dspcall : bad response : size %u dspbufs %u\n", this->c_name(), rsp_size, n_dbufs);
         }
 
-        oshm->release((uint8_t*) dbuf.ptr);
+        op_shm->release((uint8_t*) dbuf.ptr);
 
         if (rsp.status != HTP_STATUS_OK) {
             GGML_LOG_ERROR("ggml-hex: %s dspcall : dsp-rsp: %s\n", this->c_name(), status_to_str(rsp.status));
@@ -1784,51 +1784,47 @@ void ggml_hexagon_session::flush_pending(bool all) {
     }
 }
 
-void ggml_hexagon_session::flush_orb(op_request_batch *orb) {
-    dspqueue_t q = this->queue;
+void ggml_hexagon_session::flush_batch() {
+    if (op_batch->empty()) { return; }
 
     htp_general_req req;
-    req.n_bufs    = orb->n_bufs;
-    req.n_tensors = orb->n_tens;
-    req.n_ops     = orb->n_ops;
+    req.n_bufs    = op_batch->n_bufs;
+    req.n_tensors = op_batch->n_tens;
+    req.n_ops     = op_batch->n_ops;
 
     dspqueue_buffer dbuf;
-    dbuf.fd     = oshm->fd();
+    dbuf.fd     = op_shm->fd();
     dbuf.flags  = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
-    dbuf.ptr    = oshm->allocate();
+    dbuf.ptr    = op_shm->allocate();
     if (!dbuf.ptr) {
         flush_pending(false);
-        dbuf.ptr = oshm->allocate();
+        dbuf.ptr = op_shm->allocate();
     }
 
-    dbuf.offset = (uint8_t*) dbuf.ptr - (uint8_t*) oshm->base();
-    dbuf.size   = orb->flush((uint8_t*) dbuf.ptr, oshm->block_size);
+    dbuf.offset = (uint8_t*) dbuf.ptr - (uint8_t*) op_shm->base();
+    dbuf.size   = op_batch->flush((uint8_t*) dbuf.ptr, op_shm->block_size);
 
     // Bump pending flag (cleared in the session::flush once we get the response)
     this->op_pending++;  // atomic inc
 
     HEX_VERBOSE("ggml-hex: %s: queing opbatch : %p size %u\n", this->c_name(), dbuf.ptr, dbuf.size);
 
-    int err = dspqueue_write(q, 0, 1, &dbuf, sizeof(req), (const uint8_t*) &req, DSPQUEUE_TIMEOUT);
+    int err = dspqueue_write(this->queue, 0, 1, &dbuf, sizeof(req), (const uint8_t*) &req, DSPQUEUE_TIMEOUT);
     if (err != 0) {
         GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->c_name(), (unsigned) err);
     }
 }
 
 void ggml_hexagon_session::enqueue_op(htp_op_code opcode, const ggml_tensor *op) {
-    bool full = orb->add_op(opcode, op);
+    bool full = op_batch->add_op(opcode, op);
     if (full) {
-        flush_orb(orb);
+        flush_batch();
     }
 }
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
 void ggml_hexagon_session::flush(bool all) {
-    // If current batch (if any)
-    if (!orb->empty()) {
-        flush_orb(orb);
-    }
-
+    flush_batch();
     flush_pending(all);
 }
 
@@ -1935,11 +1931,14 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
     }
 
+    const size_t req_q_size = opt_opqueue * 2 * sizeof(htp_general_req);
+    const size_t rsp_q_size = opt_opqueue * 2 * sizeof(htp_general_rsp);
+
     // Now let's setup the DSP queue
     err = dspqueue_create(this->domain_id,
                           0,              // Flags
-                          256 * 1024,     // Request  queue size (in bytes)
-                          64 * 1024,      // Response queue size (in bytes)
+                          req_q_size,     // Request  queue size (in bytes)
+                          rsp_q_size,     // Response queue size (in bytes)
                           nullptr,        // Read packet callback (we handle reads explicitly)
                           nullptr,        // Error callback (we handle errors during reads)
                           (void *) this,  // Callback context
@@ -1975,9 +1974,9 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
     this->valid_iface = true;
 
-    // Allocate buffers and state for OpReq batching
-    this->orb  = new op_request_batch(this, opt_opbatch);
-    this->oshm = new op_shared_mem(this, opt_opbatch, opt_opqueue);
+    // Allocate buffers and state for op batching
+    this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch);
+    this->op_shm   = new ggml_hexagon_opshm(this, opt_opbatch, opt_opqueue);
 }
 
 void ggml_hexagon_session::release() noexcept(true) {
@@ -1985,7 +1984,8 @@ void ggml_hexagon_session::release() noexcept(true) {
 
     int err;
 
-    delete this->orb;
+    delete this->op_batch;
+    delete this->op_shm;
 
     // Stop the DSP-side service and close the queue
     if (this->valid_iface) {
@@ -2018,7 +2018,8 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
     buffer_type.device        = dev;
     repack_buffer_type.device = dev;
 
-    orb = nullptr;
+    op_batch = nullptr;
+    op_shm   = nullptr;
 
     try {
         allocate(dev_id);
