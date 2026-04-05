@@ -1,5 +1,5 @@
 // SYCL unified-cache layout choice test.
-// Verifies that pre-finalize layouts are purged after finalize_layouts selects a single layout.
+// Verifies that resolve() returns the correct layout for cached weights.
 
 #include <cstdio>
 #include <cstdlib>

@@ -3048,9 +3048,9 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 }
                 // During graph_compute, do NOT evict device-resident entries for a
                 // layout switch.  S1-PRELOAD stores weights in COALESCED layout on
-                // device; warmup's finalize_layouts may request a different layout
-                // (e.g. oneDNN for PP).  Evicting the device entry and creating a
-                // host-resident AOS replacement:
+                // device; dispatch may request a different layout (e.g. oneDNN for
+                // PP).  Evicting the device entry and creating a host-resident AOS
+                // replacement:
                 //   (a) destroys the arena-backed allocation permanently (pool memory
                 //       cannot be individually freed/reclaimed)
                 //   (b) the new device alloc fails with OOM (arena consumed all VRAM)

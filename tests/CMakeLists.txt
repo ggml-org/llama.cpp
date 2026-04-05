@@ -1359,7 +1359,7 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-host-kquant RUNTIME)
     add_test(NAME test-sycl-host-kquant COMMAND $<TARGET_FILE:test-sycl-host-kquant>)
 
-    # test-sycl-layout-choice: Ensures single layout per tensor after finalize_layouts.
+    # test-sycl-layout-choice: Ensures resolve() returns the correct layout for cached weights.
     add_executable(test-sycl-layout-choice test-sycl-layout-choice.cpp)
     target_link_libraries(test-sycl-layout-choice PRIVATE ggml)
     target_include_directories(test-sycl-layout-choice PRIVATE

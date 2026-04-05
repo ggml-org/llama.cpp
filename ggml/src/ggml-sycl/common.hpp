@@ -2582,8 +2582,6 @@ struct ggml_backend_sycl_context {
     // Tensor state is tracked per-tensor in ggml_tensor_extra_gpu::optimized_feature
     bool        supports_soa_reorder;
     ggml_sycl::UnifiedMatmulOrchestrator matmul_orchestrator;
-    bool        layouts_finalized       = false;
-    uint64_t    layouts_finalized_epoch = 0;
     uint64_t    exec_graph_hash         = 0;
     int         moe_layer_count         = 0;
 

@@ -3919,22 +3919,6 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             (int) effective);
         }
     }
-    if (ctx.layouts_finalized && !mxfp4_moe_reorder_dispatch) {
-        auto resolved_lc = ggml_sycl_resolve(src0, ctx.device);
-        layout_mode chosen = resolved_lc ? static_cast<layout_mode>(resolved_lc.layout) : GGML_LAYOUT_AOS;
-        if (chosen != layout) {
-            const bool allow_aos_fallback =
-                forced_layout && layout == GGML_LAYOUT_AOS &&
-                (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);
-            if (!allow_aos_fallback) {
-                GGML_SYCL_DEBUG("[MMVQ] Layout=%d mismatches chosen=%d for %s\n", (int) layout, (int) chosen,
-                                src0->name ? src0->name : "?");
-                return false;
-            }
-            GGML_SYCL_DEBUG("[MMVQ] Allowing AoS fallback despite chosen=%d for %s\n", (int) chosen,
-                            src0->name ? src0->name : "?");
-        }
-    }
     if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0) && layout != GGML_LAYOUT_AOS) {
         GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for MoE type=%d (%s)\n", (int) layout, src0->type,
                         src0->name ? src0->name : "?");
