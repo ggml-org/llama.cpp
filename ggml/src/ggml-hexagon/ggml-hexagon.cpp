@@ -146,8 +146,9 @@ struct ggml_hexagon_session {
     void release() noexcept(true);
 
     void enqueue_op(htp_op_code opcode, const ggml_tensor *op);
-    void flush();
+    void flush(bool all = true);
 
+    void flush_pending(bool all = false);
     void flush_orb(op_request_batch *orb);
 };
 
@@ -1520,35 +1521,51 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
 // Backend session implementation
 
 struct op_shared_mem {
-    ggml_hexagon_shared_buffer *buf;
+    ggml_hexagon_shared_buffer *sbuf;
 
-    uint64_t  block_mask;
-    size_t    block_size;
-    size_t    n_blocks;
+    std::vector<bool> block_mask;
+    size_t            block_size;
+
+    size_t n_blocks() const { return this->block_mask.size(); }
+    int    fd()       const { return this->sbuf->fd; }
 
     op_shared_mem(ggml_hexagon_session *sess, size_t max_batch, size_t max_pending) {
         size_t n_bufs    = HTP_OP_MAX_BUFS;
         size_t n_ops     = max_batch;
         size_t n_tensors = n_ops + n_ops * HTP_OP_MAX_INPUTS;
 
+        block_mask.resize(max_pending, true);
+
         block_size = sizeof(htp_general_req)        +
                      sizeof(htp_op_buf) * n_bufs    +
                      sizeof(htp_tensor) * n_tensors +
                      sizeof(htp_op_req) * n_ops;
 
-        const size_t max_blocks = sizeof(block_mask) * 8; // 1 bit per block
-        n_blocks   = max_pending < max_blocks ? max_pending : max_blocks;
-
-        buf = new ggml_hexagon_shared_buffer(sess, block_size * n_blocks, true /* pinned */);
+        sbuf = new ggml_hexagon_shared_buffer(sess, block_size * block_mask.size(), true /* pinned */);
 
         if (opt_verbose) {
             GGML_LOG_INFO("ggml-hex: %s allocated shared buf %zu : block-size %zu max-batch %zu max-pending %zu\n",
-                    sess->c_name(), (size_t) buf->size, block_size, max_batch, max_pending);
+                    sess->c_name(), (size_t) sbuf->size, block_size, max_batch, max_pending);
         }
     }
 
     ~op_shared_mem() {
-        delete buf;
+        delete sbuf;
+    }
+
+    uint8_t * allocate() {
+        auto it = std::find(block_mask.begin(), block_mask.end(), true);
+        if (it == block_mask.end())
+            return nullptr;
+
+        int i = std::distance(block_mask.begin(), it);
+        block_mask[i] = false;
+        return sbuf->base + (i * block_size);
+    }
+
+    void release(uint8_t * addr) {
+        int i = (addr - sbuf->base) / block_size;
+        block_mask[i] = true;
     }
 };
 
@@ -1562,13 +1579,9 @@ struct op_request_batch {
     std::unordered_map<int, int>                b_map; // buffer fd  to index
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr to index
 
-    // TODO: use separate fastrpc buffer for packing stuff
-    std::vector<uint8_t> packed;
-
     unsigned int n_bufs;
     unsigned int n_tens;
     unsigned int n_ops;
-
     unsigned int n_reqs_max;
 
     void reset() {
@@ -1665,7 +1678,7 @@ struct op_request_batch {
         return full();
     }
 
-    std::pair<uint8_t*, size_t> flush() {
+    size_t flush(uint8_t * mem_addr, size_t mem_size) {
         static_assert(sizeof(htp_op_buf) % 8 == 0, "sizeof(htp_op_buf) must be multiple of 8");
         static_assert(sizeof(htp_tensor) % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
         static_assert(sizeof(htp_op_req) % 8 == 0, "sizeof(htp_op_req) must be multiple of 8");
@@ -1675,9 +1688,10 @@ struct op_request_batch {
         const size_t t_size = sizeof(htp_tensor) * n_tens;
         const size_t o_size = sizeof(htp_op_req) * n_ops;
 
-        packed.resize(h_size + b_size + t_size + o_size);
+        const size_t m_size = h_size + b_size + t_size + o_size;
+        GGML_ASSERT(m_size <= mem_size);
 
-        auto *    h_ptr = (htp_general_req*) (this->packed.data());
+        auto *    h_ptr = (htp_general_req*) mem_addr;
         uint8_t * b_ptr = (uint8_t *) h_ptr + h_size;
         uint8_t * t_ptr = (uint8_t *) b_ptr + b_size;
         uint8_t * o_ptr = (uint8_t *) t_ptr + t_size;
@@ -1709,45 +1723,13 @@ struct op_request_batch {
 
         reset();
 
-        return { packed.data(), packed.size() };
+        return m_size;
     }
 };
 
-void ggml_hexagon_session::flush_orb(op_request_batch *orb)
-{
-    dspqueue_t q = this->queue;
-    auto b = orb->flush();
-
-    // Bump pending flag (cleared in the session::flush once we get the response)
-    this->op_pending++;  // atomic inc
-
-    HEX_VERBOSE("ggml-hex: %s: queing op req batch : size %zu\n", this->name.c_str(), b.second);
-
-    dspqueue_buffer *bufs = nullptr;
-    size_t         n_bufs = 0;
-
-    int err = dspqueue_write(q, 0, n_bufs, bufs, b.second, b.first, DSPQUEUE_TIMEOUT);
-    if (err != 0) {
-        GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->name.c_str(), (unsigned) err);
-    }
-}
-
-void ggml_hexagon_session::enqueue_op(htp_op_code opcode, const ggml_tensor *op)
-{
-    bool full = orb->add_op(opcode, op);
-    if (full) {
-        flush_orb(orb);
-    }
-}
-
 // Flush HTP response queue i.e wait for all outstanding requests to complete
-void ggml_hexagon_session::flush() {
+void ggml_hexagon_session::flush_pending(bool all) {
     dspqueue_t q = this->queue;
-
-    // If current batch (if any)
-    if (!orb->empty()) {
-        flush_orb(orb);
-    }
 
     while (this->op_pending) {
         struct htp_general_rsp rsp;
@@ -1785,7 +1767,53 @@ void ggml_hexagon_session::flush() {
         // this->prof_pkts   = rsp.prof_pkts;
 
         this->op_pending--;  // atomic dec
+
+        if (!all) break;
     }
+}
+
+void ggml_hexagon_session::flush_orb(op_request_batch *orb) {
+    dspqueue_t q = this->queue;
+
+    uint8_t* mem_addr = oshm->allocate();
+    if (!mem_addr) {
+        flush_pending(false);
+        mem_addr = oshm->allocate();
+    }
+
+    size_t mem_size = orb->flush(mem_addr, oshm->block_size);
+
+    // Bump pending flag (cleared in the session::flush once we get the response)
+    this->op_pending++;  // atomic inc
+
+    HEX_VERBOSE("ggml-hex: %s: queing op req batch : %p size %zu\n", this->c_name(), (void*) mem_addr, mem_size);
+
+    dspqueue_buffer *bufs = nullptr;
+    size_t         n_bufs = 0;
+
+    int err = dspqueue_write(q, 0, n_bufs, bufs, mem_size, mem_addr, DSPQUEUE_TIMEOUT);
+    if (err != 0) {
+        GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->name.c_str(), (unsigned) err);
+    }
+
+    oshm->release(mem_addr);
+}
+
+void ggml_hexagon_session::enqueue_op(htp_op_code opcode, const ggml_tensor *op) {
+    bool full = orb->add_op(opcode, op);
+    if (full) {
+        flush_orb(orb);
+    }
+}
+
+// Flush HTP response queue i.e wait for all outstanding requests to complete
+void ggml_hexagon_session::flush(bool all) {
+    // If current batch (if any)
+    if (!orb->empty()) {
+        flush_orb(orb);
+    }
+
+    flush_pending(all);
 }
 
 void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
