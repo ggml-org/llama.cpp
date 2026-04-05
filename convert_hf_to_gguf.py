@@ -11681,6 +11681,9 @@ class HunyuanOCRVisionModel(MmprojModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith("vit."):
             return  # skip text tensors
+        # strip CLS token (row 0) from position embeddings so resize_position_embeddings works
+        if "position_embedding" in name:
+            data_torch = data_torch[1:]  # [n_patches+1, n_embd] -> [n_patches, n_embd]
         yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):

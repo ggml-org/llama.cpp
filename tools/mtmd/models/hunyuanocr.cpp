@@ -5,20 +5,7 @@ ggml_cgraph * clip_graph_hunyuanocr::build() {
     const int pw    = n_patches_x;
     const int ph    = n_patches_y;
 
-    // position embeddings: skip CLS (row 0), interpolate to (pw, ph)
-    ggml_tensor * pos_embd = model.position_embeddings;
-    if (pos_embd) {
-        pos_embd = ggml_view_2d(ctx0, pos_embd, n_embd, pos_embd->ne[1] - 1,
-            pos_embd->nb[1], pos_embd->nb[1]);
-        int n_per_side = (int)std::sqrt((float)(pos_embd->ne[1]));
-        if (pw != n_per_side || ph != n_per_side) {
-            pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, n_per_side, n_per_side);
-            pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);
-            pos_embd = ggml_interpolate(ctx0, pos_embd, pw, ph, n_embd, 1, GGML_SCALE_MODE_BILINEAR);
-            pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);
-            pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, pw * ph);
-        }
-    }
+    ggml_tensor * pos_embd = resize_position_embeddings(GGML_SCALE_MODE_BILINEAR);
 
     ggml_tensor * inp = build_inp();
     ggml_tensor * cur = build_vit(inp, n_patches, NORM_TYPE_NORMAL, hparams.ffn_op, pos_embd, nullptr);
@@ -42,13 +29,13 @@ ggml_cgraph * clip_graph_hunyuanocr::build() {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model.mm_1_b, 1, 1, model.mm_1_b->ne[0]));
     }
 
-    int ow   = pw / merge;
-    int oh   = ph / merge;
-    int idim = (int)cur->ne[2]; // OC = 4608
+    const int ow   = pw / merge;
+    const int oh   = ph / merge;
+    const int idim = (int)cur->ne[2]; // OC = 4608
 
     // append newline along W (dim 0)
     ggml_tensor * nl = ggml_reshape_4d(ctx0, model.image_newline, 1, 1, idim, 1);
-    nl = ggml_repeat(ctx0, nl, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, oh, idim, 1));
+    nl = ggml_repeat_4d(ctx0, nl, 1, oh, idim, 1);
     cur = ggml_concat(ctx0, cur, nl, 0);
 
     // [OW+1, OH, OC] -> [OC, (OW+1)*OH]
