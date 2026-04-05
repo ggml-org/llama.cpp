@@ -19,13 +19,6 @@ struct mtmd_image_preprocessor {
 
     void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst, const float mean[3], const float std[3]);
     void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst);
-    void img_u8_resize_bilinear_to_f32(
-            const clip_image_u8 & src,
-            clip_image_f32 & dst,
-            int target_width,
-            int target_height,
-            const float mean[3],
-            const float std[3]);
 };
 
 /**
@@ -165,6 +158,13 @@ private:
     static constexpr float wide_aspect_ratio_limit    = 4.0f;
     static constexpr float crop_rounding_threshold    = 0.2f;
 
+    void img_u8_resize_bilinear_to_f32(
+            const clip_image_u8 & src,
+            clip_image_f32 & dst,
+            int target_width,
+            int target_height,
+            const float mean[3],
+            const float std[3]);
     static int get_image_longest_edge(const clip_hparams & params);
     static int determine_window_size(const clip_hparams & params, int longer, int shorter);
     static int calc_crop_extent(int length, int window_size);

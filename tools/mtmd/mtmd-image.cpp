@@ -30,59 +30,6 @@ void mtmd_image_preprocessor::img_u8_to_f32(const clip_image_u8 & src, clip_imag
     }
 }
 
-void mtmd_image_preprocessor::img_u8_resize_bilinear_to_f32(
-        const clip_image_u8 & src,
-        clip_image_f32 & dst,
-        int target_width,
-        int target_height,
-        const float mean[3],
-        const float std[3]) {
-    if (src.nx == target_width && src.ny == target_height) {
-        img_u8_to_f32(src, dst, mean, std);
-        return;
-    }
-
-    dst.nx = target_width;
-    dst.ny = target_height;
-    dst.buf.resize(3 * target_width * target_height);
-
-    const float scale_x = static_cast<float>(src.nx) / target_width;
-    const float scale_y = static_cast<float>(src.ny) / target_height;
-
-    for (int y = 0; y < target_height; ++y) {
-        const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
-        const int y0_floor = static_cast<int>(std::floor(src_y));
-        const int y0 = std::max(0, std::min(y0_floor, src.ny - 1));
-        const int y1 = std::max(0, std::min(y0_floor + 1, src.ny - 1));
-        const float ly = src_y - y0_floor;
-
-        for (int x = 0; x < target_width; ++x) {
-            const float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
-            const int x0_floor = static_cast<int>(std::floor(src_x));
-            const int x0 = std::max(0, std::min(x0_floor, src.nx - 1));
-            const int x1 = std::max(0, std::min(x0_floor + 1, src.nx - 1));
-            const float lx = src_x - x0_floor;
-
-            const size_t idx00 = 3 * (y0 * src.nx + x0);
-            const size_t idx01 = 3 * (y0 * src.nx + x1);
-            const size_t idx10 = 3 * (y1 * src.nx + x0);
-            const size_t idx11 = 3 * (y1 * src.nx + x1);
-            const size_t idx_dst = 3 * (y * target_width + x);
-
-            for (int c = 0; c < 3; ++c) {
-                const float v00 = (static_cast<float>(src.buf[idx00 + c]) / 255.0f - mean[c]) / std[c];
-                const float v01 = (static_cast<float>(src.buf[idx01 + c]) / 255.0f - mean[c]) / std[c];
-                const float v10 = (static_cast<float>(src.buf[idx10 + c]) / 255.0f - mean[c]) / std[c];
-                const float v11 = (static_cast<float>(src.buf[idx11 + c]) / 255.0f - mean[c]) / std[c];
-
-                const float top = v00 + (v01 - v00) * lx;
-                const float bot = v10 + (v11 - v10) * lx;
-                dst.buf[idx_dst + c] = top + (bot - top) * ly;
-            }
-        }
-    }
-}
-
 // set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
@@ -1170,6 +1117,59 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
 //
 // mtmd_image_preprocessor_step3vl
 //
+
+void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
+        const clip_image_u8 & src,
+        clip_image_f32 & dst,
+        int target_width,
+        int target_height,
+        const float mean[3],
+        const float std[3]) {
+    if (src.nx == target_width && src.ny == target_height) {
+        img_u8_to_f32(src, dst, mean, std);
+        return;
+    }
+
+    dst.nx = target_width;
+    dst.ny = target_height;
+    dst.buf.resize(3 * target_width * target_height);
+
+    const float scale_x = static_cast<float>(src.nx) / target_width;
+    const float scale_y = static_cast<float>(src.ny) / target_height;
+
+    for (int y = 0; y < target_height; ++y) {
+        const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+        const int y0_floor = static_cast<int>(std::floor(src_y));
+        const int y0 = std::max(0, std::min(y0_floor, src.ny - 1));
+        const int y1 = std::max(0, std::min(y0_floor + 1, src.ny - 1));
+        const float ly = src_y - y0_floor;
+
+        for (int x = 0; x < target_width; ++x) {
+            const float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+            const int x0_floor = static_cast<int>(std::floor(src_x));
+            const int x0 = std::max(0, std::min(x0_floor, src.nx - 1));
+            const int x1 = std::max(0, std::min(x0_floor + 1, src.nx - 1));
+            const float lx = src_x - x0_floor;
+
+            const size_t idx00 = 3 * (y0 * src.nx + x0);
+            const size_t idx01 = 3 * (y0 * src.nx + x1);
+            const size_t idx10 = 3 * (y1 * src.nx + x0);
+            const size_t idx11 = 3 * (y1 * src.nx + x1);
+            const size_t idx_dst = 3 * (y * target_width + x);
+
+            for (int c = 0; c < 3; ++c) {
+                const float v00 = (static_cast<float>(src.buf[idx00 + c]) / 255.0f - mean[c]) / std[c];
+                const float v01 = (static_cast<float>(src.buf[idx01 + c]) / 255.0f - mean[c]) / std[c];
+                const float v10 = (static_cast<float>(src.buf[idx10 + c]) / 255.0f - mean[c]) / std[c];
+                const float v11 = (static_cast<float>(src.buf[idx11 + c]) / 255.0f - mean[c]) / std[c];
+
+                const float top = v00 + (v01 - v00) * lx;
+                const float bot = v10 + (v11 - v10) * lx;
+                dst.buf[idx_dst + c] = top + (bot - top) * ly;
+            }
+        }
+    }
+}
 
 int mtmd_image_preprocessor_step3vl::get_image_longest_edge(const clip_hparams & params) {
     return params.image_longest_edge > 0 ? params.image_longest_edge : default_image_longest_edge;
