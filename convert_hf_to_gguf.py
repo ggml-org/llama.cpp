@@ -7472,7 +7472,7 @@ class Gemma4Model(Gemma3Model):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
         self.gguf_writer.add_add_space_prefix(False)
-        self.gguf_writer.add_add_bos_token(False) # already added via the chat template
+        self.gguf_writer.add_add_bos_token(True)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
