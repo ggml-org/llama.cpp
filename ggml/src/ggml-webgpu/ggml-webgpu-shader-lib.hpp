@@ -658,6 +658,26 @@ struct ggml_webgpu_mul_mat_shader_decisions {
     uint32_t mul_mat_wg_size;
 };
 
+/** MUL_MAT_ID **/
+
+struct ggml_webgpu_mul_mat_id_pipeline_key {
+    ggml_type src0_type;
+    ggml_type src1_type;
+
+    bool operator==(const ggml_webgpu_mul_mat_id_pipeline_key & other) const {
+        return src0_type == other.src0_type && src1_type == other.src1_type;
+    }
+};
+
+struct ggml_webgpu_mul_mat_id_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_mul_mat_id_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src0_type);
+        ggml_webgpu_hash_combine(seed, key.src1_type);
+        return seed;
+    }
+};
+
 /** Cpy **/
 
 struct ggml_webgpu_cpy_pipeline_key {
@@ -797,7 +817,10 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<ggml_webgpu_mul_mat_vec_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_vec_pipeline_key_hash>
         mul_mat_vec_pipelines;     // fast mat-vec (n==1)
     std::unordered_map<ggml_webgpu_mul_mat_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_pipeline_key_hash>
-        mul_mat_fast_pipelines;    // fast mat-mat (reg-tile or subgroup)
+                                             mul_mat_fast_pipelines;       // fast mat-mat (reg-tile or subgroup)
+    std::unordered_map<int, webgpu_pipeline> mul_mat_id_gather_pipelines;  // key is fixed
+    std::unordered_map<ggml_webgpu_mul_mat_id_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_id_pipeline_key_hash>
+        mul_mat_id_pipelines;                                              // src0_type/src1_type
 
     std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
         set_rows_pipelines;
@@ -1596,6 +1619,115 @@ class ggml_webgpu_shader_lib {
         pipeline.context              = decisions;
         mul_mat_legacy_pipelines[key] = pipeline;
         return mul_mat_legacy_pipelines[key];
+    }
+
+    webgpu_pipeline get_mul_mat_id_gather_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = mul_mat_id_gather_pipelines.find(1);
+        if (it != mul_mat_id_gather_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed     = preprocessor.preprocess(wgsl_mul_mat_id_gather, defines);
+        auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size = context.max_wg_size;
+
+        webgpu_pipeline pipeline       = ggml_webgpu_create_pipeline(device, processed, "mul_mat_id_gather");
+        pipeline.context               = decisions;
+        mul_mat_id_gather_pipelines[1] = pipeline;
+        return pipeline;
+    }
+
+    webgpu_pipeline get_mul_mat_id_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_mul_mat_id_pipeline_key key = {
+            .src0_type = context.src0->type,
+            .src1_type = context.src1->type,
+        };
+
+        auto it = mul_mat_id_pipelines.find(key);
+        if (it != mul_mat_id_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "mul_mat_id";
+        defines.push_back("MUL_MAT_ID");
+
+        // src1 type
+        switch (context.src1->type) {
+            case GGML_TYPE_F32:
+                defines.push_back("SRC1_INNER_TYPE=f32");
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("SRC1_INNER_TYPE=f16");
+                break;
+            default:
+                GGML_ABORT("Unsupported src1 type for mul_mat fast shader");
+        }
+
+        // src0 type
+        const struct ggml_type_traits * src0_traits = ggml_get_type_traits(context.src0->type);
+        const char *                    src0_name   = src0_traits->type_name;
+
+        switch (context.src0->type) {
+            case GGML_TYPE_F32:
+                defines.push_back("SRC0_INNER_TYPE=f32");
+                defines.push_back("FLOAT");
+                defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+                defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                variant += "_f32";
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("SRC0_INNER_TYPE=f16");
+                defines.push_back("FLOAT");
+                defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+                defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                variant += "_f16";
+                break;
+            default:
+                {
+                    std::string type_upper = src0_name;
+                    std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
+
+                    defines.push_back("BYTE_HELPERS");
+                    defines.push_back("INIT_SRC0_SHMEM_" + type_upper);
+                    defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                    defines.push_back("U32_DEQUANT_HELPERS");
+                    defines.push_back("SRC0_INNER_TYPE=u32");
+
+                    variant += std::string("_") + src0_name;
+                    break;
+                }
+        }
+
+        defines.push_back("SCALAR");
+
+        // Tiles
+        defines.push_back("TILE_M=" + std::to_string(WEBGPU_MUL_MAT_TILE_M) + "u");
+        defines.push_back("TILE_N=" + std::to_string(WEBGPU_MUL_MAT_TILE_N) + "u");
+        defines.push_back("TILE_K=" + std::to_string(WEBGPU_MUL_MAT_TILE_K) + "u");
+
+        defines.push_back("WORKGROUP_SIZE_M=" + std::to_string(WEBGPU_MUL_MAT_WG_SIZE_M) + "u");
+        defines.push_back("WORKGROUP_SIZE_N=" + std::to_string(WEBGPU_MUL_MAT_WG_SIZE_N) + "u");
+
+        // variant suffix for src1 type
+        variant += std::string("_") + (context.src1->type == GGML_TYPE_F32 ? "f32" : "f16");
+
+        auto processed = preprocessor.preprocess(wgsl_mul_mat_id, defines);
+
+        auto decisions       = std::make_shared<ggml_webgpu_mul_mat_shader_decisions>();
+        decisions->tile_k    = WEBGPU_MUL_MAT_TILE_K;
+        decisions->tile_m    = WEBGPU_MUL_MAT_TILE_M;
+        decisions->tile_n    = WEBGPU_MUL_MAT_TILE_N;
+        decisions->wg_size_m = WEBGPU_MUL_MAT_WG_SIZE_M;
+        decisions->wg_size_n = WEBGPU_MUL_MAT_WG_SIZE_N;
+        decisions->wg_size   = WEBGPU_MUL_MAT_WG_SIZE_M * WEBGPU_MUL_MAT_WG_SIZE_N;
+
+        webgpu_pipeline pipeline  = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context          = decisions;
+        mul_mat_id_pipelines[key] = pipeline;
+        return mul_mat_id_pipelines[key];
     }
 
     webgpu_pipeline get_unary_pipeline(const ggml_webgpu_shader_lib_context & context) {
