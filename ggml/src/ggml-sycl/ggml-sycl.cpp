@@ -5460,10 +5460,11 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         }
     }
 
-    // P4/P4.5: Compute placement plan when VRAM arena is enabled.
+    // P4/P4.5: Always compute placement plan when VRAM arena is active.
+    // Small models: everything assigned to device.  Large models: spill to host.
     // Single GPU: P4 Unsloth-priority bin-packing.
     // Multi-GPU: P4.5 hybrid parallelism (layer split + expert distribution).
-    if (ggml_sycl::vram_arena_enabled() && model_size_exceeds_budget) {
+    if (ggml_sycl::vram_arena_enabled()) {
         const auto & info = ggml_sycl_info();
         if (info.total_gpu_count >= 2 && ggml_backend_sycl_moe_multi_gpu_requested()) {
             // P4.5: Multi-device placement
