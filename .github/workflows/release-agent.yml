@@ -203,13 +203,14 @@ jobs:
           files: artifacts/*
 
       - name: Update Homebrew tap
+        if: ${{ env.TAP_TOKEN != '' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.name }}"
           REVISION=$(git rev-parse HEAD)
 
-          git clone https://x-access-token:${GH_TOKEN}@github.com/gary149/homebrew-llama-agent.git tap
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/gary149/homebrew-llama-agent.git tap
           cd tap
 
           # Update tag and revision in formula

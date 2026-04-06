@@ -28,7 +28,7 @@ if(NOT WIN32)
 endif()
 
 add_executable(${TARGET} ${AGENT_SOURCES})
-target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE server-context mtmd PUBLIC common ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 include_directories(../server)
