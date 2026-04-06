@@ -1584,17 +1584,21 @@ struct ggml_hexagon_opbatch {
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
     std::unordered_multimap<void*, int>         d_map; // tensor data to index
 
-    unsigned int n_bufs;
-    unsigned int n_tens;
-    unsigned int n_ops;
+    unsigned int n_bufs;     // num buffers in the batch
+    unsigned int n_tens;     // num tensors ...
+    unsigned int n_ops;      // num ops ...
+    size_t       b_vmem;     // sum of all buffer sizes
 
-    unsigned int n_ops_max;
+    unsigned int n_bufs_max;
     unsigned int n_tens_max;
+    unsigned int n_ops_max;
+    size_t       b_vmem_max;
 
     void reset() {
         n_bufs = 0;
         n_tens = 0;
         n_ops  = 0;
+        b_vmem = 0;
 
         b_map.clear();
         t_map.clear();
@@ -1604,17 +1608,17 @@ struct ggml_hexagon_opbatch {
     ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t max_batch) {
         name = sess->c_name();
      
-        n_ops_max  = max_batch;
-
-        n_bufs     = HTP_OP_MAX_BUFS;
+        n_bufs_max = HTP_OP_MAX_BUFS;
         n_ops_max  = max_batch;
         n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;
 
-        buffers.resize(n_bufs);
+        b_vmem_max = HTP_OP_MAX_VMEM;
+
+        buffers.resize(n_bufs_max);
         tensors.resize(n_tens_max);
         ops.resize(n_ops_max);
 
-        b_map.reserve(n_bufs);
+        b_map.reserve(n_bufs_max);
         t_map.reserve(n_tens_max);
         d_map.reserve(n_tens_max);
 
@@ -1622,7 +1626,6 @@ struct ggml_hexagon_opbatch {
     }
 
     bool empty() const { return n_ops == 0; }
-    bool full()  const { return n_tens == n_tens_max || n_ops == n_ops_max; }
 
     // add buffer and return its index
     int add_buffer(ggml_hexagon_shared_buffer * sbuf) {
@@ -1641,7 +1644,9 @@ struct ggml_hexagon_opbatch {
         b.fd   = sbuf->fd;
         b.size = sbuf->size;
 
-        HEX_VERBOSE("ggml-hex: add-buffer #%u : fd %d base %p size %zu\n", bi, b.fd, (void*) sbuf->base, (size_t) b.size);
+        b_vmem += b.size;
+
+        HEX_VERBOSE("ggml-hex: add-buffer #%u : fd %d base %p size %zu : vmem %zu\n", bi, b.fd, (void*) sbuf->base, (size_t) b.size, b_vmem);
 
         return bi;
     }
@@ -1670,7 +1675,7 @@ struct ggml_hexagon_opbatch {
         int ti = n_tens++;
         GGML_ASSERT(n_tens < n_tens_max);
 
-        t_map.insert({t, ti});
+        t_map.insert({t,       ti});
         d_map.insert({t->data, ti});
 
         uint64_t t_offset = (uint8_t *) t->data - sbuf->base;
@@ -1696,8 +1701,40 @@ struct ggml_hexagon_opbatch {
         return ti;
     }
 
-    // returns true when full
-    bool add_op(htp_op_code opcode, const struct ggml_tensor * t) {
+    bool fit_op(const struct ggml_tensor *t) const {
+        if (n_ops >= n_ops_max ) return false;
+
+        // check how much extras we will need
+        size_t extra_bufs = 0;
+        size_t extra_vmem = 0;
+        size_t extra_tens = 0;
+
+        auto fit_tensor = [&](const ggml_tensor *t) {
+            if (!t_map.count(t)) {
+                extra_tens++;
+
+                auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
+                if (!b_map.count(sbuf->fd)) {
+                    extra_vmem += sbuf->size;
+                    extra_bufs += 1;
+                }
+            }
+        };
+
+        for (unsigned int i=0; i < HTP_OP_MAX_INPUTS && t->src[i]; i++) {
+            fit_tensor(t->src[i]);
+        }
+        fit_tensor(t);
+
+        if ((extra_bufs + n_bufs) > n_bufs_max) return false;
+        if ((extra_tens + n_tens) > n_tens_max) return false;
+        if ((extra_vmem + b_vmem) > b_vmem_max) return false;
+
+        return true;
+    }
+
+    // assumes that fit_op() was called first and returned true
+    void add_op(htp_op_code opcode, const struct ggml_tensor * t) {
         // Add new op
         htp_op_req &o = ops[n_ops++];
         GGML_ASSERT(n_ops < n_ops_max);
@@ -1716,8 +1753,6 @@ struct ggml_hexagon_opbatch {
             o.src[i] = t->src[i] ? add_tensor(t->src[i]) : 0xffff;
         }
         o.dst = add_tensor(t);
-
-        return full();
     }
 
     size_t flush(uint8_t * mem_addr, size_t mem_size) {
@@ -1740,8 +1775,8 @@ struct ggml_hexagon_opbatch {
         memcpy(t_ptr, (void *) tensors.data(), t_size);
         memcpy(o_ptr, (void *) ops.data(),     o_size);
 
-        HEX_VERBOSE("ggml-hex: %s flush-opbatch : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
-                name, n_bufs, n_tens, n_ops, b_size, t_size, o_size);
+        HEX_VERBOSE("ggml-hex: %s flush-opbatch : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu\n",
+                name, n_bufs, n_tens, n_ops, b_vmem, b_size, t_size, o_size);
 
         if (opt_verbose > 1) {
             htp_op_buf *b = (htp_op_buf*) b_ptr;
@@ -1765,8 +1800,6 @@ struct ggml_hexagon_opbatch {
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
 void ggml_hexagon_session::flush_pending(bool all) {
-    dspqueue_t q = this->queue;
-
     while (this->op_pending) {
         struct htp_general_rsp rsp;
         uint32_t               rsp_size;
@@ -1776,7 +1809,7 @@ void ggml_hexagon_session::flush_pending(bool all) {
         uint32_t               n_dbufs;
 
         // Read response packet from queue
-        int err = dspqueue_read(q, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, DSPQUEUE_TIMEOUT);
+        int err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, DSPQUEUE_TIMEOUT);
         if (err == AEE_EEXPIRED) {
             continue;
         }
@@ -1841,10 +1874,10 @@ void ggml_hexagon_session::flush_batch() {
 }
 
 void ggml_hexagon_session::enqueue_op(htp_op_code opcode, const ggml_tensor *op) {
-    bool full = op_batch->add_op(opcode, op);
-    if (full) {
+    if (!op_batch->fit_op(op)) {
         flush_batch();
     }
+    op_batch->add_op(opcode, op);
 }
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
