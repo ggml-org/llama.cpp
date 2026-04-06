@@ -222,10 +222,13 @@ def start_benchmark(args):
     k6_args.extend(['--vus', args.parallel])
     k6_args.extend(['--summary-export', 'k6-results.json'])
     k6_args.extend(['--out', 'csv=k6-results.csv'])
-    args = f"SERVER_BENCH_N_PROMPTS={args.n_prompts} SERVER_BENCH_MAX_PROMPT_TOKENS={args.max_prompt_tokens} SERVER_BENCH_MAX_CONTEXT={args.max_tokens} "
-    args = args + ' '.join([str(arg) for arg in [k6_path, *k6_args]])
-    print(f"bench: starting k6 with: {args}")
-    k6_completed = subprocess.run(args, shell=True, stdout=sys.stdout, stderr=sys.stderr)
+    cmd = [str(arg) for arg in [k6_path, *k6_args]]
+    print(f"bench: starting k6 with: {' '.join(cmd)}")
+    env = os.environ.copy()
+    env['SERVER_BENCH_N_PROMPTS'] = str(args.n_prompts)
+    env['SERVER_BENCH_MAX_PROMPT_TOKENS'] = str(args.max_prompt_tokens)
+    env['SERVER_BENCH_MAX_CONTEXT'] = str(args.max_tokens)
+    k6_completed = subprocess.run(cmd, shell=False, stdout=sys.stdout, stderr=sys.stderr, env=env)
     if k6_completed.returncode != 0:
         raise Exception("bench: unable to run k6")
 
