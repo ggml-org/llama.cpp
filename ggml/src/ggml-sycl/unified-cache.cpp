@@ -8630,26 +8630,13 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
         ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id,
                                                              tensor_type, ne0, ne1);
 
-        cache_layout_request req{};
-        req.key              = key;
-        req.src_ptr          = expert_ptr;
-        req.src_size         = expert_size;
-        req.dst_size         = expert_size;
-        req.type             = cache_entry_type::MOE_EXPERT;
-        req.layer_id         = layer_id;
-        req.expert_id        = expert_id;
-        req.layout           = GGML_LAYOUT_AOS;
-        req.validate_content = false;
+        direct_stage_result stage_result = cache->direct_stage_expert(
+            key, expert_ptr, expert_size, expert_size,
+            GGML_LAYOUT_AOS, nullptr, nullptr, staging_queue);
 
-        cache_layout_result layout_result = cache->ensure_cached_layout(req, {}, staging_queue);
-
-        if (layout_result.status == cache_layout_status::READY ||
-            layout_result.status == cache_layout_status::IN_PROGRESS) {
+        if (stage_result.ok && stage_result.ptr) {
             result.n_staged++;
-            // Collect async fill event so callers can depends_on() it
-            if (layout_result.status == cache_layout_status::IN_PROGRESS) {
-                result.staging_events.push_back(layout_result.event);
-            }
+            result.staging_events.push_back(stage_result.event);
         } else {
             GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Failed to stage expert %d\n", layer_id, expert_id);
         }
@@ -8664,7 +8651,6 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
                 if (staging_queue) {
                     staging_queue->wait();        // caller's staging queue
                 }
-                cache->finalize_pending_fills();
                 cache->process_deferred_frees_public();
             } catch (...) {
             }
@@ -8680,7 +8666,6 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
             if (staging_queue) {
                 staging_queue->wait();
             }
-            cache->finalize_pending_fills();
         } catch (...) {
         }
     }

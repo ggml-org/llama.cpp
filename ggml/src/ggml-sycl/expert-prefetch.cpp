@@ -98,11 +98,10 @@ bool ExpertPrefetcher::hint(int layer_idx, int expert_idx) {
 // Internal implementation of hint(). Caller must hold mutex_.
 //
 // Uses moe_get_expert_stage_info() to read metadata, then submits async DMA +
-// AOS->SOA reorder via ensure_cached_layout(skip_fill_wait=true). Returns
-// immediately after DMA submission -- does NOT block on DMA completion.
+// AOS->SOA reorder via direct_stage_expert(). Returns immediately after DMA
+// submission -- does NOT block on DMA completion.
 //
 // The returned sycl::event is stored in inflight_ and waited on in await().
-// The cache entry remains IN_PROGRESS until await() finalizes it to READY.
 bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     expert_key key{ layer_idx, expert_idx };
 
@@ -136,7 +135,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
 
     // Step 3: Build reorder context on the stack.
     // fill_fn reads ctx synchronously during submission (before
-    // ensure_cached_layout returns), so stack allocation is safe.
+    // direct_stage_expert returns), so stack allocation is safe.
     reorder_fill_ctx rctx{};
     rctx.type          = info.type;
     rctx.ncols         = info.ncols;
@@ -147,47 +146,29 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     rctx.src_is_device = false;
     rctx.device_id     = device_id_;
 
-    // Step 4: Submit async DMA via unified cache (skip_fill_wait=true).
-    cache_layout_request clr{};
-    clr.key              = info.cache_key;
-    clr.src_ptr          = info.src_ptr;
-    clr.src_size         = info.src_size;
-    clr.dst_size         = info.dst_size;
-    clr.type             = cache_entry_type::MOE_EXPERT;
-    clr.layer_id         = info.layer_id;
-    clr.expert_id        = info.expert_id;
-    clr.layout           = info.layout;
-    clr.validate_content = false;
-    clr.skip_fill_wait   = true;  // Non-blocking DMA
-    clr.fill_fn          = fill_reordered_host;
-    clr.fill_ctx         = &rctx;
-
+    // Step 4: Submit async DMA via direct_stage_expert.
     // Route H2D to BCS (copy-only) queue so prefetch DMA doesn't monopolize
     // CCS and trigger xe driver GT engine resets during inference.
     sycl::queue * bcs_q = &cache->get_bcs_queue();
 
-    cache_layout_result cr;
+    direct_stage_result sr;
     try {
-        cr = cache->ensure_cached_layout(clr, {}, bcs_q);
+        sr = cache->direct_stage_expert(
+            info.cache_key, info.src_ptr, info.src_size, info.dst_size,
+            info.layout, fill_reordered_host, &rctx, bcs_q);
     } catch (...) {
         return false;
     }
 
-    if (!cr.device_ptr) {
+    if (!sr.ok || !sr.ptr) {
         return false;
     }
 
-    // Already READY (race with concurrent fill) -- no in-flight tracking.
-    if (cr.status == cache_layout_status::READY) {
-        completed_count_++;
-        return true;
-    }
-
-    // DMA submitted -- track in-flight for await() to finalize.
+    // DMA submitted -- track in-flight for await().
     prefetch_request req;
     req.key        = key;
-    req.event      = cr.event;
-    req.device_ptr = cr.device_ptr;
+    req.event      = sr.event;
+    req.device_ptr = sr.ptr;
     req.completed  = false;
     req.cache_key  = info.cache_key;
     req.layout     = info.layout;
@@ -197,7 +178,7 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
 
     inflight_[key] = std::move(req);
     GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: async DMA submitted, dev=%d ptr=%p\n",
-                    layer_idx, expert_idx, device_id_, cr.device_ptr);
+                    layer_idx, expert_idx, device_id_, sr.ptr);
     return true;
 }
 

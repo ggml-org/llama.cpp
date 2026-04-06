@@ -38,7 +38,7 @@ namespace ggml_sycl {
 
 // SOA-correct expert caching via unified cache.
 // Looks up expert metadata, performs AOS->SOA layout conversion, and uploads
-// to VRAM on the specified device using ensure_cached_layout().
+// to VRAM on the specified device using direct_stage_expert().
 // Returns device pointer if expert was successfully cached in SOA layout.
 // Returns nullptr if caching failed (no metadata, VRAM full, etc.).
 // Thread-safe: acquires g_moe_expert_meta_mutex and unified cache locks internally.
@@ -96,8 +96,8 @@ sycl::event fill_reordered_host(sycl::queue &                    queue,
 uint32_t get_expert_frequency(int layer_hash, int expert_id);
 
 // Tracks a single in-flight async DMA prefetch operation.
-// The event is from ensure_cached_layout(skip_fill_wait=true) and completes
-// when H2D DMA + AOS->SOA reorder finish on the cache's DMA queue.
+// The event is from direct_stage_expert() and completes when H2D DMA +
+// AOS->SOA reorder finish on the cache's DMA queue.
 struct prefetch_request {
     expert_key  key;
     sycl::event event;                 // DMA completion event from cache DMA queue
