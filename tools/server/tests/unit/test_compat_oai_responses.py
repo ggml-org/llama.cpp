@@ -592,3 +592,136 @@ def test_responses_reasoning_content_omitted():
     })
     assert res.status_code == 200
     assert res.body["status"] == "completed"
+
+
+def test_responses_input_file_with_data_graceful():
+    """input_file items with file_data must be rendered as text content
+    instead of rejecting the entire request."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "Summarize this file"},
+                {"type": "input_file", "file_data": "hello world", "filename": "test.txt"},
+            ]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+    # The file content must reach the model as prompt tokens
+    baseline = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "Summarize this file"},
+            ]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert baseline.status_code == 200
+    # With file_data injected as text, prompt must be longer
+    assert res.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+
+
+def test_responses_input_file_filename_only():
+    """input_file with only filename (no file_data) must produce a placeholder."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "What is this?"},
+                {"type": "input_file", "filename": "report.pdf"},
+            ]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_unknown_content_type_skipped():
+    """Unknown content types in user messages must be silently skipped,
+    not reject the entire request."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "Hello"},
+                {"type": "input_audio", "data": "base64stuff"},
+            ]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_unknown_assistant_content_type_skipped():
+    """Unknown content types in assistant output history must be skipped."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"role": "assistant", "type": "message", "content": [
+                {"type": "output_text", "text": "Hello"},
+                {"type": "some_future_type", "data": "foo"},
+            ]},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_unknown_toplevel_item_skipped():
+    """Unknown top-level item types must be skipped rather than rejecting."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {"type": "some_new_item_type", "data": "whatever"},
+            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
+def test_responses_malformed_input_text_skipped():
+    """input_text without the required text field must be skipped gracefully,
+    not reject the entire request. In Codex IDE, a 400 here would permanently
+    kill the conversation thread since history is replayed on every message."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "Hello"},
+                {"type": "input_text"},
+            ]},
+        ],
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"

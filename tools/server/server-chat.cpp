@@ -70,7 +70,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
 
                     if (type == "input_text") {
                         if (!input_item.contains("text")) {
-                            throw std::invalid_argument("'Input text' requires 'text'");
+                            SRV_WRN("%s\n", "input_text item missing 'text' field, skipping");
+                            continue;
                         }
                         chatcmpl_content.push_back({
                             {"text", input_item.at("text")},
@@ -79,9 +80,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     } else if (type == "input_image") {
                         // While `detail` is marked as required,
                         // it has default value("auto") and can be omitted.
-
                         if (!input_item.contains("image_url")) {
-                            throw std::invalid_argument("'image_url' is required");
+                            SRV_WRN("%s\n", "input_image item missing 'image_url', skipping");
+                            continue;
                         }
                         chatcmpl_content.push_back({
                             {"image_url", json {
@@ -90,9 +91,28 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                             {"type", "image_url"},
                         });
                     } else if (type == "input_file") {
-                        throw std::invalid_argument("'input_file' is not supported by llamacpp at this moment");
+                        // input_file is not natively supported by the chat completions API.
+                        // Render as text so multi-turn conversations that include file references
+                        // can still proceed instead of rejecting the entire request.
+                        if (input_item.contains("file_data") && input_item.at("file_data").is_string()) {
+                            std::string label;
+                            if (input_item.contains("filename") && input_item.at("filename").is_string()) {
+                                label = "[file: " + input_item.at("filename").get<std::string>() + "]\n";
+                            }
+                            chatcmpl_content.push_back({
+                                {"text", label + input_item.at("file_data").get<std::string>()},
+                                {"type", "text"},
+                            });
+                        } else if (input_item.contains("filename") && input_item.at("filename").is_string()) {
+                            chatcmpl_content.push_back({
+                                {"text", "[file: " + input_item.at("filename").get<std::string>() + "]"},
+                                {"type", "text"},
+                            });
+                        } else {
+                            SRV_WRN("%s\n", "input_file item has no file_data or filename, skipping");
+                        }
                     } else {
-                        throw std::invalid_argument("'type' must be one of 'input_text', 'input_image', or 'input_file'");
+                        SRV_WRN("skipping unsupported input content type '%s'\n", type.c_str());
                     }
                 }
 
@@ -146,7 +166,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         if (type == "output_text" || type == "input_text") {
                             // Accept both output_text and input_text (string content gets converted to input_text)
                             if (!exists_and_is_string(output_text, "text")) {
-                                throw std::invalid_argument("'Output text' requires 'text'");
+                                SRV_WRN("%s\n", "output_text/input_text item missing 'text' field, skipping");
+                                continue;
                             }
                             chatcmpl_content.push_back({
                                 {"text", output_text.at("text")},
@@ -154,14 +175,17 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                             });
                         } else if (type == "refusal") {
                             if (!exists_and_is_string(output_text, "refusal")) {
-                                throw std::invalid_argument("'Refusal' requires 'refusal'");
+                                SRV_WRN("%s\n", "refusal item missing 'refusal' field, skipping");
+                                continue;
                             }
                             chatcmpl_content.push_back({
                                 {"refusal", output_text.at("refusal")},
                                 {"type", "refusal"},
                             });
                         } else {
-                            throw std::invalid_argument("'type' must be 'output_text', 'input_text', or 'refusal'");
+                            // Skip unknown content types in assistant output history rather
+                            // than rejecting the entire multi-turn request.
+                            SRV_WRN("skipping unsupported assistant content type '%s'\n", type.c_str());
                         }
                     }
                 }
@@ -223,7 +247,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     json chatcmpl_outputs = item.at("output");
                     for (json & chatcmpl_output : chatcmpl_outputs) {
                         if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                            SRV_WRN("tool call output has unexpected type '%s', treating as text\n",
+                                    json_value(chatcmpl_output, "type", std::string("missing")).c_str());
                         }
                         chatcmpl_output["type"] = "text";
                     }
@@ -264,7 +289,10 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 }
             } else {
-                throw std::invalid_argument("Cannot determine type of 'item'");
+                // Skip unrecognized top-level item types (e.g. future API additions)
+                // rather than rejecting the entire multi-turn request.
+                const std::string item_type = json_value(item, "type", std::string("unknown"));
+                SRV_WRN("skipping unrecognized input item type '%s'\n", item_type.c_str());
             }
         }
     } else {
