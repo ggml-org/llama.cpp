@@ -148,6 +148,8 @@ extern "C" {
         bool buffer_from_host_ptr;
         // event synchronization
         bool events;
+        // dedicated copy stream for compute/transfer overlap
+        bool copy_stream;
     };
 
     // all the device properties
@@ -339,6 +341,9 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+
+    // Enable async weight prefetching to overlap CPU->GPU transfers with compute
+    GGML_API void                 ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool enabled);
 
     //
     // Utils

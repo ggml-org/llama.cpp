@@ -2480,6 +2480,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"-pw", "--prefetch-weights"}, "0|1",
+        string_format("prefetch weight transfers to overlap CPU->GPU copies with compute (default: %d)", (int) params.prefetch_weights),
+        [](common_params & params, int value) {
+            params.prefetch_weights = value != 0;
+        }
+    ));
+    add_opt(common_arg(
         {"--lora"}, "FNAME",
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
