@@ -1,6 +1,6 @@
 # llama-agent
 
-A coding agent optimized for local models, built entirely inside [llama.cpp](https://github.com/ggml-org/llama.cpp): single binary, same cache, light harness, zero dependencies, native performance.
+A coding agent optimized for local models, built entirely inside [llama.cpp](https://github.com/ggml-org/llama.cpp): single binary, single process, zero dependencies, same cache, light harness, native performance.
 
 <img width="1536" height="641" alt="image" src="https://github.com/user-attachments/assets/494a5615-2c3a-4aee-ad49-2a89eb862f88" />
 
