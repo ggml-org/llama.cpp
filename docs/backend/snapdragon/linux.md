@@ -3,9 +3,9 @@
 ## Docker Setup
 
 The easiest way to build llama.cpp for a Snapdragon-based Linux device is using the toolchain Docker image (see github.com/snapdragon-toolchain).
-This image includes Android NDK, OpenCL SDK, Hexagon SDK, CMake, etc.
+This image includes OpenCL SDK, Hexagon SDK, CMake, and the ARM64 Linux cross-compilation toolchain.
 
-We need to use cross-compilation with X86 host, this method works on Linux X86 and Windows X86.
+Cross-compilation is only supported on **Linux X86** and **Windows X86** hosts. The resulting binaries are deployed to and run on the target **Qualcomm Snapdragon ARM64 Linux** IoT device.
 
 ```
 ~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-linux:latest
