@@ -455,14 +455,6 @@ struct cache_ptr_view {
     cache_layout_xmx_info xmx_info      = {};
 };
 
-// Result status for layout-aware cache API
-enum class cache_layout_status {
-    READY,
-    IN_PROGRESS,
-    FAILED,
-    INVALID,
-};
-
 struct cache_layout_request;
 using cache_layout_fill_fn = sycl::event (*)(sycl::queue &                    queue,
                                              void *                           dst,
@@ -484,26 +476,13 @@ struct cache_layout_request {
     int64_t               onednn_pack_m    = 0;
     bool                  validate_content = false;
     bool                  prefer_host      = false;
-    bool                  skip_fill_wait   = false;  // When true, skip fill_event.wait() — caller collects events
     bool                  force_pool       = false;  // When true, use pool even in S1 mode (for S1-PRELOAD pinned weights)
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
 };
 
-struct cache_layout_result {
-    void *                device_ptr    = nullptr;
-    size_t                size          = 0;
-    ggml_layout_mode      layout        = GGML_LAYOUT_AOS;
-    int64_t               onednn_pack_m = 0;
-    cache_layout_xmx_info xmx_info      = {};
-    sycl::event           event;
-    cache_layout_status   status        = cache_layout_status::FAILED;
-    bool                  host_resident = false;  // true if pointer is in host memory (fallback when VRAM full)
-    cache_location        location      = cache_location::DEVICE;
-};
-
-// --- Direct Staging API (ensure_cached_layout replacement) ---
+// --- Direct Staging API ---
 // Simple structs for direct arena allocation + memcpy + reorder.
 // No state machine, no IN_PROGRESS/READY transitions.
 
@@ -839,7 +818,7 @@ class unified_cache {
     };
 
     // Fast O(1) weight lookup.  Tries the entry for this key regardless of layout.
-    // Returns the first READY entry found.  Does NOT create entries or call ensure_cached_layout.
+    // Returns the first READY entry found.  Does NOT create entries or trigger staging.
     weight_ptr_result get_weight_ptr(const ggml_sycl_cache_id & key);
 
     // --- Decomposed cache operations (no queue ops during inference) ---
@@ -924,26 +903,7 @@ class unified_cache {
                                bool                       validate_content,
                                bool *                     needs_fill);
 
-    // Ensure a weight is cached in a specific layout with graph-safe async fill.
-    // When override_queue is non-null, H2D transfers use that queue instead of
-    // the cache's internal queue, allowing callers to drive async staging.
-    //
-    // non_blocking mode (for inference hot path):
-    //   - Entry READY: return pointer immediately
-    //   - Entry IN_PROGRESS: return pointer + event (caller can depends_on)
-    //   - Not cached: return FAILED (no alloc, no fill, no block)
-    // When false (default): existing sync behavior for S1-PRELOAD/warmup.
-    cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
-                                             const std::vector<sycl::event> & deps,
-                                             sycl::queue * override_queue = nullptr,
-                                             bool non_blocking = false);
-
-    // Finalize all IN_PROGRESS entries that were created with skip_fill_wait.
-    // Call this after a batch queue.wait() to mark pending entries as READY
-    // and apply any deferred padding.
-    void finalize_pending_fills();
-
-    // === Direct Staging API (ensure_cached_layout replacement) ===
+    // === Direct Staging API ===
     // Simple arena allocate + fill + register.  No state machine.
 
     // Stage a dense weight: allocate from WEIGHT zone, fill (reorder or memcpy),
@@ -1047,7 +1007,7 @@ class unified_cache {
     // If any allocation fails after eviction, rolls back partial allocations.
     // Each staging_tensor_data provides source pointer and sizes.
     // Each cache_layout_request provides fill_fn/fill_ctx for reorder.
-    // When request pointers are non-null, ensure_cached_layout is used per tensor.
+    // When request pointers are non-null, fill_fn is called per tensor.
     // When null, raw DMA memcpy via get_dma_queue() is used.
     // Returns true if all 3 tensors were staged successfully.
     bool stage_expert_group(int                            block_id,
@@ -1187,7 +1147,7 @@ class unified_cache {
     // Poll in-flight D2H evictions and finalize completed ones.
     // Reclaims arena/device space, removes device entry, host_cache entry
     // now holds the preserved layout data.  Call at safe sync points
-    // (between graph_compute calls, during finalize_pending_fills).
+    // (between graph_compute calls, after queue drain).
     // Returns number of entries finalized.
     size_t finalize_evictions();
     size_t finalize_evictions_locked();  // Caller must hold rw_mutex_ (unique)
@@ -1714,7 +1674,7 @@ class unified_cache {
 
     // Layout pool: consolidates many individual layout allocations into
     // a few large contiguous chunks to reduce GPU TLB pressure.
-    // All layout allocations in ensure_cached_layout() are sub-allocated from this pool.
+    // All layout allocations are sub-allocated from this pool.
     // The pool is destroyed (freeing all chunks) in the unified_cache destructor.
     std::unique_ptr<ggml_sycl::sycl_device_pool> layout_pool_;
 
@@ -1875,7 +1835,7 @@ class unified_cache {
     void prefetch_worker_loop();
 
     // === Direct Staging Lookup Tables ===
-    // Simple O(1) maps for the direct staging API (ensure_cached_layout replacement).
+    // Simple O(1) maps for the direct staging API.
     // Keyed by full ggml_sycl_cache_id (uses proven detail::cache_id_hash/equal_fn).
     // Thread-safe via direct_stage_mutex_ (shared for reads, exclusive for writes).
     std::unordered_map<ggml_sycl_cache_id, weight_entry,
@@ -2648,8 +2608,7 @@ void * moe_get_ids_staging(int device_id, size_t needed_bytes);
 void moe_free_inference_buffers(int device_id);
 
 // === Direct Staging API — Free-Standing Wrappers ===
-// Route to the unified_cache for the given device.  These replace
-// ensure_cached_layout for new call sites.
+// Route to the unified_cache for the given device.
 
 direct_stage_result unified_cache_direct_stage_weight(
     int                         device_id,

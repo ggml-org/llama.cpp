@@ -313,7 +313,7 @@ static bool test_vram_to_host_eviction() {
         return true;
     }
 
-    // The unified cache already supports tiering through ensure_cached_layout
+    // The unified cache already supports tiering through the direct staging API
     // and the host_resident flag in cache entries. This test verifies the
     // behavior exists.
 

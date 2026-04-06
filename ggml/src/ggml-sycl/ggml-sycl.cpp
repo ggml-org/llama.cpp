@@ -714,7 +714,7 @@ static void moe_apply_popularity_placement() {
 
     // Signal that popularity data is now available.
     // The next update_moe_ptr_table call for each layer will use
-    // ensure_cached_layout to pre-stage popular experts that weren't
+    // direct_stage_expert to pre-stage popular experts that weren't
     // already GPU-resident. The eviction scoring in unified-cache.cpp
     // also uses popularity_rank to retain hot experts in cache.
     GGML_LOG_INFO("[MOE-WARMUP] Popularity ranks applied. Cache eviction "
@@ -1016,7 +1016,7 @@ static void moe_prestage_popular_experts() {
     // Phase 1: Pre-stage popular experts to GPU0 VRAM.
     // In S1 mode (all_weights_host), the S1-PRELOAD fills VRAM with AOS copies of
     // dense weights — available_for_compute() may return 0.  But these AOS entries
-    // are evictable: ensure_cached_layout() does LRU eviction internally.  Use total
+    // are evictable: the cache does LRU eviction internally.  Use total
     // managed cache capacity MINUS a compute reserve as the budget so hot SOA experts
     // can replace cold AOS entries while leaving room for compute buffers, KV cache,
     // and other runtime allocations that will be reserved after prestage.
@@ -1173,7 +1173,6 @@ static void moe_prestage_popular_experts() {
             req.expert_id        = meta->expert_idx;
             req.layout           = GGML_LAYOUT_SOA;
             req.validate_content = false;
-            req.skip_fill_wait   = true;
 
             if (use_gpu_reorder) {
                 gpu_fctx.type              = meta->type;
@@ -1266,8 +1265,7 @@ static void moe_prestage_popular_experts() {
             // With BCS/CCS engine split, individual CCS reorder kernels are ~10us
             // and naturally preemptible.  The yield ensures:
             //   1. ALL queues (CCS compute, DMA, BCS) drain pending work
-            //   2. Entries get promoted to READY state via finalize_pending_fills
-            //   3. Watchdog heartbeat prevents host-side timeout
+            //   2. Watchdog heartbeat prevents host-side timeout
             // Without this, back-to-back submissions accumulate a non-preemptible
             // command list that triggers xe driver GT engine resets.
             // Reduced from 8 to 2 after 120B stability testing showed engine
@@ -1279,7 +1277,6 @@ static void moe_prestage_popular_experts() {
                     cache->get_queue().wait();       // CCS compute queue
                     cache->get_dma_queue().wait();
                     cache->get_bcs_queue().wait();
-                    cache->finalize_pending_fills();
                     // Process deferred frees NOW — all queues drained, safe to unmap VRAM.
                     // evict_one defers frees to prevent BCS CAT errors during prestage.
                     cache->process_deferred_frees_public();
@@ -1289,13 +1286,12 @@ static void moe_prestage_popular_experts() {
             }
         }
 
-        // Final flush: wait for all remaining in-flight fills and promote to READY
+        // Final flush: wait for all remaining in-flight fills
         if (prestaged > 0) {
             try {
                 cache->get_queue().wait();       // CCS compute queue
                 cache->get_dma_queue().wait();
                 cache->get_bcs_queue().wait();
-                cache->finalize_pending_fills();
                 // Process any deferred frees accumulated during eviction.
                 cache->process_deferred_frees_public();
             } catch (...) {
@@ -1387,7 +1383,7 @@ static void moe_prestage_popular_experts() {
             if (!sec_cache) continue;
 
             // Use total cache capacity minus compute reserve: after unpinning,
-            // init-time entries are evictable.  ensure_cached_layout handles LRU
+            // init-time entries are evictable.  The cache handles LRU
             // eviction internally.  Reserve space for compute buffers + runtime.
             const size_t sec_managed = ggml_sycl::unified_cache_total_managed(dev);
             size_t sec_free = 0, sec_total_vram = 0;
@@ -2177,7 +2173,7 @@ private:
 
                 // Use the existing SOA caching infrastructure for promotion.
                 // moe_expert_ensure_soa_cached handles: metadata lookup, cache key,
-                // SOA reorder, ensure_cached_layout, and placement table update.
+                // SOA reorder, direct_stage_expert, and placement table update.
                 void * result = ggml_sycl::moe_expert_ensure_soa_cached(
                     c.hash_layer_id, c.expert_id, /*device_id=*/0);
 
@@ -2894,7 +2890,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
         }
 
         // --- Phase 2: distribute experts to secondary GPUs --------------------
-        // Upload experts to secondary device VRAM (using ensure_cached_layout).
+        // Upload experts to secondary device VRAM (using direct_stage_expert).
         // Experts placed here override Phase 1's GPU0 assignment with an explicit
         // device_ptr on the secondary GPU.  Remaining experts stay on GPU0 (cache-resolved).
         struct device_budget {
@@ -3046,7 +3042,7 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
 
                 // Determine if source pointer is device memory (VRAM on device 0).
                 // If so, D2H stage it via device 0's queue before passing to
-                // ensure_cached_layout on the secondary GPU.  The mmap source
+                // direct_stage_expert on the secondary GPU.  The mmap source
                 // may have been unmapped after model loading, so the only reliable
                 // host-accessible copy for device-resident weights is via D2H.
                 const bool src_on_device = (info.tensor->buffer &&
@@ -5287,7 +5283,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     const size_t effective_model_size = ggml_sycl::compute_moe_effective_weight_bytes(
         g_tensor_inventory_total_size, g_moe_expert_total_bytes, g_moe_n_experts_total, g_moe_n_experts_used);
     // Unified non-blocking cache: no model_exceeds_vram branching.
-    // All inference callers use ensure_cached_layout(non_blocking=true).
+    // All inference callers use the non-blocking try_get_cached_with_event path.
     // Dense weights are pinned after S1-PRELOAD; MoE experts use LRU eviction.
     const bool model_size_exceeds_budget = g_tensor_inventory_total_size > vram_budget;
     // Write-once at startup — relaxed ordering is sufficient because callers
@@ -5470,7 +5466,7 @@ bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
 }
 
 // ggml_backend_sycl_model_exceeds_vram removed — unified non-blocking cache
-// handles all model sizes.  Inference callers use ensure_cached_layout(non_blocking=true)
+// handles all model sizes.  Inference callers use the non-blocking try_get_cached_with_event path
 // which returns FAILED on cache miss instead of blocking.  Dense weights are pinned
 // after S1-PRELOAD; MoE experts use LRU eviction.
 
@@ -8882,7 +8878,7 @@ static sycl::event ggml_sycl_reorder_weight_gpu(sycl::queue & queue,
 }
 
 // Fill function for GPU-side AOS → SOA reorder.
-// Called by ensure_cached_layout when fill_fn is set.
+// Called by direct_stage_weight/direct_stage_expert when fill_fn is set.
 //   dst      = cache slot (device VRAM), will receive SOA data
 //   src      = original AOS data (host/mmap)
 //   ctx_void = ggml_sycl_gpu_reorder_fill_ctx *
@@ -9452,7 +9448,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         copy_event = queue.ext_oneapi_submit_barrier(empty_deps);
     } else {
         // GPU memcpy for host->device -- submit asynchronously, no host wait.
-        // The caller (ensure_cached_layout) waits on the returned event.
+        // The caller waits on the returned event.
         if (copy_deps.empty()) {
             copy_event = queue.memcpy(dst, reorder_buf, dst_size);
         } else {
@@ -10405,7 +10401,7 @@ static void ggml_sycl_preload_model_weights() {
                 const auto * tensor = item.tensor;
 
                 if (item.is_moe) {
-                    // MoE: submit all expert copies with skip_fill_wait
+                    // MoE: submit all expert copies asynchronously
                     auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
                     if (!extra) {
                         moe_failed++;
@@ -24656,7 +24652,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     GGML_SYCL_DEBUG("[MOE-PTR] stream=%p data=%p\n", (void *) stream, src0->data);
 
     // Note: we do NOT call stream->wait() here. All data dependencies are tracked
-    // via event chains: ensure_cached_layout() returns events that are collected into
+    // via event chains: direct_stage_expert returns events that are collected into
     // table_deps, and the pointer-table H2D memcpy (below) depends_on those events.
     // This keeps the staging path fully async and avoids host-device synchronization.
 
@@ -24982,8 +24978,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // dispatch fails gracefully, and the cascade falls through to AOS which reads
         // host-pinned data directly via PCIe zero-copy.
         //
-        // CRITICAL: Do NOT call ensure_cached_layout() on cache miss during inference.
-        // Even with skip_fill_wait=true, ensure_cached_layout may:
+        // CRITICAL: Do NOT call blocking staging on cache miss during inference.
+        // Blocking staging may:
         //   1. Call sycl::malloc_device (blocks Level Zero driver)
         //   2. Call fill_fn (synchronous CPU SOA reorder on calling thread)
         //   3. Acquire rw_mutex_ under contention
@@ -24992,7 +24988,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // eventually cache the SOA version for future tokens.
         // Non-blocking path for ALL layouts when source is USM-accessible.
         // On cache hit: use cached pointer. On miss: use host-pinned AOS zero-copy.
-        // NEVER call ensure_cached_layout during inference (blocks on fill/DMA).
+        // NEVER call blocking staging during inference (blocks on fill/DMA).
         // Try the requested layout first, then SOA (prestage may have stored SOA
         // even when dispatch requests AOS for MXFP4).
         if (src0_is_usm_accessible) {
@@ -25028,7 +25024,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             // Cache miss: fully non-blocking path. Leave pointer as nullptr so
             // SOA/COALESCED dispatch fails and cascade falls through to AOS
             // zero-copy via src0->data (USM host-pinned, GPU-accessible via PCIe).
-            // Do NOT call ensure_cached_layout here — it blocks on malloc + CPU reorder.
+            // Do NOT call blocking staging here — it blocks on malloc + CPU reorder.
             // The background prestage system will populate the cache for future tokens.
             GGML_SYCL_DEBUG("[OPT-FUSED] Expert %ld cache MISS, using AOS zero-copy (non-blocking)\n", (long) e);
             stats_miss++;
@@ -25038,7 +25034,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         // For AOS layout with USM-accessible source, also use non-blocking zero-copy.
         // The GPU can read host-pinned AOS data directly via PCIe (~8 GB/s) without
         // any staging, SOA reorder, or SYCL queue operations. This avoids blocking
-        // on ensure_cached_layout which may call malloc_device/fill_fn/queue.wait.
+        // on blocking staging which may call malloc_device/fill_fn/queue.wait.
         if (layout == GGML_LAYOUT_AOS && src0_is_usm_accessible) {
             // Fast check: is the entry already cached in VRAM?
             sycl::event fill_evt;
@@ -25066,7 +25062,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         }
 
         // Non-blocking lookup fallback for non-USM sources.
-        // NEVER call ensure_cached_layout during inference — blocks on malloc/fill/DMA.
+        // NEVER call blocking staging during inference — blocks on malloc/fill/DMA.
         // Try cache lookup cascade; on miss, use zero-copy from expert_aos if accessible,
         // otherwise leave nullptr for CPU fallback.
         {
@@ -25322,7 +25318,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
     // In S1 mode, ALL weights including experts are in host-pinned memory.
     // Expert preloading is unnecessary -- host-pinned pointers are GPU-accessible
     // via PCIe zero-copy.  On-demand SOA caching happens during actual inference
-    // via ggml_sycl_mul_mat_id -> ensure_cached_layout.
+    // via ggml_sycl_mul_mat_id -> direct_stage_expert.
     if (ggml_backend_sycl_all_weights_host()) {
         GGML_SYCL_DEBUG("[GRAPH-PRELOAD] S1 mode: skipping MoE expert preload (host-pinned zero-copy)\n");
         return true;
@@ -25608,7 +25604,7 @@ static bool graph_preload_weights(ggml_backend_sycl_context & ctx, ggml_cgraph *
                     // already cached this weight with a higher-priority layout
                     // (COALESCED or SOA), use that instead.  Requesting AOS when
                     // COALESCED is cached triggers a layout mismatch eviction in
-                    // ensure_cached_layout, which fails with DEVICE_LOST when a
+                    // staging, which fails with DEVICE_LOST when a
                     // VRAM arena has consumed all device memory.
                     target = GGML_LAYOUT_AOS;
                     auto * preload_cache = ggml_sycl::get_unified_cache_for_device(ctx.device);
@@ -32585,7 +32581,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
             // Check placement table for GPU0-cached experts.
             // Experts get staged to VRAM during PP via the hybrid dispatch path
-            // (which calls update_moe_ptr_table → ensure_cached_layout).
+            // (which calls update_moe_ptr_table → direct_stage_expert).
             // Here we just check what's already cached — no new staging.
             layout_mode route_layout_fast = ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, true);
             auto * extra_fast = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
@@ -33513,7 +33509,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     // and would give wrong results.  Fall through to the standard per-expert GPU dispatch.
     const bool moe_hybrid_active = (moe_hybrid_val != 0) && use_expert_cache && (ne12 == 1) && (ne11 == 1) && cpu_type_ok;
 
-    // Expert cache stages data in the requested layout via ensure_cached_layout.
+    // Expert cache stages data in the requested layout via direct_stage_expert.
     // No longer force AOS — GPU0 batched dispatch now supports SOA/Coalesced MXFP4
     // kernels. CPU dispatch reads src0->data directly (host AOS) regardless of
     // route_layout.  B50 dispatch uses its own SOA staging.
@@ -33591,7 +33587,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     //
     // Skip for USM-accessible (host-pinned) sources: the pointer table from
     // update_moe_ptr_table already provides AOS zero-copy pointers that the GPU
-    // can read directly via PCIe. Doing a blocking ensure_cached_layout here
+    // can read directly via PCIe. Doing blocking staging here
     // would stall inference on the first token (malloc_device + memcpy.wait).
     const sycl::usm::alloc src0_alloc_prestage =
         src0->data ? ggml_sycl_get_alloc_type(src0->data) : sycl::usm::alloc::unknown;
@@ -34288,7 +34284,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 // get prefetched into that device's LRU pool.
                 const int n_gpu_hint = ggml_sycl_info().total_gpu_count;
                 // Check if GPU0 prefetcher is initialized for expert caching.
-                // Let hint() manage VRAM pressure internally — ensure_cached_layout
+                // Let hint() manage VRAM pressure internally — direct_stage_expert
                 // can evict cold entries to make room for hot experts even when
                 // the static budget query reports zero available.
                 const bool gpu0_has_expert_budget =
@@ -37525,7 +37521,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             g_in_compute_impl = true;
 
             // Drain all non-compute queues (BCS, DMA) before graph execution.
-            // Prestage and ensure_cached_layout submit expert fills/reorders on
+            // Prestage and direct_stage_expert submit expert fills/reorders on
             // the BCS and DMA queues.  Graph nodes may reference VRAM that these
             // queues are still writing to.  Without this drain, the compute
             // queue starts executing kernels that read partially-written data
@@ -46752,7 +46748,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
 
     // NOTE: When VRAM arena is active, the ggml scheduler may still place some
     // attention intermediates on the CPU backend.  The proper fix is to eliminate
-    // ensure_cached_layout and have the arena manage all buffer allocation directly.
+    // the direct staging API and have the arena manage all buffer allocation directly.
     // See llama.cpp-b6y89 for the remaining PP512 fix.
 
     switch (op->op) {

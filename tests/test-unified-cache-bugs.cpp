@@ -141,75 +141,55 @@ static bool test_realloc_eviction_failure_keeps_entry(sycl::queue & q) {
     return true;
 }
 
-static bool test_layout_size_mismatch_recaches(sycl::queue & q) {
-    printf("\n=== Test: layout size mismatch recache ===\n");
+static bool test_direct_stage_weight_basic(sycl::queue & q) {
+    printf("\n=== Test: direct_stage_weight basic ===\n");
 
     ggml_sycl::unified_cache cache(q, 4096);
     std::vector<uint8_t>     data(128, 0xad);
 
-    ggml_sycl::cache_layout_request req{};
-    req.key       = ggml_sycl::test_make_cache_id(data.data());
-    req.src_ptr   = data.data();
-    req.src_size  = data.size();
-    req.dst_size  = data.size();
-    req.type      = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-    req.layer_id  = -1;
-    req.expert_id = -1;
-    req.layout    = GGML_LAYOUT_AOS;
+    ggml_sycl_cache_id key = ggml_sycl::test_make_cache_id(data.data());
 
-    auto result = cache.ensure_cached_layout(req, {});
-    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-        result.event.wait();
-    }
-    if (result.status != ggml_sycl::cache_layout_status::READY || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache initial layout for size mismatch test\n");
+    auto result = cache.direct_stage_weight(key, data.data(), data.size(), data.size(),
+                                            GGML_LAYOUT_AOS, nullptr, nullptr, &q);
+    if (!result.ok || !result.ptr) {
+        fprintf(stderr, "direct_stage_weight failed\n");
         return false;
     }
+    result.event.wait();
 
-    req.dst_size = data.size() * 2;
-    result       = cache.ensure_cached_layout(req, {});
-    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-        result.event.wait();
+    const auto * entry = cache.lookup_weight(key);
+    if (!entry || !entry->ptr) {
+        fprintf(stderr, "lookup_weight failed after staging\n");
+        return false;
     }
-    if (result.status != ggml_sycl::cache_layout_status::READY || !result.device_ptr ||
-        result.size != req.dst_size) {
-        fprintf(stderr, "Size mismatch recache did not succeed\n");
+    if (entry->size != data.size()) {
+        fprintf(stderr, "lookup_weight size mismatch (got %zu, expected %zu)\n", entry->size, data.size());
         return false;
     }
 
     return true;
 }
 
-static bool test_layout_size_mismatch_pinned_fails(sycl::queue & q) {
-    printf("\n=== Test: layout size mismatch pinned entry fails ===\n");
+static bool test_direct_stage_expert_basic(sycl::queue & q) {
+    printf("\n=== Test: direct_stage_expert basic ===\n");
 
     ggml_sycl::unified_cache cache(q, 4096);
     std::vector<uint8_t>     data(128, 0xbe);
 
-    ggml_sycl::cache_layout_request req{};
-    req.key       = ggml_sycl::test_make_cache_id(data.data());
-    req.src_ptr   = data.data();
-    req.src_size  = data.size();
-    req.dst_size  = data.size();
-    req.type      = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-    req.layer_id  = -1;
-    req.expert_id = -1;
-    req.layout    = GGML_LAYOUT_AOS;
+    ggml_sycl_cache_id key = ggml_sycl::test_make_cache_id(data.data());
+    key.aux_id = 42;  // expert_id
 
-    auto result = cache.ensure_cached_layout(req, {});
-    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-        result.event.wait();
-    }
-    if (result.status != ggml_sycl::cache_layout_status::READY || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache initial layout for pinned mismatch test\n");
+    auto result = cache.direct_stage_expert(key, data.data(), data.size(), data.size(),
+                                            GGML_LAYOUT_AOS, nullptr, nullptr, &q);
+    if (!result.ok || !result.ptr) {
+        fprintf(stderr, "direct_stage_expert failed\n");
         return false;
     }
+    result.event.wait();
 
-    cache.pin(req.key, req.layout);
-    req.dst_size = data.size() * 2;
-    result       = cache.ensure_cached_layout(req, {});
-    if (result.status != ggml_sycl::cache_layout_status::FAILED) {
-        fprintf(stderr, "Pinned size mismatch did not fail as expected (status=%d)\n", (int) result.status);
+    const auto * entry = cache.lookup_expert(key);
+    if (!entry || !entry->ptr) {
+        fprintf(stderr, "lookup_expert failed after staging\n");
         return false;
     }
 
@@ -701,109 +681,56 @@ static bool test_unpin_experts(sycl::queue & q) {
     return true;
 }
 
-static bool test_moe_overcommit_cap(sycl::queue & q) {
-    printf("\n=== Test: MoE overcommit cap ===\n");
+static bool test_direct_stage_expert_distinct_keys(sycl::queue & q) {
+    printf("\n=== Test: direct_stage_expert distinct keys ===\n");
 
-    const size_t             budget = 1024;
-    ggml_sycl::unified_cache cache(q, budget);
+    ggml_sycl::unified_cache cache(q, 4096);
 
-    std::vector<uint8_t>            data_a(budget, 0x1a);
-    ggml_sycl::cache_layout_request req{};
-    req.key              = ggml_sycl::test_make_cache_id(data_a.data());
-    req.src_ptr          = data_a.data();
-    req.src_size         = data_a.size();
-    req.dst_size         = data_a.size();
-    req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-    req.layer_id         = 0;
-    req.expert_id        = 0;
-    req.layout           = GGML_LAYOUT_AOS;
+    std::vector<uint8_t> data_a(128, 0x1a);
+    std::vector<uint8_t> data_b(128, 0x2b);
 
-    auto result = cache.ensure_cached_layout(req, {});
-    if (result.status == ggml_sycl::cache_layout_status::FAILED || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache initial MoE entry\n");
+    ggml_sycl_cache_id key_a = ggml_sycl::test_make_cache_id(data_a.data());
+    key_a.aux_id = 0;
+    ggml_sycl_cache_id key_b = ggml_sycl::test_make_cache_id(data_b.data());
+    key_b.aux_id = 1;
+
+    auto ra = cache.direct_stage_expert(key_a, data_a.data(), data_a.size(), data_a.size(),
+                                        GGML_LAYOUT_AOS, nullptr, nullptr, &q);
+    auto rb = cache.direct_stage_expert(key_b, data_b.data(), data_b.size(), data_b.size(),
+                                        GGML_LAYOUT_AOS, nullptr, nullptr, &q);
+    if (!ra.ok || !rb.ok) {
+        fprintf(stderr, "direct_stage_expert failed for distinct keys\n");
         return false;
     }
-    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-        result.event.wait();
-    }
-    cache.pin(req.key, GGML_LAYOUT_AOS);
+    ra.event.wait();
+    rb.event.wait();
 
-    std::vector<uint8_t> data_b(40, 0x2b);
-    req.key       = ggml_sycl::test_make_cache_id(data_b.data());
-    req.src_ptr   = data_b.data();
-    req.src_size  = data_b.size();
-    req.dst_size  = data_b.size();
-    req.expert_id = 1;
-    result        = cache.ensure_cached_layout(req, {});
-    if (result.status == ggml_sycl::cache_layout_status::FAILED || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache second MoE entry\n");
+    const auto * ea = cache.lookup_expert(key_a);
+    const auto * eb = cache.lookup_expert(key_b);
+    if (!ea || !eb) {
+        fprintf(stderr, "lookup_expert failed for one or both keys\n");
         return false;
     }
-    if (!result.host_resident) {
-        fprintf(stderr, "Expected host fallback for second MoE entry\n");
-        return false;
-    }
-    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
-        result.event.wait();
-    }
-    cache.pin(req.key, GGML_LAYOUT_AOS);
-
-    std::vector<uint8_t> data_c(100, 0x3c);
-    req.key       = ggml_sycl::test_make_cache_id(data_c.data());
-    req.src_ptr   = data_c.data();
-    req.src_size  = data_c.size();
-    req.dst_size  = data_c.size();
-    req.expert_id = 2;
-    result        = cache.ensure_cached_layout(req, {});
-
-    if (result.status == ggml_sycl::cache_layout_status::FAILED || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache third MoE entry\n");
-        return false;
-    }
-    if (!result.host_resident) {
-        fprintf(stderr, "Expected host fallback for third MoE entry\n");
+    if (ea->ptr == eb->ptr) {
+        fprintf(stderr, "Two distinct experts got same pointer (hash collision?)\n");
         return false;
     }
 
     return true;
 }
 
-static bool test_single_layout_enforced(sycl::queue & q) {
-    printf("\n=== Test: single layout enforcement ===\n");
+static bool test_direct_stage_weight_lookup_miss(sycl::queue & q) {
+    printf("\n=== Test: direct_stage_weight lookup miss ===\n");
 
-    ggml_sycl::unified_cache cache(q, 1 << 20);
-    std::vector<uint8_t>     data(512, 0x7a);
+    ggml_sycl::unified_cache cache(q, 4096);
 
-    ggml_sycl::cache_layout_request req{};
-    req.key      = ggml_sycl::test_make_cache_id(data.data());
-    req.src_ptr  = data.data();
-    req.src_size = data.size();
-    req.dst_size = data.size();
-    req.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-    req.layout   = GGML_LAYOUT_AOS;
+    std::vector<uint8_t> data(128, 0x7a);
+    ggml_sycl_cache_id   key = ggml_sycl::test_make_cache_id(data.data());
 
-    auto result = cache.ensure_cached_layout(req, {});
-    if (result.status != ggml_sycl::cache_layout_status::READY || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache AoS layout\n");
-        return false;
-    }
-    if (!cache.is_cached(req.key, GGML_LAYOUT_AOS)) {
-        fprintf(stderr, "AoS entry missing after caching\n");
-        return false;
-    }
-
-    req.layout = GGML_LAYOUT_SOA;
-    result     = cache.ensure_cached_layout(req, {});
-    if (result.status != ggml_sycl::cache_layout_status::READY || !result.device_ptr) {
-        fprintf(stderr, "Failed to cache SoA layout\n");
-        return false;
-    }
-    if (cache.is_cached(req.key, GGML_LAYOUT_AOS)) {
-        fprintf(stderr, "AoS entry still cached after SoA request\n");
-        return false;
-    }
-    if (!cache.is_cached(req.key, GGML_LAYOUT_SOA)) {
-        fprintf(stderr, "SoA entry missing after request\n");
+    // Lookup before staging should return nullptr
+    const auto * entry = cache.lookup_weight(key);
+    if (entry != nullptr) {
+        fprintf(stderr, "lookup_weight returned non-null for unstaged key\n");
         return false;
     }
 
@@ -827,8 +754,8 @@ int main() {
     ok &= test_evict_returns_bytes(q);
     ok &= test_realloc_failure_keeps_entry(q);
     ok &= test_realloc_eviction_failure_keeps_entry(q);
-    ok &= test_layout_size_mismatch_recaches(q);
-    ok &= test_layout_size_mismatch_pinned_fails(q);
+    ok &= test_direct_stage_weight_basic(q);
+    ok &= test_direct_stage_expert_basic(q);
     ok &= test_graph_pins_host_weights();
     ok &= test_stream_dma_mmap_fail(q);
     ok &= test_all_pinned_eviction_failure_new_entry(q);
@@ -837,8 +764,8 @@ int main() {
     ok &= test_deferred_free_stress(q);
     ok &= test_unaligned_hash(q);
     ok &= test_unpin_experts(q);
-    ok &= test_moe_overcommit_cap(q);
-    ok &= test_single_layout_enforced(q);
+    ok &= test_direct_stage_expert_distinct_keys(q);
+    ok &= test_direct_stage_weight_lookup_miss(q);
 
     printf("\nUnified cache bug tests: %s\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;

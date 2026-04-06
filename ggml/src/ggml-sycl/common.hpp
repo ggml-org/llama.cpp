@@ -2158,7 +2158,7 @@ inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int devi
           (target != GGML_LAYOUT_AOS || ggml_backend_sycl_weights_evictable())));
     if (cache_weights) {
         // Fast path: try direct cache lookup first (O(1) hash lookup, no locks/ensure).
-        // This avoids the expensive ensure_cached_layout path on every MUL_MAT.
+        // Fast O(1) lookup avoids per-MUL_MAT staging overhead.
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
             if (key.valid) {
