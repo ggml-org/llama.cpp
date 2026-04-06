@@ -688,8 +688,9 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
     int deviceId = acquire_device_blocking();
 printf("\n ANOOP ADD device ID %d", deviceId);
 
+   // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+   void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
     workers.emplace_back([=]() {
-        void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
         printf("\n ANOOP Release ADD device ID %d", deviceId);
@@ -748,8 +749,9 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
     int deviceId = acquire_device_blocking();
 
 printf("\n ANOOP MUL device ID %d", deviceId);
+   // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+   void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
     workers.emplace_back([=]() {
-        void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
         printf("\n ANOOP Release MUL device ID %d", deviceId);
@@ -809,8 +811,9 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     int deviceId = acquire_device_blocking();
 printf("\n ANOOP RMS_NORM device ID %d", deviceId);
 
+    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+    void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
     workers.emplace_back([=]() {
-        void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
        printf("\n ANOOP RMS_NORM Releasing device ID %d", deviceId);
