@@ -3888,6 +3888,145 @@ void unified_cache::finalize_pending_fills() {
     }
 }
 
+// === Direct Staging API (ensure_cached_layout replacement) ===
+
+static uint64_t direct_stage_key_hash(const ggml_sycl_cache_id & key) {
+    // Use the name_hash combined with model_id for a fast lookup key.
+    return key.name_hash ^ (key.model_id * 0x9e3779b97f4a7c15ULL);
+}
+
+direct_stage_result unified_cache::direct_stage_weight(
+    ggml_sycl_cache_id          key,
+    const void *                src_ptr,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue) {
+
+    direct_stage_result result{};
+    if (!key.valid || !src_ptr || src_size == 0 || dst_size == 0) {
+        return result;
+    }
+    if (!queue) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] null queue for weight staging\n");
+        return result;
+    }
+
+    // 1. Allocate from WEIGHT zone
+    void * ptr = zone_alloc(vram_zone_id::WEIGHT, dst_size);
+    if (!ptr) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] weight zone_alloc failed for %zu bytes\n", dst_size);
+        return result;
+    }
+
+    // 2. Fill: reorder or plain memcpy
+    sycl::event fill_event;
+    if (fill_fn) {
+        fill_event = fill_fn(*queue, ptr, dst_size, src_ptr, src_size, fill_ctx, {});
+    } else {
+        fill_event = queue->memcpy(ptr, src_ptr, src_size);
+    }
+
+    // 3. Zero-fill padding if dst_size > src_size
+    sycl::event last_event = fill_event;
+    if (dst_size > src_size && !fill_fn) {
+        last_event = queue->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(fill_event);
+            cgh.memset(static_cast<char *>(ptr) + src_size, 0, dst_size - src_size);
+        });
+    }
+
+    // 4. Store in lookup table
+    const uint64_t hash = direct_stage_key_hash(key);
+    {
+        std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
+        direct_weight_entries_[hash] = weight_entry{ ptr, dst_size, layout };
+    }
+
+    result.ptr   = ptr;
+    result.event = last_event;
+    result.ok    = true;
+    return result;
+}
+
+direct_stage_result unified_cache::direct_stage_expert(
+    ggml_sycl_cache_id          key,
+    const void *                src_ptr,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue) {
+
+    direct_stage_result result{};
+    if (!key.valid || !src_ptr || src_size == 0 || dst_size == 0) {
+        return result;
+    }
+    if (!queue) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] null queue for expert staging\n");
+        return result;
+    }
+
+    // 1. Allocate from WEIGHT zone
+    void * ptr = zone_alloc(vram_zone_id::WEIGHT, dst_size);
+    if (!ptr) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] expert zone_alloc failed for %zu bytes\n", dst_size);
+        return result;
+    }
+
+    // 2. Fill: reorder or plain memcpy
+    sycl::event fill_event;
+    if (fill_fn) {
+        fill_event = fill_fn(*queue, ptr, dst_size, src_ptr, src_size, fill_ctx, {});
+    } else {
+        fill_event = queue->memcpy(ptr, src_ptr, src_size);
+    }
+
+    // 3. Zero-fill padding if dst_size > src_size
+    sycl::event last_event = fill_event;
+    if (dst_size > src_size && !fill_fn) {
+        last_event = queue->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(fill_event);
+            cgh.memset(static_cast<char *>(ptr) + src_size, 0, dst_size - src_size);
+        });
+    }
+
+    // 4. Store in lookup table
+    const uint64_t hash = direct_stage_key_hash(key);
+    {
+        std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
+        direct_expert_entries_[hash] = weight_entry{ ptr, dst_size, layout };
+    }
+
+    result.ptr   = ptr;
+    result.event = last_event;
+    result.ok    = true;
+    return result;
+}
+
+const weight_entry * unified_cache::lookup_weight(ggml_sycl_cache_id key) const {
+    const uint64_t hash = direct_stage_key_hash(key);
+    std::shared_lock<std::shared_mutex> lock(direct_stage_mutex_);
+    auto it = direct_weight_entries_.find(hash);
+    if (it == direct_weight_entries_.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+const weight_entry * unified_cache::lookup_expert(ggml_sycl_cache_id key) const {
+    const uint64_t hash = direct_stage_key_hash(key);
+    std::shared_lock<std::shared_mutex> lock(direct_stage_mutex_);
+    auto it = direct_expert_entries_.find(hash);
+    if (it == direct_expert_entries_.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
 bool unified_cache::is_cached(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) const {
     if (!key_id.valid) {
         return false;
@@ -9272,6 +9411,64 @@ unified_cache * unified_cache_register_for_queue(int device_id, sycl::queue & qu
         GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to register device %d: %s\n", device_id, e.what());
         return nullptr;
     }
+}
+
+// === Direct Staging API — Free-Standing Wrappers ===
+
+direct_stage_result unified_cache_direct_stage_weight(
+    int                         device_id,
+    ggml_sycl_cache_id          key,
+    const void *                src,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] no cache for device %d\n", device_id);
+        return {};
+    }
+    return cache->direct_stage_weight(key, src, src_size, dst_size, layout, fill_fn, fill_ctx, queue);
+}
+
+direct_stage_result unified_cache_direct_stage_expert(
+    int                         device_id,
+    ggml_sycl_cache_id          key,
+    const void *                src,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        GGML_LOG_ERROR("[DIRECT-STAGE] no cache for device %d\n", device_id);
+        return {};
+    }
+    return cache->direct_stage_expert(key, src, src_size, dst_size, layout, fill_fn, fill_ctx, queue);
+}
+
+const weight_entry * unified_cache_lookup_weight(
+    int                         device_id,
+    ggml_sycl_cache_id          key) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return nullptr;
+    }
+    return cache->lookup_weight(key);
+}
+
+const weight_entry * unified_cache_lookup_expert(
+    int                         device_id,
+    ggml_sycl_cache_id          key) {
+    auto * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return nullptr;
+    }
+    return cache->lookup_expert(key);
 }
 
 void shutdown_unified_cache() {

@@ -503,6 +503,22 @@ struct cache_layout_result {
     cache_location        location      = cache_location::DEVICE;
 };
 
+// --- Direct Staging API (ensure_cached_layout replacement) ---
+// Simple structs for direct arena allocation + memcpy + reorder.
+// No state machine, no IN_PROGRESS/READY transitions.
+
+struct weight_entry {
+    void *           ptr    = nullptr;
+    size_t           size   = 0;
+    ggml_layout_mode layout = GGML_LAYOUT_AOS;
+};
+
+struct direct_stage_result {
+    void *      ptr   = nullptr;  // Device pointer in WEIGHT zone
+    sycl::event event;            // Completion event
+    bool        ok    = false;
+};
+
 
 // --- Expert Popularity Ranking ---
 // Lightweight popularity tracking: the cache IS the placement.
@@ -926,6 +942,40 @@ class unified_cache {
     // Call this after a batch queue.wait() to mark pending entries as READY
     // and apply any deferred padding.
     void finalize_pending_fills();
+
+    // === Direct Staging API (ensure_cached_layout replacement) ===
+    // Simple arena allocate + fill + register.  No state machine.
+
+    // Stage a dense weight: allocate from WEIGHT zone, fill (reorder or memcpy),
+    // store in lookup table for inference-time resolution.
+    // fill_fn: if non-null, called for AOS->SOA reorder; otherwise plain memcpy.
+    // queue: BCS or CCS queue for the DMA/fill submission.
+    direct_stage_result direct_stage_weight(
+        ggml_sycl_cache_id          key,
+        const void *                src_ptr,
+        size_t                      src_size,
+        size_t                      dst_size,
+        ggml_layout_mode            layout,
+        cache_layout_fill_fn        fill_fn,
+        const void *                fill_ctx,
+        sycl::queue *               queue);
+
+    // Stage an expert tensor: same semantics as direct_stage_weight but uses
+    // a separate lookup table for MoE experts.
+    direct_stage_result direct_stage_expert(
+        ggml_sycl_cache_id          key,
+        const void *                src_ptr,
+        size_t                      src_size,
+        size_t                      dst_size,
+        ggml_layout_mode            layout,
+        cache_layout_fill_fn        fill_fn,
+        const void *                fill_ctx,
+        sycl::queue *               queue);
+
+    // Fast O(1) lookup for inference-time weight resolution.
+    // Returns nullptr if not staged.  No allocation, no state machine.
+    const weight_entry * lookup_weight(ggml_sycl_cache_id key) const;
+    const weight_entry * lookup_expert(ggml_sycl_cache_id key) const;
 
     // === Multi-Device Partial Row Loading ===
 
@@ -1824,6 +1874,14 @@ class unified_cache {
     // The prefetch worker loop (runs on background thread)
     void prefetch_worker_loop();
 
+    // === Direct Staging Lookup Tables ===
+    // Simple O(1) maps for the direct staging API (ensure_cached_layout replacement).
+    // Keyed by cache_id hash, stores only {ptr, size, layout}.
+    // Thread-safe via direct_stage_mutex_ (shared for reads, exclusive for writes).
+    std::unordered_map<uint64_t, weight_entry> direct_weight_entries_;
+    std::unordered_map<uint64_t, weight_entry> direct_expert_entries_;
+    mutable std::shared_mutex                  direct_stage_mutex_;
+
     // Set to true when any weight has been evicted from device to host.
     // One-way flag (false → true, never reset). Used by graph replay / persistent TG
     // to know that baked pointers may reference freed device memory.
@@ -2586,6 +2644,40 @@ void * moe_get_ids_staging(int device_id, size_t needed_bytes);
 
 // Free all pre-allocated MoE buffers for a device (called during shutdown).
 void moe_free_inference_buffers(int device_id);
+
+// === Direct Staging API — Free-Standing Wrappers ===
+// Route to the unified_cache for the given device.  These replace
+// ensure_cached_layout for new call sites.
+
+direct_stage_result unified_cache_direct_stage_weight(
+    int                         device_id,
+    ggml_sycl_cache_id          key,
+    const void *                src,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue);
+
+direct_stage_result unified_cache_direct_stage_expert(
+    int                         device_id,
+    ggml_sycl_cache_id          key,
+    const void *                src,
+    size_t                      src_size,
+    size_t                      dst_size,
+    ggml_layout_mode            layout,
+    cache_layout_fill_fn        fill_fn,
+    const void *                fill_ctx,
+    sycl::queue *               queue);
+
+const weight_entry * unified_cache_lookup_weight(
+    int                         device_id,
+    ggml_sycl_cache_id          key);
+
+const weight_entry * unified_cache_lookup_expert(
+    int                         device_id,
+    ggml_sycl_cache_id          key);
 
 // === Shutdown API ===
 
