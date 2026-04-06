@@ -3735,6 +3735,24 @@ unified_cache::weight_ptr_result unified_cache::get_weight_ptr(const ggml_sycl_c
         result.on_device = !entry.host_resident;
         return result;
     }
+    lock.unlock();
+
+    // Fallback: check direct_weight_entries_ populated by direct_stage_weight().
+    // S1-PRELOAD uses direct_stage_weight which stores entries in a separate map
+    // (direct_weight_entries_) for lock-free staging.  Without this fallback,
+    // mem_handle WEIGHT resolution via resolve_slow() -> get_weight_ptr() misses
+    // all staged weights, causing inference to fall back to host AOS pointers
+    // and producing garbage output during TG.
+    {
+        std::shared_lock<std::shared_mutex> dlock(direct_stage_mutex_);
+        auto it = direct_weight_entries_.find(key);
+        if (it != direct_weight_entries_.end() && it->second.ptr) {
+            result.ptr       = it->second.ptr;
+            result.layout    = it->second.layout;
+            result.on_device = true;  // direct_stage_weight always stages to device VRAM
+            return result;
+        }
+    }
     return result;
 }
 
@@ -8623,11 +8641,6 @@ void * unified_cache::arena_alloc(size_t size) {
         return nullptr;
     }
 
-    // Track for LIFO reclaim — enables arena_free() to rewind the bump pointer
-    // when the caller frees the most recent allocation (stack discipline).
-    last_arena_alloc_off_.store(off, std::memory_order_relaxed);
-    last_arena_alloc_size_.store(aligned, std::memory_order_relaxed);
-
     return static_cast<uint8_t *>(compute_arena_ptr_) + off;
 }
 
@@ -8641,23 +8654,28 @@ void unified_cache::arena_free(void * ptr, size_t size) {
     const size_t off = static_cast<uint8_t *>(ptr)
                      - static_cast<uint8_t *>(compute_arena_ptr_);
 
-    // LIFO reclaim assumes single-threaded access: pool_leg processes graph
-    // nodes sequentially on one compute stream per device.  If concurrent
-    // arena_alloc/arena_free is ever needed, replace with compare_exchange.
-    // LIFO reclaim: if this was the last allocation, rewind the bump pointer.
-    if (off == last_arena_alloc_off_.load(std::memory_order_relaxed) &&
-        aligned == last_arena_alloc_size_.load(std::memory_order_relaxed)) {
-        compute_arena_off_.fetch_sub(aligned, std::memory_order_relaxed);
-        last_arena_alloc_off_.store(0, std::memory_order_relaxed);
-        last_arena_alloc_size_.store(0, std::memory_order_relaxed);
+    // Watermark reclaim: if this allocation sits at the current arena top,
+    // rewind the bump pointer.  Unlike the previous last-alloc-only tracking,
+    // this handles cascading LIFO frees correctly: when multiple pool_alloc
+    // instances in a single op are freed in reverse order (C++ destructor
+    // order), each free reclaims its space because each successive free lands
+    // at the new arena top after the previous reclaim.
+    //
+    // Without cascading reclaim, only the last allocation per op was reclaimed
+    // (the rest leaked until arena_reset), causing the 256 MB SCRATCH zone to
+    // exhaust during PP512's 1158-node graph.
+    //
+    // Single-threaded assumption: pool_leg processes graph nodes sequentially
+    // on one compute stream per device.
+    size_t current_off = compute_arena_off_.load(std::memory_order_relaxed);
+    if (off + aligned == current_off) {
+        compute_arena_off_.store(off, std::memory_order_relaxed);
     }
-    // Non-LIFO free: no-op (space reclaimed at arena_reset).
+    // Non-watermark free: no-op (space reclaimed at arena_reset).
 }
 
 void unified_cache::arena_reset() {
     compute_arena_off_.store(0, std::memory_order_relaxed);
-    last_arena_alloc_off_.store(0, std::memory_order_relaxed);
-    last_arena_alloc_size_.store(0, std::memory_order_relaxed);
 }
 
 bool unified_cache::arena_owns(const void * ptr) const {

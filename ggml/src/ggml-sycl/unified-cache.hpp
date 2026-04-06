@@ -1524,8 +1524,10 @@ class unified_cache {
     // Returns nullptr if arena is not reserved or has insufficient space.
     void * arena_alloc(size_t size);
 
-    // LIFO reclaim: if ptr was the last bump allocation, rewind the bump pointer.
-    // Non-LIFO frees are no-ops (space reclaimed at arena_reset).
+    // Watermark reclaim: if ptr+size sits at the current arena top, rewind the
+    // bump pointer.  Handles cascading LIFO frees (e.g. multiple pool_alloc
+    // destructors firing in reverse order within a single graph op).
+    // Non-watermark frees are no-ops (space reclaimed at arena_reset).
     void arena_free(void * ptr, size_t size);
 
     // Reset the arena bump pointer to 0 (call between graph_compute invocations).
@@ -1703,12 +1705,6 @@ class unified_cache {
     void *              compute_arena_ptr_  = nullptr;
     size_t              compute_arena_size_ = 0;
     std::atomic<size_t> compute_arena_off_{ 0 };
-
-    // LIFO reclaim tracking: if the last allocation is freed, rewind the bump
-    // pointer to reclaim the space instantly.  Only the most recent allocation
-    // is eligible; older frees are no-ops (reclaimed at arena_reset).
-    std::atomic<size_t> last_arena_alloc_off_{ 0 };
-    std::atomic<size_t> last_arena_alloc_size_{ 0 };
 
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;
