@@ -1740,7 +1740,7 @@ struct ggml_hexagon_opbatch {
         memcpy(t_ptr, (void *) tensors.data(), t_size);
         memcpy(o_ptr, (void *) ops.data(),     o_size);
 
-        HEX_VERBOSE("ggml-hex: %s flush-op-batch : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
+        HEX_VERBOSE("ggml-hex: %s flush-opbatch : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
                 name, n_bufs, n_tens, n_ops, b_size, t_size, o_size);
 
         if (opt_verbose > 1) {
@@ -1832,7 +1832,7 @@ void ggml_hexagon_session::flush_batch() {
     // Bump pending flag (cleared in the session::flush once we get the response)
     this->op_pending++;  // atomic inc
 
-    HEX_VERBOSE("ggml-hex: %s: queing opbatch : %p size %u\n", this->c_name(), dbuf.ptr, dbuf.size);
+    HEX_VERBOSE("ggml-hex: %s: queue-opbatch : %p size %u\n", this->c_name(), dbuf.ptr, dbuf.size);
 
     int err = dspqueue_write(this->queue, 0, 1, &dbuf, sizeof(req), (const uint8_t*) &req, DSPQUEUE_TIMEOUT);
     if (err != 0) {
