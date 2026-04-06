@@ -1134,10 +1134,6 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
         }
 
         // fallback to general-purpose std::regex / std::wregex
-        // TODO: std::regex uses recursive backtracking which can cause stack overflow (segfault)
-        //       on long inputs (e.g. 43K repeated characters). Any regex that lacks a custom
-        //       handler above is vulnerable. Consider replacing with a non-backtracking engine
-        //       such as RE2. ref: https://github.com/ggml-org/llama.cpp/issues/21113
         try {
             // if a unicode category is used in the regex, we use the collapsed text and replace the unicode category
             // with the corresponding collapsed representation
