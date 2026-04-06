@@ -62,6 +62,8 @@ test parameters:
   -ot --override-tensors <tensor name pattern>=<buffer type>;...
                                             (default: disabled)
   -nopo, --no-op-offload <0|1>              (default: 0)
+  -fitt, --fit-target <MiB>                 fit model to device memory with this margin per device in MiB (default: off)
+  -fitc, --fit-ctx <n>                      minimum ctx size for --fit-target (default: 4096)
 
 Multiple values can be given for each parameter by separating them with ','
 or by specifying the parameter multiple times. Ranges can be given as
