@@ -2968,74 +2968,6 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     return use_cuda_graph;
 }
 
-static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, ggml_tensor * node) {
-    memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
-    props->node_data = node->data;
-    props->node_op = node->op;
-    props->node_type = node->type;
-    props->flags = node->flags;
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        props->ne[i] = node->ne[i];
-        props->nb[i] = node->nb[i];
-    }
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (!node->src[i]) {
-            continue;
-        }
-
-        props->src_data[i] = node->src[i]->data;
-    }
-    memcpy(props->op_params, node->op_params, GGML_MAX_OP_PARAMS);
-}
-
-static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_graph_node_properties * props) {
-    if (node->data != props->node_data && node->op != GGML_OP_VIEW) {
-        return false;
-    }
-
-    if (node->op != props->node_op) {
-        return false;
-    }
-
-    if (node->type != props->node_type) {
-        return false;
-    }
-
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        if (node->ne[i] != props->ne[i]) {
-            return false;
-        }
-        if (node->nb[i] != props->nb[i]) {
-            return false;
-        }
-    }
-
-    if (node->op != GGML_OP_VIEW) {
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (!node->src[i]) {
-                if (props->src_data[i] != nullptr) {
-                    return false;
-                }
-                continue;
-            }
-
-            if (node->src[i]->data != props->src_data[i]) {
-                return false;
-            }
-        }
-    }
-
-    if (memcmp(props->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
-        return false;
-    }
-
-    if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) != (props->flags & GGML_TENSOR_FLAG_COMPUTE)) {
-        return false;
-    }
-
-    return true;
-}
-
 static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
@@ -3047,58 +2979,18 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     // Check if the graph size has changed
-    if (graph->props.size() != (size_t)cgraph->n_nodes) {
+    if ((int)graph->nodes_copy.size() != cgraph->n_nodes) {
         res = true;
-        graph->props.resize(cgraph->n_nodes);
+        graph->nodes_copy.resize(cgraph->n_nodes);
     }
 
-    // Loop over nodes in GGML graph to determine if CUDA graph update is required
-    // and store properties to allow this comparison for the next token
-
-    const int32_t flag_seen = GGML_TENSOR_FLAG_UNUSED;
-
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        cgraph->nodes[i]->flags |= flag_seen;
-    }
-
-    size_t extra_idx = 0;
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        bool props_match = true;
-
         if (!res) {
-            props_match = ggml_cuda_graph_node_properties_match(cgraph->nodes[i], &graph->props[i]);
-        }
-        if (!props_match) {
-            res = true;
-        }
-        ggml_cuda_graph_node_set_properties(&graph->props[i], cgraph->nodes[i]);
-
-        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
-            ggml_tensor * src = cgraph->nodes[i]->src[src_idx];
-            if (src && !(src->flags & flag_seen)) {
-                if (extra_idx >= graph->extra.size()) {
-                    graph->extra.push_back({});
-                    res = true;
-                }
-
-                if (!res) {
-                    if (!ggml_cuda_graph_node_properties_match(src, &graph->extra[extra_idx])) {
-                        res = true;
-                    }
-                }
-                ggml_cuda_graph_node_set_properties(&graph->extra[extra_idx], src);
-                extra_idx++;
+            if (memcmp(&graph->nodes_copy[i], cgraph->nodes[i], sizeof(ggml_tensor)) != 0) {
+                res = true;
             }
         }
-    }
-
-    if (graph->extra.size() != extra_idx) {
-        res = true;
-        graph->extra.resize(extra_idx);
-    }
-
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        cgraph->nodes[i]->flags &= ~flag_seen;
+        memcpy(&graph->nodes_copy[i], cgraph->nodes[i], sizeof(ggml_tensor));
     }
 
     return res;
