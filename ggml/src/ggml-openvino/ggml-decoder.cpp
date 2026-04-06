@@ -332,28 +332,49 @@ void GgmlOvDecoder::validate_cgraph() const {
 
 ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const {
     if (m_naive) {
-        return input!= nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
+        return input != nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
     }
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
+    // ggml_tensor gives us exact measurements in all cases, so none of those should be -1 (as that's an
+    // OpenVINO native convention). All of those are passed thorugh directly.
+    //
+    // Cases where a tensor dimension size varies are handled case-by-case below. We provide a PartialShape to
+    // communicate the worst-case scenario: a PartialShape has a lower and upper bound on the dimension,
+    // used to inform OpenVINO optimizations. An issue was observed with OpenCL remote buffers not allocating
+    // unless such a range was provided (considerations with remote memory). Although that's not the responsibility
+    // of llama.cpp to solve, providing dimension bounds is useful nonetheless.
+
+    const auto prefill_upper = m_is_prefill ? m_prefill_chunk_size : 1;
+    const auto dim_span_ctx = ov::Dimension(1, m_model_params.ctx);
+
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
         // tokens or positions
-        int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
-        input_shape = ov::PartialShape{1, 1, 1, len};
+        if (m_is_static) {
+            input_shape = ov::PartialShape{1, 1, 1, prefill_upper};
+        } else {
+            // NOTE: AFAICT PartialShape with min_dim == max_dim is not valid, Shape must be used.
+            // Updating callsites to return some Shape optional to allow 1,1,1,1
+            // might materially improve things
+            input_shape = ov::PartialShape{1, 1, 1, ov::Dimension(1, m_prefill_chunk_size)};
+        }
 
     } else if (is_output_idx(input, op)) {
         // output index
-        input_shape = ov::PartialShape{1, 1, 1, m_is_static ? m_compute_params.output_len : -1};
-
+        if (m_is_static) {
+            input_shape = ov::PartialShape{1, 1, 1, m_compute_params.output_len};
+        } else {
+            input_shape = ov::PartialShape{1, 1, 1, ov::Dimension(1, m_compute_params.output_len)};
+        }
     } else if (is_inp_mask(input, op)) {
         // mask
         if (m_is_static) {
-            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
+            input_shape = ov::PartialShape{1, 1, prefill_upper, m_model_params.ctx};
         } else if (m_is_stateful) {
-            input_shape = ov::PartialShape{1, 1, -1, -1};
+            input_shape = ov::PartialShape{1, 1, dim_span_ctx, dim_span_ctx};
         } else {
-            input_shape = ov::PartialShape{-1, 1, -1, -1};
+            input_shape = ov::PartialShape{dim_span_ctx, 1, dim_span_ctx, dim_span_ctx};
         }
 
     } else if (is_kvcache(input, op)) {
@@ -361,7 +382,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         input_shape = ov::PartialShape{get_shape(input)};
         if (!m_is_static) {
             // do not fix ctx size to make llama-bench work across test params
-            input_shape[2] = -1;
+            input_shape[2] = dim_span_ctx;
         }
         if (is_stateful()) {
             // Convert stateless KV cache layout [1, 1, seq, n_heads_kv * head_size]
@@ -369,14 +390,18 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             assert(input_shape.size() == 4 && input_shape[0] == 1 && input_shape[1] == 1 &&
                    input_shape[2].is_dynamic() &&
                    input_shape[3] == (m_model_params.n_heads_kv * m_model_params.head_size));
-            input_shape = {input_shape[0], ov::Dimension::dynamic(), m_model_params.n_heads_kv,
+            input_shape = {input_shape[0], dim_span_ctx, m_model_params.n_heads_kv,
                            m_model_params.head_size};
         }
 
     } else if (is_kv_idx(input, op)) {
         // kv update index
-        int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
-        input_shape = ov::PartialShape{1, 1, 1, len};
+        if (m_is_static) {
+            int len = m_is_prefill ? m_prefill_chunk_size : 1;
+            input_shape = ov::PartialShape{1, 1, 1, len};
+        } else {
+            input_shape = ov::PartialShape{1, 1, 1, dim_span_ctx};
+        }
 
     } else {
         input_shape = ov::PartialShape{get_shape(input)};
