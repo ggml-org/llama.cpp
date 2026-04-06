@@ -5,7 +5,6 @@
 #include "llama-impl.h"
 #include "llama-model-loader.h"
 
-#include "llama.h"
 #include "unicode.h"
 
 #include <algorithm>
