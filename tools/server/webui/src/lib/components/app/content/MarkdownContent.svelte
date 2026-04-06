@@ -224,7 +224,6 @@
 	}
 
 
-
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
 	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
@@ -249,7 +248,7 @@
 
 		const singleNodeRoot = { type: 'root', children: [node] };
 		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
-		let html = processorInstance.stringify(transformedRoot);
+		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
 
@@ -602,14 +601,12 @@
 	class="{className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
-	dir="auto"
 >
 	{#each renderedBlocks as block (block.id)}
 		<div
 			class="markdown-block"
 			data-block-id={block.id}
 			use:fadeInView={{ skipIfVisible: true }}
-			dir="auto"
 		>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html block.html}
@@ -617,7 +614,7 @@
 	{/each}
 
 	{#if unstableBlockHtml}
-		<div class="markdown-block markdown-block--unstable" data-block-id="unstable" dir="auto">
+		<div class="markdown-block markdown-block--unstable" data-block-id="unstable">
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html unstableBlockHtml}
 		</div>
