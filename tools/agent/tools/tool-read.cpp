@@ -130,7 +130,7 @@ static tool_result read_execute(const json & args, const tool_context & ctx) {
     std::ostringstream output;
     for (size_t i = 0; i < lines.size(); i++) {
         int num = offset + i + 1;
-        output << std::setw(6) << num << "| " << lines[i] << "\n";
+        output << std::setw(6) << num << "\t" << lines[i] << "\n";
     }
 
     // Add file info
