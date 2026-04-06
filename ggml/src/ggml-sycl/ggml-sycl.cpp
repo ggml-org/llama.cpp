@@ -1233,6 +1233,26 @@ static void moe_prestage_popular_experts() {
             auto & up_host_fctx   = all_host_fill_ctxs[gi * 3 + 1];
             auto & down_host_fctx = all_host_fill_ctxs[gi * 3 + 2];
 
+            // P4: Check placement plan — skip experts planned for host.
+            // Each tensor (gate/up/down) is checked individually.  If the plan
+            // says an expert is not on device, skip its staging to avoid
+            // exhausting the WEIGHT zone on MoE models.
+            if (cache->has_placement_plan()) {
+                const auto & pp = cache->get_placement_plan();
+                auto check_expert_tensor = [&](const moe_expert_meta * meta) -> bool {
+                    if (!meta || !meta->tensor || !meta->tensor->name) return true;
+                    const std::string tname(meta->tensor->name);
+                    return pp.expert_on_device(tname, mg.expert_idx, device);
+                };
+                bool gate_on_dev = check_expert_tensor(mg.gate);
+                bool up_on_dev   = check_expert_tensor(mg.up);
+                bool down_on_dev = check_expert_tensor(mg.down);
+                if (!gate_on_dev && !up_on_dev && !down_on_dev) {
+                    skipped++;
+                    continue;
+                }
+            }
+
             bool gate_ok = build_tensor_data(mg.gate, gate_sd, gate_req,
                                              gate_gpu_fctx, gate_host_fctx);
             bool up_ok   = build_tensor_data(mg.up,   up_sd,   up_req,
@@ -1434,6 +1454,26 @@ static void moe_prestage_popular_experts() {
                 }
                 if (already_on_secondary) {
                     continue;
+                }
+
+                // P4: Check placement plan — skip experts not planned for any
+                // secondary device.  Without this, Phase 2 tries to stage
+                // host-planned experts onto secondary GPUs, exhausting VRAM.
+                if (meta->tensor && meta->tensor->name) {
+                    bool planned_for_secondary = false;
+                    const std::string tname(meta->tensor->name);
+                    for (const auto & b : sec_budgets) {
+                        auto * sec_cache = b.cache;
+                        if (sec_cache && sec_cache->has_placement_plan() &&
+                            sec_cache->get_placement_plan().expert_on_device(
+                                tname, meta->expert_idx, b.dev)) {
+                            planned_for_secondary = true;
+                            break;
+                        }
+                    }
+                    if (!planned_for_secondary) {
+                        continue;
+                    }
                 }
 
                 const size_t soa_bytes = ggml_sycl_layout_bytes_for_dims(
@@ -1743,6 +1783,16 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     // Get unified cache for target device
     unified_cache * cache = get_unified_cache_for_device(device_id);
     if (!cache) return nullptr;
+
+    // P4: Check placement plan — skip device staging for experts planned for host.
+    // Without this, adaptive prestage and ExpertPrefetcher::hint() bypass the plan
+    // and exhaust the WEIGHT zone on MoE models that exceed VRAM.
+    if (cache->has_placement_plan() && meta->tensor && meta->tensor->name) {
+        const std::string tname(meta->tensor->name);
+        if (!cache->get_placement_plan().expert_on_device(tname, expert_idx, device_id)) {
+            return nullptr;  // Expert planned for host — caller handles host fallback
+        }
+    }
 
     // Build cache key from expert tensor metadata
     ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(
@@ -5409,7 +5459,8 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
             }
             const auto gpu_mode = ggml_sycl::get_multi_gpu_mode(is_moe);
             g_placement_plan = ggml_sycl::compute_multi_device_plan(
-                budgets, g_tensor_inventory, static_cast<int>(g_model_n_layer), gpu_mode);
+                budgets, g_tensor_inventory, static_cast<int>(g_model_n_layer),
+                gpu_mode, g_moe_n_experts_total);
             g_has_placement_plan = true;
             GGML_LOG_INFO("[SYCL] Multi-device placement plan computed: %zu entries, "
                           "%.1f MB device + %.1f MB host (%d GPUs)\n",
@@ -5418,9 +5469,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                           g_placement_plan.host_bytes / (1024.0 * 1024.0),
                           info.total_gpu_count);
         } else {
-            // P4: Single-device placement
+            // P4: Single-device placement (with per-expert MoE splitting)
             g_placement_plan = ggml_sycl::compute_placement_plan(
-                g_tensor_inventory, vram_budget, ctx->device);
+                g_tensor_inventory, vram_budget, ctx->device, g_moe_n_experts_total);
             g_has_placement_plan = true;
             GGML_LOG_INFO("[SYCL] Placement plan computed: %zu entries, "
                           "%.1f MB device + %.1f MB host\n",
@@ -10203,8 +10254,19 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
     const int layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
     size_t    cached   = 0;
 
-    size_t failed = 0;
+    size_t failed       = 0;
+    size_t plan_skipped = 0;
+    const std::string tname(src0->name ? src0->name : "");
     for (int64_t e = 0; e < n_experts; ++e) {
+        // P4: Check placement plan — skip device staging for experts planned for host.
+        if (cache->has_placement_plan() && !tname.empty()) {
+            if (!cache->get_placement_plan().expert_on_device(
+                    tname, static_cast<int>(e), device)) {
+                plan_skipped++;
+                continue;
+            }
+        }
+
         const uint8_t *    expert_aos = static_cast<const uint8_t *>(src0->data) + e * expert_size;
         ggml_sycl_cache_id key        = ggml_sycl_get_moe_expert_cache_key(src0, extra, static_cast<int>(e));
         if (!expert_aos || !key.valid) {
@@ -10236,8 +10298,9 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
             failed++;
         }
     }
-    if (g_ggml_sycl_debug && (cached > 0 || failed > 0)) {
-        GGML_SYCL_DEBUG("[MODEL-PRELOAD] MoE cached=%zu failed=%zu for %s layout=%s\n", cached, failed,
+    if (g_ggml_sycl_debug && (cached > 0 || failed > 0 || plan_skipped > 0)) {
+        GGML_SYCL_DEBUG("[MODEL-PRELOAD] MoE cached=%zu failed=%zu plan_skipped=%zu for %s layout=%s\n",
+                        cached, failed, plan_skipped,
                         src0->name ? src0->name : "?", ggml_sycl_layout_mode_name(layout));
     }
     return cached > 0;
@@ -10325,7 +10388,11 @@ static void ggml_sycl_preload_model_weights() {
             std::unordered_map<std::string, size_t> plan_rank;
             plan_rank.reserve(g_placement_plan.entries.size());
             for (size_t r = 0; r < g_placement_plan.entries.size(); ++r) {
-                plan_rank[g_placement_plan.entries[r].name] = r;
+                // For per-expert MoE entries, use the first (highest priority)
+                // entry's rank as representative for tensor-level sorting.
+                if (plan_rank.find(g_placement_plan.entries[r].name) == plan_rank.end()) {
+                    plan_rank[g_placement_plan.entries[r].name] = r;
+                }
             }
             const size_t unranked = plan_rank.size();  // sentinel: after all ranked entries
             for (auto & [dev, indices] : items_by_device) {
@@ -10424,7 +10491,18 @@ static void ggml_sycl_preload_model_weights() {
                     const int layer_id = ggml_sycl_tp_extract_layer_number(tensor->name);
 
                     bool any_cached = false;
+                    const std::string tname(tensor->name ? tensor->name : "");
                     for (int64_t e = 0; e < n_experts; ++e) {
+                        // P4: Check placement plan — skip device staging for
+                        // experts planned for host.  This prevents blind S1-PRELOAD
+                        // from exhausting the WEIGHT zone on MoE models.
+                        if (cache->has_placement_plan() && !tname.empty()) {
+                            if (!cache->get_placement_plan().expert_on_device(
+                                    tname, static_cast<int>(e), device)) {
+                                continue;
+                            }
+                        }
+
                         const uint8_t * expert_aos =
                             static_cast<const uint8_t *>(tensor->data) + e * expert_size;
                         ggml_sycl_cache_id key =
@@ -32586,6 +32664,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             layout_mode route_layout_fast = ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, true);
             auto * extra_fast = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
 
+            // Placement plan fast-path: when the plan says an expert is host-placed,
+            // skip GPU cache lookups entirely and route directly to CPU dispatch.
+            const std::string tname_fast_str(tname_layer);
+            ggml_sycl::unified_cache * plan_cache_fast =
+                ggml_sycl::get_unified_cache_for_device(ctx.device);
+            const bool have_plan_fast = plan_cache_fast && plan_cache_fast->has_placement_plan();
+            const auto & plan_fast = have_plan_fast ? plan_cache_fast->get_placement_plan()
+                                                    : ggml_sycl::placement_plan{};
+
             // Per-device secondary entries collected during the expert loop below.
             std::vector<std::vector<expert_dispatch_entry>> sec_entries_fast(
                 have_secondary_fast ? n_gpu_devs_fast : 0);
@@ -32643,6 +32730,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
                 const int32_t expert_id = ids_data[ci];
                 GGML_ASSERT(expert_id >= 0 && expert_id < n_as);
+
+                // Placement plan fast-path: when the plan explicitly places this
+                // expert on host, skip all GPU cache lookups and route to CPU.
+                if (have_plan_fast && !tname_fast_str.empty() &&
+                    !plan_fast.expert_on_device(tname_fast_str, expert_id, -1)) {
+                    goto cpu_fallback_fast;
+                }
 
                 // Route to GPU0 VRAM cache, secondary GPU, or CPU.
                 // Uses is_expert_resident with block-number keys to check the
@@ -32713,6 +32807,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 }
 
                 // CPU fallback — also hint the prefetcher to re-cache for next token
+            cpu_fallback_fast:
                 if (layer_hash_fast != 0) {
                     auto & pf_unfused = g_expert_prefetchers[ctx.device];
                     if (pf_unfused.is_initialized()) {
@@ -34050,6 +34145,14 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 dispatch_experts_secondary_gpu_impl(entries, target_device, sctx, cpu_entries);
             };
 
+            // Placement plan for hybrid dispatch: when the plan says host, skip GPU checks.
+            const std::string tname_hybrid_str(src0->name ? src0->name : "");
+            ggml_sycl::unified_cache * plan_cache_hybrid =
+                ggml_sycl::get_unified_cache_for_device(ctx.device);
+            const bool have_plan_hybrid = plan_cache_hybrid && plan_cache_hybrid->has_placement_plan();
+            const auto & plan_hybrid = have_plan_hybrid ? plan_cache_hybrid->get_placement_plan()
+                                                        : ggml_sycl::placement_plan{};
+
             if (false) {  // GPU probe now in CPU-TG path above
                 // GPU probe handled partition — skip to shared dispatch
             } else if (cpu_expert_tg_active) {
@@ -34066,6 +34169,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     for (int64_t id = 0; id < n_ids; id++) {
                         const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                         GGML_ASSERT(i02 >= 0 && i02 < n_as);
+
+                        // Placement plan fast-path: host-placed expert → CPU directly
+                        if (have_plan_hybrid && !tname_hybrid_str.empty() &&
+                            !plan_hybrid.expert_on_device(tname_hybrid_str, i02, -1)) {
+                            cpu_entries.push_back({ iid1, id, i02, nullptr, 0 });
+                            continue;
+                        }
 
                         // Route expert to GPU with cached weights, CPU only as fallback.
                         // Priority: GPU0 cache > secondary GPU cache > prefetcher > CPU.
@@ -34371,6 +34481,13 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                 for (int64_t id = 0; id < n_ids; id++) {
                     const int32_t i02 = ids_host[static_cast<size_t>(iid1 * n_ids + id)];
                     GGML_ASSERT(i02 >= 0 && i02 < n_as);
+
+                    // Placement plan fast-path: host-placed expert → CPU directly
+                    if (have_plan_hybrid && !tname_hybrid_str.empty() &&
+                        !plan_hybrid.expert_on_device(tname_hybrid_str, i02, -1)) {
+                        cpu_entries.push_back({ iid1, id, i02, nullptr });
+                        continue;
+                    }
 
                     bool routed = false;
 

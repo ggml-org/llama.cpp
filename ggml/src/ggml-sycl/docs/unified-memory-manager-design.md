@@ -250,10 +250,10 @@ This micro-benchmark measures whether routed MoE experts should be computed on G
 Based on these results combined with Unsloth's GPT-OSS offloading guide, the MoE expert placement strategy is **static, priority-ordered fill at load time**:
 
 1. **Fill VRAM with highest-priority weights first.** Dense layers (attention, shared experts) always go in VRAM (SOA). They are accessed every token and benefit from VRAM residency.
-2. **Fill remaining VRAM with MoE experts in Unsloth priority order.** When VRAM budget allows, experts that fit should stay — GPU VRAM compute is 2.9-4.5x faster than CPU. The priority order (from Unsloth's `-ot` tiering):
-   - Gate projections first (smallest, routing-critical)
-   - Down projections next (produce MoE output)
-   - Up projections last (largest, first to overflow to host)
+2. **Fill remaining VRAM with MoE experts in Unsloth priority order.** When VRAM budget allows, experts that fit should stay — GPU VRAM compute is 2.9-4.5x faster than CPU. The priority order (from Unsloth's `-ot` tiering, most impactful first):
+   - Down projections first (produce MoE output, most impactful per Unsloth)
+   - Up projections next
+   - Gate projections last (least impactful, first to overflow to host)
    - Within each category: earlier layers before later layers
 3. **Overflow experts go to host-pinned (AOS) for CPU compute.** Never shuttle experts via DMA during inference — the 2.5-4.4x DMA+GPU penalty makes on-demand transfer strictly worse than CPU-local compute.
 4. **Expert prefetch cache merges into unified cache.** The legacy shadow pool (`vram_pool_` in `expert-prefetch.cpp`) is eliminated. The prefetcher becomes a scheduling/prediction layer only; all memory management flows through the unified cache's placement plan.

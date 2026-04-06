@@ -2881,7 +2881,21 @@ direct_stage_result unified_cache::direct_stage_expert(
     // 1. Allocate from WEIGHT zone
     void * ptr = zone_alloc(vram_zone_id::WEIGHT, dst_size);
     if (!ptr) {
-        GGML_LOG_ERROR("[DIRECT-STAGE] expert zone_alloc failed for %zu bytes\n", dst_size);
+        // VRAM exhausted — register as host-pinned entry instead of failing.
+        // The src_ptr is already host-pinned (from model load / mmap).
+        // Dispatch will see AOS host pointer and route to CPU compute.
+        static std::atomic<int> host_fallback_log{0};
+        if (host_fallback_log.fetch_add(1, std::memory_order_relaxed) < 10) {
+            GGML_LOG_WARN("[DIRECT-STAGE] WEIGHT zone full (%zu bytes) — "
+                          "registering expert on host for CPU dispatch\n", dst_size);
+        }
+        {
+            std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
+            direct_expert_entries_[key] = weight_entry{
+                const_cast<void *>(src_ptr), src_size, GGML_LAYOUT_AOS };
+        }
+        result.ptr = const_cast<void *>(src_ptr);
+        result.ok  = true;
         return result;
     }
 
@@ -9759,7 +9773,8 @@ static int p4_extract_layer_id(const char * name) {
 placement_plan compute_placement_plan(
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
     size_t vram_budget,
-    int    device_id) {
+    int    device_id,
+    int    n_experts) {
 
     placement_plan plan;
     plan.vram_budget  = vram_budget;
@@ -9768,21 +9783,47 @@ placement_plan compute_placement_plan(
     plan.vram_bytes   = 0;
     plan.host_bytes   = 0;
 
-    // Build entries with priority classification
-    plan.entries.reserve(tensor_inventory.size());
+    // Build entries with priority classification.
+    // Dense weights get one entry per tensor.
+    // MoE expert tensors (n_experts > 0, name contains "_exps") are split into
+    // per-expert entries so each expert competes individually for VRAM.
+    plan.entries.reserve(tensor_inventory.size() + (n_experts > 0 ? tensor_inventory.size() * n_experts : 0));
     for (const auto & [name, src_size] : tensor_inventory) {
+        const tensor_usage usage = infer_tensor_usage(name.c_str());
+
+        // MoE expert tensors: split into per-expert entries when n_experts > 0.
+        // Each expert gets its own placement_entry with expert_id >= 0.
+        // The composite tensor entry is NOT added — only per-expert entries.
+        if (n_experts > 0 && usage == tensor_usage::MOE_EXPERT_WEIGHT) {
+            const int    layer_id     = p4_extract_layer_id(name.c_str());
+            const size_t expert_size  = src_size / static_cast<size_t>(n_experts);
+            const placement_priority prio = tensor_to_placement_priority(usage, name.c_str());
+
+            for (int e = 0; e < n_experts; ++e) {
+                placement_entry entry;
+                entry.name          = name;
+                entry.src_size      = expert_size;
+                entry.dst_size      = expert_size;  // Default: same as source (AOS)
+                entry.layer_id      = layer_id;
+                entry.expert_id     = e;
+                entry.priority      = prio;
+                entry.on_device     = false;
+                entry.target_device = -1;
+                plan.entries.push_back(std::move(entry));
+            }
+            continue;
+        }
+
+        // Dense weight: single entry with expert_id = -1.
         placement_entry entry;
         entry.name     = name;
         entry.src_size = src_size;
         entry.dst_size = src_size;  // Default: same as source (AOS)
         entry.layer_id = p4_extract_layer_id(name.c_str());
+        entry.expert_id = -1;
 
-        // Classify usage and map to priority
-        const tensor_usage usage = infer_tensor_usage(name.c_str());
         entry.priority = tensor_to_placement_priority(usage, name.c_str());
 
-        // MoE expert tensors are composite (contain all experts for a layer).
-        // They compete for VRAM at the full tensor level during S1-PRELOAD.
         entry.on_device      = false;      // Will be set during packing below
         entry.target_device  = -1;         // -1 = host (updated during packing)
         plan.entries.push_back(std::move(entry));
@@ -9800,7 +9841,10 @@ placement_plan compute_placement_plan(
             if (a.layer_id != b.layer_id) {
                 return a.layer_id < b.layer_id;
             }
-            return a.dst_size > b.dst_size;
+            if (a.dst_size != b.dst_size) {
+                return a.dst_size > b.dst_size;
+            }
+            return a.expert_id < b.expert_id;
         });
 
     // Greedy bin-packing: fill VRAM up to budget, spill the rest to host.
@@ -9872,6 +9916,24 @@ placement_plan compute_placement_plan(
                           host_count, host_bytes / (1024.0 * 1024.0));
         }
     }
+    // Log MoE expert placement breakdown if per-expert entries exist
+    {
+        size_t expert_device_count = 0, expert_host_count = 0;
+        for (const auto & e : plan.entries) {
+            if (e.expert_id >= 0) {
+                if (e.on_device) {
+                    expert_device_count++;
+                } else {
+                    expert_host_count++;
+                }
+            }
+        }
+        if (expert_device_count + expert_host_count > 0) {
+            GGML_LOG_INFO("[PLACEMENT] MoE experts: %zu on device, %zu on host (of %zu total)\n",
+                          expert_device_count, expert_host_count,
+                          expert_device_count + expert_host_count);
+        }
+    }
     GGML_LOG_INFO("[PLACEMENT] Total: %.1f MB device + %.1f MB host (budget=%.1f MB)\n",
                   plan.vram_bytes / (1024.0 * 1024.0),
                   plan.host_bytes / (1024.0 * 1024.0),
@@ -9914,13 +9976,14 @@ placement_plan compute_multi_device_plan(
     const std::vector<device_budget> &                  device_budgets,
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
     int                                                 n_layers,
-    multi_gpu_mode                                      mode) {
+    multi_gpu_mode                                      mode,
+    int                                                 n_experts) {
 
     // Single device: delegate to existing P4 path
     if (device_budgets.size() <= 1) {
         const int    dev    = device_budgets.empty() ? 0 : device_budgets[0].device_id;
         const size_t budget = device_budgets.empty() ? 0 : device_budgets[0].vram_budget;
-        return compute_placement_plan(tensor_inventory, budget, dev);
+        return compute_placement_plan(tensor_inventory, budget, dev, n_experts);
     }
 
     const size_t n_devs = device_budgets.size();
@@ -9979,23 +10042,48 @@ placement_plan compute_multi_device_plan(
     }
 
     // Step 2: Build entries with priority classification (same as P4).
-    plan.entries.reserve(tensor_inventory.size());
+    // MoE expert tensors are split into per-expert entries when n_experts > 0.
+    plan.entries.reserve(tensor_inventory.size() + (n_experts > 0 ? tensor_inventory.size() * n_experts : 0));
     for (const auto & [name, src_size] : tensor_inventory) {
+        const tensor_usage usage = infer_tensor_usage(name.c_str());
+
+        // MoE expert tensors: split into per-expert entries when n_experts > 0.
+        if (n_experts > 0 && usage == tensor_usage::MOE_EXPERT_WEIGHT) {
+            const int    layer_id     = p4_extract_layer_id(name.c_str());
+            const size_t expert_size  = src_size / static_cast<size_t>(n_experts);
+            const placement_priority prio = tensor_to_placement_priority(usage, name.c_str());
+
+            for (int e = 0; e < n_experts; ++e) {
+                placement_entry entry;
+                entry.name          = name;
+                entry.src_size      = expert_size;
+                entry.dst_size      = expert_size;
+                entry.layer_id      = layer_id;
+                entry.expert_id     = e;
+                entry.priority      = prio;
+                entry.on_device     = false;
+                entry.target_device = -1;
+                plan.entries.push_back(std::move(entry));
+            }
+            continue;
+        }
+
+        // Dense weight: single entry with expert_id = -1.
         placement_entry entry;
         entry.name          = name;
         entry.src_size      = src_size;
         entry.dst_size      = src_size;
         entry.layer_id      = p4_extract_layer_id(name.c_str());
+        entry.expert_id     = -1;
         entry.on_device     = false;
         entry.target_device = -1;
 
-        const tensor_usage usage = infer_tensor_usage(name.c_str());
         entry.priority = tensor_to_placement_priority(usage, name.c_str());
 
         plan.entries.push_back(std::move(entry));
     }
 
-    // Step 3: Sort by (priority ASC, layer_id ASC, dst_size DESC).
+    // Step 3: Sort by (priority ASC, layer_id ASC, dst_size DESC, expert_id ASC).
     std::sort(plan.entries.begin(), plan.entries.end(),
         [](const placement_entry & a, const placement_entry & b) {
             if (a.priority != b.priority) {
@@ -10004,7 +10092,10 @@ placement_plan compute_multi_device_plan(
             if (a.layer_id != b.layer_id) {
                 return a.layer_id < b.layer_id;
             }
-            return a.dst_size > b.dst_size;
+            if (a.dst_size != b.dst_size) {
+                return a.dst_size > b.dst_size;
+            }
+            return a.expert_id < b.expert_id;
         });
 
     // Step 4: Pack entries into devices.
@@ -10110,15 +10201,14 @@ placement_plan compute_multi_device_plan(
     }
 
     // expert_device: per-layer per-expert device assignment (from entry target_device).
-    // MoE expert tensors contain ALL experts for a layer in one blob.
-    // The plan assigns the whole tensor to one device, so all experts in that
-    // tensor share the same target.  Individual expert routing is handled
-    // at runtime by the unified cache's per-expert caching.
+    // With per-expert splitting (n_experts > 0), each expert has its own entry
+    // and can be assigned to a different device.  Without splitting, the whole
+    // MoE tensor goes to one device and all experts share that target.
     for (const auto & entry : plan.entries) {
         if (!is_moe_priority(entry.priority)) continue;
         if (entry.layer_id < 0) continue;
-        // All experts within this tensor go to target_device
-        plan.expert_device[entry.layer_id][0] = entry.target_device;
+        const int eid = (entry.expert_id >= 0) ? entry.expert_id : 0;
+        plan.expert_device[entry.layer_id][eid] = entry.target_device;
     }
 
     // Log multi-device placement summary

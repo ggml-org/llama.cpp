@@ -112,6 +112,7 @@ struct placement_entry {
     size_t             dst_size;       // Layout-converted destination bytes (SOA/COALESCED)
     placement_priority priority;       // Sort key
     int                layer_id;       // Layer number (earlier = higher priority within same level)
+    int                expert_id;      // -1 for dense weights, >=0 for individual MoE experts
     bool               on_device;      // true = VRAM (any device), false = host
     int                target_device;  // Target GPU device_id (-1 = host/CPU)
 };
@@ -162,6 +163,8 @@ struct placement_plan {
 
     // Quick lookup: is this tensor on any device?
     // Returns true if tensor with given name is planned for VRAM (any GPU).
+    // For dense weights (expert_id == -1) only; MoE expert entries are not
+    // indexed by name alone — use expert_on_device() for per-expert queries.
     bool is_on_device(const std::string & name) const {
         auto it = name_index_.find(name);
         return it != name_index_.end() && entries[it->second].on_device;
@@ -183,30 +186,62 @@ struct placement_plan {
         return entries[it->second].target_device;
     }
 
+    // MoE expert query: is a specific expert of a tensor planned for VRAM?
+    // tensor_name: the composite MoE tensor name (e.g. "blk.0.ffn_down_exps")
+    // expert_id: individual expert index (0..n_experts-1)
+    // device_id: if >= 0, checks assignment to a specific device; -1 checks any device
+    bool expert_on_device(const std::string & tensor_name, int expert_id, int device_id = -1) const {
+        const std::string key = tensor_name + ":e" + std::to_string(expert_id);
+        auto it = expert_index_.find(key);
+        if (it == expert_index_.end()) {
+            return true;  // No plan entry for this expert — default to device (safe fallback)
+        }
+        const auto & e = entries[it->second];
+        if (!e.on_device) return false;
+        if (device_id >= 0) return e.target_device == device_id;
+        return true;
+    }
+
     // Build the name->index lookup after entries are populated.
     void build_index() {
         name_index_.clear();
+        expert_index_.clear();
         name_index_.reserve(entries.size());
+        expert_index_.reserve(entries.size());
         for (size_t i = 0; i < entries.size(); ++i) {
-            name_index_[entries[i].name] = i;
+            const auto & e = entries[i];
+            if (e.expert_id >= 0) {
+                // MoE expert entry: index by "tensor_name:eN"
+                const std::string key = e.name + ":e" + std::to_string(e.expert_id);
+                expert_index_[key] = i;
+            } else {
+                // Dense weight: index by name
+                name_index_[e.name] = i;
+            }
         }
     }
 
   private:
-    std::unordered_map<std::string, size_t> name_index_;
+    std::unordered_map<std::string, size_t> name_index_;    // Dense weights: name -> index
+    std::unordered_map<std::string, size_t> expert_index_;  // MoE experts: "name:eN" -> index
 };
 
 // Compute placement plan for all model weights given a VRAM budget.
 // tensor_inventory: vector of (name, src_size) pairs from model header.
 // vram_budget: available VRAM bytes for weights.
 // device_id: target device (for layout size calculation).
-// Sorts by (priority ASC, layer_id ASC, dst_size DESC) and greedily
-// packs into VRAM.  The mapping from tensor_usage to placement_priority
-// is in unified-cache.cpp (requires common.hpp types).
+// n_experts: experts per MoE layer (0 for dense models).  When > 0,
+//            MoE tensors (identified by _exps suffix) are split into
+//            per-expert entries so each expert competes individually
+//            for VRAM placement.
+// Sorts by (priority ASC, layer_id ASC, dst_size DESC, expert_id ASC)
+// and greedily packs into VRAM.  The mapping from tensor_usage to
+// placement_priority is in unified-cache.cpp (requires common.hpp types).
 placement_plan compute_placement_plan(
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
     size_t                                              vram_budget,
-    int                                                 device_id);
+    int                                                 device_id,
+    int                                                 n_experts = 0);
 
 // P4.5: Compute multi-device placement plan for hybrid parallelism.
 // Dense layers use layer parallelism (contiguous ranges per device, proportional to VRAM).
@@ -217,11 +252,15 @@ placement_plan compute_placement_plan(
 // tensor_inventory: vector of (name, src_size) pairs from model header.
 // n_layers: total number of transformer layers in the model.
 // mode: parallelism strategy (LAYER, EXPERT, or HYBRID).
+// n_experts: experts per MoE layer (0 for dense models).  When > 0,
+//            MoE tensors are split into per-expert entries for fine-grained
+//            per-expert device assignment.
 placement_plan compute_multi_device_plan(
     const std::vector<device_budget> &                  device_budgets,
     const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
     int                                                 n_layers,
-    multi_gpu_mode                                      mode = multi_gpu_mode::HYBRID);
+    multi_gpu_mode                                      mode     = multi_gpu_mode::HYBRID,
+    int                                                 n_experts = 0);
 
 // Parse GGML_SYCL_MULTI_GPU_MODE env var.
 // Returns HYBRID for MoE models, LAYER for dense-only, unless overridden.
