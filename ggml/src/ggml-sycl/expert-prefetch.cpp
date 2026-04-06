@@ -287,22 +287,9 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         it->second.completed = true;
         completed_count_++;
 
-        // Finalize the unified cache entry from IN_PROGRESS → READY.
-        // After event.wait(), the DMA + reorder is complete and the device
-        // pointer holds valid SOA data. register_ready() marks the entry
-        // so that lookup() will find it on subsequent accesses.
-        if (it->second.cache_key.valid) {
-            unified_cache * cache = get_unified_cache_for_device(device_id_);
-            if (cache) {
-                cache->register_ready(it->second.cache_key,
-                                      it->second.device_ptr,
-                                      it->second.layout,
-                                      it->second.size,
-                                      cache_entry_type::MOE_EXPERT,
-                                      it->second.layer_id,
-                                      it->second.expert_id);
-            }
-        }
+        // Entry is already stored in direct_expert_entries_ by
+        // direct_stage_expert() and findable via lookup_expert().
+        // No register_ready() call needed.
 
         GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
                         layer_idx, expert_idx, it->second.device_ptr);
