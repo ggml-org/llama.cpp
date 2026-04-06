@@ -689,9 +689,9 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     constexpr int ncols = ncols1*ncols2;
 
     const int tile_idx = blockIdx.x; // One block per output tile.
-    const int j        = blockIdx.y;
-    const int c        = blockIdx.z;
-    const int jc       = j*ncols2 + c;
+    const int col1     = blockIdx.y;
+    const int col2     = blockIdx.z;
+    const int jc       = col1*ncols2 + col2;
     const int tid      = threadIdx.x;
 
     // nblocks_stream_k is a multiple of ntiles_dst (== gridDim.x), so each tile gets the same number of blocks.
@@ -712,11 +712,11 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
 
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
-    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+    if (jt*ncols1 + col1 >= ne01 || zt_gqa*ncols2 + col2 >= gqa_ratio) {
         return;
     }
 
-    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (col1*ne02 + col2)*D + tid;
 
     // Load the partial result that needs a fixup
     float dst_val = *dst;
@@ -769,9 +769,9 @@ static __global__ void flash_attn_stream_k_fixup_general(
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
-    const int j     = blockIdx.y;
-    const int c     = blockIdx.z;
-    const int jc    = j*ncols2 + c;
+    const int col1  = blockIdx.y;
+    const int col2  = blockIdx.z;
+    const int jc    = col1*ncols2 + col2;
     const int tid   = threadIdx.x;
 
     const float * dst_fixup_data = ((const float *) dst_fixup) + gridDim.x*(2*2*ncols);
@@ -799,11 +799,11 @@ static __global__ void flash_attn_stream_k_fixup_general(
 
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
-    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+    if (jt*ncols1 + col1 >= ne01 || zt_gqa*ncols2 + col2 >= gqa_ratio) {
         return;
     }
 
-    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (col1*ne02 + col2)*D + tid;
 
     // Load the partial result that needs a fixup:
     float dst_val = 0.0f;
@@ -1187,8 +1187,8 @@ void launch_fattn(
 
             const uint3 fd_k_j_z_ne12 = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa * K->ne[2]);
             const uint3 fd_k_j_z      = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa);
-            const uint3 fd_k_j         = init_fastdiv_values(ntiles_KV * ntiles_x);
-            const uint3 fd_k            = init_fastdiv_values(ntiles_KV);
+            const uint3 fd_k_j        = init_fastdiv_values(ntiles_KV * ntiles_x);
+            const uint3 fd_k          = init_fastdiv_values(ntiles_KV);
 
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
