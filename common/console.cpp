@@ -700,13 +700,13 @@ namespace console {
         std::vector<std::string> entries;
         size_t viewing_idx = SIZE_MAX;
         std::string backup_line; // current line before viewing history
-        void add(const std::string_view line) {
+        void add(std::string_view line) {
             if (line.empty()) {
                 return;
             }
             // avoid duplicates with the last entry
             if (entries.empty() || entries.back() != line) {
-                entries.push_back(std::string(line));
+                entries.emplace_back(line);
             }
             // also clear viewing state
             end_viewing();
