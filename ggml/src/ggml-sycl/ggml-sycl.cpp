@@ -12559,7 +12559,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     ggml_backend_sycl_buffer_type_context * buft_ctx = (ggml_backend_sycl_buffer_type_context *) buft->context;
     ggml_sycl_set_device(buft_ctx->device);
     const queue_ptr stream                = buft_ctx->stream;
-    size                                  = std::max(size, (size_t) 1);  // syclMalloc returns null for size 0
+    size                                  = std::max(size, (size_t) 1);
     void *             dev_ptr            = nullptr;
     ggml_sycl_mem_type effective_mem_type = buft_ctx->mem_type;
     if (buft_ctx->mem_policy == GGML_SYCL_MEM_POLICY_KV_AUTO) {
@@ -12610,14 +12610,22 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
         is_compute_buft ? ggml_sycl::runtime_category::COMPUTE
                         : (is_kv_buft ? ggml_sycl::runtime_category::KV_CACHE : ggml_sycl::runtime_category::OTHER);
 
-    // === Arena fast-path: route compute buffers through RUNTIME zone ===
-    // When the arena is active, compute buffers bypass all budget/headroom logic
-    // and sub-allocate directly from the pre-reserved RUNTIME zone.
+    // === Arena fast-path: route compute/runtime buffers through RUNTIME zone ===
+    // When the arena is active, non-weight non-KV device buffers bypass all
+    // budget/headroom logic and sub-allocate from the pre-reserved RUNTIME zone.
+    // This includes both explicit "_Compute" buffer types AND the standard "SYCL0"
+    // buffer type used by ggml's backend scheduler for compute buffers.
     if (ggml_sycl::vram_arena_enabled()) {
         auto * cache = ggml_sycl::get_unified_cache_for_device(buft_ctx->device);
         if (cache && cache->arena_active()) {
-            if (is_compute_buft) {
-                // Route compute buffers through RUNTIME zone
+            // Any non-KV device buffer goes through RUNTIME zone when arena
+            // is active.  Weight buffers from model loading also go here —
+            // their data is managed separately by S1-PRELOAD into the WEIGHT
+            // zone.  The ggml buffer just needs a device-resident address.
+            const bool should_use_runtime = !is_kv_buft
+                && effective_mem_type == GGML_SYCL_MEM_DEVICE;
+            if (should_use_runtime) {
+                // Route through RUNTIME zone
                 void * ptr = cache->zone_alloc(
                     ggml_sycl::vram_zone_id::RUNTIME, size);
                 if (ptr) {
@@ -12625,12 +12633,14 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
                         new ggml_backend_sycl_buffer_context(
                             buft_ctx->device, ptr, buft_ctx->stream, size);
                     ctx->from_arena = true;  // Don't sycl::free this
+                    GGML_LOG_INFO("[SYCL] Arena RUNTIME zone alloc: %.1f MB (%s)\n",
+                                  size / (1024.0 * 1024.0), buft_ctx->name.c_str());
                     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface,
                         ctx, size);
                 }
                 // RUNTIME zone full — fall through to legacy path
-                GGML_LOG_WARN("[SYCL] RUNTIME zone full (%.1f MB request), falling back\n",
-                              size / (1024.0 * 1024.0));
+                GGML_LOG_WARN("[SYCL] RUNTIME zone full (%.1f MB request from %s), falling back\n",
+                              size / (1024.0 * 1024.0), buft_ctx->name.c_str());
             }
             if (is_kv_buft) {
                 // KV allocation: use KV zone capacity instead of available()
@@ -12997,8 +13007,9 @@ struct tiered_kv_buffer_context {
     // that init_tensor remaps to the actual per-layer pointers.
     // NOTE: When vmem_pool is active, alloc_base IS the vmem virtual address
     // (no synthetic base needed — the vmem range is contiguous device memory).
-    void * alloc_base      = nullptr;
-    size_t alloc_base_size = 0;
+    void * alloc_base          = nullptr;
+    size_t alloc_base_size     = 0;
+    bool   alloc_base_is_arena = false;  // true = arena KV zone pointer, don't std::free
 
     // L0 virtual memory pool for KV cache (Phase 9).
     // When active, provides a contiguous virtual address range backed by
@@ -13056,7 +13067,8 @@ static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
     }
 
     // Free the synthetic allocator base (plain aligned_alloc, NOT SYCL USM).
-    if (ctx->alloc_base) {
+    // Skip if alloc_base is an arena pointer (arena owns the memory).
+    if (ctx->alloc_base && !ctx->alloc_base_is_arena) {
         ggml_sycl::alloc_registry::instance().unregister_alloc(ctx->alloc_base);
         std::free(ctx->alloc_base);
         ctx->alloc_base = nullptr;
@@ -13332,14 +13344,27 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         cached_kv_host.store(kv_host_val, std::memory_order_release);
     }
 
-    // Query VRAM available for KV cache from the unified cache (single VRAM authority).
+    // Query VRAM available for KV cache.
+    // When arena is active, use KV zone capacity (pre-reserved in the arena).
+    // Without arena, use unified_cache_available_for_compute (budget-based).
     size_t kv_vram_cap = 0;
     if (kv_host_val != 1) {
-        kv_vram_cap = ggml_sycl::unified_cache_available_for_compute(device);
+        if (ggml_sycl::vram_arena_enabled()) {
+            auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+            if (cache && cache->arena_active()) {
+                const size_t kv_zone_cap  = cache->zone_capacity(ggml_sycl::vram_zone_id::KV);
+                const size_t kv_zone_used = cache->zone_used(ggml_sycl::vram_zone_id::KV);
+                kv_vram_cap = kv_zone_cap > kv_zone_used ? kv_zone_cap - kv_zone_used : 0;
+            }
+        }
+        if (kv_vram_cap == 0) {
+            kv_vram_cap = ggml_sycl::unified_cache_available_for_compute(device);
+        }
     }
 
-    GGML_SYCL_DEBUG("[KV-TIER] dev=%d cache_available=%.0f MB kv_req=%.0f MB\n",
-                    device, kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0));
+    GGML_SYCL_DEBUG("[KV-TIER] dev=%d cache_available=%.0f MB kv_req=%.0f MB arena=%d\n",
+                    device, kv_vram_cap / (1024.0 * 1024.0), size / (1024.0 * 1024.0),
+                    (int)ggml_sycl::vram_arena_enabled());
 
     uint32_t n_layers = g_model_n_layer;
     if (n_layers == 0) {
@@ -13555,37 +13580,46 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
     mgr.set_actual_hot_layers(n_device_layers);
     layout = mgr.compute_region_layout(size);
 
-    // Allocate synthetic base pointer for the ggml allocator.
-    // The allocator needs a contiguous address range to compute per-tensor offsets.
-    // init_tensor remaps each tensor from this synthetic space to the actual
-    // per-layer allocation.  Uses plain aligned_alloc (NOT sycl::malloc_host)
-    // to avoid:
-    //   1. Wasting GB of host-pinned memory (GPU page table entries) for an
-    //      address range that is never accessed by GPU kernels.
-    //   2. Polluting the alloc_registry with a large HOST_PINNED range that
-    //      could shadow per-layer DEVICE entries in range-based lookup.
-    const size_t alloc_align = 128;  // match buffer alignment
+    // When ALL layers are on device from contiguous arena KV zone, use the
+    // first layer's arena pointer as alloc_base — no synthetic base needed.
+    // This eliminates init_tensor remapping and ensures tensors (including
+    // VIEWs) always have valid device USM addresses.
+    const size_t alloc_align = 128;
     const size_t alloc_padded = (size + alloc_align - 1) & ~(alloc_align - 1);
-    void * alloc_base = std::aligned_alloc(alloc_align, alloc_padded);
-    if (!alloc_base) {
-        GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate %zu bytes for allocator base\n",
-                       device, alloc_padded);
-        for (auto & la : layer_allocs) {
-            if (la.ptr && !la.from_arena) {
-                ggml_sycl::unified_cache_deallocate(
-                    device, la.ptr, la.size,
-                    ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+    void * alloc_base = nullptr;
+    bool   alloc_base_is_arena = false;
+
+    if (arena_kv_active && n_host_layers == 0 && n_device_layers == n_layers) {
+        // All layers are contiguous in arena KV zone — use first layer's ptr
+        alloc_base = layer_allocs[0].ptr;
+        alloc_base_is_arena = true;
+        fprintf(stderr, "[KV-TIER] Using arena KV zone as alloc_base: %p (no synthetic base)\n",
+                      alloc_base);
+        fflush(stderr);
+    } else {
+        // Mixed device/host or non-arena: need synthetic base for remapping
+        alloc_base = std::aligned_alloc(alloc_align, alloc_padded);
+        if (!alloc_base) {
+            GGML_LOG_ERROR("[KV-TIER] Device %d: failed to allocate %zu bytes for allocator base\n",
+                           device, alloc_padded);
+            for (auto & la : layer_allocs) {
+                if (la.ptr && !la.from_arena) {
+                    ggml_sycl::unified_cache_deallocate(
+                        device, la.ptr, la.size,
+                        ggml_sycl::unified_cache::alloc_lifetime::PERSISTENT);
+                }
             }
+            return nullptr;
         }
-        return nullptr;
     }
-    // Zero the synthetic base so any un-remapped fallback reads zeros
-    // (defensive — all KV tensors should be remapped by init_tensor).
-    std::memset(alloc_base, 0, alloc_padded);
-    // Register as MMAP so alloc_registry can identify it if needed, but
-    // using a type that won't be confused with DEVICE or HOST_PINNED.
-    ggml_sycl::alloc_registry::instance().register_alloc(
-        alloc_base, alloc_padded, device, ggml_sycl::alloc_type::MMAP);
+    if (!alloc_base_is_arena) {
+        // Zero the synthetic base so any un-remapped fallback reads zeros
+        // (defensive — all KV tensors should be remapped by init_tensor).
+        std::memset(alloc_base, 0, alloc_padded);
+        // Register as MMAP so alloc_registry can identify it if needed.
+        ggml_sycl::alloc_registry::instance().register_alloc(
+            alloc_base, alloc_padded, device, ggml_sycl::alloc_type::MMAP);
+    }
 
     // Diagnostic: check for address space overlap between alloc_base and device allocations.
     // If a device pointer falls within [alloc_base, alloc_base+size), alloc_registry
@@ -13639,8 +13673,9 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     auto * ctx         = new tiered_kv_buffer_context{};
     ctx->layer_allocs  = std::move(layer_allocs);
-    ctx->alloc_base      = alloc_base;
-    ctx->alloc_base_size = alloc_padded;
+    ctx->alloc_base          = alloc_base;
+    ctx->alloc_base_size     = alloc_padded;
+    ctx->alloc_base_is_arena = alloc_base_is_arena;
     ctx->device_size   = total_device;
     ctx->host_size     = total_host;
     ctx->device        = device;
@@ -17142,9 +17177,10 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
     }
 
     struct fallback_host_copy {
-        ggml_tensor *        tensor;
-        void *               orig;
-        std::vector<uint8_t> host;
+        ggml_tensor * tensor;
+        void *        orig;
+        void *        host_ptr  = nullptr;  // sycl::malloc_host (USM — avoids staging buffer hang)
+        size_t        host_size = 0;
     };
 
     std::vector<fallback_host_copy> host_copies;
@@ -17165,17 +17201,21 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
         if (bytes == 0) {
             return;
         }
-        fallback_host_copy entry{ t, t->data, {} };
-        entry.host.resize(bytes);
+        fallback_host_copy entry{ t, t->data, nullptr, bytes };
+        entry.host_ptr = sycl::malloc_host(bytes, *stream);
+        if (!entry.host_ptr) {
+            GGML_LOG_ERROR("[SYCL] CPU fallback: malloc_host failed for %zu bytes\n", bytes);
+            return;
+        }
         // Copy existing data for ALL input tensors (leafs AND intermediate
         // view/reshape nodes).  View-like ops share their data pointer with
         // view_src; if only the leaf is staged, the view node's data pointer
         // still points to device memory → segfault in CPU compute.
         // Output-only nodes (dst) don't need a pre-copy.
         if (!is_output) {
-            stream->memcpy(entry.host.data(), entry.orig, bytes).wait();
+            stream->memcpy(entry.host_ptr, entry.orig, bytes).wait();
         }
-        t->data = entry.host.data();
+        t->data = entry.host_ptr;
         host_copies.push_back(std::move(entry));
     };
     for (int i = 0; i < graph->n_leafs; ++i) {
@@ -17217,6 +17257,12 @@ bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor *
         stream->memcpy(dst_orig, dst->data, dst_bytes).wait();
     }
     restore_host_copies();
+    // Free host-pinned staging buffers
+    for (auto & entry : host_copies) {
+        if (entry.host_ptr) {
+            sycl::free(entry.host_ptr, *stream);
+        }
+    }
     if (status != GGML_STATUS_SUCCESS) {
         GGML_LOG_WARN("[SYCL] CPU fallback graph failed (%s)\n", reason ? reason : "unknown");
         return false;
