@@ -46951,6 +46951,15 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
 static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_sycl_device_context * sycl_ctx = (ggml_backend_sycl_device_context *) dev->context;
     int                                device   = sycl_ctx->device;
+
+    // When the VRAM arena is active, claim support for ALL ops to prevent the
+    // ggml backend scheduler from splitting tensors to the CPU backend (which
+    // uses regular malloc, producing non-USM pointers that oneDNN rejects).
+    // The SYCL backend handles unsupported ops internally via cpu_fallback_graph.
+    if (ggml_sycl::vram_arena_enabled()) {
+        return true;
+    }
+
     switch (op->op) {
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
