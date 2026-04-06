@@ -10284,35 +10284,25 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
             continue;
         }
 
-        ggml_sycl::cache_layout_request req{};
-        req.key      = key;
-        req.src_ptr  = expert_aos;
-        req.src_size = expert_size;
-
-        req.dst_size = expert_layout_bytes;
-        req.type     = ggml_sycl::cache_entry_type::MOE_EXPERT;
-
-        req.layer_id         = layer_id;
-        req.expert_id        = static_cast<int>(e);
-        req.layout           = layout;
-        req.validate_content = false;
-
-        req.xmx_info = xmx_info;
+        // Determine fill function for layout conversion
+        ggml_sycl::cache_layout_fill_fn fill_fn  = nullptr;
+        const void *                    fill_ctx = nullptr;
         if (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED) {
-            req.fill_fn  = ggml_sycl_fill_reordered_host;
-            req.fill_ctx = &reorder_ctx;
+            fill_fn  = ggml_sycl_fill_reordered_host;
+            fill_ctx = &reorder_ctx;
         } else if (layout == GGML_LAYOUT_XMX_TILED) {
 #if SYCL_XMX_MOE_AVAILABLE
-            req.fill_fn  = ggml_sycl_fill_xmx_tiled;
-            req.fill_ctx = &tiled_ctx;
+            fill_fn  = ggml_sycl_fill_xmx_tiled;
+            fill_ctx = &tiled_ctx;
 #endif
         }
         // Route H2D to BCS (copy engine) to keep CCS free during MoE preload.
         sycl::queue * bcs_q = &cache->get_bcs_queue();
-        ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {}, bcs_q);
+        auto result = ggml_sycl::unified_cache_direct_stage_expert(
+            device, key, expert_aos, expert_size, expert_layout_bytes,
+            layout, fill_fn, fill_ctx, bcs_q);
 
-        if (result.status == ggml_sycl::cache_layout_status::READY ||
-            result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+        if (result.ok && result.ptr) {
             cached++;
         } else {
             failed++;
@@ -10453,8 +10443,8 @@ static void ggml_sycl_preload_model_weights() {
             std::vector<dense_pin_info> dense_pin_keys;
             dense_pin_keys.reserve(indices.size());
 
-            // (pending_dense tracking removed — S1-PRELOAD uses ensure_cached_layout which
-            // handles allocation + fill + registration atomically)
+            // S1-PRELOAD uses direct_stage_weight/direct_stage_expert which
+            // handle arena allocation + fill + lookup registration atomically.
 
             // Route H2D through BCS (copy-only) queue to keep CCS free.
             // For 120B models, S1-PRELOAD uploads ~5 GB of attention weights.
@@ -10515,27 +10505,13 @@ static void ggml_sycl_preload_model_weights() {
                             continue;
                         }
 
-                        ggml_sycl::cache_layout_request req{};
-                        req.key              = key;
-                        req.src_ptr          = expert_aos;
-                        req.src_size         = expert_size;
-                        req.dst_size         = expert_layout_bytes;
-                        req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                        req.layer_id         = layer_id;
-                        req.expert_id        = static_cast<int>(e);
-                        req.layout           = GGML_LAYOUT_AOS;
-                        req.validate_content = false;
-                        req.skip_fill_wait   = true;  // Async — no wait per expert
-                        req.force_pool       = true;  // Pool alloc: avoid per-expert GEM_CREATE
-
-                        auto result = cache->ensure_cached_layout(req, {}, bcs_q);
-                        if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                        auto result = ggml_sycl::unified_cache_direct_stage_expert(
+                            device, key, expert_aos, expert_size, expert_layout_bytes,
+                            GGML_LAYOUT_AOS, nullptr, nullptr, bcs_q);
+                        if (result.ok && result.ptr) {
                             any_cached = true;
                             total_bytes += expert_size;
                             s1_in_flight.push_back(result.event);
-                        } else if (result.status == ggml_sycl::cache_layout_status::READY) {
-                            any_cached = true;
-                            total_bytes += expert_size;
                         }
                         // Back-pressure: wait on oldest event when window full
                         while (s1_in_flight.size() >= s1_max_in_flight) {
@@ -10544,7 +10520,6 @@ static void ggml_sycl_preload_model_weights() {
                             s1_drain_count++;
                             ggml_sycl_watchdog_heartbeat();
                             if (s1_drain_count % s1_max_in_flight == 0) {
-                                cache->finalize_pending_fills();
                                 cache->process_deferred_frees_public();
                             }
                         }
@@ -10555,7 +10530,7 @@ static void ggml_sycl_preload_model_weights() {
                         moe_failed++;
                     }
                 } else {
-                    // Dense: submit H2D copy with skip_fill_wait via cache directly
+                    // Dense: submit H2D copy via direct_stage_weight
                     if (!tensor->data) {
                         dense_failed++;
                         continue;
@@ -10660,31 +10635,21 @@ static void ggml_sycl_preload_model_weights() {
                         reorder_ctx.device_id     = device;
                     }
 
-                    ggml_sycl::cache_layout_request req{};
-                    req.key              = cache_key;
-                    req.src_ptr          = src_ptr;
-                    req.src_size         = src_size;
-                    req.dst_size         = dst_size;
-                    req.type             = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-                    req.layout           = preload_layout;
-                    req.validate_content = false;
-                    req.skip_fill_wait   = true;  // Async -- no wait per tensor
-                    req.force_pool       = true;  // Pool alloc: avoid per-tensor GEM_CREATE
+                    ggml_sycl::cache_layout_fill_fn fill_fn  = nullptr;
+                    const void *                    fill_ctx = nullptr;
                     if (use_soa || use_coalesced) {
-                        req.fill_fn  = ggml_sycl_fill_reordered_host;
-                        req.fill_ctx = &reorder_ctx;
+                        fill_fn  = ggml_sycl_fill_reordered_host;
+                        fill_ctx = &reorder_ctx;
                     }
 
-                    auto result = cache->ensure_cached_layout(req, {}, bcs_q);
-                    if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
+                    auto result = ggml_sycl::unified_cache_direct_stage_weight(
+                        device, cache_key, src_ptr, src_size, dst_size,
+                        preload_layout, fill_fn, fill_ctx, bcs_q);
+                    if (result.ok && result.ptr) {
                         dense_cached++;
                         total_bytes += dst_size;
                         dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
                         s1_in_flight.push_back(result.event);
-                    } else if (result.status == ggml_sycl::cache_layout_status::READY) {
-                        dense_cached++;
-                        total_bytes += dst_size;
-                        dense_pin_keys.push_back({ cache_key, preload_layout, tensor });
                     } else {
                         dense_failed++;
                     }
@@ -10696,7 +10661,6 @@ static void ggml_sycl_preload_model_weights() {
                     s1_in_flight.pop_front();
                     s1_drain_count++;
                     if (s1_drain_count % s1_max_in_flight == 0) {
-                        cache->finalize_pending_fills();
                         cache->process_deferred_frees_public();
                         ggml_sycl_watchdog_heartbeat();
                     }
@@ -10719,8 +10683,7 @@ static void ggml_sycl_preload_model_weights() {
             }
             ggml_sycl_watchdog_heartbeat();
 
-            // Mark all IN_PROGRESS entries as READY now that DMA is complete
-            cache->finalize_pending_fills();
+            // Process deferred frees after all DMA is complete
             cache->process_deferred_frees_public();
 
             // Replace each tensor's DIRECT handle (host-pinned pointer from
@@ -10795,7 +10758,7 @@ static void ggml_sycl_preload_model_weights() {
         // Must happen here (not in set_tensor_inventory) because the unified cache
         // absorbs pre-existing g_runtime_reserved_bytes into its baseline at creation
         // time — reserves registered before the cache is created have no effect on
-        // available_for_compute().  The cache is now created (by ensure_cached_layout
+        // available_for_compute().  The cache is now created (by direct_stage
         // calls above), so this reserve will properly reduce the budget seen by KV tiering.
         if (g_moe_expert_total_bytes > 0 && g_moe_n_experts_total > 0 && g_model_n_layer > 0) {
             const size_t n_expert_tensors = static_cast<size_t>(g_moe_n_experts_total) * static_cast<size_t>(g_model_n_layer);
@@ -12633,8 +12596,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
                         new ggml_backend_sycl_buffer_context(
                             buft_ctx->device, ptr, buft_ctx->stream, size);
                     ctx->from_arena = true;  // Don't sycl::free this
-                    GGML_LOG_INFO("[SYCL] Arena RUNTIME zone alloc: %.1f MB (%s)\n",
-                                  size / (1024.0 * 1024.0), buft_ctx->name.c_str());
+                    GGML_SYCL_DEBUG("[SYCL] Arena RUNTIME zone alloc: %.1f MB (%s)\n",
+                                    size / (1024.0 * 1024.0), buft_ctx->name.c_str());
                     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface,
                         ctx, size);
                 }
@@ -13593,9 +13556,8 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
         // All layers are contiguous in arena KV zone — use first layer's ptr
         alloc_base = layer_allocs[0].ptr;
         alloc_base_is_arena = true;
-        fprintf(stderr, "[KV-TIER] Using arena KV zone as alloc_base: %p (no synthetic base)\n",
+        GGML_LOG_INFO("[KV-TIER] Using arena KV zone as alloc_base: %p (no synthetic base)\n",
                       alloc_base);
-        fflush(stderr);
     } else {
         // Mixed device/host or non-arena: need synthetic base for remapping
         alloc_base = std::aligned_alloc(alloc_align, alloc_padded);

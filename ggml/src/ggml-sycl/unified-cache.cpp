@@ -10668,14 +10668,10 @@ void * unified_cache::zone_alloc(vram_zone_id zone, size_t size, size_t align) {
     size_t prev = z.used.fetch_add(aligned_size, std::memory_order_relaxed);
     if (prev + aligned_size > z.size) {
         z.used.fetch_sub(aligned_size, std::memory_order_relaxed);
-        fprintf(stderr, "[ZONE-ALLOC] zone=%d FULL: need=%zu prev=%zu cap=%zu start=%zu\n",
-                (int)zone, aligned_size, prev, z.size, z.start);
-        fflush(stderr);
+        GGML_SYCL_DEBUG("[ZONE-ALLOC] zone=%d FULL: need=%zu prev=%zu cap=%zu start=%zu\n",
+                        (int)zone, aligned_size, prev, z.size, z.start);
         return nullptr;
     }
-    fprintf(stderr, "[ZONE-ALLOC] zone=%d OK: off=%zu size=%zu cap=%zu start=%zu ptr=%p\n",
-            (int)zone, prev, aligned_size, z.size, z.start, offset_to_ptr(z.start + prev));
-    fflush(stderr);
 
     return offset_to_ptr(z.start + prev);
 }
