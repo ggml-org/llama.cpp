@@ -9,6 +9,23 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
 
+def make_responses_request(input_items, **kwargs):
+    global server
+    data = {
+        "model": "gpt-4.1",
+        "input": input_items,
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+    }
+    data.update(kwargs)
+    return server.make_request("POST", "/v1/responses", data=data)
+
+def assert_completed_response(input_items, **kwargs):
+    res = make_responses_request(input_items, **kwargs)
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+    return res
+
 def test_responses_with_openai_library():
     global server
     server.start()
@@ -647,81 +664,157 @@ def test_responses_input_file_filename_only():
     assert res.body["status"] == "completed"
 
 
-def test_responses_unknown_content_type_skipped():
-    """Unknown content types in user messages must be silently skipped,
-    not reject the entire request."""
+def test_responses_unknown_content_type_recovery_visible():
+    """Unknown user content types should keep the request alive and inject
+    visible recovery text into the converted prompt."""
     global server
     server.start()
-    res = server.make_request("POST", "/v1/responses", data={
-        "model": "gpt-4.1",
-        "input": [
-            {"role": "user", "content": [
-                {"type": "input_text", "text": "Hello"},
-                {"type": "input_audio", "data": "base64stuff"},
-            ]},
-        ],
-        "max_output_tokens": 8,
-        "temperature": 0.8,
-    })
-    assert res.status_code == 200
-    assert res.body["status"] == "completed"
+    baseline = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Hello"},
+        ]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Hello"},
+            {"type": "input_audio", "data": "base64stuff"},
+        ]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
 
 
-def test_responses_unknown_assistant_content_type_skipped():
-    """Unknown content types in assistant output history must be skipped."""
+def test_responses_unknown_assistant_content_type_recovery_visible():
+    """Unknown assistant content types should keep the request alive and inject
+    visible recovery text into the converted prompt."""
     global server
     server.start()
-    res = server.make_request("POST", "/v1/responses", data={
-        "model": "gpt-4.1",
-        "input": [
-            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
-            {"role": "assistant", "type": "message", "content": [
-                {"type": "output_text", "text": "Hello"},
-                {"type": "some_future_type", "data": "foo"},
-            ]},
-            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
-        ],
-        "max_output_tokens": 8,
-        "temperature": 0.8,
-    })
-    assert res.status_code == 200
-    assert res.body["status"] == "completed"
+    baseline = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+            {"type": "some_future_type", "data": "foo"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
 
 
 def test_responses_unknown_toplevel_item_skipped():
     """Unknown top-level item types must be skipped rather than rejecting."""
     global server
     server.start()
-    res = server.make_request("POST", "/v1/responses", data={
-        "model": "gpt-4.1",
-        "input": [
-            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
-            {"type": "some_new_item_type", "data": "whatever"},
-            {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
-        ],
-        "max_output_tokens": 8,
-        "temperature": 0.8,
-    })
-    assert res.status_code == 200
-    assert res.body["status"] == "completed"
+    assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"type": "some_new_item_type", "data": "whatever"},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
 
 
-def test_responses_malformed_input_text_skipped():
-    """input_text without the required text field must be skipped gracefully,
-    not reject the entire request. In Codex IDE, a 400 here would permanently
-    kill the conversation thread since history is replayed on every message."""
+def test_responses_malformed_input_text_recovery_visible():
+    """Malformed input_text should keep the request alive and inject visible
+    recovery text instead of silently disappearing."""
     global server
     server.start()
-    res = server.make_request("POST", "/v1/responses", data={
-        "model": "gpt-4.1",
-        "input": [
-            {"role": "user", "content": [
-                {"type": "input_text", "text": "Hello"},
-                {"type": "input_text"},
-            ]},
-        ],
-        "max_output_tokens": 8,
-        "temperature": 0.8,
-    })
-    assert res.status_code == 200
-    assert res.body["status"] == "completed"
+    baseline = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Hello"},
+        ]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Hello"},
+            {"type": "input_text"},
+        ]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+
+
+def test_responses_malformed_input_image_recovery_visible():
+    """Malformed input_image should keep the request alive and inject visible
+    recovery text into the converted prompt."""
+    global server
+    server.start()
+    baseline = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Describe this attachment"},
+        ]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Describe this attachment"},
+            {"type": "input_image"},
+        ]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+
+
+def test_responses_malformed_input_file_recovery_visible():
+    """Malformed input_file should keep the request alive and inject visible
+    recovery text into the converted prompt."""
+    global server
+    server.start()
+    baseline = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Summarize this upload"},
+        ]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "Summarize this upload"},
+            {"type": "input_file"},
+        ]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+
+
+def test_responses_malformed_assistant_output_text_recovery_visible():
+    """Malformed assistant output_text history should keep the request alive
+    and inject visible recovery text."""
+    global server
+    server.start()
+    baseline = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+            {"type": "output_text"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+
+
+def test_responses_malformed_assistant_refusal_recovery_visible():
+    """Malformed refusal history should keep the request alive and inject
+    visible recovery text."""
+    global server
+    server.start()
+    baseline = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    recovered = assert_completed_response([
+        {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+        {"role": "assistant", "type": "message", "content": [
+            {"type": "output_text", "text": "Hello"},
+            {"type": "refusal"},
+        ]},
+        {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
+    ])
+    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]

@@ -3,6 +3,26 @@
 
 #include <sstream>
 
+static json responses_make_text_content(const std::string & text) {
+    return json {
+        {"text", text},
+        {"type", "text"},
+    };
+}
+
+static void responses_append_recovery_text(
+        std::vector<json> & chatcmpl_content,
+        const std::string & role,
+        const std::string & item_type,
+        const std::string & detail) {
+    SRV_WRN(
+            "responses recovery: role='%s', item_type='%s', action='inject_text', detail='%s'\n",
+            role.c_str(),
+            item_type.c_str(),
+            detail.c_str());
+    chatcmpl_content.push_back(responses_make_text_content("[responses recovery: " + detail + "]"));
+}
+
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
@@ -64,13 +84,14 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             ) {
                 // #responses_create-input-input_item_list-item-input_message
                 std::vector<json> chatcmpl_content;
+                const std::string role = item.at("role").get<std::string>();
 
                 for (const json & input_item : item.at("content")) {
                     const std::string type = json_value(input_item, "type", std::string());
 
                     if (type == "input_text") {
                         if (!input_item.contains("text")) {
-                            SRV_WRN("%s\n", "input_text item missing 'text' field, skipping");
+                            responses_append_recovery_text(chatcmpl_content, role, type, "input_text item missing text");
                             continue;
                         }
                         chatcmpl_content.push_back({
@@ -81,7 +102,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         // While `detail` is marked as required,
                         // it has default value("auto") and can be omitted.
                         if (!input_item.contains("image_url")) {
-                            SRV_WRN("%s\n", "input_image item missing 'image_url', skipping");
+                            responses_append_recovery_text(chatcmpl_content, role, type, "input_image item missing image_url");
                             continue;
                         }
                         chatcmpl_content.push_back({
@@ -109,10 +130,15 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                                 {"type", "text"},
                             });
                         } else {
-                            SRV_WRN("%s\n", "input_file item has no file_data or filename, skipping");
+                            responses_append_recovery_text(chatcmpl_content, role, type, "input_file item missing file_data and filename");
                         }
                     } else {
-                        SRV_WRN("skipping unsupported input content type '%s'\n", type.c_str());
+                        const std::string item_type = type.empty() ? std::string("unknown") : type;
+                        responses_append_recovery_text(
+                                chatcmpl_content,
+                                role,
+                                item_type,
+                                "unsupported input content type " + item_type);
                     }
                 }
 
@@ -150,7 +176,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 (!item.contains("type") || item.at("type") == "message")
             ) {
                 // #responses_create-input-input_item_list-item-output_message
-                auto chatcmpl_content = json::array();
+                std::vector<json> chatcmpl_content;
+                const std::string role = item.at("role").get<std::string>();
 
                 // Handle both string content and array content
                 if (item.contains("content") && item.at("content").is_string()) {
@@ -166,7 +193,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         if (type == "output_text" || type == "input_text") {
                             // Accept both output_text and input_text (string content gets converted to input_text)
                             if (!exists_and_is_string(output_text, "text")) {
-                                SRV_WRN("%s\n", "output_text/input_text item missing 'text' field, skipping");
+                                responses_append_recovery_text(chatcmpl_content, role, type, type + " item missing text");
                                 continue;
                             }
                             chatcmpl_content.push_back({
@@ -175,7 +202,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                             });
                         } else if (type == "refusal") {
                             if (!exists_and_is_string(output_text, "refusal")) {
-                                SRV_WRN("%s\n", "refusal item missing 'refusal' field, skipping");
+                                responses_append_recovery_text(chatcmpl_content, role, type, "refusal item missing refusal");
                                 continue;
                             }
                             chatcmpl_content.push_back({
@@ -183,9 +210,12 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                                 {"type", "refusal"},
                             });
                         } else {
-                            // Skip unknown content types in assistant output history rather
-                            // than rejecting the entire multi-turn request.
-                            SRV_WRN("skipping unsupported assistant content type '%s'\n", type.c_str());
+                            const std::string item_type = type.empty() ? std::string("unknown") : type;
+                            responses_append_recovery_text(
+                                    chatcmpl_content,
+                                    role,
+                                    item_type,
+                                    "unsupported assistant content type " + item_type);
                         }
                     }
                 }
@@ -196,7 +226,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         prev_msg["content"] = json::array();
                     }
                     auto & prev_content = prev_msg["content"];
-                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                    for (const auto & part : chatcmpl_content) {
+                        prev_content.push_back(part);
+                    }
                 } else {
                     item.erase("status");
                     item.erase("type");
@@ -247,7 +279,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     json chatcmpl_outputs = item.at("output");
                     for (json & chatcmpl_output : chatcmpl_outputs) {
                         if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            SRV_WRN("tool call output has unexpected type '%s', treating as text\n",
+                            SRV_DBG("responses compat: item_type='%s', action='treat_tool_output_as_text'\n",
                                     json_value(chatcmpl_output, "type", std::string("missing")).c_str());
                         }
                         chatcmpl_output["type"] = "text";
@@ -292,7 +324,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 // Skip unrecognized top-level item types (e.g. future API additions)
                 // rather than rejecting the entire multi-turn request.
                 const std::string item_type = json_value(item, "type", std::string("unknown"));
-                SRV_WRN("skipping unrecognized input item type '%s'\n", item_type.c_str());
+                SRV_DBG("responses compat: item_type='%s', action='skip_unrecognized_top_level_item'\n", item_type.c_str());
             }
         }
     } else {
@@ -313,7 +345,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             // sent by clients like Codex CLI - these are provider-specific
             // and cannot be converted to chat completions function tools
             if (tool_type != "function") {
-                SRV_WRN("skipping unsupported tool type '%s' in Responses conversion\n", tool_type.c_str());
+                SRV_DBG("responses compat: item_type='%s', action='skip_unsupported_tool'\n", tool_type.c_str());
                 continue;
             }
 
