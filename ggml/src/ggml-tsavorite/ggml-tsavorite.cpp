@@ -46,6 +46,7 @@ using namespace tsi::runtime;
 
 std::vector<std::thread> workers;
 static std::mutex device_mutex;
+static std::mutex tsi_pack_mutex;
 static std::condition_variable device_cv;
 
 // device availability table
@@ -137,34 +138,41 @@ uint64_t num_of_op;
 static void *loadResult_add[NUM_OF_TXES], *loadResult_mult[NUM_OF_TXES], *loadResult_rms_norm[NUM_OF_TXES];
 static BlobDescriptor *blobDescriptor_add[NUM_OF_TXES], *blobDescriptor_mult[NUM_OF_TXES], *blobDescriptor_rms_norm[NUM_OF_TXES];
 
+
+
+// ============================================================
+// FUNCTION REPLACEMENT: tsi_load_all_blobs()
+// (makes blob names unique per device to avoid collisions)
+// ============================================================
+
 void tsi_load_all_blobs() {
+    for (int i = 0; i < NUM_OF_TXES; ++i) {
+        printf("\n ANOOP Loading Blobs \n");
 
-for (int i=0; i < NUM_OF_TXES; ++i) {
-printf("\n ANOOP Loading Blobs \n");
-  loadResult_add[i] = tsi_load_blob(
-      i,
-      "txe_add",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"));
+        char name_add[64], name_mult[64], name_rms[64];
+        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%d", i);
+        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%d", i);
+        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%d", i);
 
-  blobDescriptor_add[i] = static_cast<BlobDescriptor *>(loadResult_add[i]);
+        loadResult_add[i] = tsi_load_blob(
+            i,
+            name_add,
+            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"));
+        blobDescriptor_add[i] = static_cast<BlobDescriptor *>(loadResult_add[i]);
 
-  loadResult_mult[i] = tsi_load_blob(
-      i,
-      "txe_mult",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"));
+        loadResult_mult[i] = tsi_load_blob(
+            i,
+            name_mult,
+            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"));
+       blobDescriptor_mult[i] = static_cast<BlobDescriptor *>(loadResult_mult[i]);
 
-  blobDescriptor_mult[i] = static_cast<BlobDescriptor *>(loadResult_mult[i]);
-
-  loadResult_rms_norm[i] = tsi_load_blob(
-      i,
-      "txe_rms_norm",
-      ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"));
-
-  blobDescriptor_rms_norm[i] = static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
-
-}
-
-  return;
+        loadResult_rms_norm[i] = tsi_load_blob(
+            i,
+            name_rms,
+            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"));
+        blobDescriptor_rms_norm[i] = static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
+    }
+    return;
 }
 
 static void tsi_unload_all_blobs() {
@@ -626,54 +634,48 @@ static void tsi_blob_execution_internal(void *commandList) {
   return;
 }
 
+//lock goes out of scope
+// <--- function scope ends here mutex will be released
+//tsi_pack_mutex.unlock() is called automatically
+//std::lock_guard releases the mutex automatically when it goes out of scope.
 static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
-  constexpr int64_t kPackedArgsI64  = 9;
-  constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+    constexpr int64_t kPackedArgsI64   = 9;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId);
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
-  // Allocate packed args buffer in shared DRAM
-  void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-  auto *p = static_cast<int64_t *>(packed);
+    void *commandList = tsi_create_command_list(deviceId);
 
-  MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
-  MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
-  MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    auto *p = static_cast<int64_t *>(packed);
 
-  // Pack args strictly as:
-  // (A handle, A offset, A size0,  B handle, B offset, B size0,  C handle, C offset, C size0)
-  // NOTE: this is NOT "all handles first".
-  int idx = 0;
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
 
-  // Arg A
-  p[idx++] = tsi_shmem_handle_from_ptr(A->data);
-  p[idx++] = (int64_t)A->offset;
-  p[idx++] = (int64_t)A->shape[0];
+    int idx = 0;
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    p[idx++] = (int64_t)A->shape[0];
 
-  // Arg B
-  p[idx++] = tsi_shmem_handle_from_ptr(B->data);
-  p[idx++] = (int64_t)B->offset;
-  p[idx++] = (int64_t)B->shape[0];
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    p[idx++] = (int64_t)B->shape[0];
 
-  // Arg C
-  p[idx++] = tsi_shmem_handle_from_ptr(C->data);
-  p[idx++] = (int64_t)C->offset;
-  p[idx++] = (int64_t)C->shape[0];
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
+    p[idx++] = (int64_t)C->shape[0];
 
-  // Sanity: we must have filled exactly kPackedArgsI64 entries
-  // (avoid silent layout drift).
-  if (idx != kPackedArgsI64) {
-    printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
-    abort();
-  }
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        abort();
+    }
 
-  const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
 
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], /*packedArgs*/ packedHandle);
-  tsi_add_command_to_list(commandList, blobExecuteCmd);
-
-  return commandList;
+    return commandList;
 }
 
 static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
@@ -696,54 +698,45 @@ printf("\n ANOOP ADD device ID %d", deviceId);
 
 
 static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
-  constexpr int64_t kPackedArgsI64  = 9;
-  constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+    constexpr int64_t kPackedArgsI64   = 9;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId);
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
-  // Allocate packed args buffer in shared DRAM
-  void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-  auto *p = static_cast<int64_t *>(packed);
+    void *commandList = tsi_create_command_list(deviceId);
 
-  MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
-  MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
-  MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    auto *p = static_cast<int64_t *>(packed);
 
-  // Pack args strictly as:
-  // (A handle, A offset, A size0,  B handle, B offset, B size0,  C handle, C offset, C size0)
-  // NOTE: this is NOT "all handles first".
-  int idx = 0;
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
 
-  // Arg A
-  p[idx++] = tsi_shmem_handle_from_ptr(A->data);
-  p[idx++] = (int64_t)A->offset;
-  p[idx++] = (int64_t)A->shape[0];
+    int idx = 0;
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    p[idx++] = (int64_t)A->shape[0];
 
-  // Arg B
-  p[idx++] = tsi_shmem_handle_from_ptr(B->data);
-  p[idx++] = (int64_t)B->offset;
-  p[idx++] = (int64_t)B->shape[0];
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    p[idx++] = (int64_t)B->shape[0];
+    
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
+    p[idx++] = (int64_t)C->shape[0];
 
-  // Arg C
-  p[idx++] = tsi_shmem_handle_from_ptr(C->data);
-  p[idx++] = (int64_t)C->offset;
-  p[idx++] = (int64_t)C->shape[0];
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        abort();
+    }
 
-  // Sanity: we must have filled exactly kPackedArgsI64 entries
-  // (avoid silent layout drift).
-  if (idx != kPackedArgsI64) {
-    printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
-    abort();
-  }
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
 
-  const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
-
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], /*packedArgs*/ packedHandle);
-  tsi_add_command_to_list(commandList, blobExecuteCmd);
-
-  return commandList;
+    return commandList;
 }
+
 
 static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
     if (!multi_thread_enable) {
@@ -765,65 +758,46 @@ printf("\n ANOOP MUL device ID %d", deviceId);
 
 
 static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf, TSI_DeviceIdType deviceId) {
-  constexpr int64_t kPackedArgsI64  = 20;
-  constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+    constexpr int64_t kPackedArgsI64   = 20;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
-  // Create the command list for the blob execute command
-  void *commandList = tsi_create_command_list(deviceId);
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
-  // Allocate packed args buffer in shared DRAM
-  void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-  auto *p = static_cast<int64_t *>(packed);
+    void *commandList = tsi_create_command_list(deviceId);
 
-  MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
-  MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
-  MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)buf;
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    auto *p = static_cast<int64_t *>(packed);
 
-  // Pack args strictly as:
-  // (A handle, A offset, A size0,  B handle, B offset, B size0,  C handle, C offset, C size0)
-  // NOTE: this is NOT "all handles first".
-  int idx = 0;
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)buf;
 
-  // Arg A
-  p[idx++] = tsi_shmem_handle_from_ptr(A->data);
-  p[idx++] = (int64_t)A->offset;
-  for(int i=0; i <=3; ++i) {
-      p[idx++] = (int64_t)A->shape[i];
-  }
-  for(int i=0; i <=2; ++i) {
-      p[idx++] = (int64_t)A->strides[i];
-  }
+    int idx = 0;
 
-  // Arg B
-  p[idx++] = tsi_shmem_handle_from_ptr(B->data);
-  p[idx++] = (int64_t)B->offset;
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    for (int i = 0; i <= 3; ++i) p[idx++] = (int64_t)A->shape[i];
+    for (int i = 0; i <= 2; ++i) p[idx++] = (int64_t)A->strides[i];
 
-  for(int i=0; i <=3; ++i) {
-      p[idx++] = (int64_t)B->shape[i];
-  }
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    for (int i = 0; i <= 3; ++i) p[idx++] = (int64_t)B->shape[i];
+    for (int i = 0; i <= 2; ++i) p[idx++] = (int64_t)B->strides[i];
 
-  for(int i=0; i <=2; ++i) {
-      p[idx++] = (int64_t)B->strides[i];
-  }
- 
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
 
-  // Arg C
-  p[idx++] = tsi_shmem_handle_from_ptr(C->data);
-  p[idx++] = (int64_t)C->offset;
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        abort();
+    }
 
-  // Sanity: we must have filled exactly kPackedArgsI64 entries
-  // (avoid silent layout drift).
-  if (idx != kPackedArgsI64) {
-    printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
-    abort();
-  }
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
 
-  const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
-
-  void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], /*packedArgs*/ packedHandle);
-  tsi_add_command_to_list(commandList, blobExecuteCmd);
-  return commandList;
-}
+    return commandList;
+} 
 
 static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     if (!multi_thread_enable) {
