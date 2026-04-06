@@ -270,7 +270,13 @@ def main():
     # and use it to get the device the model is on.
     device = next(model.parameters()).device
     prompt = get_prompt(args)
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    # Prepend BOS if the tokenizer didn't add it — llama.cpp always adds BOS
+    # (add_bos: true in GGUF), so we need the same prefix for apples-to-apples comparison.
+    if tokenizer.bos_token_id is not None and (input_ids.shape[1] == 0 or input_ids[0, 0] != tokenizer.bos_token_id):
+        bos = torch.tensor([[tokenizer.bos_token_id]])
+        input_ids = torch.cat([bos, input_ids], dim=1)
+    input_ids = input_ids.to(device)
     token_ids = input_ids[0].cpu().tolist()
 
     print(f"Input tokens: {input_ids}")

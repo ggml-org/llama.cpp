@@ -102,6 +102,8 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
+        cb(cur, "attn_raw_out", il);
+
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         if (il == n_layer - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
