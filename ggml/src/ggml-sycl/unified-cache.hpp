@@ -1876,11 +1876,13 @@ class unified_cache {
 
     // === Direct Staging Lookup Tables ===
     // Simple O(1) maps for the direct staging API (ensure_cached_layout replacement).
-    // Keyed by cache_id hash, stores only {ptr, size, layout}.
+    // Keyed by full ggml_sycl_cache_id (uses proven detail::cache_id_hash/equal_fn).
     // Thread-safe via direct_stage_mutex_ (shared for reads, exclusive for writes).
-    std::unordered_map<uint64_t, weight_entry> direct_weight_entries_;
-    std::unordered_map<uint64_t, weight_entry> direct_expert_entries_;
-    mutable std::shared_mutex                  direct_stage_mutex_;
+    std::unordered_map<ggml_sycl_cache_id, weight_entry,
+                       detail::cache_id_hash, detail::cache_id_equal_fn> direct_weight_entries_;
+    std::unordered_map<ggml_sycl_cache_id, weight_entry,
+                       detail::cache_id_hash, detail::cache_id_equal_fn> direct_expert_entries_;
+    mutable std::shared_mutex direct_stage_mutex_;
 
     // Set to true when any weight has been evicted from device to host.
     // One-way flag (false → true, never reset). Used by graph replay / persistent TG

@@ -3890,11 +3890,6 @@ void unified_cache::finalize_pending_fills() {
 
 // === Direct Staging API (ensure_cached_layout replacement) ===
 
-static uint64_t direct_stage_key_hash(const ggml_sycl_cache_id & key) {
-    // Use the name_hash combined with model_id for a fast lookup key.
-    return key.name_hash ^ (key.model_id * 0x9e3779b97f4a7c15ULL);
-}
-
 direct_stage_result unified_cache::direct_stage_weight(
     ggml_sycl_cache_id          key,
     const void *                src_ptr,
@@ -3938,11 +3933,10 @@ direct_stage_result unified_cache::direct_stage_weight(
         });
     }
 
-    // 4. Store in lookup table
-    const uint64_t hash = direct_stage_key_hash(key);
+    // 4. Store in lookup table (keyed by full cache_id for collision safety)
     {
         std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-        direct_weight_entries_[hash] = weight_entry{ ptr, dst_size, layout };
+        direct_weight_entries_[key] = weight_entry{ ptr, dst_size, layout };
     }
 
     result.ptr   = ptr;
@@ -3994,11 +3988,10 @@ direct_stage_result unified_cache::direct_stage_expert(
         });
     }
 
-    // 4. Store in lookup table
-    const uint64_t hash = direct_stage_key_hash(key);
+    // 4. Store in lookup table (keyed by full cache_id for collision safety)
     {
         std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-        direct_expert_entries_[hash] = weight_entry{ ptr, dst_size, layout };
+        direct_expert_entries_[key] = weight_entry{ ptr, dst_size, layout };
     }
 
     result.ptr   = ptr;
@@ -4008,9 +4001,8 @@ direct_stage_result unified_cache::direct_stage_expert(
 }
 
 const weight_entry * unified_cache::lookup_weight(ggml_sycl_cache_id key) const {
-    const uint64_t hash = direct_stage_key_hash(key);
     std::shared_lock<std::shared_mutex> lock(direct_stage_mutex_);
-    auto it = direct_weight_entries_.find(hash);
+    auto it = direct_weight_entries_.find(key);
     if (it == direct_weight_entries_.end()) {
         return nullptr;
     }
@@ -4018,9 +4010,8 @@ const weight_entry * unified_cache::lookup_weight(ggml_sycl_cache_id key) const 
 }
 
 const weight_entry * unified_cache::lookup_expert(ggml_sycl_cache_id key) const {
-    const uint64_t hash = direct_stage_key_hash(key);
     std::shared_lock<std::shared_mutex> lock(direct_stage_mutex_);
-    auto it = direct_expert_entries_.find(hash);
+    auto it = direct_expert_entries_.find(key);
     if (it == direct_expert_entries_.end()) {
         return nullptr;
     }
