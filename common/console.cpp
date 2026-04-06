@@ -150,8 +150,8 @@ namespace console {
                 out = tty;
             }
 
-            // Enable bracket paste mode - terminal wraps pastes with ESC[200~ and ESC[201~
-            fprintf(out, "\033[?2004h");
+            // Enable bracket paste mode and reverse wrap (so \b wraps to previous row)
+            fprintf(out, "\033[?2004h\033[?45h");
             fflush(out);
         }
 
@@ -166,8 +166,8 @@ namespace console {
 #if !defined(_WIN32)
         // Restore settings on POSIX systems
         if (!simple_io) {
-            // Disable bracket paste mode
-            fprintf(out, "\033[?2004l");
+            // Disable bracket paste mode and reverse wrap
+            fprintf(out, "\033[?2004l\033[?45l");
             fflush(out);
 
             if (tty != nullptr) {
@@ -325,6 +325,22 @@ namespace console {
 #endif
     }
 
+    static int get_term_width() {
+#if defined(_WIN32)
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(hConsole, &csbi)) return csbi.dwSize.X;
+        return 80;
+#else
+        struct winsize ws;
+        int fd = (tty != nullptr) ? fileno(tty) : STDOUT_FILENO;
+        if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
+        return 80;
+#endif
+    }
+
+    // Track cursor column (0-based) for wrap-aware forward movement on POSIX.
+    static int cursor_col;
+
     static int put_codepoint(const char* utf8_codepoint, size_t length, int expectedWidth) {
 #if defined(_WIN32)
         CONSOLE_SCREEN_BUFFER_INFO bufferInfo;
@@ -355,6 +371,11 @@ namespace console {
         // We can trust expectedWidth if we've got one
         if (expectedWidth >= 0 || tty == nullptr) {
             fwrite(utf8_codepoint, length, 1, out);
+            if (expectedWidth > 0) {
+                cursor_col += expectedWidth;
+                int tw = get_term_width();
+                if (tw > 0) cursor_col %= tw;
+            }
             return expectedWidth;
         }
 
@@ -750,10 +771,28 @@ namespace console {
             SetConsoleCursorPosition(hConsole, newCursorPosition);
         }
 #else
+        int tw = get_term_width();
+
         if (delta < 0) {
-            for (int i = 0; i < -delta; i++) fprintf(out, "\b");
+            // Backward: \b wraps to previous row via reverse-wrap mode (\033[?45h)
+            for (int i = 0; i < -delta; i++) {
+                fprintf(out, "\b");
+                cursor_col--;
+                if (cursor_col < 0) cursor_col += tw;
+            }
         } else {
-            for (int i = 0; i < delta; i++) fprintf(out, "\033[C");
+            // Forward: \033[C doesn't wrap at row end.
+            // Use column tracking to emit \033[B\r\033[nC when crossing a row.
+            for (int i = 0; i < delta; i++) {
+                if (cursor_col + 1 >= tw) {
+                    // At last column — wrap to start of next row
+                    fprintf(out, "\033[B\r");
+                    cursor_col = 0;
+                } else {
+                    fprintf(out, "\033[C");
+                    cursor_col++;
+                }
+            }
         }
 #endif
     }
@@ -826,6 +865,35 @@ namespace console {
         size_t byte_pos = 0; // current byte index
         size_t char_pos = 0; // current character index (one char can be multiple bytes)
 
+#if !defined(_WIN32)
+        // Initialize cursor column tracking for wrap-aware movement.
+        // Query actual cursor column via ESC[6n (safe here — no user input yet).
+        cursor_col = 0;
+        if (!simple_io) {
+            fprintf(out, "\033[6n");
+            fflush(out);
+            // Read response: ESC[row;colR — use raw fd read with short timeout
+            fd_set init_fds;
+            FD_ZERO(&init_fds);
+            FD_SET(STDIN_FILENO, &init_fds);
+            struct timeval init_tv = {0, 50000}; // 50ms
+            if (select(STDIN_FILENO + 1, &init_fds, nullptr, nullptr, &init_tv) > 0) {
+                char pos_buf[32];
+                ssize_t pos_n = read(STDIN_FILENO, pos_buf, sizeof(pos_buf) - 1);
+                if (pos_n > 0) {
+                    pos_buf[pos_n] = '\0';
+                    int r = 0, c = 0;
+                    char * pp = pos_buf;
+                    if (*pp == '\033') pp++;
+                    if (*pp == '[') pp++;
+                    if (sscanf(pp, "%d;%d", &r, &c) == 2) {
+                        cursor_col = c - 1; // 0-based
+                    }
+                }
+            }
+        }
+#endif
+
         char32_t input_char;
         while (true) {
             assert(char_pos <= byte_pos);
@@ -853,6 +921,15 @@ namespace console {
             fflush(out); // Ensure all output is displayed before waiting for input
             input_char = getchar32();
 
+            if (input_char == 0x01 && !bracket_paste_mode) { // Ctrl+A: move to line start
+                move_to_line_start(char_pos, byte_pos, widths);
+                continue;
+            }
+            if (input_char == 0x05 && !bracket_paste_mode) { // Ctrl+E: move to line end
+                move_to_line_end(char_pos, byte_pos, widths, line);
+                continue;
+            }
+
             if (input_char == '\r' || input_char == '\n') {
                 if (bracket_paste_mode) {
                     // Insert literal newline during paste, show continuation prompt
@@ -861,6 +938,7 @@ namespace console {
                     byte_pos++;
                     char_pos++;
                     fprintf(out, "\n> ");
+                    cursor_col = 2;
                     fflush(out);
                     continue;
                 }
@@ -968,6 +1046,7 @@ namespace console {
                     byte_pos++;
                     char_pos++;
                     fprintf(out, "\n> ");
+                    cursor_col = 2;
                     fflush(out);
                 } else if (code == 0x1B) {
                     // Discard the rest of the escape sequence
@@ -1009,6 +1088,7 @@ namespace console {
                 byte_pos++;
                 char_pos++;
                 fprintf(out, "\n> ");
+                cursor_col = 2;
                 fflush(out);
             } else if (input_char == KEY_ARROW_UP || input_char == KEY_ARROW_DOWN) {
                 if (input_char == KEY_ARROW_UP) {
