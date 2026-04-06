@@ -4951,30 +4951,15 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
 
 @ModelBase.register("StepVLForConditionalGeneration")
 class Step3VLVisionModel(MmprojModel):
-    def __init__(self, dir_model: Path, *args, hparams: dict[str, Any] | None = None, **kwargs):
-        if hparams is None:
-            hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
-        assert hparams is not None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
 
-        vision_config = {**hparams.get("vision_config", {})}
-
-        hidden_size = int(vision_config.get("hidden_size", vision_config.get("width", 0)))
-        if hidden_size <= 0:
-            raise ValueError("Step3-VL vision hidden_size/width not found")
-
-        mlp_ratio = float(vision_config.get("mlp_ratio", 8960 / 1536))
-        vision_config["hidden_size"] = hidden_size
-        vision_config["num_hidden_layers"] = int(vision_config.get("num_hidden_layers", vision_config.get("layers", 0)))
-        vision_config["num_attention_heads"] = int(vision_config.get("num_attention_heads", vision_config.get("heads", 0)))
-        vision_config["intermediate_size"] = int(vision_config.get("intermediate_size", round(hidden_size * mlp_ratio)))
-        vision_config["layer_norm_eps"] = float(vision_config.get("layer_norm_eps", 1e-5))
-        vision_config["use_ln_pre"] = bool(vision_config.get("use_ln_pre", True))
-        vision_config["use_ln_post"] = bool(vision_config.get("use_ln_post", False))
-        vision_config["use_abs_posemb"] = bool(vision_config.get("use_abs_posemb", True))
-        vision_config["use_rope2d"] = bool(vision_config.get("use_rope2d", True))
-        hparams["vision_config"] = vision_config
-
-        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+        if not self.hparams_vision.get("intermediate_size"):
+            hidden_size = self.hparams_vision.get("hidden_size") or self.hparams_vision.get("width") or 0
+            assert hidden_size > 0
+            mlp_ratio = float(self.hparams_vision.get("mlp_ratio", 8960 / 1536))
+            self.hparams_vision["intermediate_size"] = int(round(hidden_size * mlp_ratio))
 
         self.preprocessor_config.setdefault("image_mean", list(_MISTRAL_COMMON_DATASET_MEAN))
         self.preprocessor_config.setdefault("image_std", list(_MISTRAL_COMMON_DATASET_STD))
@@ -4991,7 +4976,7 @@ class Step3VLVisionModel(MmprojModel):
         )
 
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.STEP3VL)
-        self.gguf_writer.add_vision_attention_layernorm_eps(float(self.hparams_vision["layer_norm_eps"]))
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(self.hparams_vision.get("layer_norm_eps", 1e-5)))
         self.gguf_writer.add_vision_projector_scale_factor(projector_stride ** 2)
         # 3024 max resize comes from step3-vl-10b processing_step3.py.
         self.gguf_writer.add_vision_preproc_image_size(3024)
@@ -5002,8 +4987,6 @@ class Step3VLVisionModel(MmprojModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid
-
         if name.startswith("model.") or name.startswith("lm_head."):
             return
 
@@ -5030,10 +5013,7 @@ class Step3VLVisionModel(MmprojModel):
             name = name.replace("attn.in_proj_weight", "attn.in_proj.weight")
             name = name.replace("attn.in_proj_bias", "attn.in_proj.bias")
 
-            yield (self.map_tensor_name(name), data_torch)
-            return
-
-        return
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration")
