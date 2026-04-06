@@ -11050,8 +11050,6 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
                       g_sycl_graph_inflight.load(std::memory_order_relaxed),
                       ggml_sycl_graph_recording_active() ? 1 : 0);
     }
-    const void *              req_src_ptr      = src_ptr;
-    size_t                    req_src_size     = src_size;
     bool                      used_host_layout = false;
     bool                      host_needs_fill  = false;
     bool                      host_pinned      = false;
@@ -11106,8 +11104,6 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
 
         if (host_ptr) {
             used_host_layout = true;
-            req_src_ptr      = host_ptr;
-            req_src_size     = dst_size;
             ggml_sycl_drop_non_target_host_entries(host_cache, cache_key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1,
                                                    -1, resolved);
             if (g_ggml_sycl_debug >= 2 || copy_trace) {
@@ -11143,125 +11139,33 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
             return const_cast<void *>(src_ptr);
         }
     }
-    ggml_sycl::cache_layout_request req{};
-    req.key              = cache_key;
-    req.src_ptr          = req_src_ptr;
-    req.src_size         = req_src_size;
-    req.dst_size         = dst_size;
-    req.type             = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-    req.layout           = resolved;
-    req.onednn_pack_m    = onednn_pack_m;
-    req.validate_content = false;
-    req.prefer_host      = request_prefer_host;
-    req.xmx_info         = xmx_info;
-    if (!used_host_layout) {
-        if (resolved == GGML_LAYOUT_SOA || resolved == GGML_LAYOUT_COALESCED ||
-            resolved == GGML_LAYOUT_XMX_GEMM_TILED) {
-            reorder_ctx.type          = tensor->type;
-            reorder_ctx.ncols         = tensor->ne[0];
-            reorder_ctx.nrows         = ggml_nrows(tensor);
-            reorder_ctx.nbytes        = src_size;
-            reorder_ctx.dst_bytes     = dst_size;
-            reorder_ctx.layout        = resolved;
-            reorder_ctx.src_is_device = src_is_device;
-            reorder_ctx.device_id     = device;
-            req.fill_fn               = ggml_sycl_fill_reordered_host;
+    // Direct lookup — all weights should be staged by S1-PRELOAD.
+    // No allocation, no fill, no event.wait().
+    const ggml_sycl::weight_entry * entry = cache->lookup_weight(cache_key);
+    if (entry && entry->ptr) {
+        const layout_mode actual_layout = entry->layout;
+        if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+            ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, entry->ptr, entry->size,
+                                               xmx_info, onednn_pack_m);
+        }
+        GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d HIT ptr=%p\n", tensor->name ? tensor->name : "(null)",
+                        (int) actual_layout, entry->ptr);
+        return entry->ptr;
+    }
 
-            req.fill_ctx = &reorder_ctx;
-        } else if (resolved == GGML_LAYOUT_ONEDNN_PACKED) {
-            req.fill_fn  = ggml_sycl_fill_onednn_packed;
-            req.fill_ctx = &onednn_ctx;
-        } else if (resolved == GGML_LAYOUT_ONEDNN_WOQ) {
-            req.fill_fn  = ggml_sycl_fill_onednn_woq;
-            req.fill_ctx = &woq_ctx;
-        } else if (resolved == GGML_LAYOUT_XMX_TILED) {
-            req.fill_fn  = ggml_sycl_fill_xmx_tiled;
-            req.fill_ctx = &tiled_ctx;
+    // Weight not staged — layer streaming fallback
+    if (ggml_sycl::layer_streaming_active(device)) {
+        void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+        if (streamed) {
+            GGML_LOG_DEBUG("[LAYER-STREAM] Using streamed ptr for %s (layout=%d)\n", tensor->name, (int) resolved);
+            return streamed;
         }
     }
 
-    // Non-blocking fast path: lock-free lookup for exact layout match.
-    // Dense weights pinned after S1-PRELOAD hit here on every inference token.
-    // IMPORTANT: Only return the EXACT requested layout — returning a different
-    // layout (e.g., SOA when AOS requested) causes the kernel to misinterpret
-    // the data format and produce garbage output.
-    {
-        void * cached_ptr = cache->lookup(cache_key, resolved);
-        if (cached_ptr) {
-            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, cached_ptr, dst_size, xmx_info,
-                                                   onednn_pack_m);
-            }
-            GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d HIT ptr=%p\n", tensor->name ? tensor->name : "(null)",
-                            (int) resolved, cached_ptr);
-            return cached_ptr;
-        }
-    }
-
-    // Fallback: ensure_cached_layout on the BCS queue (copy engine, separate from CCS).
-    // This handles:
-    // - Warmup: first-time SOA conversion for each weight
-    // - PP: AOS layout request when S1-PRELOAD stored SOA (needs AOS copy)
-    // - Any cache miss (weight not yet in VRAM)
-    // The BCS queue keeps H2D off CCS, preventing GT engine resets from long-running
-    // copy+reorder chains that exceed the xe driver preempt timeout (640ms).
-
-    // Warmup/first-access: use ensure_cached_layout.
-    // For 120B models post-warmup, this path is never reached (post_warmup_host returns nullptr above).
-    // Use BCS queue for 120B; for models that fit in VRAM, use compute queue for compatibility.
-    sycl::queue * override_q              = ggml_backend_sycl_all_weights_host() ? &cache->get_bcs_queue() : nullptr;
-    ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {}, override_q);
-    bool                           had_exception = false;
-    for (int attempt = 0; attempt < 3 && result.status == ggml_sycl::cache_layout_status::IN_PROGRESS; ++attempt) {
-        try {
-            result.event.wait();
-        } catch (const sycl::exception & e) {
-            GGML_LOG_WARN("[UNIFIED-CACHE] Event wait failed for layout=%d %s: %s\n", (int) resolved, tensor->name,
-                          e.what());
-            had_exception = true;
-            break;
-        } catch (...) {
-            GGML_LOG_WARN("[UNIFIED-CACHE] Event wait failed for layout=%d %s\n", (int) resolved, tensor->name);
-            had_exception = true;
-            break;
-        }
-        result = cache->ensure_cached_layout(req, {}, override_q);
-        if (result.status == ggml_sycl::cache_layout_status::FAILED) {
-            break;
-        }
-    }
-    if (!had_exception && result.host_resident) {
-        if (ggml_sycl::layer_streaming_active(device)) {
-            void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
-            if (streamed) {
-                GGML_LOG_DEBUG("[LAYER-STREAM] Using streamed ptr for %s (layout=%d)\n", tensor->name, (int) resolved);
-                return streamed;
-            }
-        }
-        if (resolved != GGML_LAYOUT_AOS) {
-            GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s not streamable, falling back to AoS\n",
-                          (int) resolved, tensor->name);
-            return nullptr;
-        }
-    }
-    if (had_exception || result.status != ggml_sycl::cache_layout_status::READY || result.device_ptr == nullptr) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] Failed to cache layout=%d for %s, falling back to AoS\n", (int) resolved,
-                      tensor->name);
-        return nullptr;
-    }
-    // The cache may return a different layout than requested (e.g. during graph
-    // compute when a device-resident S1-PRELOAD entry survives a layout switch).
-    // Use the actual cached layout for metadata and dispatch decisions.
-    const layout_mode actual_layout = (result.layout != GGML_LAYOUT_AOS) ? result.layout : resolved;
-    if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-        ggml_sycl_update_layout_from_cache(extra, tensor, device, actual_layout, result.device_ptr, result.size,
-                                           result.xmx_info, result.onednn_pack_m);
-    }
-    const bool keep_aos = ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type);
-    if (actual_layout != GGML_LAYOUT_AOS && !keep_aos) {
-        ggml_sycl_drop_non_target_cache_entries(cache, cache_key, actual_layout);
-    }
-    return result.device_ptr;
+    // Not staged, not streamed — fall through to host-pinned zero-copy
+    GGML_SYCL_DEBUG("[LOOKUP] weight %s layout=%d MISS — host-pinned fallback\n",
+                    tensor->name ? tensor->name : "(null)", (int) resolved);
+    return nullptr;
 }
 
 static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
