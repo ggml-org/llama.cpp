@@ -5335,14 +5335,33 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Unified non-blocking cache: no model_exceeds_vram branching.
     // All inference callers use the non-blocking try_get_cached_with_event path.
     // Dense weights are pinned after S1-PRELOAD; MoE experts use LRU eviction.
-    const bool model_size_exceeds_budget = g_tensor_inventory_total_size > vram_budget;
+    //
+    // Subtract arena zone overhead (SCRATCH, ONEDNN, RUNTIME) from the weight
+    // budget comparison.  Without this, a model that barely fits raw VRAM
+    // (e.g. 11.5 GB on 11.6 GB) appears to fit, but the ~1 GB of arena zones
+    // leaves only ~10.6 GB for weights — the placement plan never triggers.
+    size_t arena_zone_overhead = 0;
+    if (ggml_sycl::vram_arena_enabled()) {
+        auto * cache = ggml_sycl::get_unified_cache_for_device(ctx->device);
+        if (cache && cache->arena_active()) {
+            arena_zone_overhead = cache->zone_capacity(ggml_sycl::vram_zone_id::SCRATCH)
+                                + cache->zone_capacity(ggml_sycl::vram_zone_id::ONEDNN)
+                                + cache->zone_capacity(ggml_sycl::vram_zone_id::RUNTIME);
+        }
+    }
+    const size_t weight_budget = vram_budget > arena_zone_overhead
+                               ? vram_budget - arena_zone_overhead : 0;
+    const bool model_size_exceeds_budget = g_tensor_inventory_total_size > weight_budget;
     // Write-once at startup — relaxed ordering is sufficient because callers
     // are sequenced after model load (no cross-thread visibility requirement).
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_relaxed);
 
     GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB (free=%.1f MB), "
+                  "arena_zones=%.1f MB, weight_budget=%.1f MB, "
                   "model_size=%.1f MB, exceeds_budget=%s\n",
                   budget_pct, vram_budget / (1024.0 * 1024.0), free_mem / (1024.0 * 1024.0),
+                  arena_zone_overhead / (1024.0 * 1024.0),
+                  weight_budget / (1024.0 * 1024.0),
                   effective_model_size / (1024.0 * 1024.0),
                   model_size_exceeds_budget ? "true" : "false");
 
