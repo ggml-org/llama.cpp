@@ -1513,26 +1513,13 @@ static void moe_prestage_popular_experts() {
                     fctx.prealloc_temp_size = sec_prealloc_size;
                     fctx.bcs_queue          = budget.cache ? &budget.cache->get_bcs_queue() : nullptr;
 
-                    ggml_sycl::cache_layout_request req{};
-                    req.key              = item.key;
-                    req.src_ptr          = item.meta->data_ptr;
-                    req.src_size         = item.meta->bytes;
-                    req.dst_size         = item.dst_bytes;
-                    req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                    req.layer_id         = item.meta->layer_id;
-                    req.expert_id        = item.meta->expert_idx;
-                    req.layout           = GGML_LAYOUT_SOA;
-                    req.validate_content = false;
-                    req.skip_fill_wait   = true;
-                    req.fill_fn          = ggml_sycl_fill_reordered_gpu;
-                    req.fill_ctx         = &fctx;
-
                     try {
-                        auto result = budget.cache->ensure_cached_layout(req, {});
-                        if ((result.status == ggml_sycl::cache_layout_status::READY ||
-                             result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
-                            && result.device_ptr) {
-                            // Cache already tracks the pointer — no separate table needed.
+                        auto result = budget.cache->direct_stage_expert(
+                            item.key, item.meta->data_ptr, item.meta->bytes,
+                            item.dst_bytes, GGML_LAYOUT_SOA,
+                            ggml_sycl_fill_reordered_gpu, &fctx,
+                            &budget.cache->get_queue());
+                        if (result.ok && result.ptr) {
                             budget.staged++;
                         }
                     } catch (...) {
@@ -1542,10 +1529,6 @@ static void moe_prestage_popular_experts() {
                 // Finalize + free temp VRAM per secondary device
                 for (auto & b : sec_budgets) {
                     if (b.staged > 0) {
-                        try {
-                            b.cache->finalize_pending_fills();
-                        } catch (...) {
-                        }
                         sycl::queue & q = b.cache->get_queue();
                         q.wait();
                         for (void * buf : sec_temp_bufs[b.dev]) {
@@ -1648,41 +1631,16 @@ static void moe_prestage_popular_experts() {
 
                     auto & budget = sec_budgets[ci.budget_idx];
 
-                    ggml_sycl::cache_layout_request req{};
-                    req.key              = ci.key;
-                    req.src_ptr          = ci.reorder_buf;
-                    req.src_size         = ci.dst_bytes;
-                    req.dst_size         = ci.dst_bytes;
-                    req.type             = ggml_sycl::cache_entry_type::MOE_EXPERT;
-                    req.layer_id         = ci.meta->layer_id;
-                    req.expert_id        = ci.meta->expert_idx;
-                    req.layout           = GGML_LAYOUT_SOA;
-                    req.validate_content = false;
-                    req.skip_fill_wait   = true;
-                    req.fill_fn          = nullptr;
-                    req.fill_ctx         = nullptr;
-
                     // Route raw H2D to BCS (copy engine) on the secondary GPU.
                     sycl::queue * sec_bcs = &budget.cache->get_bcs_queue();
                     try {
-                        auto result = budget.cache->ensure_cached_layout(req, {}, sec_bcs);
-                        if ((result.status == ggml_sycl::cache_layout_status::READY ||
-                             result.status == ggml_sycl::cache_layout_status::IN_PROGRESS)
-                            && result.device_ptr) {
-                            // Cache already tracks the pointer — no separate table needed.
+                        auto result = budget.cache->direct_stage_expert(
+                            ci.key, ci.reorder_buf, ci.dst_bytes, ci.dst_bytes,
+                            GGML_LAYOUT_SOA, nullptr, nullptr, sec_bcs);
+                        if (result.ok && result.ptr) {
                             budget.staged++;
                         }
                     } catch (...) {
-                    }
-                }
-
-                // Finalize pending fills on all secondary caches
-                for (const auto & b : sec_budgets) {
-                    if (b.staged > 0) {
-                        try {
-                            b.cache->finalize_pending_fills();
-                        } catch (...) {
-                        }
                     }
                 }
 
@@ -1761,7 +1719,7 @@ static void moe_prestage_popular_experts() {
 }
 
 // ---------------------------------------------------------------------------
-// SOA-correct expert caching: single-expert wrapper around ensure_cached_layout.
+// SOA-correct expert caching: single-expert wrapper around direct_stage_expert.
 // Used by ExpertPrefetcher::hint() to upload experts with correct SOA layout
 // instead of raw AOS memcpy.  Returns device pointer on success, nullptr on failure.
 // ---------------------------------------------------------------------------
@@ -1811,32 +1769,18 @@ void * moe_expert_ensure_soa_cached(int layer_idx, int expert_idx, int device_id
     reorder_ctx.src_is_device = false;
     reorder_ctx.device_id     = device_id;
 
-    // Build cache layout request (same pattern as moe_prestage_popular_experts)
-    cache_layout_request req{};
-    req.key              = key;
-    req.src_ptr          = meta->data_ptr;
-    req.src_size         = meta->bytes;
-    req.dst_size         = dst_bytes;
-    req.type             = cache_entry_type::MOE_EXPERT;
-    req.layer_id         = meta->layer_id;
-    req.expert_id        = meta->expert_idx;
-    req.layout           = GGML_LAYOUT_SOA;
-    req.validate_content = false;
-    req.fill_fn          = ggml_sycl_fill_reordered_host;
-    req.fill_ctx         = &reorder_ctx;
-
     // Route H2D to BCS (copy-only) queue to keep SOA reorder off CCS.
     // Without this, runtime expert staging during inference monopolizes CCS
     // and can trigger xe driver GT engine resets (>640ms preempt timeout).
     sycl::queue * bcs_q = &cache->get_bcs_queue();
 
     try {
-        auto result = cache->ensure_cached_layout(req, {}, bcs_q);
-        if ((result.status == cache_layout_status::READY ||
-             result.status == cache_layout_status::IN_PROGRESS) && result.device_ptr) {
-            // Cache already tracks the pointer — no separate table needed.
-            // is_expert_resident() / get_expert_device_ptr() query the cache directly.
-            return result.device_ptr;
+        auto result = cache->direct_stage_expert(
+            key, meta->data_ptr, meta->bytes, dst_bytes,
+            GGML_LAYOUT_SOA, ggml_sycl_fill_reordered_host,
+            &reorder_ctx, bcs_q);
+        if (result.ok && result.ptr) {
+            return result.ptr;
         }
     } catch (...) {
         // VRAM exhausted or SYCL error — caller falls back to CPU dispatch
@@ -3142,19 +3086,6 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 reorder_ctx.src_is_device = false;  // upload_src is always host-accessible
                 reorder_ctx.device_id   = budget.dev;
 
-                cache_layout_request req{};
-                req.key              = key;
-                req.src_ptr          = upload_src;
-                req.src_size         = info.bytes;
-                req.dst_size         = dst_bytes;
-                req.type             = cache_entry_type::MOE_EXPERT;
-                req.layer_id         = info.layer_id;
-                req.expert_id        = info.expert_idx;
-                req.layout           = GGML_LAYOUT_SOA;
-                req.validate_content = false;
-                req.fill_fn          = ggml_sycl_fill_reordered_host;
-                req.fill_ctx         = &reorder_ctx;
-
                 GGML_SYCL_DEBUG("[MOE-PHASE2] Uploading expert #%zu L%d E%d to GPU%d "
                                 "(type=%d dst_bytes=%zu)\n",
                                 total_uploaded, info.layer_id, info.expert_idx,
@@ -3164,22 +3095,23 @@ static void moe_hybrid_init_once(ggml_backend_sycl_context & ctx, ggml_cgraph * 
                 // CCS monopolization during Phase 2 expert uploads.
                 sycl::queue * phase2_bcs = &budget.cache->get_bcs_queue();
 
-                cache_layout_result result{};
+                ggml_sycl::direct_stage_result stage_result{};
                 try {
-                    result = budget.cache->ensure_cached_layout(req, {}, phase2_bcs);
+                    stage_result = budget.cache->direct_stage_expert(
+                        key, upload_src, info.bytes, dst_bytes,
+                        GGML_LAYOUT_SOA, ggml_sycl_fill_reordered_host,
+                        &reorder_ctx, phase2_bcs);
                 } catch (const std::exception & e) {
-                    GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout EXCEPTION: %s\n", e.what());
+                    GGML_LOG_ERROR("[MOE-PHASE2] direct_stage_expert EXCEPTION: %s\n", e.what());
                     free_staging();
                     continue;
                 } catch (...) {
-                    GGML_LOG_ERROR("[MOE-PHASE2] ensure_cached_layout UNKNOWN EXCEPTION\n");
+                    GGML_LOG_ERROR("[MOE-PHASE2] direct_stage_expert UNKNOWN EXCEPTION\n");
                     free_staging();
                     continue;
                 }
                 free_staging();
-                if (result.status == cache_layout_status::READY
-                    || result.status == cache_layout_status::IN_PROGRESS) {
-                    // Cache already tracks the pointer — no separate table needed.
+                if (stage_result.ok && stage_result.ptr) {
                     set_expert_popularity_rank(
                         info.layer_id, info.expert_idx, static_cast<int>(total_uploaded));
                     budget.n_slots--;
