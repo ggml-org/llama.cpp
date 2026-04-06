@@ -3,27 +3,27 @@
 		ChatMessageAgenticContent,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		MarkdownContent,
 		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { AGENTIC_TAGS, INPUT_CLASSES, REASONING_TAGS } from '$lib/constants';
+	import { INPUT_CLASSES } from '$lib/constants';
 	import { MessageRole, KeyboardKey, ChatMessageStatsView } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
+
+	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -35,12 +35,14 @@
 		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		messageContent: string | undefined;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
@@ -54,12 +56,14 @@
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
+		toolMessages = [],
 		messageContent,
 		onConfirmDelete,
 		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
+		onForkConversation,
 		onNavigateToSibling,
 		onRegenerate,
 		onShowDeleteDialogChange,
@@ -84,16 +88,8 @@
 		}
 	}
 
-	const hasAgenticMarkers = $derived(
-		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
-	);
-	const hasStreamingToolCall = $derived(
-		isChatStreaming() && agenticStreamingToolCall(message.convId) !== null
-	);
-	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
-	const isStructuredContent = $derived(
-		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall
-	);
+	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
+	const hasReasoning = $derived(!!message.reasoningContent);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -151,7 +147,7 @@
 	}
 
 	let highlightAgenticTurns = $derived(
-		hasAgenticMarkers &&
+		isAgentic &&
 			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
 	);
 
@@ -166,13 +162,14 @@
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
 			hasNoContent &&
+			!isAgentic &&
 			isLastAssistantMessage
 	);
 
 	let showProcessingInfoBottom = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
-			!hasNoContent &&
+			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
 	);
 
@@ -256,15 +253,13 @@
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
-		{:else if isStructuredContent}
+		{:else}
 			<ChatMessageAgenticContent
-				content={messageContent || ''}
+				{message}
+				{toolMessages}
 				isStreaming={isChatStreaming()}
 				highlightTurns={highlightAgenticTurns}
-				{message}
 			/>
-		{:else}
-			<MarkdownContent content={messageContent || ''} attachments={message.extra} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
@@ -352,9 +347,8 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
-				? onContinue
-				: undefined}
+			onContinue={currentConfig.enableContinueGeneration && !hasReasoning ? onContinue : undefined}
+			{onForkConversation}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}

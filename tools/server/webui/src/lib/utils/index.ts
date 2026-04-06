@@ -22,6 +22,7 @@ export { default as autoResizeTextarea } from './autoresize-textarea';
 // Branching utilities
 export {
 	filterByLeafNodeId,
+	findMessageById,
 	findLeafNode,
 	findDescendantMessages,
 	getMessageSiblings,
@@ -38,7 +39,7 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString } from './cors-proxy';
+export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
@@ -148,8 +149,17 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Favicon utilities
 export { getFaviconUrl } from './favicon';
 
-// Agentic content parsing utilities
-export { parseAgenticContent, type AgenticSection } from './agentic';
+// Agentic content utilities (structured section derivation)
+export {
+	deriveAgenticSections,
+	parseToolResultWithImages,
+	hasAgenticContent,
+	type AgenticSection,
+	type ToolResultLine
+} from './agentic';
+
+// Legacy migration utilities
+export { runLegacyMigration, isMigrationNeeded } from './legacy-migration';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';

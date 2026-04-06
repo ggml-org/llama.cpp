@@ -3,6 +3,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "hf-cache.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -326,60 +327,48 @@ struct handle_model_result {
     common_params_model mmproj;
 };
 
-static handle_model_result common_params_handle_model(
-        struct common_params_model & model,
-        const std::string & bearer_token,
-        bool offline) {
+static handle_model_result common_params_handle_model(struct common_params_model & model,
+                                                      const std::string          & bearer_token,
+                                                      bool                         offline) {
     handle_model_result result;
-    // handle pre-fill default model path and url based on hf_repo and hf_file
-    {
-        if (!model.docker_repo.empty()) {  // Handle Docker URLs by resolving them to local paths
-            model.path = common_docker_resolve_model(model.docker_repo);
-            model.name = model.docker_repo; // set name for consistency
-        } else if (!model.hf_repo.empty()) {
-            // short-hand to avoid specifying --hf-file -> default it to --model
-            if (model.hf_file.empty()) {
-                if (model.path.empty()) {
-                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
-                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                        exit(1); // error message already printed
-                    }
-                    model.name    = model.hf_repo;      // repo name with tag
-                    model.hf_repo = auto_detected.repo; // repo name without tag
-                    model.hf_file = auto_detected.ggufFile;
-                    if (!auto_detected.mmprojFile.empty()) {
-                        result.found_mmproj   = true;
-                        result.mmproj.hf_repo = model.hf_repo;
-                        result.mmproj.hf_file = auto_detected.mmprojFile;
-                    }
-                } else {
-                    model.hf_file = model.path;
-                }
-            }
 
-            std::string model_endpoint = get_model_endpoint();
-            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
-            // make sure model path is present (for caching purposes)
-            if (model.path.empty()) {
-                // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
-                model.path = fs_get_cache_file(filename);
-            }
-
-        } else if (!model.url.empty()) {
-            if (model.path.empty()) {
-                auto f = string_split<std::string>(model.url, '#').front();
-                f = string_split<std::string>(f, '?').front();
-                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
-            }
-
+    if (!model.docker_repo.empty()) {
+        model.path = common_docker_resolve_model(model.docker_repo);
+        model.name = model.docker_repo;
+    } else if (!model.hf_repo.empty()) {
+        // If -m was used with -hf, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
         }
-    }
+        common_download_model_opts opts;
+        opts.download_mmproj = true;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
 
-    // then, download it if needed
-    if (!model.url.empty()) {
-        bool ok = common_download_model(model, bearer_token, offline);
-        if (!ok) {
+        if (download_result.model_path.empty()) {
+            LOG_ERR("error: failed to download model from Hugging Face\n");
+            exit(1);
+        }
+
+        model.name = model.hf_repo;
+        model.path = download_result.model_path;
+
+        if (!download_result.mmproj_path.empty()) {
+            result.found_mmproj = true;
+            result.mmproj.path  = download_result.mmproj_path;
+        }
+    } else if (!model.url.empty()) {
+        if (model.path.empty()) {
+            auto f = string_split<std::string>(model.url, '#').front();
+            f = string_split<std::string>(f, '?').front();
+            model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+        }
+
+        common_download_model_opts opts;
+        opts.offline = offline;
+        auto download_result = common_download_model(model, bearer_token, opts);
+        if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
         }
@@ -433,6 +422,9 @@ static bool parse_bool_value(const std::string & value) {
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
+
+    // setup log directly from params.verbosity: see tools/cli/cli.cpp
+    common_log_set_verbosity_thold(params.verbosity);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
@@ -539,8 +531,17 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
 
+    // TODO: Remove later
+    try {
+        hf_cache::migrate_old_cache_to_hf_cache(params.hf_token, params.offline);
+    } catch (const std::exception & e) {
+        LOG_WRN("HF cache migration failed: %s\n", e.what());
+    }
+    // export_graph_ops loads only metadata
+    const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
+
     // maybe handle remote preset
-    if (!params.model.hf_repo.empty()) {
+    if (!params.model.hf_repo.empty() && !skip_model_download) {
         std::string cli_hf_repo = params.model.hf_repo;
         bool has_preset = common_params_handle_remote_preset(params, ctx_arg.ex);
 
@@ -571,7 +572,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     // handle model and download
-    {
+    if (!skip_model_download) {
         auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
         if (params.no_mmproj) {
             params.mmproj = {};
@@ -592,7 +593,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // model is required (except for server)
     // TODO @ngxson : maybe show a list of available models in CLI in this case
-    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !params.usage && !params.completion) {
+    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !skip_model_download && !params.usage && !params.completion) {
         throw std::invalid_argument("error: --model is required\n");
     }
 
@@ -634,8 +635,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
     }
-
-    common_log_set_verbosity_thold(params.verbosity);
 
     return true;
 }
@@ -1061,12 +1060,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-cl", "--cache-list"},
         "show list of models in cache",
         [](common_params &) {
-            printf("model cache directory: %s\n", fs_get_cache_directory().c_str());
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                auto & model = models[i];
-                printf("%4d. %s\n", (int) i + 1, model.to_string().c_str());
+                printf("%4zu. %s\n", i + 1, models[i].to_string().c_str());
             }
             exit(0);
         }
@@ -1084,7 +1081,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.verbose_prompt = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"--display-prompt"},
         {"--no-display-prompt"},
@@ -1314,6 +1311,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.kv_unified = value;
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
+    add_opt(common_arg(
+        {"--clear-idle"},
+        {"--no-clear-idle"},
+        "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",
+        [](common_params & params, bool value) {
+            params.clear_idle = value;
+        }
+    ).set_env("LLAMA_ARG_CLEAR_IDLE").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -2813,6 +2818,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
     add_opt(common_arg(
+        {"--reuse-port"},
+        string_format("allow multiple sockets to bind to the same port (default: %s)", params.reuse_port ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.reuse_port = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REUSE_PORT"));
+    add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
         [](common_params & params, const std::string & value) {
@@ -2848,6 +2860,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.webui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--tools"}, "TOOL1,TOOL2,...",
+        "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
+        "specify \"all\" to enable all tools\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff",
+        [](common_params & params, const std::string & value) {
+            params.server_tools = parse_csv_row(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
@@ -3250,6 +3271,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
         [](common_params & params) {
             params.verbosity = INT_MAX;
+            common_log_set_verbosity_thold(INT_MAX);
         }
     ));
     add_opt(common_arg(
@@ -3270,6 +3292,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
+            common_log_set_verbosity_thold(value);
         }
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(

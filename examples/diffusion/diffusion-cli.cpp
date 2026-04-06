@@ -545,11 +545,12 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION)) {
         return 1;
     }
 
-    common_init();
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();

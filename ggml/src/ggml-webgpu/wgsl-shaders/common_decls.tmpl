@@ -8,6 +8,30 @@ fn get_byte_i32(value: u32, index: u32) -> i32 {
 }
 #endif
 
+#ifdef U32_DEQUANT_HELPERS
+fn load_src0_u16_at(byte_offset: u32) -> u32 {
+    let word = src0[byte_offset / 4u];
+    let shift = (byte_offset & 2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_src0_u32_at(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 3u) * 8u;
+    let lo = src0[word_idx];
+    if (shift == 0u) {
+        return lo;
+    }
+    let hi = src0[word_idx + 1u];
+    return (lo >> shift) | (hi << (32u - shift));
+}
+
+fn load_src0_f16_at(byte_offset: u32) -> f16 {
+    let packed = unpack2x16float(load_src0_u16_at(byte_offset));
+    return f16(packed[0]);
+}
+#endif
+
 #ifdef Q4_0_T
 struct q4_0 {
     d: f16,
