@@ -17,56 +17,39 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
-#define htp_act_preamble3              \
-    const uint32_t ne00 = src0->ne[0]; \
-    const uint32_t ne01 = src0->ne[1]; \
-    const uint32_t ne02 = src0->ne[2]; \
-    const uint32_t ne03 = src0->ne[3]; \
-                                       \
-    const uint32_t ne10 = src1->ne[0]; \
-    const uint32_t ne11 = src1->ne[1]; \
-    const uint32_t ne12 = src1->ne[2]; \
-    const uint32_t ne13 = src1->ne[3]; \
-                                       \
-    const uint32_t ne0 = dst->ne[0];   \
-    const uint32_t ne1 = dst->ne[1];   \
-    const uint32_t ne2 = dst->ne[2];   \
-    const uint32_t ne3 = dst->ne[3];   \
-                                       \
-    const uint32_t nb00 = src0->nb[0]; \
-    const uint32_t nb01 = src0->nb[1]; \
-    const uint32_t nb02 = src0->nb[2]; \
-    const uint32_t nb03 = src0->nb[3]; \
-                                       \
-    const uint32_t nb10 = src1->nb[0]; \
-    const uint32_t nb11 = src1->nb[1]; \
-    const uint32_t nb12 = src1->nb[2]; \
-    const uint32_t nb13 = src1->nb[3]; \
-                                       \
-    const uint32_t nb0 = dst->nb[0];   \
-    const uint32_t nb1 = dst->nb[1];   \
-    const uint32_t nb2 = dst->nb[2];   \
-    const uint32_t nb3 = dst->nb[3];
-
-#define htp_act_preamble2              \
-    const uint32_t ne00 = src0->ne[0]; \
-    const uint32_t ne01 = src0->ne[1]; \
-    const uint32_t ne02 = src0->ne[2]; \
-    const uint32_t ne03 = src0->ne[3]; \
-                                       \
-    const uint32_t ne0 = dst->ne[0];   \
-    const uint32_t ne1 = dst->ne[1];   \
-    const uint32_t ne2 = dst->ne[2];   \
-    const uint32_t ne3 = dst->ne[3];   \
-                                       \
-    const uint32_t nb00 = src0->nb[0]; \
-    const uint32_t nb01 = src0->nb[1]; \
-    const uint32_t nb02 = src0->nb[2]; \
-    const uint32_t nb03 = src0->nb[3]; \
-                                       \
-    const uint32_t nb0 = dst->nb[0];   \
-    const uint32_t nb1 = dst->nb[1];   \
-    const uint32_t nb2 = dst->nb[2];   \
+#define htp_act_preamble                                 \
+    const struct htp_tensor * src0 = actx->octx->src[0]; \
+    const struct htp_tensor * src1 = actx->octx->src[1]; \
+    const struct htp_tensor * dst  = actx->octx->dst;    \
+                                                         \
+    const uint32_t ne00 = src0->ne[0];                   \
+    const uint32_t ne01 = src0->ne[1];                   \
+    const uint32_t ne02 = src0->ne[2];                   \
+    const uint32_t ne03 = src0->ne[3];                   \
+                                                         \
+    const uint32_t nb00 = src0->nb[0];                   \
+    const uint32_t nb01 = src0->nb[1];                   \
+    const uint32_t nb02 = src0->nb[2];                   \
+    const uint32_t nb03 = src0->nb[3];                   \
+                                                         \
+    const uint32_t ne10 = src1 ? src1->ne[0] : 0;        \
+    const uint32_t ne11 = src1 ? src1->ne[1] : 0;        \
+    const uint32_t ne12 = src1 ? src1->ne[2] : 0;        \
+    const uint32_t ne13 = src1 ? src1->ne[3] : 0;        \
+                                                         \
+    const uint32_t nb10 = src1 ? src1->nb[0] : 0;        \
+    const uint32_t nb11 = src1 ? src1->nb[1] : 0;        \
+    const uint32_t nb12 = src1 ? src1->nb[2] : 0;        \
+    const uint32_t nb13 = src1 ? src1->nb[3] : 0;        \
+                                                         \
+    const uint32_t ne0 = dst->ne[0];                     \
+    const uint32_t ne1 = dst->ne[1];                     \
+    const uint32_t ne2 = dst->ne[2];                     \
+    const uint32_t ne3 = dst->ne[3];                     \
+                                                         \
+    const uint32_t nb0 = dst->nb[0];                     \
+    const uint32_t nb1 = dst->nb[1];                     \
+    const uint32_t nb2 = dst->nb[2];                     \
     const uint32_t nb3 = dst->nb[3];
 
 struct htp_act_context {
@@ -97,10 +80,7 @@ struct htp_act_context {
 
 static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = actx->octx->src[0];
-    const struct htp_tensor * src1 = actx->octx->src[1];
-    const struct htp_tensor * dst  = actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     size_t src0_row_size = actx->src0_row_size;
     size_t src1_row_size = actx->src1_row_size;
@@ -207,10 +187,7 @@ static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = actx->octx->src[0];
-    const struct htp_tensor * src1 = actx->octx->src[1];
-    const struct htp_tensor * dst  = actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -332,9 +309,7 @@ static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, vo
 
 static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = actx->octx->src[0];
-    const struct htp_tensor * dst  = actx->octx->dst;
-    htp_act_preamble2;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -433,9 +408,7 @@ static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void unary_silu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = actx->octx->src[0];
-    const struct htp_tensor * dst  = actx->octx->dst;
-    htp_act_preamble2;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -533,10 +506,7 @@ static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
 static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = actx->octx->src[0];
-    const struct htp_tensor * src1 = actx->octx->src[1];
-    const struct htp_tensor * dst  = actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     size_t src0_row_size = actx->src0_row_size;
     size_t src1_row_size = actx->src1_row_size;
