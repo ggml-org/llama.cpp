@@ -1673,7 +1673,7 @@ struct ggml_hexagon_opbatch {
 
         // Add new tensor to the batch
         int ti = n_tens++;
-        GGML_ASSERT(n_tens < n_tens_max);
+        GGML_ASSERT(n_tens <= n_tens_max);
 
         t_map.insert({t,       ti});
         d_map.insert({t->data, ti});
@@ -1737,7 +1737,7 @@ struct ggml_hexagon_opbatch {
     void add_op(htp_op_code opcode, const struct ggml_tensor * t) {
         // Add new op
         htp_op_req &o = ops[n_ops++];
-        GGML_ASSERT(n_ops < n_ops_max);
+        GGML_ASSERT(n_ops <= n_ops_max);
 
         memcpy(&o.params, &t->op_params, sizeof(t->op_params));
         o.opcode = opcode;
