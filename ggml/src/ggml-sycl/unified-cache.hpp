@@ -43,13 +43,14 @@ bool vram_arena_enabled();
 
 // === VRAM Arena: zone-based sub-allocator for a single pre-allocated VRAM block ===
 //
-// Layout (left-to-right within arena):
-//   [Compute zone (bump→)] [KV zone (bump→)] ... [Weight zone (←bump from end)]
+// Layout (within arena):
+//   [KV (bump->) ...free... (<-bump WEIGHT)] [ONEDNN] [RUNTIME] [SCRATCH (bump->)]
 //
-// Compute zone: bump-right, reset between tokens (arena_reset semantics).
-// KV zone: bump-right, grows as context fills.
-// Weight zone: bump-LEFT from arena end, with free-list for eviction reclaim.
-// oneDNN scratch: carved from a fixed region between KV and Weight zones.
+// KV zone: bump-right, grows as context fills. Shared region with Weight.
+// Weight zone: bump-LEFT from shared region end, with free-list for eviction reclaim.
+// ONEDNN zone: persistent oneDNN scratchpad workspace.
+// RUNTIME zone: persistent ggml compute buffers (allocated at context creation).
+// SCRATCH zone: ephemeral pool_leg per-op scratch, reset between graph_compute calls.
 
 enum class vram_zone_id : uint8_t {
     KV       = 0,  // KV cache, bump-right, grows with context

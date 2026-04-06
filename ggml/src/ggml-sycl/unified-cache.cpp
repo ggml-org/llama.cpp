@@ -9557,6 +9557,9 @@ void unified_cache::arena_free(void * ptr, size_t size) {
     const size_t off = static_cast<uint8_t *>(ptr)
                      - static_cast<uint8_t *>(compute_arena_ptr_);
 
+    // LIFO reclaim assumes single-threaded access: pool_leg processes graph
+    // nodes sequentially on one compute stream per device.  If concurrent
+    // arena_alloc/arena_free is ever needed, replace with compare_exchange.
     // LIFO reclaim: if this was the last allocation, rewind the bump pointer.
     if (off == last_arena_alloc_off_.load(std::memory_order_relaxed) &&
         aligned == last_arena_alloc_size_.load(std::memory_order_relaxed)) {

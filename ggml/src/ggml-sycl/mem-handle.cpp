@@ -63,7 +63,10 @@ mem_handle mem_handle::from_arena_zone(int zone_id, size_t offset, size_t size,
         case static_cast<int>(vram_zone_id::RUNTIME): h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;
         case static_cast<int>(vram_zone_id::SCRATCH): h.kind_ = mem_handle_kind::ARENA_SCRATCH; break;
         case static_cast<int>(vram_zone_id::ONEDNN):  h.kind_ = mem_handle_kind::ARENA_ONEDNN;  break;
-        default: h.kind_ = mem_handle_kind::ARENA_RUNTIME; break;
+        default:
+            GGML_LOG_WARN("[MEM-HANDLE] from_arena_zone: unexpected zone_id %d, defaulting to ARENA_RUNTIME\n", zone_id);
+            h.kind_ = mem_handle_kind::ARENA_RUNTIME;
+            break;
     }
     h.device_    = device_id;
     h.zone_id_   = zone_id;
