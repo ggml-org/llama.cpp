@@ -81,7 +81,7 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 #define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 32u
 #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
-#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           5000u
+#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES             128  // enough for 32 parameters
 #define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES     4
