@@ -24,16 +24,13 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_MXFP4:
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
-<<<<<<< HEAD
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
-=======
         case GGML_TYPE_TQ3_0:
             mul_mat_q_case<GGML_TYPE_TQ3_0>(ctx, args, stream);
             break;
         case GGML_TYPE_TQ3_1S:
             mul_mat_q_case<GGML_TYPE_TQ3_1S>(ctx, args, stream);
->>>>>>> 90cf6bf81 (release: tq3_1s runtime for 27b on 16gb)
             break;
         case GGML_TYPE_TQ3_4S:
             mul_mat_q_case<GGML_TYPE_TQ3_4S>(ctx, args, stream);
