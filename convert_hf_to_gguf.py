@@ -10574,13 +10574,31 @@ class GptOssModel(TextModel):
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
-    def _add_feed_forward_length(self):
-        ff_dim = self.hparams["block_ff_dim"]
+    def _lfm2_config_value(self, key: str):
+        value = self.hparams.get(key)
+        if value is not None:
+            return value
 
-        auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
-        ff_dim = self.hparams["block_ff_dim"]
-        ffn_dim_multiplier = self.hparams["block_ffn_dim_multiplier"]
-        multiple_of = self.hparams["block_multiple_of"]
+        config_path = self.dir_model / "config.json"
+        if config_path.is_file():
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return config.get(key)
+
+        return None
+
+    def _add_feed_forward_length(self):
+        ff_dim = self._lfm2_config_value("block_ff_dim")
+        auto_adjust_ff_dim = self._lfm2_config_value("block_auto_adjust_ff_dim")
+        ffn_dim_multiplier = self._lfm2_config_value("block_ffn_dim_multiplier")
+        multiple_of = self._lfm2_config_value("block_multiple_of")
+
+        if ff_dim is None:
+            raise KeyError("missing LFM2 block_ff_dim")
+        if auto_adjust_ff_dim is None:
+            raise KeyError("missing LFM2 block_auto_adjust_ff_dim")
+        if multiple_of is None:
+            raise KeyError("missing LFM2 block_multiple_of")
 
         if auto_adjust_ff_dim:
             ff_dim = int(2 * ff_dim / 3)
