@@ -1580,13 +1580,16 @@ struct ggml_hexagon_opbatch {
     std::vector<htp_tensor> tensors;
     std::vector<htp_op_req> ops;
 
-    std::unordered_map<int, int>                b_map; // buffer fd  to index
-    std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr to index
+    std::unordered_map<int, int>                b_map; // buffer fd   to index
+    std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
+    std::unordered_multimap<void*, int>         d_map; // tensor data to index
 
     unsigned int n_bufs;
     unsigned int n_tens;
     unsigned int n_ops;
-    unsigned int max_batch;
+
+    unsigned int n_ops_max;
+    unsigned int n_tens_max;
 
     void reset() {
         n_bufs = 0;
@@ -1595,37 +1598,41 @@ struct ggml_hexagon_opbatch {
 
         b_map.clear();
         t_map.clear();
+        d_map.clear();
     }
 
     ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t max_batch) {
         name = sess->c_name();
      
-        this->max_batch = max_batch;
+        n_ops_max  = max_batch;
 
-        n_bufs = HTP_OP_MAX_BUFS;
-        n_ops  = max_batch;
-        n_tens = n_ops + n_ops * HTP_OP_MAX_INPUTS;
+        n_bufs     = HTP_OP_MAX_BUFS;
+        n_ops_max  = max_batch;
+        n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;
 
         buffers.resize(n_bufs);
-        tensors.resize(n_tens);
-        ops.resize(n_ops);
+        tensors.resize(n_tens_max);
+        ops.resize(n_ops_max);
 
         b_map.reserve(n_bufs);
-        t_map.reserve(n_tens);
+        t_map.reserve(n_tens_max);
+        d_map.reserve(n_tens_max);
 
         reset();
     }
 
     bool empty() const { return n_ops == 0; }
-    bool full()  const { return n_ops == max_batch; }
+    bool full()  const { return n_tens == n_tens_max || n_ops == n_ops_max; }
 
     // add buffer and return its index
     int add_buffer(ggml_hexagon_shared_buffer * sbuf) {
-        auto p = b_map.find(sbuf->fd);
-        if (p != b_map.end()) { return p->second; }
+        // Lookup by fd
+        auto it = b_map.find(sbuf->fd);
+        if (it != b_map.end()) { return it->second; }
 
+        // Add new buffer to the batch
         int bi = n_bufs++;
-        GGML_ASSERT(n_bufs < HTP_OP_MAX_BUFS); // TODO: better error handling
+        GGML_ASSERT(n_bufs < HTP_OP_MAX_BUFS);
 
         b_map.insert({sbuf->fd, bi});
 
@@ -1639,17 +1646,32 @@ struct ggml_hexagon_opbatch {
         return bi;
     }
 
+    bool same_shape(const htp_tensor * h, const ggml_tensor * t) const {
+        return (h->ne[0] == t->ne[0]) && (h->ne[1] == t->ne[1]) && (h->ne[2] == t->ne[2]) && (h->ne[3] == t->ne[3]) &&
+               (h->nb[0] == t->nb[0]) && (h->nb[1] == t->nb[1]) && (h->nb[2] == t->nb[2]) && (h->nb[3] == t->nb[3]);
+    }
+
     // add tensor and return its index
     int add_tensor(const ggml_tensor * t) {
         auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
 
-        auto p = t_map.find(t);
-        if (p != t_map.end()) { return p->second; }
+        // First lookup by tensor data
+        auto range = d_map.equal_range(t->data);
+        for (auto it = range.first; it != range.second; ++it) {
+            htp_tensor * h = &tensors[it->second];
+            if (same_shape(h, t)) { return it->second; }
+        }
 
+        // Lookup by tensor ptr
+        auto it = t_map.find(t);
+        if (it != t_map.end()) { return it->second; }
+
+        // Add new tensor to the batch
         int ti = n_tens++;
-        GGML_ASSERT(n_tens < HTP_OP_MAX_TENSORS); // TODO: better error handling
+        GGML_ASSERT(n_tens < n_tens_max);
 
         t_map.insert({t, ti});
+        d_map.insert({t->data, ti});
 
         uint64_t t_offset = (uint8_t *) t->data - sbuf->base;
         size_t   t_size   = ggml_nbytes(t);
@@ -1676,7 +1698,10 @@ struct ggml_hexagon_opbatch {
 
     // returns true when full
     bool add_op(htp_op_code opcode, const struct ggml_tensor * t) {
+        // Add new op
         htp_op_req &o = ops[n_ops++];
+        GGML_ASSERT(n_ops < n_ops_max);
+
         memcpy(&o.params, &t->op_params, sizeof(t->op_params));
         o.opcode = opcode;
         o.flags  = 0;
@@ -1715,7 +1740,7 @@ struct ggml_hexagon_opbatch {
         memcpy(t_ptr, (void *) tensors.data(), t_size);
         memcpy(o_ptr, (void *) ops.data(),     o_size);
 
-        HEX_VERBOSE("ggml-hex: %s op-batch-flush : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
+        HEX_VERBOSE("ggml-hex: %s flush-op-batch : n-bufs %u n-tensors %u n-ops %u : b-size %zu t-size %zu o-size %zu\n",
                 name, n_bufs, n_tens, n_ops, b_size, t_size, o_size);
 
         if (opt_verbose > 1) {
