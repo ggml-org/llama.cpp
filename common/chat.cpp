@@ -1732,17 +1732,7 @@ struct gemma4_model_turn_builder {
     void collect_result(const json & curr) {
         json response;
         if (curr.contains("content")) {
-            const auto & content = curr.at("content");
-            if (content.is_string()) {
-                // Try to parse the content as JSON; fall back to raw string
-                try {
-                    response = json::parse(content.get<std::string>());
-                } catch (...) {
-                    response = content;
-                }
-            } else {
-                response = content;
-            }
+            response = curr.at("content");
         }
 
         std::string name;
