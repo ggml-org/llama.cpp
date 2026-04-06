@@ -10542,10 +10542,10 @@ static void ggml_sycl_preload_model_weights() {
                             s1_in_flight.front().wait();
                             s1_in_flight.pop_front();
                             s1_drain_count++;
+                            ggml_sycl_watchdog_heartbeat();
                             if (s1_drain_count % s1_max_in_flight == 0) {
                                 cache->finalize_pending_fills();
                                 cache->process_deferred_frees_public();
-                                ggml_sycl_watchdog_heartbeat();
                             }
                         }
                     }
@@ -46952,13 +46952,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
     ggml_backend_sycl_device_context * sycl_ctx = (ggml_backend_sycl_device_context *) dev->context;
     int                                device   = sycl_ctx->device;
 
-    // When the VRAM arena is active, claim support for ALL ops to prevent the
-    // ggml backend scheduler from splitting tensors to the CPU backend (which
-    // uses regular malloc, producing non-USM pointers that oneDNN rejects).
-    // The SYCL backend handles unsupported ops internally via cpu_fallback_graph.
-    if (ggml_sycl::vram_arena_enabled()) {
-        return true;
-    }
+    // NOTE: When VRAM arena is active, the ggml scheduler may still place some
+    // attention intermediates on the CPU backend.  The proper fix is to eliminate
+    // ensure_cached_layout and have the arena manage all buffer allocation directly.
+    // See llama.cpp-b6y89 for the remaining PP512 fix.
 
     switch (op->op) {
         case GGML_OP_CONV_TRANSPOSE_1D:
