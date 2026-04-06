@@ -30,10 +30,205 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #endif
 
 namespace fs = std::filesystem;
 
+// Result from running a user shell command (! prefix)
+struct user_command_result {
+    std::string output;
+    int exit_code;
+};
+
+static user_command_result run_user_command(const std::string & command,
+                                            const std::string & working_dir,
+                                            std::atomic<bool> & is_interrupted) {
+    user_command_result result;
+    result.exit_code = 0;
+
+    static const size_t MAX_CONTEXT_LENGTH = 100000;
+
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+        result.output = "[Failed to create pipe]\n";
+        result.exit_code = 1;
+        return result;
+    }
+
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si = {sizeof(STARTUPINFOA)};
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    PROCESS_INFORMATION pi;
+    std::string cmd_line = "cmd /c " + command;
+
+    if (!CreateProcessA(NULL, (LPSTR)cmd_line.c_str(), NULL, NULL, TRUE,
+                        CREATE_NO_WINDOW, NULL, working_dir.c_str(), &si, &pi)) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        result.output = "[Failed to create process]\n";
+        result.exit_code = 1;
+        return result;
+    }
+
+    CloseHandle(hWritePipe);
+
+    char buffer[4096];
+    DWORD bytesRead;
+
+    while (true) {
+        if (is_interrupted.load()) {
+            TerminateProcess(pi.hProcess, 1);
+            break;
+        }
+
+        DWORD available = 0;
+        PeekNamedPipe(hReadPipe, NULL, 0, NULL, &available, NULL);
+        if (available == 0) {
+            DWORD wait_result = WaitForSingleObject(pi.hProcess, 100);
+            if (wait_result == WAIT_OBJECT_0) break;
+            continue;
+        }
+
+        if (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            fwrite(buffer, 1, bytesRead, stdout);
+            fflush(stdout);
+            result.output.append(buffer, bytesRead);
+            if (result.output.size() > MAX_CONTEXT_LENGTH * 2) {
+                result.output.erase(0, result.output.size() - MAX_CONTEXT_LENGTH);
+            }
+        }
+    }
+
+    DWORD exitCodeDword;
+    GetExitCodeProcess(pi.hProcess, &exitCodeDword);
+    result.exit_code = (int)exitCodeDword;
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(hReadPipe);
+
+#else
+    int pipe_fd[2];
+    if (pipe(pipe_fd) == -1) {
+        result.output = "[Failed to create pipe]\n";
+        result.exit_code = 1;
+        return result;
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        result.output = "[Failed to fork process]\n";
+        result.exit_code = 1;
+        return result;
+    }
+
+    if (pid == 0) {
+        // Child process
+        close(pipe_fd[0]);
+        dup2(pipe_fd[1], STDOUT_FILENO);
+        dup2(pipe_fd[1], STDERR_FILENO);
+        close(pipe_fd[1]);
+
+        if (chdir(working_dir.c_str()) != 0) {
+            _exit(127);
+        }
+
+        execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
+        _exit(127);
+    }
+
+    // Parent process
+    close(pipe_fd[1]);
+
+    // Set non-blocking read
+    int flags = fcntl(pipe_fd[0], F_GETFL, 0);
+    fcntl(pipe_fd[0], F_SETFL, flags | O_NONBLOCK);
+
+    char buffer[4096];
+    bool child_reaped = false;
+
+    while (true) {
+        if (is_interrupted.load()) {
+            kill(pid, SIGKILL);
+            break;
+        }
+
+        ssize_t n = read(pipe_fd[0], buffer, sizeof(buffer) - 1);
+        if (n > 0) {
+            buffer[n] = '\0';
+            fwrite(buffer, 1, n, stdout);
+            fflush(stdout);
+            result.output.append(buffer, n);
+            if (result.output.size() > MAX_CONTEXT_LENGTH * 2) {
+                result.output.erase(0, result.output.size() - MAX_CONTEXT_LENGTH);
+            }
+        } else if (n == 0) {
+            // EOF
+            break;
+        } else {
+            // EAGAIN - no data available
+            int status;
+            pid_t wp = waitpid(pid, &status, WNOHANG);
+            if (wp == pid) {
+                // Process ended, read remaining data
+                while ((n = read(pipe_fd[0], buffer, sizeof(buffer) - 1)) > 0) {
+                    buffer[n] = '\0';
+                    fwrite(buffer, 1, n, stdout);
+                    fflush(stdout);
+                    result.output.append(buffer, n);
+                    if (result.output.size() > MAX_CONTEXT_LENGTH * 2) {
+                        result.output.erase(0, result.output.size() - MAX_CONTEXT_LENGTH);
+                    }
+                }
+                result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+                child_reaped = true;
+                break;
+            }
+            usleep(10000);  // 10ms
+        }
+    }
+
+    close(pipe_fd[0]);
+
+    // Wait for child if not already done
+    if (!child_reaped) {
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status)) {
+            result.exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            result.exit_code = 128 + WTERMSIG(status);
+        }
+    }
+#endif
+
+    // Truncate to max context length (keep tail)
+    if (result.output.size() > MAX_CONTEXT_LENGTH) {
+        result.output = result.output.substr(result.output.size() - MAX_CONTEXT_LENGTH);
+        size_t nl = result.output.find('\n');
+        if (nl != std::string::npos && nl < 200) {
+            result.output = result.output.substr(nl + 1);
+        }
+        result.output = "[output truncated]\n" + result.output;
+    }
+
+    return result;
+}
 
 const char * LLAMA_AGENT_LOGO = R"(
     ____                                                   __
@@ -484,6 +679,8 @@ int main(int argc, char ** argv) {
         console::log("  /tools      list available tools\n");
         console::log("  /skills     list available skills\n");
         console::log("  /agents     list discovered AGENTS.md files\n");
+        console::log("  !<cmd>      run a shell command (output shared with LLM)\n");
+        console::log("  !!<cmd>     run a shell command (output hidden from LLM)\n");
         console::log("  ESC/Ctrl+C  abort generation\n");
         console::log("\n");
     }
@@ -528,6 +725,54 @@ int main(int argc, char ** argv) {
 
             // Skip empty input
             if (buffer.empty()) {
+                continue;
+            }
+
+            // Handle ! prefix: run shell command
+            if (buffer[0] == '!') {
+                bool exclude_from_context = (buffer.size() >= 2 && buffer[1] == '!');
+                size_t cmd_start = exclude_from_context ? 2 : 1;
+                std::string cmd = buffer.substr(cmd_start);
+
+                // Trim leading whitespace
+                size_t first = cmd.find_first_not_of(" \t");
+                if (first == std::string::npos) {
+                    console::log("Usage: !<command> or !!<command>\n");
+                    continue;
+                }
+                cmd = cmd.substr(first);
+
+                console::set_display(DISPLAY_TYPE_PROMPT);
+                console::log("\n$ %s\n", cmd.c_str());
+                console::set_display(DISPLAY_TYPE_RESET);
+                g_is_interrupted.store(false);
+                auto cmd_result = run_user_command(cmd, working_dir, g_is_interrupted);
+
+                // Ensure output ends with newline for clean display
+                if (!cmd_result.output.empty() && cmd_result.output.back() != '\n') {
+                    fwrite("\n", 1, 1, stdout);
+                }
+
+                if (cmd_result.exit_code != 0) {
+                    console::set_display(DISPLAY_TYPE_ERROR);
+                    console::log("[exit code: %d]\n", cmd_result.exit_code);
+                    console::set_display(DISPLAY_TYPE_RESET);
+                }
+
+                if (g_is_interrupted.load()) {
+                    console::log("[interrupted]\n");
+                    g_is_interrupted.store(false);
+                }
+
+                // Inject into LLM context (single ! only)
+                if (!exclude_from_context) {
+                    std::string context = "[user executed shell command]\n$ " + cmd + "\n" + cmd_result.output;
+                    if (cmd_result.exit_code != 0) {
+                        context += "[exit code: " + std::to_string(cmd_result.exit_code) + "]\n";
+                    }
+                    agent.add_context_message("user", context);
+                }
+
                 continue;
             }
 

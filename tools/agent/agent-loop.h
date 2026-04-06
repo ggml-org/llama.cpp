@@ -190,6 +190,10 @@ public:
     // Clear conversation history
     void clear();
 
+    // Add a message to the conversation history without triggering generation.
+    // Used by the REPL for injecting user-executed shell command output (! prefix).
+    void add_context_message(const std::string & role, const std::string & content);
+
     // Get current messages (for debugging)
     const json & get_messages() const { return messages_; }
 

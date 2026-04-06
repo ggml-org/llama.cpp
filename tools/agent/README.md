@@ -145,6 +145,8 @@ Interactive commands available during a session. Type these directly in the chat
 | `/skills` | List available skills |
 | `/agents` | List discovered AGENTS.md files |
 | `/stats` | Show token usage and timing statistics |
+| `!<cmd>` | Run a shell command and share the output with the LLM |
+| `!!<cmd>` | Run a shell command without sharing output with the LLM |
 
 ## Usage Examples
 

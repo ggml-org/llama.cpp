@@ -455,6 +455,13 @@ void agent_loop::clear() {
     stats_ = session_stats{};
 }
 
+void agent_loop::add_context_message(const std::string & role, const std::string & content) {
+    messages_.push_back({{"role", role}, {"content", content}});
+    if (session_file_) {
+        session_file_->append_message(messages_.back());
+    }
+}
+
 json agent_loop::build_oai_request_body(const std::vector<common_chat_tool> & chat_tools,
                                         bool has_vision) {
     // Deep copy messages so we don't mutate the canonical messages_.
