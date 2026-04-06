@@ -155,8 +155,8 @@ struct server_slot {
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
 
-    double t_prompt_processing; // ms
-    double t_token_generation;  // ms
+    double t_prompt_processing = 0.0; // ms
+    double t_token_generation = 0.0;  // ms
 
     std::function<void(int /* id_slot */)> callback_on_release;
 
@@ -605,6 +605,17 @@ private:
         llama_batch_free(batch);
     }
 
+    void slot_save_and_clear(server_slot & slot) {
+        if (slot.prompt.n_tokens() == 0) {
+            return;
+        }
+        SLT_INF(slot, "%s", "saving idle slot to prompt cache\n");
+        SLT_DBG(slot, "%s", "__TEST_TAG_CLEAR_IDLE_SLOT__\n");
+        slot.prompt_save(*prompt_cache);
+        slot.prompt_clear(false);
+        prompt_cache->update();
+    }
+
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
@@ -864,6 +875,19 @@ private:
 
         metrics.init();
 
+        if (params_base.clear_idle) {
+            if (!params_base.kv_unified) {
+                SRV_WRN("%s: --clear-idle requires --kv-unified, disabling\n", __func__);
+                params_base.clear_idle = false;
+            } else if (params_base.cache_ram_mib == 0) {
+                SRV_WRN("%s: --clear-idle requires --cache-ram, disabling\n", __func__);
+                params_base.clear_idle = false;
+            } else {
+                SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
+                SRV_DBG("%s", "__TEST_TAG_CLEAR_IDLE_ENABLED__\n");
+            }
+        }
+
         // populate webui settings
         {
             if (!params_base.webui_config_json.empty()) {
@@ -1010,15 +1034,15 @@ private:
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
-            // don't update the cache if the slot's context is empty
-            update_cache = update_cache && tokens.size() > 0;
-
             if (update_cache) {
                 SRV_WRN("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
-                ret->prompt_save(*prompt_cache);
+                // don't save the slot's state if its context is empty
+                if (tokens.size() > 0) {
+                    ret->prompt_save(*prompt_cache);
+                }
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear(false);
@@ -1692,9 +1716,7 @@ private:
                     const int id_slot = task.id_slot;
                     const int id_task = task.id;
 
-                    server_slot * slot = id_slot != -1
-                                            ? get_slot_by_id(id_slot)
-                                            : get_available_slot(task);
+                    server_slot * slot = id_slot != -1 ? get_slot_by_id(id_slot) : get_available_slot(task);
 
                     //
                     // slot scheduling logic
@@ -1730,6 +1752,14 @@ private:
                     } else if (!launch_slot_with_task(*slot, std::move(task))) {
                         SRV_ERR("failed to launch slot with task, id_task = %d\n", id_task);
                         break; // drop the task
+                    }
+
+                    if (params_base.clear_idle) {
+                        for (auto & s : slots) {
+                            if (!s.is_processing()) {
+                                slot_save_and_clear(s);
+                            }
+                        }
                     }
                 } break;
             case SERVER_TASK_TYPE_CANCEL:
