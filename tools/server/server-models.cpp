@@ -532,6 +532,32 @@ void server_models::load(const std::string & name) {
     }
     unload_lru();
 
+    // if only_one_model is set, unload the currently loaded model (if any)
+    if (base_params.only_one_model) {
+        std::string model_to_unload;
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            for (const auto & [model_name, inst] : mapping) {
+                if (model_name != name && inst.meta.is_running()) {
+                    model_to_unload = model_name;
+                    break;
+                }
+            }
+        }
+        if (!model_to_unload.empty()) {
+            SRV_INF("only_one_model is set, unloading model %s before loading %s\n", model_to_unload.c_str(), name.c_str());
+            unload(model_to_unload);
+            // wait for unload to complete
+            {
+                std::unique_lock<std::mutex> lk(mutex);
+                cv.wait(lk, [this, &model_to_unload]() {
+                    auto it = mapping.find(model_to_unload);
+                    return it != mapping.end() && it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
+                });
+            }
+        }
+    }
+
     std::lock_guard<std::mutex> lk(mutex);
 
     auto meta = mapping[name].meta;
