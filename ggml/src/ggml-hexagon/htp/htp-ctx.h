@@ -19,7 +19,6 @@ struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t age;
     uint32_t pinned;
 };
 
@@ -41,8 +40,6 @@ struct htp_context {
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
     size_t                 vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
-
-    uint32_t               opmask;
 };
 
 #endif /* HTP_CTX_H */

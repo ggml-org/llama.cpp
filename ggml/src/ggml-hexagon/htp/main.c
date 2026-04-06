@@ -181,7 +181,6 @@ AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t
             m->base   = (uint64_t) va;
             m->fd     = fd;
             m->size   = size;
-            m->age    = 0;
             m->pinned = pinned;
 
             return AEE_SUCCESS;
@@ -495,50 +494,79 @@ static void execute_op(struct htp_ops_context * octx) {
     }
 }
 
-static void prep_op_buf(struct htp_context *ctx, uint32_t idx, struct htp_op_buf *b) {
-    FARF(HIGH, "prep-buf #%u : fd %u size %u flags 0x%x", idx, b->fd, (uint32_t) b->size, b->flags);
-
+static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_op_buf *b) {
     b->base = NULL;
 
-    // See if the buffer is already mapped
-    // Age mapings and find the oldest as we go
-    struct htp_mmap *o_mm = ctx->mmap;
-    uint32_t        o_age = 0;
-
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
-        struct htp_mmap *m = &ctx->mmap[i];
-        if (m->fd == b->fd) {
-            b->base = m->base;
-            m->age  = 0;
-        } else {
-            if (!m->pinned && ++m->age > o_age) {
-                o_age = m->age;
-                o_mm  = m;
-            }
+        struct htp_mmap *m = ctx->mmap + i;
+        if (m->size && m->fd == b->fd) {
+            b->base   = m->base;
+            *m_reuse |= (1 << i);
+            return true;
         }
     }
 
-    if (!b->base) {
-        // New buffer, add to mappings
-        struct htp_mmap *m = o_mm;
-        if (m->size) {
-            // Replacing an older entry, unmap first
-            HAP_munmap2((void *) m->base, m->size);
+    return false;
+}
+
+static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
+    if (m->size && !m->pinned) {
+        FARF(HIGH, "unmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+        HAP_munmap2((void *) m->base, m->size);
+        m->size = 0;
+        m->base = 0;
+        m->fd   = -1;
+    }
+}
+
+static inline void mmap_buf(struct htp_context *ctx, struct htp_op_buf *b) {
+    if (b->base) return;
+
+    // find unused mapping
+    for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
+        struct htp_mmap *m = &ctx->mmap[i];
+        if (!m->size) {
+            void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
+            if (va == (void*)-1) {
+                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, b->fd, (uint32_t) b->size);
+                abort(); // can't do much else at this point
+            }
+
+            m->base   = b->base = (uint64_t) va;
+            m->fd     = b->fd;
+            m->size   = b->size;
+            m->pinned = 0;
+
+            FARF(HIGH, "mmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+            return;
         }
+    }
+}
 
-        FARF(HIGH, "mmap : fd %u size %u", b->fd, (uint32_t) b->size);
+static void prep_op_bufs(struct htp_context *ctx, struct htp_op_buf *bufs, uint32_t n_bufs) {
+    uint32_t m_reuse = 0;
+    uint32_t n_reuse = 0;
 
-        void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
-        if (va == (void*)-1) {
-            FARF(ERROR, "mmap failed : va %p fd %u size %u", va, b->fd, (uint32_t) b->size);
-            abort(); // can't do much else at this point
-        }
+    // See what we can reuse
+    for (uint32_t i=0; i < n_bufs; i++) {
+        struct htp_op_buf *b = bufs + i;
+        if (reuse_buf(ctx, &m_reuse, b)) { n_reuse++; }
+        FARF(HIGH, "prep-buf #%u : fd %u base %p size %u flags 0x%x (pass0)", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+    }
 
-        m->base   = b->base = (uint64_t) va;
-        m->fd     = b->fd;
-        m->size   = b->size;
-        m->age    = 0;
-        m->pinned = 0;
+    if (n_reuse == n_bufs) return;
+
+    // Drop unused mappings
+    for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
+        bool used = m_reuse & (1<<i);
+        if (!used) { drop_mmap(ctx, ctx->mmap + i); }
+    }
+
+    // Create missing mappings
+    for (uint32_t i=0; i < n_bufs; i++) {
+        struct htp_op_buf *b = bufs + i;
+        mmap_buf(ctx, b);
+        FARF(HIGH, "prep-buf #%u : fd %u base %p size %u flags 0x%x (pass1)", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
     }
 }
 
@@ -551,6 +579,12 @@ static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32
 
     FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
+}
+
+static void prep_tensors(struct htp_context *ctx, struct htp_op_buf *bufs, struct htp_tensor *tens, uint32_t n_tens) {
+    for (uint32_t i=0; i < n_tens; i++) {
+        prep_tensor(ctx, bufs, i, tens + i);
+    }
 }
 
 static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_req * op) {
@@ -639,16 +673,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         struct htp_tensor* tens = (struct htp_tensor*) m_ptr; m_ptr += t_size;
         struct htp_op_req*  ops = (struct htp_op_req*) m_ptr;
 
-        FARF(HIGH, "processing opreq batch: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u",
+        FARF(HIGH, "processing opbatch: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u",
                 n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
 
-        for (uint32_t i=0; i < n_bufs; i++) {
-            prep_op_buf(ctx, i, &bufs[i]);
-        }
-
-        for (uint32_t i=0; i < n_tens; i++) {
-            prep_tensor(ctx, bufs, i, &tens[i]);
-        }
+        prep_op_bufs(ctx, bufs, n_bufs);
+        prep_tensors(ctx, bufs, tens, n_tens);
 
         vtcm_acquire(ctx);
 
