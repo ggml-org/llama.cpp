@@ -39,7 +39,6 @@ struct htp_context {
     size_t                 vtcm_size;
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
-    size_t                 vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
 };
 
 #endif /* HTP_CTX_H */

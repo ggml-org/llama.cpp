@@ -309,15 +309,8 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     }
 
 #ifdef HTP_HAS_HMX
-    if (use_hmx) {
-        ctx->hmx_enabled       = 1;
-        ctx->vtcm_scratch_size = ctx->vtcm_size;
-        FARF(HIGH, "HMX enabled: vtcm-scratch %zu", ctx->vtcm_scratch_size);
-    } else {
-        ctx->hmx_enabled       = 0;
-        ctx->vtcm_scratch_size = ctx->vtcm_size;
-        FARF(HIGH, "HMX disabled (use_hmx=0)");
-    }
+    ctx->hmx_enabled = use_hmx;
+    FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
 #endif
 
     qurt_sysenv_max_hthreads_t hw_threads;
