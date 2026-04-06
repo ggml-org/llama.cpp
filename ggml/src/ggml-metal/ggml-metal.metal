@@ -202,6 +202,23 @@ void dequantize_q4_0_t4(device const block_q4_0 * xb, short il, thread type4 & r
     }
 }
 
+void quantize_q1_0(device const float * src, device block_q1_0 & dst) {
+    float sum_abs = 0.0f;
+    for (int j = 0; j < QK1_0; j++) {
+        sum_abs += fabs(src[j]);
+    }
+    dst.d = sum_abs / QK1_0;
+
+    for (int j = 0; j < QK1_0 / 8; j++) {
+        dst.qs[j] = 0;
+    }
+    for (int j = 0; j < QK1_0; j++) {
+        if (src[j] >= 0.0f) {
+            dst.qs[j / 8] |= (1 << (j % 8));
+        }
+    }
+}
+
 void quantize_q4_0(device const float * src, device block_q4_0 & dst) {
 #pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
@@ -7298,6 +7315,7 @@ kernel void kernel_cpy_f32_q(
 typedef decltype(kernel_cpy_f32_q<QK8_0,  block_q8_0,  quantize_q8_0>)  cpy_f_q_t;
 
 template [[host_name("kernel_cpy_f32_q8_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK8_0,  block_q8_0,   quantize_q8_0>;
+template [[host_name("kernel_cpy_f32_q1_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK1_0,  block_q1_0,   quantize_q1_0>;
 template [[host_name("kernel_cpy_f32_q4_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK4_0,  block_q4_0,   quantize_q4_0>;
 template [[host_name("kernel_cpy_f32_q4_1")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK4_1,  block_q4_1,   quantize_q4_1>;
 template [[host_name("kernel_cpy_f32_q5_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK5_0,  block_q5_0,   quantize_q5_0>;
