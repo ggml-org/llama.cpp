@@ -1394,7 +1394,11 @@ static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
     return sum * d * ds8.x;
 }
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1200
+#define VDR_TQ3_4S_Q8_1_MMVQ 16
+#else
 #define VDR_TQ3_4S_Q8_1_MMVQ 4
+#endif
 static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
