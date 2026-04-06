@@ -1545,6 +1545,18 @@ bool agent_loop::try_compact() {
         return false;
     }
 
+    return do_compact(effective_keep);
+}
+
+bool agent_loop::compact() {
+    int32_t ctx_size = server_ctx_.get_meta().slot_n_ctx;
+    int32_t effective_keep = (ctx_size > 0)
+        ? std::min(config_.compaction.keep_recent_tokens, ctx_size / 3)
+        : config_.compaction.keep_recent_tokens;
+    return do_compact(effective_keep);
+}
+
+bool agent_loop::do_compact(int32_t effective_keep) {
     size_t cut_idx = compaction_find_cut_point(messages_, effective_keep);
     if (cut_idx <= 1) {
         return false; // nothing to summarize (only system prompt before cut)

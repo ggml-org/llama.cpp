@@ -679,6 +679,7 @@ int main(int argc, char ** argv) {
         console::log("  /tools      list available tools\n");
         console::log("  /skills     list available skills\n");
         console::log("  /agents     list discovered AGENTS.md files\n");
+        console::log("  /compact    manually compact conversation context\n");
         console::log("  !<cmd>      run a shell command (output shared with LLM)\n");
         console::log("  !!<cmd>     run a shell command (output hidden from LLM)\n");
         console::log("  ESC/Ctrl+C  abort generation\n");
@@ -783,6 +784,15 @@ int main(int argc, char ** argv) {
             if (buffer == "/clear") {
                 agent.clear();
                 console::log("Conversation cleared.\n");
+                continue;
+            }
+            if (buffer == "/compact") {
+                console::log("\nCompacting...\n");
+                if (agent.compact()) {
+                    console::log("Context compacted.\n");
+                } else {
+                    console::log("Nothing to compact (conversation too short).\n");
+                }
                 continue;
             }
             if (buffer == "/tools") {

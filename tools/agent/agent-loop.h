@@ -194,6 +194,10 @@ public:
     // Used by the REPL for injecting user-executed shell command output (! prefix).
     void add_context_message(const std::string & role, const std::string & content);
 
+    // Force context compaction regardless of threshold.
+    // Returns true if compaction was performed.
+    bool compact();
+
     // Get current messages (for debugging)
     const json & get_messages() const { return messages_; }
 
@@ -238,6 +242,7 @@ private:
 
     // Context compaction: summarize old messages when context gets large
     bool try_compact();
+    bool do_compact(int32_t effective_keep);
     std::string generate_summary(const json & messages_to_summarize,
                                   const std::string & previous_summary);
 
