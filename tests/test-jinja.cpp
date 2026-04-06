@@ -523,6 +523,18 @@ static void test_filters(testing & t) {
         "hello"
     );
 
+    test_template(t, "upper array",
+        "{{ items|upper }}",
+        {{"items", json::array({"hello", "world"})}},
+        "['HELLO', 'WORLD']"
+    );
+
+    test_template(t, "upper dict",
+        "{{ items|upper }}",
+        {{"items", {{"hello", "world"}}}},
+        "{'HELLO': 'WORLD'}"
+    );
+
     test_template(t, "capitalize",
         "{{ 'heLlo World'|capitalize }}",
         json::object(),

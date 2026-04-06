@@ -28,7 +28,7 @@ if (NOT ZENDNN_ROOT OR ZENDNN_ROOT STREQUAL "" OR ZENDNN_ROOT STREQUAL "OFF")
     ExternalProject_Add(
         zendnn
         GIT_REPOSITORY https://github.com/amd/ZenDNN.git
-        GIT_TAG a18adf8c605fb5f5e52cefd7eda08a7b18febbaf    # ZenDNN-2026-WW08
+        GIT_TAG f79f7321a1add65ced6397a6bfab7edba6e3e14e    # ZenDNN-2026-WW13
         PREFIX      ${ZENDNN_PREFIX}
         SOURCE_DIR  ${ZENDNN_SOURCE_DIR}
         BINARY_DIR  ${ZENDNN_BUILD_DIR}

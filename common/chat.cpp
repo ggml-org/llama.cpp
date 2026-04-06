@@ -13,6 +13,8 @@
 #include "jinja/caps.h"
 #include "peg-parser.h"
 
+#include "nlohmann/json.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -762,12 +764,12 @@ static void foreach_parameter(const json &                                      
     }
 }
 
-std::string common_chat_template_direct_apply(
+static std::string common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs,
-    const std::optional<json> & messages_override,
-    const std::optional<json> & tools_override,
-    const std::optional<json> & additional_context) {
+    const std::optional<json> & messages_override = std::nullopt,
+    const std::optional<json> & tools_override = std::nullopt,
+    const std::optional<json> & additional_context = std::nullopt) {
     jinja::context ctx(tmpl.source());
 
     nlohmann::ordered_json inp = nlohmann::ordered_json{
@@ -812,6 +814,12 @@ std::string common_chat_template_direct_apply(
         result = result.substr(0, result.size() - tmpl.eos_token().size());
     }
     return result;
+}
+
+std::string common_chat_template_direct_apply(
+    const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs) {
+    return common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
 }
 
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
@@ -864,7 +872,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
     data.thinking_end_tag   = "[/THINK]";
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = {
         "[THINK]",
@@ -947,7 +955,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         adjusted_messages.push_back(msg);
     }
 
-    auto prompt = common_chat_template_direct_apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    auto prompt = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
 
     // Check if we need to replace the return token with end token during
     // inference and without generation prompt. For more details see:
@@ -1069,12 +1077,137 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
+static common_chat_params common_chat_params_init_gemma4(const common_chat_template &    tmpl,
+                                                         const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
+    data.supports_thinking = true;
+
+    data.preserved_tokens = {
+        "<|channel>",
+        "<channel|>",
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|turn>",
+    };
+
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
+
+        if (extract_reasoning) {
+            p.rule("thought", p.literal("<|channel>thought\n") + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+        } else {
+            p.rule("thought", p.content(p.literal("<|channel>thought\n") + p.until("<channel|>") + p.literal("<channel|>")));
+        }
+
+        auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+
+        if (has_response_format) {
+            auto response_format = p.literal("```json") <<
+                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
+                p.literal("```");
+            return start + p.optional(thought) + response_format;
+        }
+
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // Gemma4 tool calling syntax
+            // Rules should match traversal logic in gemma4_to_json()
+            p.rule("gemma4-string-content", p.until("<|\"|>"));
+            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
+            p.rule("gemma4-bool", p.json_bool());
+            p.rule("gemma4-null", p.json_null());
+            p.rule("gemma4-number", p.json_number());
+            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
+            p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
+            p.rule("gemma4-dict", [&]() {
+                auto ws = p.space();
+                auto member = p.ref("gemma4-dict-kv");
+                auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
+                return p.sequence({
+                    p.literal("{"), ws,
+                    p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+                });
+            });
+            p.rule("gemma4-array", [&]() {
+                auto ws = p.space();
+                auto value = p.ref("gemma4-value");
+                auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
+                return p.sequence({
+                    p.literal("["), ws,
+                    p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+                });
+            });
+            p.rule("gemma4-value", [&]() {
+                return p.choice({
+                    p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
+                    p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
+                });
+            });
+
+            auto tool_choice = p.choice();
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string  name     = function.at("name");
+                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
+                // const auto & params   = function.at("parameters");
+
+                tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
+                    p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
+                    p.tool_args(p.ref("gemma4-dict")),
+                })));
+            });
+
+            auto tool_call = p.trigger_rule("tool-call", p.repeat(
+                "<|tool_call>call:" + tool_choice + "<tool_call|>",
+                /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
+                /* max = */ inputs.parallel_tool_calls ? -1 : 1
+            ));
+
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
+            auto message = p.rule("message", thought + content);
+            return start + p.zero_or_more(message) + tool_call;
+        }
+
+        auto content = p.rule("content", p.content(p.until("<|channel>")));
+        auto message = p.rule("message", thought + content);
+        return start + p.one_or_more(message);
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
+        };
+    }
+
+    return data;
+}
+
 // Functionary v3.2 - uses recipient-based format: >>>recipient\n{content}
 static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template &    tmpl,
                                                                    const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt           = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = {
         ">>>all",
@@ -1168,7 +1301,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                                                           const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.preserved_tokens  = {
@@ -1291,7 +1424,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
                                                        const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
@@ -1370,7 +1503,7 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
@@ -1441,7 +1574,7 @@ static common_chat_params common_chat_params_init_gigachat_v3(
 
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = false;
     data.preserved_tokens  = {
@@ -1548,46 +1681,146 @@ static void requires_non_null_content(json & messages) {
 }
 
 // Gemma4 uses a custom tool_responses field instead of role:tool messages.
-// Convert consecutive role:tool messages into a single user message with tool_responses.
+//
+// This will transform a sequence of messages:
+//   assistant(tool_call+) -> tool+ -> assistant(content)
+//
+// Into a single assistant message containing a tool_responses field:
+//   assistant(content + tool_call + tool_responses)
+//
+// This is necessary for the Gemma4 chat template to properly format the prompt.
+// See https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4
+struct gemma4_model_turn_builder {
+    json & messages;
+    size_t pos;
+    json tool_calls = json::array();
+    json tool_responses = json::array();
+    json content;
+    json reasoning_content;
+
+    gemma4_model_turn_builder(json & msgs, size_t pos) : messages(msgs), pos(pos) {}
+
+    void collect() {
+        // Collect the first assistant message
+        auto & msg = messages[pos];
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            // According to the prompt formatting guide, we need to preserve reasoning_content
+            // between function calls. The current chat templates do not support this, but we will do it anyway.
+            reasoning_content = msg.at("reasoning_content");
+        }
+        for (auto & tc : msg.at("tool_calls")) {
+            tool_calls.push_back(tc);
+        }
+        pos++;
+
+        // Collect tool call results
+        while (pos < messages.size() && messages[pos].value("role", "") == "tool") {
+            collect_result(messages[pos]);
+            pos++;
+        }
+
+        // Check if the next assistant message is the final message
+        if (pos < messages.size() && messages[pos].value("role", "") == "assistant") {
+            auto & next = messages[pos];
+            if (!has_tool_calls(next) && has_content(next)) {
+                content = next.at("content");
+                pos++;
+            }
+        }
+    }
+
+    void collect_result(const json & curr) {
+        json response;
+        if (curr.contains("content")) {
+            const auto & content = curr.at("content");
+            if (content.is_string()) {
+                // Try to parse the content as JSON; fall back to raw string
+                try {
+                    response = json::parse(content.get<std::string>());
+                } catch (...) {
+                    response = content;
+                }
+            } else {
+                response = content;
+            }
+        }
+
+        std::string name;
+
+        // Match name with corresponding tool call
+        size_t idx = tool_responses.size();
+        if (idx < tool_calls.size()) {
+            auto & tc = tool_calls[idx];
+            if (tc.contains("function")) {
+                name = tc.at("function").value("name", "");
+            }
+        }
+
+        // Fallback to the tool call id
+        if (name.empty()) {
+            name = curr.value("tool_call_id", "");
+        }
+
+        tool_responses.push_back({{"name", name}, {"response", response}});
+    }
+
+    json build() {
+        collect();
+
+        json msg = {
+            {"role", "assistant"},
+            {"tool_calls", tool_calls},
+        };
+        if (!tool_responses.empty()) {
+            msg["tool_responses"] = tool_responses;
+        }
+        if (!content.is_null()) {
+            msg["content"] = content;
+        }
+        if (!reasoning_content.is_null()) {
+            msg["reasoning_content"] = reasoning_content;
+        }
+        return msg;
+    }
+
+    static bool has_content(const json & msg) {
+        if (!msg.contains("content") || msg.at("content").is_null()) {
+            return false;
+        }
+        const auto & content = msg.at("content");
+        if (content.is_string() && !content.get<std::string>().empty()) {
+            return true;
+        }
+        if (content.is_array() && !content.empty()) {
+            return true;
+        }
+        return false;
+    }
+
+    static bool has_tool_calls(const json & msg) {
+        return msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty();
+    }
+};
+
 static void convert_tool_responses_gemma4(json & messages) {
     json result = json::array();
     size_t i = 0;
+
     while (i < messages.size()) {
-        if (messages[i].contains("role") && messages[i].at("role") == "tool") {
-            json tool_responses = json::array();
-            while (i < messages.size() &&
-                   messages[i].contains("role") &&
-                   messages[i].at("role") == "tool") {
-                const auto & tool_msg = messages[i];
-                std::string name;
-                if (tool_msg.contains("tool_call_id") && tool_msg.at("tool_call_id").is_string()) {
-                    name = tool_msg.at("tool_call_id");
-                } else if (tool_msg.contains("name") && tool_msg.at("name").is_string()) {
-                    name = tool_msg.at("name");
-                }
-                json response;
-                if (tool_msg.contains("content")) {
-                    const auto & content = tool_msg.at("content");
-                    if (content.is_string()) {
-                        // Try to parse the content as JSON; fall back to raw string
-                        try {
-                            response = json::parse(content.get<std::string>());
-                        } catch (...) {
-                            response = content;
-                        }
-                    } else {
-                        response = content;
-                    }
-                }
-                tool_responses.push_back({{"name", name}, {"response", response}});
-                i++;
-            }
-            result.push_back({{"role", "user"}, {"tool_responses", tool_responses}});
-        } else {
-            result.push_back(messages[i]);
+        auto & msg = messages[i];
+
+        if (msg.value("role", "") != "assistant" || !msg.contains("tool_calls") ||
+            !msg.at("tool_calls").is_array() || msg.at("tool_calls").empty()) {
+            result.push_back(msg);
             i++;
+            continue;
         }
+
+        gemma4_model_turn_builder builder(messages, i);
+        result.push_back(builder.build());
+        i = builder.pos;
     }
+
     messages = result;
 }
 
@@ -1623,10 +1856,10 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-static std::optional<common_chat_params> try_specialized_template(
+std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
-        const autoparser::generation_params & params) {
+        autoparser::generation_params & params) {
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
@@ -1679,6 +1912,12 @@ static std::optional<common_chat_params> try_specialized_template(
         return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
+    // Gemma4 format detection
+    if (src.find("'<|tool_call>call:'") != std::string::npos) {
+        workaround::convert_tool_responses_gemma4(params.messages);
+        return common_chat_params_init_gemma4(tmpl, params);
+    }
+
     return std::nullopt;
 }
 
@@ -1719,14 +1958,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         workaround::func_args_not_string(params.messages);
     }
 
-    if (src.find("'<|tool_call>call:'") != std::string::npos) {
-        workaround::convert_tool_responses_gemma4(params.messages);
-    }
-
     params.add_generation_prompt = false;
-    std::string no_gen_prompt    = common_chat_template_direct_apply(tmpl, params);
+    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params);
     params.add_generation_prompt = true;
-    std::string gen_prompt       = common_chat_template_direct_apply(tmpl, params);
+    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
     auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
     params.generation_prompt     = diff.right;
 
@@ -1760,7 +1995,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         common_chat_params data;
         auto params_copy               = params;
         params_copy.reasoning_format   = COMMON_REASONING_FORMAT_NONE;
-        data.prompt                    = common_chat_template_direct_apply(tmpl, params_copy);
+        data.prompt                    = common_chat_template_direct_apply_impl(tmpl, params_copy);
         data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
         data.generation_prompt         = params.generation_prompt;
         auto parser                    = build_chat_peg_parser([&params](common_chat_peg_builder &p) {
@@ -1770,7 +2005,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         return data;
     }
 
-    if (auto result = try_specialized_template(tmpl, src, params)) {
+    if (auto result = common_chat_try_specialized_template(tmpl, src, params)) {
         result->generation_prompt = params.generation_prompt;
         return *result;
     }
