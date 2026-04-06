@@ -386,8 +386,8 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
-    /* fit_params_target    */ { 1024 },
-    /* fit_params_min_ctx   */ { 4096 },
+    /* fit_params_target    */ { 0 },
+    /* fit_params_min_ctx   */ { 0 },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -2243,18 +2243,16 @@ int main(int argc, char ** argv) {
 
             std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
 
+            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
+            cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
+
             llama_params_fit(inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),
                 inst.fit_min_ctx,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
-
-            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
-            if (cparams.n_ctx < n_ctx_needed) {
-                cparams.n_ctx = n_ctx_needed;
-            }
-        }
+       }
 
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
