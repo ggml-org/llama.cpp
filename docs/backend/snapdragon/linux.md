@@ -1,14 +1,14 @@
-# Snapdragon-based IoT devices
+# Snapdragon-based Linux devices
 
 ## Docker Setup
 
 The easiest way to build llama.cpp for a Snapdragon-based Linux device is using the toolchain Docker image (see [github.com/snapdragon-toolchain](https://github.com/snapdragon-toolchain)).
 This image includes OpenCL SDK, Hexagon SDK, CMake, and the ARM64 Linux cross-compilation toolchain.
 
-Cross-compilation is supported on **Linux X86** hosts. The resulting binaries are deployed to and run on the target **Qualcomm Snapdragon ARM64 Linux** IoT device.
+Cross-compilation is supported on **Linux X86** hosts. The resulting binaries are deployed to and run on the target **Qualcomm Snapdragon ARM64 Linux** device.
 
 ```
-~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-linux:latest
+~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-linux:v0.1
 [d]/> cd /workspace
 ```
 
@@ -22,9 +22,9 @@ Let's build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
 ```
 [d]/workspace> cp docs/backend/snapdragon/CMakeUserPresets.json .
 
-[d]/workspace> cmake --preset arm64-linux-snapdragon-release -B build-snapdragon -DCMAKE_C_FLAGS="-march=armv8 -fno-finite-math-only -flto -D_GNU_SOURCE" -DCMAKE_CXX_FLAGS="-march=armv8 -fno-finite-math-only -flto -D_GNU_SOURCE"
+[d]/workspace> cmake --preset arm64-linux-snapdragon-release -B build-snapdragon
 
-[d]/workspace> cmake --build build-snapdragon -j
+[d]/workspace> cmake --build build-snapdragon -j $(nproc)
 ```
 
 To generate an installable "package" simply use cmake --install, then zip it:
@@ -36,7 +36,7 @@ To generate an installable "package" simply use cmake --install, then zip it:
 
 ## How to Install
 
-For this step, you will deploy the built binaries and libraries to the target IOT device. Transfer `pkg-snapdragon.zip` to the target device, then unzip it and set up the environment variables:
+For this step, you will deploy the built binaries and libraries to the target Linux device. Transfer `pkg-snapdragon.zip` to the target device, then unzip it and set up the environment variables:
 
 ```
 $ unzip pkg-snapdragon.zip
