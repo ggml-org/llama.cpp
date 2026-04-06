@@ -697,13 +697,8 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     size_t src0_row_size = src0->nb[1];
-    size_t src1_row_size = src1->nb[1]; // zero bytes if src1 is not used
+    size_t src1_row_size = src1 ? src1->nb[1] : src0->nb[1];
     size_t dst_row_size  = dst->nb[1];
-
-    const bool src1_valid = src1->ne[0];
-    if (!src1_valid) {
-        src1_row_size = src0_row_size;
-    }
 
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
@@ -737,7 +732,7 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     octx->src1_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
-    if (src1->ne[0]) {
+    if (src1) {
         FARF(HIGH, "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n",
              op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
              src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], octx->src0_spad.size, octx->src1_spad.size,
@@ -777,9 +772,9 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 
     // Pointers and GLU logic
     const uint8_t * data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * data_src1 = (const uint8_t *) src1->data;
+    const uint8_t * data_src1 = src1 ? (const uint8_t *) src1->data : NULL;
 
-    if (!src1_valid && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
+    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
          const int32_t swapped = octx->op_params[1];
          data_src1 = data_src0;
          actx.src1_row_size = actx.src0_row_size;
