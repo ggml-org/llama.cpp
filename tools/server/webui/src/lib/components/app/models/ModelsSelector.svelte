@@ -45,8 +45,16 @@
 	let options = $derived(
 		modelOptions().filter((option) => {
 			const modelProps = modelsStore.getModelProps(option.model);
+			if (modelProps?.webui === false) return false;
 
-			return modelProps?.webui !== false;
+			// Hide embedding/rerank-only models from chat selector
+			// If capabilities are present, require "completion" capability
+			// If capabilities are absent (legacy), show the model (backwards compat)
+			if (option.capabilities.length > 0 && !option.capabilities.includes('completion')) {
+				return false;
+			}
+
+			return true;
 		})
 	);
 	let loading = $derived(modelsLoading());

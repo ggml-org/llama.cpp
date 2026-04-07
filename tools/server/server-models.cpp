@@ -1004,15 +1004,29 @@ void server_models_routes::init_routes() {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
             }
+            // Determine capabilities from preset flags
+            json capabilities = json::array();
+            std::string tmp_val;
+            if (meta.preset.get_option("LLAMA_ARG_EMBEDDINGS", tmp_val) ||
+                    meta.preset.get_option("LLAMA_ARG_RERANKING", tmp_val)) {
+                capabilities.push_back("embedding");
+                std::string rerank_val;
+                if (meta.preset.get_option("LLAMA_ARG_RERANKING", rerank_val)) {
+                    capabilities.push_back("rerank");
+                }
+            } else {
+                capabilities.push_back("completion");
+            }
+
             models_json.push_back(json {
-                {"id",       meta.name},
-                {"aliases",  meta.aliases},
-                {"tags",     meta.tags},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"status",   status},
-                // TODO: add other fields, may require reading GGUF metadata
+                {"id",           meta.name},
+                {"aliases",      meta.aliases},
+                {"tags",         meta.tags},
+                {"object",       "model"},    // for OAI-compat
+                {"owned_by",     "llamacpp"}, // for OAI-compat
+                {"created",      t},          // for OAI-compat
+                {"status",       status},
+                {"capabilities", capabilities},
             });
         }
         res_ok(res, {
