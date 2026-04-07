@@ -1056,6 +1056,16 @@ class unified_cache {
     const weight_entry * lookup_weight(ggml_sycl_cache_id key) const;
     const weight_entry * lookup_expert(ggml_sycl_cache_id key) const;
 
+    // Register a host-arena pointer directly as a HOST_PINNED expert entry.
+    // ptr must be sycl::malloc_host memory (e.g. from host_weight_arena_alloc).
+    // No zone_alloc, no device copy.  Used by S1-PRELOAD for host-planned experts.
+    void register_host_expert(ggml_sycl_cache_id key, void * ptr, size_t size, ggml_layout_mode layout);
+
+    // Register a host-arena pointer directly as a HOST_PINNED dense weight entry.
+    // ptr must be sycl::malloc_host memory (e.g. from host_weight_arena_alloc).
+    // No zone_alloc, no device copy.  Used by S1-PRELOAD for host-planned dense weights.
+    void register_host_weight(ggml_sycl_cache_id key, void * ptr, size_t size, ggml_layout_mode layout);
+
     // === Multi-Device Partial Row Loading ===
 
     // Load a contiguous row range of a weight tensor to this device with SOA reorder.
@@ -1715,19 +1725,6 @@ class unified_cache {
 
     // === Host-Pinned Memory Pool ===
     // Optional sycl::malloc_host pool managed alongside the VRAM arena.
-    // Enables arena to handle host fallback allocations (KV overflow, weight
-    // eviction) without raw sycl::malloc_host calls.
-    // Enabled via GGML_SYCL_HOST_POOL_MB env var (default: disabled).
-
-    void * host_pool_alloc(size_t size);
-    void   host_pool_reset();
-
-    size_t host_pool_capacity() const { return host_pool_size_; }
-
-    size_t host_pool_used() const { return host_pool_off_.load(std::memory_order_relaxed); }
-
-    void * host_pool_base() const { return host_pool_ptr_; }
-
     // === Host Weight Arena ===
     bool   host_weight_arena_reserve(size_t bytes);
     void * host_weight_arena_alloc(size_t bytes);
@@ -1923,12 +1920,6 @@ class unified_cache {
     size_t              scratch_pool_size_ = 0;        // Total pool bytes
     std::atomic<size_t> scratch_pool_off_{ 0 };        // Current bump offset
     size_t              scratch_pool_hwm_ = 0;         // High-water mark for diagnostics
-
-    // === Host-Pinned Memory Pool ===
-    // Optional sycl::malloc_host pool — bump-allocated, reset between tokens.
-    void *              host_pool_ptr_  = nullptr;
-    size_t              host_pool_size_ = 0;
-    std::atomic<size_t> host_pool_off_{ 0 };
 
     // === Unified allocate() tracking (Phase 3) ===
     // Track pointers returned by allocate() so deallocate() knows whether
@@ -2698,10 +2689,6 @@ bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 void * unified_cache_get_scratch(int device_id, size_t size);
 void   unified_cache_return_scratch(int device_id, void * ptr, size_t size);
 void   unified_cache_reset_scratch_pool(int device_id);
-
-// Allocate from the host-pinned pool (bump allocator).
-// Returns nullptr if pool is not enabled or exhausted.
-void * unified_cache_host_pool_alloc(int device_id, size_t size);
 
 // Allocate from expert budget (or host fallback).
 unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size);

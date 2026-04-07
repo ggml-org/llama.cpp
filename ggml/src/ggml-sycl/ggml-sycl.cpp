@@ -10917,6 +10917,16 @@ static void ggml_sycl_preload_model_weights() {
             std::deque<sycl::event> s1_in_flight;
             size_t                  s1_drain_count = 0;
 
+            // Part A: Pre-allocate host weight arena if the placement plan reserves
+            // host bytes for this device.  A single sycl::malloc_host upfront avoids
+            // per-expert malloc_host calls in the loop (which block the L0 driver).
+            if (cache->has_placement_plan()) {
+                const auto & plan = cache->get_placement_plan();
+                if (plan.weight_host_bytes > 0) {
+                    cache->host_weight_arena_reserve(plan.weight_host_bytes);
+                }
+            }
+
             // Submit all H2D copies for this device without waiting
             for (size_t idx : indices) {
                 const auto & item   = items[idx];
@@ -10948,11 +10958,26 @@ static void ggml_sycl_preload_model_weights() {
                     bool              any_cached = false;
                     const std::string tname(tensor->name ? tensor->name : "");
                     for (int64_t e = 0; e < n_experts; ++e) {
-                        // P4: Check placement plan — skip device staging for
-                        // experts planned for host.  This prevents blind S1-PRELOAD
-                        // from exhausting the WEIGHT zone on MoE models.
+                        // P4: Check placement plan — host-planned experts are staged
+                        // into the host weight arena instead of device VRAM.
                         if (cache->has_placement_plan() && !tname.empty()) {
                             if (!cache->get_placement_plan().expert_on_device(tname, static_cast<int>(e), device)) {
+                                // Expert is host-planned: copy mmap data into host arena.
+                                const uint8_t * expert_aos =
+                                    static_cast<const uint8_t *>(tensor->data) + e * expert_size;
+                                if (expert_aos) {
+                                    void * arena_ptr = cache->host_weight_arena_alloc(expert_size);
+                                    if (arena_ptr) {
+                                        std::memcpy(arena_ptr, expert_aos, expert_size);
+                                        ggml_sycl_cache_id key =
+                                            ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
+                                        if (key.valid) {
+                                            cache->register_host_expert(key, arena_ptr, expert_size, GGML_LAYOUT_AOS);
+                                            GGML_SYCL_DEBUG("[S1-PRELOAD] host-arena expert %s[%ld] %.1f KB\n",
+                                                            tname.c_str(), (long)e, expert_size / 1024.0f);
+                                        }
+                                    }
+                                }
                                 continue;
                             }
                         }
@@ -10996,27 +11021,26 @@ static void ggml_sycl_preload_model_weights() {
                         continue;
                     }
 
-                    // P4/P4.5: Skip upload if placement plan says host or different device.
-                    // Register host-placed weights with host_cache so the cache tracks
-                    // ALL weights (both VRAM/SOA and host/AOS).  Without registration,
-                    // resolve_weight falls through to the raw pointer path.
+                    // P4/P4.5: Skip device upload for host-planned dense weights.
+                    // Stage into host arena and register in direct_weight_entries_ so
+                    // lookup_weight() resolves them with location==HOST_PINNED.
                     if (cache->has_placement_plan() && tensor->name[0] != '\0') {
                         if (!cache->plan_on_this_device(std::string(tensor->name), device)) {
-                            // Register as HOST_PINNED AOS entry in host cache
-                            auto * hcache = ggml_sycl::try_get_host_cache();
-                            if (hcache && tensor->data) {
-                                ggml_sycl_cache_id host_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                            // Dense weight is host-planned: copy mmap data into host arena
+                            // and register in direct_weight_entries_ so lookup_weight() finds it.
+                            if (tensor->data) {
+                                ggml_sycl_cache_id host_key =
+                                    ggml_backend_sycl_get_weight_cache_key(tensor, device);
                                 if (host_key.valid) {
-                                    const size_t nbytes     = ggml_nbytes(tensor);
-                                    const int    layer_id   = ggml_sycl_tp_extract_layer_number(tensor->name);
-                                    bool         needs_fill = false;
-                                    hcache->ensure_cached_alloc(host_key, tensor->data, nbytes, nbytes,
-                                                                ggml_sycl::cache_entry_type::DENSE_WEIGHT, layer_id,
-                                                                /*expert_id=*/-1, GGML_LAYOUT_AOS,
-                                                                /*validate_content=*/false, &needs_fill, nullptr,
-                                                                nullptr, nullptr);
-                                    GGML_SYCL_DEBUG("[S1-PRELOAD] registered host-placed weight: %s (%.1f MB)\n",
-                                                    tensor->name, nbytes / (1024.0f * 1024.0f));
+                                    const size_t nbytes  = ggml_nbytes(tensor);
+                                    void *       arena_ptr = cache->host_weight_arena_alloc(nbytes);
+                                    if (arena_ptr) {
+                                        std::memcpy(arena_ptr, tensor->data, nbytes);
+                                        cache->register_host_weight(host_key, arena_ptr, nbytes,
+                                                                    GGML_LAYOUT_AOS);
+                                        GGML_SYCL_DEBUG("[S1-PRELOAD] host-arena weight: %s (%.1f MB)\n",
+                                                        tensor->name, nbytes / (1024.0f * 1024.0f));
+                                    }
                                 }
                             }
                             weight_host_bytes[device] += ggml_nbytes(tensor);
