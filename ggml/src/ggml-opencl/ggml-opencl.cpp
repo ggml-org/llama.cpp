@@ -5310,34 +5310,47 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         cl_buffer_region region;
 
-        // Subbuffer for q (lower 4 bits)
+        // Create subbuffer for d.
         region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
-        region.size = size_q;
-        CL_CHECK((extra->q = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+        region.size = size_d;
+        extra->d = clCreateSubBuffer(
+            extra_orig->data_device, CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
         auto previous_origin = region.origin;
 
-        // Subbuffer for qh (upper 1 bit)
+        // Create subbuffer for dm.
+        region.origin = align_to(previous_origin + size_d, backend_ctx->alignment);
+        region.size = size_dm;
+        extra->dm = clCreateSubBuffer(
+            extra_orig->data_device, CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+        previous_origin = region.origin;
+
+        // Create subbuffer for s.
+        region.origin = align_to(previous_origin + size_dm, backend_ctx->alignment);
+        region.size = size_s;
+        extra->s = clCreateSubBuffer(
+            extra_orig->data_device, CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+        previous_origin = region.origin;
+
+        // Create subbuffer for q (lower 4 bits)
+        region.origin = align_to(previous_origin + size_s, backend_ctx->alignment);
+        region.size = size_q;
+        extra->q = clCreateSubBuffer(
+            extra_orig->data_device, CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+        previous_origin = region.origin;
+
+        // Create subbuffer for qh (upper 1 bit)
         region.origin = align_to(previous_origin + size_q, backend_ctx->alignment);
         region.size = size_qh;
         CL_CHECK((extra->qh = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-        previous_origin = region.origin;
-
-        // Subbuffer for scales
-        region.origin = align_to(previous_origin + size_qh, backend_ctx->alignment);
-        region.size = size_s;
-        CL_CHECK((extra->s = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-        previous_origin = region.origin;
-
-        // Subbuffer for d
-        region.origin = align_to(previous_origin + size_s, backend_ctx->alignment);
-        region.size = size_d;
-        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
-        previous_origin = region.origin;
-
-        // Subbuffer for dm
-        region.origin = align_to(previous_origin + size_d, backend_ctx->alignment);
-        region.size = size_dm;
-        CL_CHECK((extra->dm = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+        CL_CHECK(err);
 
         cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
 
