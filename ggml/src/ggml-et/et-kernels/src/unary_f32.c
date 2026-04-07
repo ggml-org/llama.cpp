@@ -493,9 +493,20 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
         return -1;
     }
 
-    // Both src and dst are contiguous F32 are treat as flat arrays.
-    // Distribute work by cache lines (16 floats = 64 bytes) across threads.
-    const int64_t total_elements = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
+    // Tensor layout: src and dst are F32 with at least dim-0 contiguity
+    //   - nb[0] == sizeof(float) (rows are dense; SIMD loads stay legal)
+    //   - nb[1], nb[2], nb[3] may all be arbitrary strides for 4D views
+    //
+    // We walk rows independently and decompose row index r into (i1,i2,i3),
+    // computing per-row byte offsets via nb[1..3] of each tensor.
+    const int64_t nc  = dst->ne[0];                          // row width (logical)
+    const int64_t ne1 = dst->ne[1];
+    const int64_t ne2 = dst->ne[2];
+    const int64_t nr  = ne1 * ne2 * dst->ne[3];              // total rows
+    const int64_t total_elements = nr * nc;
+    const size_t  s_nb1 = src0->nb[1], s_nb2 = src0->nb[2], s_nb3 = src0->nb[3];
+    const size_t  d_nb1 = dst->nb[1],  d_nb2 = dst->nb[2],  d_nb3 = dst->nb[3];
+
     const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes per float
     const int64_t total_cachelines = (total_elements + elements_per_cacheline - 1) / elements_per_cacheline;
 
@@ -512,33 +523,91 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     int64_t elem_end = cl_end * elements_per_cacheline;
     if (elem_end > total_elements) elem_end = total_elements;
 
-    float* src_ptr = src0_data + elem_start;
-    float* dst_ptr = dst_data + elem_start;
-    const int32_t count = (int32_t)(elem_end - elem_start);
+    // Fast path: tensor is fully contiguous (no view), walk it as a flat array.
+    // This preserves perf for the common case and avoids the per-row dispatch loop.
+    const size_t row_bytes = (size_t)nc * sizeof(float);
+    const int is_flat =
+        s_nb1 == row_bytes && s_nb2 == s_nb1 * (size_t)ne1 && s_nb3 == s_nb2 * (size_t)ne2 &&
+        d_nb1 == row_bytes && d_nb2 == d_nb1 * (size_t)ne1 && d_nb3 == d_nb2 * (size_t)ne2;
 
-    switch (unary_op) {
-        case GGML_UNARY_OP_NEG:         vec_neg(dst_ptr, src_ptr, count);         break;
-        case GGML_UNARY_OP_ABS:         vec_abs(dst_ptr, src_ptr, count);         break;
-        case GGML_UNARY_OP_SGN:         vec_sgn(dst_ptr, src_ptr, count);         break;
-        case GGML_UNARY_OP_STEP:        vec_step(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_RELU:        vec_relu(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_EXP:         vec_exp(dst_ptr, src_ptr, count);         break;
-        case GGML_UNARY_OP_EXPM1:       vec_expm1(dst_ptr, src_ptr, count);       break;
-        case GGML_UNARY_OP_SIGMOID:     vec_sigmoid(dst_ptr, src_ptr, count);     break;
-        case GGML_UNARY_OP_TANH:        vec_tanh(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_SILU:        vec_silu(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_ELU:         vec_elu(dst_ptr, src_ptr, count);         break;
-        case GGML_UNARY_OP_GELU:        vec_gelu(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_GELU_QUICK:  vec_gelu_quick(dst_ptr, src_ptr, count);  break;
-        case GGML_UNARY_OP_GELU_ERF:    vec_gelu_erf(dst_ptr, src_ptr, count);    break;
-        case GGML_UNARY_OP_HARDSWISH:   vec_hardswish(dst_ptr, src_ptr, count);   break;
-        case GGML_UNARY_OP_HARDSIGMOID: vec_hardsigmoid(dst_ptr, src_ptr, count); break;
-        case GGML_UNARY_OP_SOFTPLUS:    vec_softplus(dst_ptr, src_ptr, count);    break;
-        case GGML_UNARY_OP_FLOOR:       vec_floor(dst_ptr, src_ptr, count);       break;
-        case GGML_UNARY_OP_CEIL:        vec_ceil(dst_ptr, src_ptr, count);        break;
-        case GGML_UNARY_OP_ROUND:       vec_round(dst_ptr, src_ptr, count);       break;
-        case GGML_UNARY_OP_TRUNC:       vec_trunc(dst_ptr, src_ptr, count);       break;
-        default: return -1;
+    if (is_flat) {
+        float* src_ptr = src0_data + elem_start;
+        float* dst_ptr = dst_data  + elem_start;
+        const int32_t count = (int32_t)(elem_end - elem_start);
+        switch (unary_op) {
+            case GGML_UNARY_OP_NEG:         vec_neg(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_ABS:         vec_abs(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_SGN:         vec_sgn(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_STEP:        vec_step(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_RELU:        vec_relu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_EXP:         vec_exp(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_EXPM1:       vec_expm1(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_SIGMOID:     vec_sigmoid(dst_ptr, src_ptr, count);     break;
+            case GGML_UNARY_OP_TANH:        vec_tanh(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_SILU:        vec_silu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_ELU:         vec_elu(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_GELU:        vec_gelu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_GELU_QUICK:  vec_gelu_quick(dst_ptr, src_ptr, count);  break;
+            case GGML_UNARY_OP_GELU_ERF:    vec_gelu_erf(dst_ptr, src_ptr, count);    break;
+            case GGML_UNARY_OP_HARDSWISH:   vec_hardswish(dst_ptr, src_ptr, count);   break;
+            case GGML_UNARY_OP_HARDSIGMOID: vec_hardsigmoid(dst_ptr, src_ptr, count); break;
+            case GGML_UNARY_OP_SOFTPLUS:    vec_softplus(dst_ptr, src_ptr, count);    break;
+            case GGML_UNARY_OP_FLOOR:       vec_floor(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_CEIL:        vec_ceil(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_ROUND:       vec_round(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_TRUNC:       vec_trunc(dst_ptr, src_ptr, count);       break;
+            default: return -1;
+        }
+        return 0;
+    }
+
+    // Slow path: arbitrary 4D-strided view. Walk the assigned element range
+    // row-by-row, clipping each segment to a row boundary so we never cross
+    // nb[1]. For each row index r, decompose into (i1,i2,i3) and add the
+    // corresponding nb[*] byte offsets to the base pointers.
+    int64_t e = elem_start;
+    while (e < elem_end) {
+        int64_t row = e / nc;
+        int64_t col = e % nc;
+        int64_t take = nc - col;
+        if (take > elem_end - e) take = elem_end - e;
+
+        // Decompose row into (i3,i2,i1) using row-major linearization
+        const int64_t i1 = row % ne1;
+        const int64_t r2 = row / ne1;
+        const int64_t i2 = r2 % ne2;
+        const int64_t i3 = r2 / ne2;
+
+        float* src_ptr = (float*)((char*)src0_data + i3 * s_nb3 + i2 * s_nb2 + i1 * s_nb1) + col;
+        float* dst_ptr = (float*)((char*)dst_data  + i3 * d_nb3 + i2 * d_nb2 + i1 * d_nb1) + col;
+        const int32_t count = (int32_t)take;
+
+        switch (unary_op) {
+            case GGML_UNARY_OP_NEG:         vec_neg(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_ABS:         vec_abs(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_SGN:         vec_sgn(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_STEP:        vec_step(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_RELU:        vec_relu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_EXP:         vec_exp(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_EXPM1:       vec_expm1(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_SIGMOID:     vec_sigmoid(dst_ptr, src_ptr, count);     break;
+            case GGML_UNARY_OP_TANH:        vec_tanh(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_SILU:        vec_silu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_ELU:         vec_elu(dst_ptr, src_ptr, count);         break;
+            case GGML_UNARY_OP_GELU:        vec_gelu(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_GELU_QUICK:  vec_gelu_quick(dst_ptr, src_ptr, count);  break;
+            case GGML_UNARY_OP_GELU_ERF:    vec_gelu_erf(dst_ptr, src_ptr, count);    break;
+            case GGML_UNARY_OP_HARDSWISH:   vec_hardswish(dst_ptr, src_ptr, count);   break;
+            case GGML_UNARY_OP_HARDSIGMOID: vec_hardsigmoid(dst_ptr, src_ptr, count); break;
+            case GGML_UNARY_OP_SOFTPLUS:    vec_softplus(dst_ptr, src_ptr, count);    break;
+            case GGML_UNARY_OP_FLOOR:       vec_floor(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_CEIL:        vec_ceil(dst_ptr, src_ptr, count);        break;
+            case GGML_UNARY_OP_ROUND:       vec_round(dst_ptr, src_ptr, count);       break;
+            case GGML_UNARY_OP_TRUNC:       vec_trunc(dst_ptr, src_ptr, count);       break;
+            default: return -1;
+        }
+
+        e += take;
     }
 
     return 0;

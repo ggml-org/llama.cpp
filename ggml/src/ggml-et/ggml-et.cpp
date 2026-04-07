@@ -799,11 +799,14 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[0]);
             break;
         case GGML_OP_UNARY:
+            // Only require dim-0 contiguity (nb[0] == sizeof(float)). Higher
+            // dims may be arbitrarily strided views; the kernel walks per-row
+            // using all four nb[] values. See unary_f32.c entry_point.
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 ggml_nelements(op) % 16 == 0 &&
-                ggml_is_contiguous(op) &&
-                ggml_is_contiguous(op->src[0])) {
+                op->nb[0] == sizeof(float) &&
+                op->src[0]->nb[0] == sizeof(float)) {
                 switch (ggml_get_unary_op(op)) {
                     case GGML_UNARY_OP_ABS:
                     case GGML_UNARY_OP_SGN:
