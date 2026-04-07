@@ -2164,6 +2164,31 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
         return false;
     }
 
+    // Check that the fused output does not overlap with source tensors
+    auto overlaps = [](const ggml_tensor * a, const ggml_tensor * b) -> bool {
+        if (!a->data || !b->data) {
+            return false;
+        }
+        const uintptr_t a_start = (uintptr_t) a->data;
+        const uintptr_t a_end   = a_start + ggml_nbytes(a);
+        const uintptr_t b_start = (uintptr_t) b->data;
+        const uintptr_t b_end   = b_start + ggml_nbytes(b);
+        return a_start < b_end && b_start < a_end;
+    };
+
+    if (overlaps(glu, ffn_up->src[0]) || overlaps(glu, ffn_up->src[1]) || overlaps(glu, ffn_gate->src[0])) {
+        return false;
+    }
+
+    if (has_bias) {
+        const ggml_tensor * up_bias_data = ffn_up_bias->src[0] == ffn_up ? ffn_up_bias->src[1] : ffn_up_bias->src[0];
+        const ggml_tensor * gate_bias_data =
+            ffn_gate_bias->src[0] == ffn_gate ? ffn_gate_bias->src[1] : ffn_gate_bias->src[0];
+        if (overlaps(glu, up_bias_data) || overlaps(glu, gate_bias_data)) {
+            return false;
+        }
+    }
+
     return true;
 }
 
