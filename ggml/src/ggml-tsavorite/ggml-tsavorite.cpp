@@ -18,8 +18,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include <limits.h>
-#include <libgen.h>
 #include <string.h>
 
 #include "ggml-tsavorite.h"
@@ -244,10 +242,13 @@ static void ensure_tsi_runtime_initialized() {
     #else
         num_of_txes = NUM_OF_TXES;
         multi_thread_enable = false;
-        tsi_load_all_blobs();
     #endif /* GGML_TARGET_POSIX */
     tsi_initialize(num_of_txes, NULL);
 
+    if (multi_thread_enable) {
+        // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+        tsi_load_all_blobs();
+    }
     device_free = (bool *)malloc(num_of_txes * sizeof(bool));
     if (!device_free) {
         fprintf(stderr, "Failed to allocate device_free\n");
@@ -1225,7 +1226,10 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
       sleep(2);
       runtime_initialized = false;
       #ifndef GGML_TARGET_POSIX
-         tsi_unload_all_blobs();
+          if (multi_thread_enable) {
+              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+              tsi_unload_all_blobs();
+          }
       #endif /* !GGML_TARGET_POSIX */
       if(device_free) {
           free(device_free);
@@ -1249,7 +1253,10 @@ tsi_cleanup() {
         return;
     runtime_initialized = false;
     #ifndef GGML_TARGET_POSIX
-       tsi_unload_all_blobs();
+          if (multi_thread_enable) {
+              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+              tsi_unload_all_blobs();
+          }
     #endif /* !GGML_TARGET_POSIX */
     if(device_free) {
         free(device_free);
