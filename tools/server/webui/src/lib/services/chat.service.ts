@@ -305,17 +305,23 @@ export class ChatService {
 
 	/**
 	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
-	 * After a response completes, this re-submits the full conversation (with reasoning/CoT stripped)
+	 * After a response completes, this re-submits the full conversation
 	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
 	 * This warms the cache for the next turn, making it faster.
 	 *
+	 * When excludeReasoningFromContext is true, reasoning content is stripped from the messages
+	 * to match what sendMessage would send on the next turn (avoiding cache misses).
+	 * When false, reasoning_content is preserved so the cached prompt matches the next request.
+	 *
 	 * @param messages - The full conversation including the latest assistant response
 	 * @param model - Optional model name (required in ROUTER mode)
+	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
 	 * @param signal - Optional AbortSignal to cancel the pre-encode request
 	 */
 	static async preEncode(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		model?: string | null,
+		excludeReasoning?: boolean,
 		signal?: AbortSignal
 	): Promise<void> {
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -325,23 +331,34 @@ export class ChatService {
 						msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 					);
 				}
+
 				return msg as ApiChatMessageData;
 			})
 			.filter((msg) => {
 				if (msg.role === MessageRole.SYSTEM) {
 					const content = typeof msg.content === 'string' ? msg.content : '';
+
 					return content.trim().length > 0;
 				}
+
 				return true;
 			});
 
 		const requestBody: Record<string, unknown> = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				content: ChatService.stripReasoningContent(msg.content),
-				tool_calls: msg.tool_calls,
-				tool_call_id: msg.tool_call_id
-			})),
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: Record<string, unknown> = {
+					role: msg.role,
+					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+
+				if (!excludeReasoning && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+
+				return mapped;
+			}),
 			stream: false,
 			n_predict: 0
 		};

@@ -730,7 +730,13 @@ class ChatStore {
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 				// Pre-encode conversation in KV cache for faster next turn
 				if (config().preEncodeConversation) {
-					this.triggerPreEncode(allMessages, assistantMessage, streamedContent, effectiveModel);
+					this.triggerPreEncode(
+						allMessages,
+						assistantMessage,
+						streamedContent,
+						effectiveModel,
+						!!config().excludeReasoningFromContext
+					);
 				}
 			},
 			onError: (error: Error) => {
@@ -1638,7 +1644,8 @@ class ChatStore {
 		allMessages: DatabaseMessage[],
 		assistantMessage: DatabaseMessage,
 		assistantContent: string,
-		model?: string | null
+		model?: string | null,
+		excludeReasoning?: boolean
 	): Promise<void> {
 		this.cancelPreEncode();
 		this.preEncodeAbortController = new AbortController();
@@ -1654,7 +1661,7 @@ class ChatStore {
 				{ ...assistantMessage, content: assistantContent }
 			];
 
-			await ChatService.preEncode(messagesWithAssistant, model, signal);
+			await ChatService.preEncode(messagesWithAssistant, model, excludeReasoning, signal);
 		} catch (err) {
 			if (!isAbortError(err)) {
 				console.warn('[ChatStore] Pre-encode failed:', err);
