@@ -92,8 +92,8 @@ pack_b_interleaved(et_fp16_t *out,
         __asm__ volatile(
             "flw.ps    f2, 0(%[src])    \n\t"
             "flw.ps    f3, 32(%[src])   \n\t"
-            "fsch.ps   f2, f1(%[d0])    \n\t"
-            "fsch.ps   f3, f1(%[d1])    \n\t"
+            "fscw.ps   f2, f1(%[d0])    \n\t"
+            "fscw.ps   f3, f1(%[d1])    \n\t"
             :
             : [src] "r"(row),
               [d0] "r"(dst),
