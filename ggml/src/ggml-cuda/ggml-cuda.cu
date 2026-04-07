@@ -2921,13 +2921,19 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+
+/// @brief This function checks if a given GGML computation graph (ggml_cgraph) is compatible with CUDA graph capture. 
+/// It iterates through the nodes of the GGML graph and checks for certain conditions that would make it incompatible with CUDA graphs, such as the presence of split buffers or unsupported node types.
+/// If any incompatible conditions are found, it returns false, indicating that CUDA graph capture should not be used for this graph. If all nodes are compatible, it returns true, indicating that CUDA graph capture can be used.
+/// @param cgraph Pointer to the GGML computation graph.
+/// @return True if CUDA graph capture can be used, false otherwise.
+static bool ggml_cuda_graph_check_compability(const ggml_cgraph * cgraph) {
 
     bool use_cuda_graph = true;
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_tensor * node = cgraph->nodes[i];
+        const ggml_tensor * node = cgraph->nodes[i];
 
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
@@ -2959,7 +2965,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     return use_cuda_graph;
 }
 
-static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, ggml_tensor * node) {
+/// @brief This function populates a ggml_cuda_graph_node_properties struct with the properties of a given GGML tensor node.
+/// @param props Pointer to the ggml_cuda_graph_node_properties struct to populate.
+/// @param node Pointer to the GGML tensor node whose properties are to be copied.
+static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, const ggml_tensor * node) {
     memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
     props->node_data = node->data;
     props->node_op = node->op;
@@ -2979,7 +2988,13 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
     memcpy(props->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
 
-static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_graph_node_properties * props) {
+/// @brief This function compares the properties of ggml_cgraph node(GGML tensor) to the properties stored in a ggml_cuda_graph_node_properties struct.  
+/// It checks if the data pointer, operation type, data type, dimensions, strides, source tensor data pointers, operation parameters, and compute flag match between the two. 
+/// If any of these properties do not match, it returns false, indicating that the CUDA graph may need to be updated. If all properties match, it returns true.
+/// @param node Pointer to the GGML tensor node to compare.
+/// @param props Pointer to the ggml_cuda_graph_node_properties struct to compare against.
+/// @return True if the properties match, false otherwise.
+static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, const ggml_cuda_graph_node_properties * props) {
     if (node->data != props->node_data && node->op != GGML_OP_VIEW) {
         return false;
     }
@@ -3027,11 +3042,15 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
     return true;
 }
 
-static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
+static const void * ggml_cuda_graph_get_key(const ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
-static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+/// @brief This function checks if the properties of the nodes in the given GGML computation graph have changed compared to the properties stored in the corresponding ggml_cuda_graph_node_properties structs in the CUDA graph context.
+/// @param cuda_ctx Pointer to the CUDA backend context.
+/// @param cgraph Pointer to the GGML computation graph.
+/// @return True if an update is required, false otherwise.
+static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph) {
     bool res = false;
 
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
@@ -3089,6 +3108,10 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     return res;
 }
 
+/// @brief This function updates the CUDA graph executable for a given GGML computation graph .
+/// If any errors on update than it destroys the existing CUDA graph executable and creates a new one using cudaGraphInstantiate().
+/// @param cuda_ctx Pointer to the CUDA backend context.
+/// @param graph_key Key identifying the CUDA graph.
 static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
@@ -3116,6 +3139,7 @@ static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_c
         GGML_ASSERT(stat == cudaSuccess);
     }
 }
+
 #endif // USE_CUDA_GRAPH
 
 static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
@@ -3465,7 +3489,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // returns whether the write (out) nodes overwrite the read nodes in operation
-static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
+static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  int           node_idx,
                                                  int           node_count,
                                                  int *         out_nodes,
@@ -3527,7 +3551,14 @@ static bool ggml_cuda_check_fusion_memory_ranges(ggml_cgraph * cgraph,
     return is_ok;
 }
 
-static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
+/// @brief Evaluates and captures a CUDA graph for a given GGML computation graph. 
+/// Scans ggml_cgraph nodes, if required, apply fusion of operations and record kernel functions in the cuda_stream.
+/// @param cuda_ctx Pointer to the CUDA backend context. It includes the CUDA stream.
+/// @param cgraph Pointer to the GGML computation graph.
+/// @param use_cuda_graph Flag indicating whether to use CUDA graphs.
+/// @param cuda_graph_update_required Flag indicating whether a CUDA graph update is required.
+/// @param graph_key Key identifying the CUDA graph.
+static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
     // flag used to determine whether it is an integrated_gpu
@@ -4047,8 +4078,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             }
 
             CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
-            graph_evaluated_or_captured = true; // CUDA graph has been captured           
-            CUDA_CHECK(cudaGraphGetNodes(graph->graph, NULL, &graph->num_nodes)); 
+            graph_evaluated_or_captured = true; // CUDA graph has been captured                        
             cuda_ctx->commit_graph(graph_key);                                         
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
@@ -4079,6 +4109,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 }
 
 #ifdef USE_CUDA_GRAPH
+/// @brief Determines what is the GPU architecture and enables or disables CUDA graph capability.
+/// @param cuda_ctx Pointer to the CUDA backend context.
+/// @param graph_key Key identifying the CUDA graph.
+/// @return True if CUDA graphs can be enabled, false otherwise.
 static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
@@ -4095,6 +4129,11 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, co
 }
 #endif // USE_CUDA_GRAPH
 
+/// @brief Evaluates a GGML computation graph. If CUDA graphs are enabled and compatible, get cuda stream and begin captures the GGML-graph execution into a CUDA graph and launches it. 
+/// Otherwise, executes the graph directly on the CUDA stream.
+/// @param backend Pointer to the CUDA backend.
+/// @param cgraph Pointer to the GGML computation graph.
+/// @return Status of the graph computation.
 static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
@@ -4179,6 +4218,11 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
     }
 }
 
+/// @brief Optimizes a GGML computation graph for CUDA graph execution. Target Q, K, V for concurrency in attention, by interleaving the branches from the fan-out node (e.g. attn-norm) to the join node (e.g. KQ or flash-attn).
+/// This optimization extends the lifetimes of the tensors and increases the chances of fusing more operations within the concurrent branches, which can then be executed using CUDA graphs for better performance.
+/// The original cgraph is saved and restored in graph_compute to enable fusion within streams even when concurrency is not possible.
+/// @param backend The CUDA backend.
+/// @param cgraph The GGML computation graph to optimize.
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
@@ -5304,5 +5348,147 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
 
     return cuda_backend;
 }
+
+#ifdef USE_CUDA_GRAPH
+
+class ggml_cuda_graph_cache::ggml_cuda_graph_cache_implementation
+{
+    
+public:    
+    ggml_cuda_graph_cache_implementation(){}
+
+    /// @brief Retrieves a graph from the cache or creates a new one if it doesn't exist.
+    /// @param first_node_ptr  Pointer to the first node of the graph, used as the key for caching.
+    /// @return Pointer to the cached or newly created graph.
+    ggml_cuda_graph* get_graph(const void* first_node_ptr) {
+        auto it = cache_map.find(first_node_ptr);
+        if (it != cache_map.end()) {
+            // O(1) move to front since it's recently used. no memory alloc or copy, just pointer manipulation.
+            lru_list.splice(lru_list.begin(), lru_list, it->second);
+            return it->second->second.get();
+        }
+        auto  g   = std::make_unique<ggml_cuda_graph>();
+        auto* ptr = g.get();
+        lru_list.emplace_front(first_node_ptr, std::move(g));
+        cache_map[first_node_ptr] = lru_list.begin();
+        return ptr;
+    }
+
+    /// @brief Records graph's size and add it to the memory budget.
+    // idempotent — a second call for the same key is silently ignored.
+    // minimum memory floor applied so zero-node graphs count toward budget.
+    /// @param first_node_ptr  Pointer to the first node of the graph.
+    void commit_graph(const void* first_node_ptr) {
+        auto it = cache_map.find(first_node_ptr);
+        if (it == cache_map.end()) return;
+
+        auto& graph = it->second->second;
+        if (graph->graph == nullptr) {
+            GGML_LOG_DEBUG("Warning: commit on null cudaGraph_t, key=%p\n",
+                           first_node_ptr);
+            return;
+        }
+
+        size_t num_nodes = 0;            
+        CUDA_CHECK(cudaGraphGetNodes(graph->graph, NULL, &num_nodes));
+
+        if (graph->committed) {
+            if (num_nodes == graph->num_nodes) {
+                GGML_LOG_DEBUG("Warning: commit_graph called twice for key=%p\n", first_node_ptr);
+                return; // Strictly idempotent
+            }            
+            // Account for old memory before recalculating
+            memory_usage_total = sat_sub(memory_usage_total, graph->memory_usage);
+        }
+                
+        // Sync num_nodes from the cudaGraph_t API.
+        graph->num_nodes = num_nodes;
+
+        // enforce a minimum floor so zero-node graphs still consume budget.
+        constexpr size_t MIN_BYTES_PER_ENTRY = 256;
+        graph->memory_usage = std::max(graph->num_nodes * 1024, MIN_BYTES_PER_ENTRY);                
+        graph->committed    = true;
+        memory_usage_total += graph->memory_usage;
+        enforce_memory_limit(); 
+    }
+
+    /// @brief Removes unused graphs from the cache.    
+    void remove_unused() {
+        for (auto it = lru_list.begin(); it != lru_list.end();) {
+            auto& key = it->first;
+            auto& g   = it->second;
+            if (g && g->graph == nullptr) {                
+                // safe subtraction.
+                memory_usage_total = sat_sub(memory_usage_total, g->memory_usage);
+                cache_map.erase(key);
+                it = lru_list.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    /// @brief Checks if any graph in the cache is enabled.
+    /// @return  True if any graph is enabled, false otherwise.
+    bool any_graph_enabled()const 
+    { 
+        for (const auto& item : lru_list)
+            if (item.second && item.second->is_enabled()) return true;
+        return false;
+    }
+
+    /// @brief  Checks if any graph in the cache has an instance.
+    /// @return  True if any graph has an instance, false otherwise.
+    bool any_graph_has_instance() const 
+    { 
+        for (const auto& item : lru_list)
+            if (item.second && item.second->instance != nullptr) return true;
+        return false; }
+
+private:
+    using CacheItem = std::pair<const void*, std::unique_ptr<ggml_cuda_graph>>;
+    std::list<CacheItem> lru_list;
+    std::unordered_map<const void*, typename std::list<CacheItem>::iterator> cache_map;
+
+    size_t memory_usage_total = 0;        
+    static constexpr size_t upper_bound_bytes  = 20ULL * 1024 * 1024; // MiB
+
+    // threshold on number of entries so zero-memory graphs can't grow the cache unboundedly.
+    static constexpr size_t MAX_ENTRIES = 128;
+
+    // saturating subtraction — prevents size_t unsigned wrap-around.
+    static size_t sat_sub(size_t total, size_t v) {
+        return (v > total) ? 0 : total - v;
+    }
+
+    /// @brief Evicts least recently used entries until we're under the memory limit and entry count limit.    
+    void enforce_memory_limit() {
+        while ((memory_usage_total >= upper_bound_bytes ||
+                cache_map.size() > MAX_ENTRIES) && lru_list.size()>0) {
+
+            auto& oldest = lru_list.back();
+            GGML_LOG_DEBUG("<->Eviction triggered, size=%zu entries=%zu\n",
+                           memory_usage_total, cache_map.size());
+
+            // saturating subtract.
+            memory_usage_total = sat_sub(memory_usage_total,
+                                         oldest.second->memory_usage);
+            cache_map.erase(oldest.first);
+            lru_list.pop_back();
+        }
+    }
+
+
+};
+
+ggml_cuda_graph_cache::ggml_cuda_graph_cache(): pImpl{std::make_unique<ggml_cuda_graph_cache_implementation>()} {}
+ggml_cuda_graph_cache::~ggml_cuda_graph_cache()=default;
+ggml_cuda_graph* ggml_cuda_graph_cache::get_graph(const void* first_node_ptr){ return pImpl->get_graph(first_node_ptr); } 
+void ggml_cuda_graph_cache::commit_graph(const void* first_node_ptr){ pImpl->commit_graph(first_node_ptr); }
+void ggml_cuda_graph_cache::remove_unused(){ pImpl->remove_unused(); }
+bool ggml_cuda_graph_cache::any_graph_enabled() const { return pImpl->any_graph_enabled(); }
+bool ggml_cuda_graph_cache::any_graph_has_instance() const { return pImpl->any_graph_has_instance(); }
+
+#endif
 
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)

@@ -1319,92 +1319,25 @@ struct ggml_cuda_stream_context {
 };
 
 #ifdef USE_CUDA_GRAPH 
-struct ggml_backend_cuda_graphs_cache {
+
+class ggml_cuda_graph_cache
+{
+    class ggml_cuda_graph_cache_implementation;
+    std::unique_ptr<ggml_cuda_graph_cache_implementation> pImpl;
+    
 public:
-    ggml_backend_cuda_graphs_cache() = default;
-    ggml_backend_cuda_graphs_cache(const ggml_backend_cuda_graphs_cache&) = delete;
- 
-private:
-    using CacheItem = std::pair<const void*, std::unique_ptr<ggml_cuda_graph>>;
-    std::list<CacheItem> lru_list;
-    std::unordered_map<const void*, typename std::list<CacheItem>::iterator> cache_map;
- 
-    size_t total_memory_usage = 0; 
-    const size_t upper_bound_bytes = 10 * 1024 * 1024; // 10 MiB
- 
-    void enforce_memory_limit() {        
-        while (total_memory_usage >= upper_bound_bytes && !lru_list.empty()) {
-            auto& oldest = lru_list.back();
-            GGML_LOG_DEBUG("Note: Eviction triggered, current size: %zu\n",
-                           total_memory_usage);
-            total_memory_usage -= oldest.second->memory_usage;
-            cache_map.erase(oldest.first);
-            lru_list.pop_back();
-        }
-    }
- 
-public:
-    ggml_cuda_graph* get_graph(const void* first_node_ptr) {
-        auto it = cache_map.find(first_node_ptr);
-        if (it != cache_map.end()) {
-            lru_list.splice(lru_list.begin(), lru_list, it->second);
-            return it->second->second.get();
-        }
-        auto  new_graph = std::make_unique<ggml_cuda_graph>();
-        auto* graph_ptr = new_graph.get();
-        lru_list.emplace_front(first_node_ptr, std::move(new_graph));
-        cache_map[first_node_ptr] = lru_list.begin();
-        return graph_ptr;
-    }
- 
-    void commit_graph(const void* first_node_ptr) {
-        auto it = cache_map.find(first_node_ptr);
-        if (it == cache_map.end()) return;
- 
-        auto& graph = it->second->second;
-        if (graph->graph == nullptr) {
-            GGML_LOG_DEBUG("Warning: committing graph with null cudaGraph_t, "
-                           "key: %p\n", first_node_ptr);
-            return;
-        }
- 
-        if (graph->committed) {
-            GGML_LOG_DEBUG("Warning: commit_graph called twice for key %p — "
-                           "ignoring duplicate.\n", first_node_ptr);
-            return;
-        }
- 
-        graph->memory_usage = graph->num_nodes * 1024;
-        graph->committed    = true;          
-        total_memory_usage += graph->memory_usage;
-        enforce_memory_limit();              
-    }
- 
-    void remove_unused() {
-        for (auto it = lru_list.begin(); it != lru_list.end();) {
-            auto& key = it->first;
-            auto& g   = it->second;
-            if (g && g->graph == nullptr) {                
-                total_memory_usage -= g->memory_usage;
-                cache_map.erase(key);
-                it = lru_list.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
- 
-    bool any_graph_enabled() const {
-        for (const auto& item : lru_list)
-            if (item.second && item.second->is_enabled()) return true;
-        return false;
-    }
- 
-    bool any_graph_has_instance() const {
-        for (const auto& item : lru_list)
-            if (item.second && item.second->instance != nullptr) return true;
-        return false;
-    }
+    ggml_cuda_graph* get_graph(const void* first_node_ptr); 
+    void commit_graph(const void* first_node_ptr);
+    void remove_unused();
+    bool any_graph_enabled()      const;
+    bool any_graph_has_instance() const;
+    
+    explicit ggml_cuda_graph_cache();    
+    ~ggml_cuda_graph_cache();     
+    ggml_cuda_graph_cache(ggml_cuda_graph_cache&&)                  = delete;
+    ggml_cuda_graph_cache& operator=(ggml_cuda_graph_cache&&)       = delete;
+    ggml_cuda_graph_cache(const ggml_cuda_graph_cache&)             = delete;    
+    ggml_cuda_graph_cache& operator=(const ggml_cuda_graph_cache&)  = delete;
 };
 
 #endif
@@ -1419,7 +1352,7 @@ struct ggml_backend_cuda_context {
     int curr_stream_no = 0;
 
 #ifdef USE_CUDA_GRAPH  
-    ggml_backend_cuda_graphs_cache cuda_graphs;
+    ggml_cuda_graph_cache cuda_graphs;
 
     // Mark a graph as committed and update memory usage. This should be called after successfully instantiating a CUDA graph instance from the ggml graph. 
     void commit_graph(const void * query_graph_key) 
