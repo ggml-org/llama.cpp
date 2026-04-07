@@ -398,7 +398,13 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
             return type;
         }
     }
-    throw std::runtime_error("Unsupported cache type: " + s);
+
+    auto type = ggml_name_to_type(s.c_str());
+    if (type == GGML_TYPE_COUNT) {
+        throw std::runtime_error("Unsupported cache type: " + s);
+    }
+    LOG_WRN("Unsupported cache type: %s\n", s.c_str());
+    return type;
 }
 
 static std::string get_all_kv_cache_types() {

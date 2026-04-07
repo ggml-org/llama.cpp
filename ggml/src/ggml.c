@@ -1421,6 +1421,18 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
     return wtype;
 }
 
+enum ggml_type ggml_name_to_type(const char * name) {
+    enum ggml_type type = GGML_TYPE_COUNT;
+    ggml_get_type_traits(type);
+
+    for (int i = 0; i < GGML_TYPE_COUNT; i++) {
+        if (strcmp(type_traits[i].type_name, name) == 0) {
+            return (enum ggml_type)i;
+        }
+    }
+    return GGML_TYPE_COUNT;
+}
+
 size_t ggml_tensor_overhead(void) {
     return GGML_OBJECT_SIZE + GGML_TENSOR_SIZE;
 }
