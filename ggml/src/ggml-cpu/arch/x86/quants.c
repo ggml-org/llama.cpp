@@ -274,13 +274,6 @@ static inline __m256 quad_mx_delta_float(const uint8_t x0, const float y0, const
 }
 #endif
 #elif defined(__SSSE3__)
-static inline int hsum_i32_4(const __m128i a) {
-    const __m128i hi64 = _mm_unpackhi_epi64(a, a);
-    const __m128i sum64 = _mm_add_epi32(hi64, a);
-    const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
-    return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
-}
-
 static inline __m128i bytes_from_bits_16(const uint8_t * x) {
     uint16_t x16;
     memcpy(&x16, x, sizeof(uint16_t));
