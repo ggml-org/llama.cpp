@@ -1723,8 +1723,6 @@ class unified_cache {
 
     size_t scratch_pool_hwm() const { return scratch_pool_hwm_; }
 
-    // === Host-Pinned Memory Pool ===
-    // Optional sycl::malloc_host pool managed alongside the VRAM arena.
     // === Host Weight Arena ===
     bool   host_weight_arena_reserve(size_t bytes);
     void * host_weight_arena_alloc(size_t bytes);

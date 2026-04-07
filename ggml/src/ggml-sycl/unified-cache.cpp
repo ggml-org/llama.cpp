@@ -8840,8 +8840,6 @@ void unified_cache::reset_scratch_pool() {
     scratch_pool_off_.store(0, std::memory_order_relaxed);
 }
 
-// --- Host-Pinned Memory Pool ---
-
 // --- Host Weight Arena ---
 
 bool unified_cache::host_weight_arena_reserve(size_t bytes) {
