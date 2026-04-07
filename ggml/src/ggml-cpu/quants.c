@@ -22,6 +22,42 @@
 
 #define UNUSED GGML_UNUSED
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+
+// horizontally add 8 floats
+static inline float hsum_float_8(const __m256 x) {
+    __m128 res = _mm256_extractf128_ps(x, 1);
+    res = _mm_add_ps(res, _mm256_castps256_ps128(x));
+    res = _mm_add_ps(res, _mm_movehl_ps(res, res));
+    res = _mm_add_ss(res, _mm_movehdup_ps(res));
+    return _mm_cvtss_f32(res);
+}
+
+// 32 packed bits -> 32 bytes
+static inline __m256i bytes_from_bits_32(const uint8_t * x) {
+    uint32_t x32;
+    memcpy(&x32, x, sizeof(uint32_t));
+    const __m256i shuf_mask = _mm256_set_epi64x(
+            0x0303030303030303, 0x0202020202020202,
+            0x0101010101010101, 0x0000000000000000);
+    __m256i bytes = _mm256_shuffle_epi8(_mm256_set1_epi32(x32), shuf_mask);
+    const __m256i bit_mask = _mm256_set1_epi64x(0x7fbfdfeff7fbfdfe);
+    bytes = _mm256_or_si256(bytes, bit_mask);
+    return _mm256_sub_epi8(_mm256_setzero_si256(), _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8(-1)));
+}
+
+// multiply int8_t, add results pairwise twice and return as float vector
+static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
+    const __m256i ax = _mm256_sign_epi8(x, x);
+    const __m256i sy = _mm256_sign_epi8(y, x);
+    const __m256i dot = _mm256_maddubs_epi16(ax, sy);
+    const __m256i ones = _mm256_set1_epi16(1);
+    const __m256i summed_pairs = _mm256_madd_epi16(ones, dot);
+    return _mm256_cvtepi32_ps(summed_pairs);
+}
+#endif
+
 void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q1_0_ref(x, y, k);
 }
@@ -134,8 +170,37 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     const block_q1_0 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-    float sumf = 0.0;
+    float sumf = 0.0f;
 
+#if defined(__AVX2__)
+    // AVX2 path
+    __m256 acc = _mm256_setzero_ps();
+    const __m256i one = _mm256_set1_epi8(1);
+
+    for (int i = 0; i < nb; ++i) {
+        const float d0 = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int k = 0; k < 4; ++k) {
+            const float d1 = GGML_FP16_TO_FP32(y[i*4 + k].d);
+            const __m256i bits = bytes_from_bits_32(x[i].qs + k*4);
+
+            __m256i qx = bits;
+
+            qx = _mm256_sub_epi8(_mm256_slli_epi16(qx, 1), one);
+
+            const __m256i qy = _mm256_loadu_si256((const __m256i *) y[i*4 + k].qs);
+            const __m256 q = mul_sum_i8_pairs_float(qx, qy);
+            const __m256 d = _mm256_set1_ps(d0 * d1);
+#if defined(__AVX2__) && defined(__FMA__)
+            acc = _mm256_fmadd_ps(d, q, acc);
+#else
+            acc = _mm256_add_ps(acc, _mm256_mul_ps(d, q));
+#endif
+        }
+    }
+
+    sumf = hsum_float_8(acc);
+#else
     for (int i = 0; i < nb; i++) {
         const float d0 = GGML_FP16_TO_FP32(x[i].d);
 
@@ -160,6 +225,7 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
         sumf += d0 * sumi;
     }
+#endif
 
     *s = sumf;
 }
