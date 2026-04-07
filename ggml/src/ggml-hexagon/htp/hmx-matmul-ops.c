@@ -16,15 +16,16 @@
 #include "ggml-common.h"
 
 #include "hex-dma.h"
+#include "worker-pool.h"
+
 #include "hvx-utils.h"
 #include "hvx-dump.h"
-#include "worker-pool.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 
-#include "hmx-worker.h"
-#include "hmx-utils.h"
 #include "hmx-ops.h"
+#include "hmx-utils.h"
+#include "hmx-worker.h"
 #include "hmx-profile.h"
 
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
@@ -110,36 +111,45 @@ static inline bool hmx_add_overflow(size_t a, size_t b, size_t *out) {
     return false;
 }
 
-// Search for optimal (mc, nc) chunk sizes that maximize mc * nc within VTCM budget.
+// Search for optimal (mc, nc) chunk sizes within VTCM budget.
 //
-// Cost model: total = nc * per_n_cost + mc * per_m_cost + mc * nc * per_mn_cost + overhead
-//   per_n_cost:  bytes per nc column (weight + scratch buffers)
-//   per_m_cost:  bytes per mc row (activation)
-//   per_mn_cost: bytes per mc*nc element (output)
-//   overhead:    fixed bytes (scales 256B, eye_tile 2048B, etc.)
+// VTCM model: nc * per_n_cost + mc * per_m_cost + mc * nc * per_mn_cost + overhead
+//
+// Minimize ceil(m/mc) * m_block_cost + ceil(n/nc) * n_block_cost.
+// All matmul paths repeat weight processing per M-block and activation loading
+// per N-block, so discrete block counts drive total overhead.
+// Tie-break: when cost is equal, prefer larger mc * nc.
+//
+// Caller-provided coefficients:
+//   m_block_cost: penalty per extra M-block (weight redundancy, scales with n).
+//   n_block_cost: penalty per extra N-block (activation redundancy, scales with m).
 //
 // Algorithm: nc sweeps from n_max down by 32, analytically solving for mc_max.
 // Returns 0 on success, -1 if VTCM is insufficient.
-static int hmx_compute_chunks(
-    size_t vtcm_total, size_t overhead,
-    size_t per_n_cost, size_t per_m_cost, size_t per_mn_cost,
-    int m, int n,
-    size_t *m_chunk_out, size_t *n_chunk_out,
-    size_t *total_out)
-{
+static int hmx_compute_chunks(size_t   vtcm_total,
+                              size_t   overhead,
+                              size_t   per_n_cost,
+                              size_t   per_m_cost,
+                              size_t   per_mn_cost,
+                              int      m,
+                              int      n,
+                              size_t   m_block_cost,
+                              size_t   n_block_cost,
+                              size_t * m_chunk_out,
+                              size_t * n_chunk_out,
+                              size_t * total_out) {
     if (m <= 0 || n <= 0) return -1;
     if (vtcm_total <= overhead) return -1;
     if (per_n_cost == 0 || per_m_cost == 0 || per_mn_cost == 0) return -1;
 
     const size_t usable = vtcm_total - overhead;
-    size_t best_mn = 0, best_m = 0, best_n = 0;
+
+    size_t best_cost = SIZE_MAX;
+    size_t best_mn   = 0;
+    size_t best_m = 0, best_n = 0;
 
     const size_t n_max = hex_align_down((size_t)n, HMX_FP16_TILE_N_COLS);
     for (size_t nc = n_max; nc >= HMX_FP16_TILE_N_COLS; nc -= HMX_FP16_TILE_N_COLS) {
-        // Early exit: if nc * m_max cannot beat best, smaller nc won't either
-        if (nc * hex_align_down((size_t)m, HMX_FP16_TILE_N_ROWS) <= best_mn)
-            break;
-
         size_t n_fixed = 0, ncmn = 0, mc_denom = 0;
         if (hmx_mul_overflow(nc, per_n_cost, &n_fixed)) continue;
         if (n_fixed >= usable) goto next_nc;
@@ -153,10 +163,19 @@ static int hmx_compute_chunks(
             mc = hex_align_down(mc, HMX_FP16_TILE_N_ROWS);
             mc = hex_smin(mc, (size_t)m);
 
-            if (mc > 0 && mc * nc > best_mn) {
-                best_mn = mc * nc;
-                best_m  = mc;
-                best_n  = nc;
+            if (mc == 0) {
+                goto next_nc;
+            }
+
+            size_t mblocks = ((size_t) m + mc - 1) / mc;
+            size_t nblocks = ((size_t) n + nc - 1) / nc;
+            size_t cost    = mblocks * m_block_cost + nblocks * n_block_cost;
+            size_t mn      = mc * nc;
+            if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
+                best_cost = cost;
+                best_mn   = mn;
+                best_m    = mc;
+                best_n    = nc;
             }
         }
 
@@ -679,25 +698,29 @@ static void core_dot_chunk_fp16(__fp16 *output, const __fp16 *activation, const 
 // --- Async HMX matmul job (for pipeline overlap) ---
 
 typedef struct {
-    __fp16       *output;
-    const __fp16 *activation;
-    const __fp16 *weight;
-    const __fp16 *scales;
-    int           n_row_tiles;
-    int           n_col_tiles;
-    int           n_dot_tiles;
+    __fp16 *       output;
+    const __fp16 * activation;
+    const __fp16 * weight;
+    const __fp16 * scales;
+    int            n_row_tiles;
+    int            n_col_tiles;
+    int            n_dot_tiles;
 } hmx_matmul_job_t;
 
-static void hmx_matmul_worker_fn(void *data) {
-    hmx_matmul_job_t *job = (hmx_matmul_job_t *) data;
-    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales,
-                        job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
+static void hmx_matmul_worker_fn(void * data) {
+    hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
+    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles,
+                        job->n_dot_tiles);
 }
 
-static inline void hmx_matmul_job_init(
-    hmx_matmul_job_t *job,
-    __fp16 *output, const __fp16 *activation, const __fp16 *weight, const __fp16 *scales,
-    int n_row_tiles, int n_col_tiles, int n_dot_tiles) {
+static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
+                                       __fp16 *           output,
+                                       const __fp16 *     activation,
+                                       const __fp16 *     weight,
+                                       const __fp16 *     scales,
+                                       int                n_row_tiles,
+                                       int                n_col_tiles,
+                                       int                n_dot_tiles) {
     job->output      = output;
     job->activation  = activation;
     job->weight      = weight;
@@ -866,12 +889,13 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
     const size_t f32_scratch_per_m = use_dma_activation ? (size_t) params->k * sizeof(float) : 0;
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
+    // FP16 weight: interleave and activation load have similar per-element cost.
     if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256,
-                             /*per_n=*/3 * vec_dot_size,
-                             /*per_m=*/group_size * vec_dot_size + f32_scratch_per_m,
-                             /*per_mn=*/sizeof(__fp16),
-                             params->m, params->n,
-                             &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+                           /*per_n=*/3 * vec_dot_size,
+                           /*per_m=*/group_size * vec_dot_size + f32_scratch_per_m,
+                           /*per_mn=*/sizeof(__fp16), params->m, params->n,
+                           /*m_block_cost=*/(size_t) params->n,
+                           /*n_block_cost=*/(size_t) params->m, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
         FARF(HIGH, "%s: grouped path does not fit VTCM, falling back to legacy batched loop", __func__);
         return hmx_mat_mul_permuted_w16a32_batched_legacy(ctx, params);
     }
@@ -1040,13 +1064,15 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     const size_t f32_scratch_per_m = use_dma_activation ? (size_t) k * sizeof(float) : 0;
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
+    // FP16 weight: interleave and activation load have similar per-element cost.
     if (hmx_compute_chunks(vtcm_budget,
-                              /*overhead=*/ 256,
-                              /*per_n=*/    3 * vec_dot_size,  // W + S0 + S1
-                              /*per_m=*/    vec_dot_size + f32_scratch_per_m,  // A + optional F32 scratch
-                              /*per_mn=*/   sizeof(__fp16),     // O
-                              m, n,
-                              &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+                           /*overhead=*/256,
+                           /*per_n=*/3 * vec_dot_size,                  // W + S0 + S1
+                           /*per_m=*/vec_dot_size + f32_scratch_per_m,  // A + optional F32 scratch
+                           /*per_mn=*/sizeof(__fp16),                   // O
+                           m, n,
+                           /*m_block_cost=*/(size_t) n,
+                           /*n_block_cost=*/(size_t) m, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
         FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)", __func__, m, k, n, vtcm_budget);
         return -1;
     }
@@ -1191,6 +1217,8 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
 int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict out, const float *restrict x, const uint8_t *restrict w, int m,
                                        int k, int n, int w_type);
 
+#define FALLBACK_TO_STANDARD 1
+
 int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict permuted_weight, int m, int k, int n,
                                      int weight_type) {
@@ -1203,9 +1231,12 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
     // for large m, k (e.g. prefill FFN Down), use out-stationary version
     if (m >= 128 && k > n && n > 1024) {
-        FARF(MEDIUM, "hmx_matmul_qk: OUT-STATIONARY path m=%d k=%d n=%d type=%d (K_BLOCK=512, %d K-iters with fp16 intermediate)",
-             m, k, n, weight_type, (k + 511) / 512);
-        return mat_mul_qk_0_d16a32_out_stationary(ctx, dst, activation, permuted_weight, m, k, n, weight_type);
+        int rc = mat_mul_qk_0_d16a32_out_stationary(ctx, dst, activation, permuted_weight, m, k, n, weight_type);
+        if (rc != FALLBACK_TO_STANDARD) {
+            return rc;  // 0 success, -1 error
+        }
+        FARF(MEDIUM, "hmx_matmul_qk: out-stationary fallback to standard m=%d k=%d n=%d", m, k, n);
+        // fall through to standard path
     }
 
     size_t row_stride = get_x4x2_row_stride(weight_type, k);
@@ -1231,9 +1262,10 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     }
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256,
-                              per_n_cost, /*per_m=*/vec_dot_size, per_mn_cost,
-                              m, n, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+    // Quantized weight: dequant ~1.5x more expensive per element than activation load.
+    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, per_n_cost, /*per_m=*/vec_dot_size, per_mn_cost, m, n,
+                           /*m_block_cost=*/(size_t) n * 3,
+                           /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
         FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d pipe=%d budget=%zu)",
              __func__, m, k, n, use_pipeline, vtcm_budget);
         return -1;
@@ -1402,9 +1434,10 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                 }
 
                 // submit C0 (non-blocking — HMX worker executes in parallel)
-                hmx_matmul_job_init(&job_slots[0],
-                    (__fp16 *) vtcm_output_bufs[0], (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
-                    hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS), hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
+                hmx_matmul_job_init(&job_slots[0], (__fp16 *) vtcm_output_bufs[0], (__fp16 *) vtcm_activation,
+                                    (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
+                                    hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
+                                    hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
                 hmx_worker_submit(ctx->hmx_worker, hmx_matmul_worker_fn, &job_slots[0]);
 
                 // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
@@ -1438,10 +1471,10 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                 // counterpart — and (i+1)%2 was last used by C_{i-1} which completed
                 // before C_i was submitted.
                 if (i + 1 < n_chunk_cnt) {
-                    hmx_matmul_job_init(&job_slots[(i + 1) % 2],
-                        (__fp16 *) vtcm_output_bufs[(i + 1) % 2], (__fp16 *) vtcm_activation,
-                        (__fp16 *) vtcm_weight_bufs[(i + 1) % 2], vtcm_scales,
-                        hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS), hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
+                    hmx_matmul_job_init(&job_slots[(i + 1) % 2], (__fp16 *) vtcm_output_bufs[(i + 1) % 2],
+                                        (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[(i + 1) % 2],
+                                        vtcm_scales, hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
+                                        hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
                     hmx_worker_submit(ctx->hmx_worker, hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]);
                 }
 
@@ -1583,12 +1616,41 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
 
     const size_t vtcm_budget = ctx->vtcm_size;
 
-    const size_t M_BLOCK_SIZE = 512;
-    const size_t N_BLOCK_SIZE = 512;
-    const size_t K_BLOCK_SIZE = 512;
+    const size_t K_BLOCK_SIZE = 1024;
 
-    // Compute precise buffer sizes
+    // Fallback: if k doesn't need K-blocking, out-stationary has no advantage
+    const size_t k_iters_check = (k + K_BLOCK_SIZE - 1) / K_BLOCK_SIZE;
+    if (k_iters_check <= 1) {
+        FARF(MEDIUM, "%s: K_BLK=%zu >= k=%d, fallback to standard path", __func__, K_BLOCK_SIZE, k);
+        return FALLBACK_TO_STANDARD;
+    }
+
+    // Dynamic M,N search via hmx_compute_chunks
     const size_t sub_row_stride_alloc = get_x4x2_row_stride(weight_type, K_BLOCK_SIZE);
+    const size_t per_m                = K_BLOCK_SIZE * sizeof(float)  // scratch1: M×K×4 (act DMA staging F32)
+                         + K_BLOCK_SIZE * sizeof(__fp16);             // activation: M×K×2 (F16 tiles)
+    const size_t per_n = sub_row_stride_alloc                         // scratch0: N×sub_row(K) (packed quant)
+                         + K_BLOCK_SIZE * sizeof(__fp16);             // weight: N×K×2 (F16 tiles)
+    const size_t per_mn       = sizeof(__fp16);                       // output: M×N×2 (out-stationary)
+    // Alignment margin: hex_align_up can add up to 2047 bytes per buffer;
+    // scratch1 (mc×6144) is naturally 2048-aligned, remaining 4 buffers need margin
+    const size_t align_margin = 4 * HMX_FP16_TILE_SIZE;
+    const size_t overhead     = HMX_FP16_TILE_SIZE + 256 + align_margin;  // eye_tile + scales + alignment
+
+    size_t       M_BLOCK_SIZE, N_BLOCK_SIZE, vtcm_used;
+    // Cost-based search: minimize ceil(m/mc)*m_block_cost + ceil(n/nc)*n_block_cost.
+    // From profiling: wt_dequant per element ≈ 1.5× activation load per element.
+    // m_block_cost = n*3: each extra M-block re-dequants all N×K weight (expensive).
+    // n_block_cost = m*2: each extra N-block re-loads all M×K activation (cheaper).
+    const size_t m_block_cost = (size_t) n * 3;
+    const size_t n_block_cost = (size_t) m * 2;
+    if (hmx_compute_chunks(vtcm_budget, overhead, per_n, per_m, per_mn, m, n, m_block_cost, n_block_cost, &M_BLOCK_SIZE,
+                           &N_BLOCK_SIZE, &vtcm_used) != 0) {
+        FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)", __func__, m, k, n, vtcm_budget);
+        return -1;
+    }
+
+    // Compute precise buffer sizes from searched M,N and fixed K
     const size_t weight_size  = hex_align_up(N_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
     const size_t act_size     = hex_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
     const size_t out_size     = hex_align_up(M_BLOCK_SIZE * N_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
@@ -1597,7 +1659,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
 
     const size_t total_vtcm = weight_size + act_size + out_size + scratch0_sz + scratch1_sz + HMX_FP16_TILE_SIZE + 256;
     if (total_vtcm > vtcm_budget) {
-        FARF(HIGH, "%s: VTCM too small: need %zu have %zu (m=%d k=%d n=%d)", __func__, total_vtcm, vtcm_budget, m, k, n);
+        FARF(HIGH, "%s: VTCM overflow after search: need %zu have %zu (M=%zu N=%zu K=%zu)", __func__, total_vtcm,
+             vtcm_budget, M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE);
         return -1;
     }
 
@@ -1611,8 +1674,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
     assert((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) <= vtcm_budget);
 
-    FARF(MEDIUM, "%s: m=%d k=%d n=%d wtype=%d vtcm=%zu/%zu", __func__, m, k, n, weight_type,
-         (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
+    FARF(HIGH, "hmx-mm: m=%d k=%d n=%d wtype=%d block M=%zu N=%zu K=%zu vtcm=%zu/%zu", __func__, m, k, n, weight_type,
+         M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE, (size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base), vtcm_budget);
 
     // initialize eye tile (32x32 identity matrix)
     {

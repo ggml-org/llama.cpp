@@ -21,12 +21,12 @@
 extern "C" {
 #endif
 
-typedef void (*hmx_worker_fn_t)(void *data);
+typedef void (*hmx_worker_fn_t)(void * data);
 
-typedef struct hmx_worker_context *hmx_worker_context_t;
+typedef struct hmx_worker_context * hmx_worker_context_t;
 
 // Create worker thread.  Thread starts idle (no HMX lock held).
-AEEResult hmx_worker_init(hmx_worker_context_t *ctx, uint32_t stack_size, uint32_t vtcm_rctx);
+AEEResult hmx_worker_init(hmx_worker_context_t * ctx, uint32_t stack_size, uint32_t vtcm_rctx);
 
 // Destroy worker thread.  Must not be called while a job is in-flight.
 void hmx_worker_release(hmx_worker_context_t ctx);
@@ -37,7 +37,7 @@ AEEResult hmx_worker_begin(hmx_worker_context_t ctx);
 // Submit a job (non-blocking).  Caller must have called wait() for any
 // previous job before submitting a new one.
 // |data| must remain valid until the corresponding wait() returns.
-AEEResult hmx_worker_submit(hmx_worker_context_t ctx, hmx_worker_fn_t fn, void *data);
+AEEResult hmx_worker_submit(hmx_worker_context_t ctx, hmx_worker_fn_t fn, void * data);
 
 // Block until the current in-flight job completes.
 // Returns immediately if no job is in-flight.

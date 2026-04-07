@@ -1,12 +1,11 @@
 #include "hmx-worker.h"
 
+#include <HAP_compute_res.h>
+#include <HAP_farf.h>
 #include <qurt.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <HAP_compute_res.h>
-#include <HAP_farf.h>
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -14,35 +13,35 @@
 
 enum hmx_worker_cmd {
     HMX_WORKER_CMD_BEGIN,  // acquire HMX lock
-    HMX_WORKER_CMD_JOB,   // execute fn(data)
-    HMX_WORKER_CMD_END,   // release HMX lock
-    HMX_WORKER_CMD_KILL,  // exit thread
+    HMX_WORKER_CMD_JOB,    // execute fn(data)
+    HMX_WORKER_CMD_END,    // release HMX lock
+    HMX_WORKER_CMD_KILL,   // exit thread
 };
 
 struct hmx_worker_context {
     // Command channel: main thread → worker
-    atomic_uint          cmd_seqn;   // bumped by main thread for each command
-    enum hmx_worker_cmd  cmd_type;
-    hmx_worker_fn_t      fn;
-    void                *data;
+    atomic_uint         cmd_seqn;  // bumped by main thread for each command
+    enum hmx_worker_cmd cmd_type;
+    hmx_worker_fn_t     fn;
+    void *              data;
 
     // Completion channel: worker → main thread
-    atomic_uint          done_seqn;  // set to cmd_seqn when command completes
+    atomic_uint done_seqn;  // set to cmd_seqn when command completes
 
     // Configuration
-    uint32_t             vtcm_rctx;
+    uint32_t vtcm_rctx;
 
     // Thread resources
-    qurt_thread_t        thread;
-    void                *stack;      // single allocation: stack + context
+    qurt_thread_t thread;
+    void *        stack;  // single allocation: stack + context
 };
 
 // ---------------------------------------------------------------------------
 // Worker thread entry point
 // ---------------------------------------------------------------------------
 
-static void hmx_worker_main(void *arg) {
-    struct hmx_worker_context *ctx = (struct hmx_worker_context *) arg;
+static void hmx_worker_main(void * arg) {
+    struct hmx_worker_context * ctx = (struct hmx_worker_context *) arg;
 
     FARF(HIGH, "hmx-worker: thread started");
 
@@ -56,23 +55,23 @@ static void hmx_worker_main(void *arg) {
         prev_seqn = seqn;
 
         switch (ctx->cmd_type) {
-        case HMX_WORKER_CMD_BEGIN:
-            HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
-            break;
+            case HMX_WORKER_CMD_BEGIN:
+                HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
+                break;
 
-        case HMX_WORKER_CMD_JOB:
-            ctx->fn(ctx->data);
-            break;
+            case HMX_WORKER_CMD_JOB:
+                ctx->fn(ctx->data);
+                break;
 
-        case HMX_WORKER_CMD_END:
-            HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
-            break;
+            case HMX_WORKER_CMD_END:
+                HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
+                break;
 
-        case HMX_WORKER_CMD_KILL:
-            atomic_store_explicit(&ctx->done_seqn, seqn, memory_order_release);
-            qurt_futex_wake(&ctx->done_seqn, 1);
-            FARF(HIGH, "hmx-worker: thread stopped");
-            return;
+            case HMX_WORKER_CMD_KILL:
+                atomic_store_explicit(&ctx->done_seqn, seqn, memory_order_release);
+                qurt_futex_wake(&ctx->done_seqn, 1);
+                FARF(HIGH, "hmx-worker: thread stopped");
+                return;
         }
 
         atomic_store_explicit(&ctx->done_seqn, seqn, memory_order_release);
@@ -85,9 +84,10 @@ static void hmx_worker_main(void *arg) {
 // ---------------------------------------------------------------------------
 
 // Issue a command to the worker (non-blocking).
-static void hmx_worker_issue(struct hmx_worker_context *ctx,
-                             enum hmx_worker_cmd type,
-                             hmx_worker_fn_t fn, void *data) {
+static void hmx_worker_issue(struct hmx_worker_context * ctx,
+                             enum hmx_worker_cmd         type,
+                             hmx_worker_fn_t             fn,
+                             void *                      data) {
     ctx->cmd_type = type;
     ctx->fn       = fn;
     ctx->data     = data;
@@ -96,11 +96,10 @@ static void hmx_worker_issue(struct hmx_worker_context *ctx,
 }
 
 // Block until the worker has completed the most recently issued command.
-static void hmx_worker_drain(struct hmx_worker_context *ctx) {
+static void hmx_worker_drain(struct hmx_worker_context * ctx) {
     unsigned int expected = atomic_load_explicit(&ctx->cmd_seqn, memory_order_acquire);
     while (atomic_load_explicit(&ctx->done_seqn, memory_order_acquire) != expected) {
-        qurt_futex_wait(&ctx->done_seqn,
-                        atomic_load_explicit(&ctx->done_seqn, memory_order_relaxed));
+        qurt_futex_wait(&ctx->done_seqn, atomic_load_explicit(&ctx->done_seqn, memory_order_relaxed));
     }
 }
 
@@ -110,30 +109,34 @@ static void hmx_worker_drain(struct hmx_worker_context *ctx) {
 
 #define LOWEST_USABLE_QURT_PRIO (254)
 
-AEEResult hmx_worker_init(hmx_worker_context_t *out, uint32_t stack_size, uint32_t vtcm_rctx) {
+AEEResult hmx_worker_init(hmx_worker_context_t * out, uint32_t stack_size, uint32_t vtcm_rctx) {
     if (!out) {
         return AEE_EBADPARM;
     }
 
     // Single allocation: stack followed by context struct.
-    size_t total = stack_size + sizeof(struct hmx_worker_context);
-    unsigned char *blob = (unsigned char *) malloc(total);
+    size_t          total = stack_size + sizeof(struct hmx_worker_context);
+    unsigned char * blob  = (unsigned char *) malloc(total);
     if (!blob) {
         FARF(ERROR, "hmx-worker: allocation failed (%zu bytes)", total);
         return AEE_ENOMEMORY;
     }
     memset(blob, 0, total);
 
-    struct hmx_worker_context *ctx = (struct hmx_worker_context *) (blob + stack_size);
-    ctx->stack     = blob;
-    ctx->vtcm_rctx = vtcm_rctx;
-    atomic_init(&ctx->cmd_seqn,  0);
+    struct hmx_worker_context * ctx = (struct hmx_worker_context *) (blob + stack_size);
+    ctx->stack                      = blob;
+    ctx->vtcm_rctx                  = vtcm_rctx;
+    atomic_init(&ctx->cmd_seqn, 0);
     atomic_init(&ctx->done_seqn, 0);
 
     // Match caller thread priority (same pattern as worker-pool.c).
     int prio = qurt_thread_get_priority(qurt_thread_get_id());
-    if (prio < 1)                       prio = 1;
-    if (prio > LOWEST_USABLE_QURT_PRIO) prio = LOWEST_USABLE_QURT_PRIO;
+    if (prio < 1) {
+        prio = 1;
+    }
+    if (prio > LOWEST_USABLE_QURT_PRIO) {
+        prio = LOWEST_USABLE_QURT_PRIO;
+    }
 
     qurt_thread_attr_t attr;
     qurt_thread_attr_init(&attr);
@@ -154,7 +157,9 @@ AEEResult hmx_worker_init(hmx_worker_context_t *out, uint32_t stack_size, uint32
 }
 
 void hmx_worker_release(hmx_worker_context_t ctx) {
-    if (!ctx) return;
+    if (!ctx) {
+        return;
+    }
 
     // Tell the worker to exit.
     hmx_worker_issue(ctx, HMX_WORKER_CMD_KILL, NULL, NULL);
@@ -172,7 +177,7 @@ AEEResult hmx_worker_begin(hmx_worker_context_t ctx) {
     return AEE_SUCCESS;
 }
 
-AEEResult hmx_worker_submit(hmx_worker_context_t ctx, hmx_worker_fn_t fn, void *data) {
+AEEResult hmx_worker_submit(hmx_worker_context_t ctx, hmx_worker_fn_t fn, void * data) {
     // Caller is expected to have called wait() for any previous job.
     // Safety: drain any residual (should be instant in normal flow).
     hmx_worker_drain(ctx);
