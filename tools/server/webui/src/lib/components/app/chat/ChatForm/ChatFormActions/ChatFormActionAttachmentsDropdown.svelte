@@ -15,7 +15,6 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { Switch } from '$lib/components/ui/switch';
 	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -72,15 +71,6 @@
 	);
 	let totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
 
-	function isGroupDisabled(group: ToolGroup): boolean {
-		return (
-			group.source === ToolSource.MCP &&
-			!!group.serverId &&
-			!conversationsStore.isMcpServerEnabledForChat(group.serverId)
-		);
-	}
-	let hoveredGroup = $state<string | null>(null);
-
 	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
 
 	function getGroupCheckedState(group: (typeof groups)[number]): {
@@ -106,7 +96,6 @@
 	}
 
 	function getEnabledToolCount(group: ToolGroup): number {
-		if (isGroupDisabled(group)) return 0;
 		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.function.name)).length;
 	}
 
@@ -117,9 +106,6 @@
 			}
 			mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
 		}
-	}
-	async function toggleServerForChat(serverId: string) {
-		await conversationsStore.toggleMcpServerForChat(serverId);
 	}
 
 	function handleMcpPromptClick() {
@@ -287,12 +273,9 @@
 						</div>
 					{:else}
 						<div class="max-h-80 overflow-y-auto p-2 pr-1">
-							{#each groups as group (group.label)}
-								{@const groupDisabled = isGroupDisabled(group)}
+							{#each activeGroups as group (group.label)}
 								{@const isExpanded = expandedGroups.has(group.label)}
-								{@const { checked, indeterminate } = groupDisabled
-									? { checked: false, indeterminate: false }
-									: getGroupCheckedState(group)}
+								{@const { checked, indeterminate } = getGroupCheckedState(group)}
 								{@const favicon = getFavicon(group)}
 
 								<Collapsible.Root
@@ -305,20 +288,9 @@
 										}
 									}}
 								>
-									<!-- svelte-ignore a11y_no_static_element_interactions -->
-									<div
-										class="flex items-center gap-1"
-										onmouseenter={() => {
-											if (groupDisabled) hoveredGroup = group.label;
-										}}
-										onmouseleave={() => {
-											if (hoveredGroup === group.label) hoveredGroup = null;
-										}}
-									>
+									<div class="flex items-center gap-1">
 										<Collapsible.Trigger
-											class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50 {groupDisabled
-												? 'opacity-40'
-												: ''}"
+											class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 										>
 											{#if isExpanded}
 												<ChevronDown class="h-3.5 w-3.5 shrink-0" />
@@ -346,41 +318,23 @@
 											</span>
 										</Collapsible.Trigger>
 
-										{#if groupDisabled && hoveredGroup === group.label && group.serverId}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<Switch
-														checked={false}
-														onclick={(e: MouseEvent) => e.stopPropagation()}
-														onCheckedChange={() =>
-															group.serverId && toggleServerForChat(group.serverId)}
-														class="mr-2 shrink-0"
-													/>
-												</Tooltip.Trigger>
-												<Tooltip.Content side="left">
-													<p>Enable {group.label}</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
-										{:else}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<Checkbox
-														{checked}
-														{indeterminate}
-														disabled={groupDisabled}
-														onCheckedChange={() => toolsStore.toggleGroup(group)}
-														class="mr-2 h-4 w-4 shrink-0 {groupDisabled ? 'opacity-40' : ''}"
-													/>
-												</Tooltip.Trigger>
+										<Tooltip.Root>
+											<Tooltip.Trigger>
+												<Checkbox
+													{checked}
+													{indeterminate}
+													onCheckedChange={() => toolsStore.toggleGroup(group)}
+													class="mr-2 h-4 w-4 shrink-0"
+												/>
+											</Tooltip.Trigger>
 
-												<Tooltip.Content side="right">
-													<p>
-														{checked ? 'Disable' : 'Enable'}
-														{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
-													</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
-										{/if}
+											<Tooltip.Content side="right">
+												<p>
+													{checked ? 'Disable' : 'Enable'}
+													{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
+												</p>
+											</Tooltip.Content>
+										</Tooltip.Root>
 									</div>
 
 									<Collapsible.Content>
@@ -388,19 +342,12 @@
 											{#each group.tools as tool (tool.function.name)}
 												<button
 													type="button"
-													class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {groupDisabled
-														? 'pointer-events-none opacity-40'
-														: 'hover:bg-muted/50'}"
-													onclick={() =>
-														!groupDisabled && toolsStore.toggleTool(tool.function.name)}
+													class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
+													onclick={() => toolsStore.toggleTool(tool.function.name)}
 												>
 													<Checkbox
-														checked={groupDisabled
-															? false
-															: toolsStore.isToolEnabled(tool.function.name)}
-														disabled={groupDisabled}
-														onCheckedChange={() =>
-															!groupDisabled && toolsStore.toggleTool(tool.function.name)}
+														checked={toolsStore.isToolEnabled(tool.function.name)}
+														onCheckedChange={() => toolsStore.toggleTool(tool.function.name)}
 														class="h-4 w-4 shrink-0"
 													/>
 
