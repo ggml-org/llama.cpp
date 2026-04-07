@@ -2884,21 +2884,37 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
     // 1. Allocate from WEIGHT zone
     void * ptr = zone_alloc(vram_zone_id::WEIGHT, dst_size);
     if (!ptr) {
-        // VRAM exhausted — register as host-pinned entry instead of failing.
-        // The src_ptr is already host-pinned (from model load / mmap).
-        // Dispatch will see AOS host pointer and route to CPU compute.
         static std::atomic<int> host_fallback_log{ 0 };
         if (host_fallback_log.fetch_add(1, std::memory_order_relaxed) < 10) {
-            GGML_LOG_WARN(
-                "[DIRECT-STAGE] WEIGHT zone full (%zu bytes) — "
-                "registering expert on host for CPU dispatch\n",
-                dst_size);
+            GGML_LOG_WARN("[DIRECT-STAGE] WEIGHT zone full (%zu bytes) — host arena fallback\n", dst_size);
         }
+
+        const sycl::context & ctx   = queue->get_context();
+        sycl::usm::alloc      atype = sycl::get_pointer_type(src_ptr, ctx);
+
+        void *         host_ptr = nullptr;
+        cache_location loc      = cache_location::HOST_MMAP;
+
+        if (atype == sycl::usm::alloc::host) {
+            host_ptr = const_cast<void *>(src_ptr);
+            loc      = cache_location::HOST_PINNED;
+        } else {
+            host_ptr = host_weight_arena_alloc(src_size);
+            if (host_ptr) {
+                std::memcpy(host_ptr, src_ptr, src_size);
+                loc = cache_location::HOST_PINNED;
+            } else {
+                host_ptr = const_cast<void *>(src_ptr);
+                loc      = cache_location::HOST_MMAP;
+                GGML_LOG_WARN("[DIRECT-STAGE] host arena exhausted, raw mmap fallback\n");
+            }
+        }
+
         {
             std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-            direct_expert_entries_[key] = weight_entry{ const_cast<void *>(src_ptr), src_size, GGML_LAYOUT_AOS, cache_location::HOST_MMAP };
+            direct_expert_entries_[key] = weight_entry{ host_ptr, src_size, GGML_LAYOUT_AOS, loc };
         }
-        result.ptr = const_cast<void *>(src_ptr);
+        result.ptr = host_ptr;
         result.ok  = true;
         return result;
     }
