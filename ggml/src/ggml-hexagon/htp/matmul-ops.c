@@ -2921,8 +2921,8 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
     octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
 
-    octx->src0_spad.src  = NULL;
     octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->src0_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
 
     octx->src0_spad.stride = src0_row_size_padded;
@@ -2948,6 +2948,10 @@ int op_matmul(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
 #ifdef HTP_HAS_HMX
+    if (!octx->ctx->hmx_enabled) {
+        return op_matmul_hvx(octx);
+    }
+
     // HMX weight tile requires N to be 32-aligned.
     if (src0->ne[1] % 32 != 0) {
         return op_matmul_hvx(octx);
@@ -3142,8 +3146,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
     octx->src2_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src2_spad.data + octx->src2_spad.size;
 
-    octx->src0_spad.src  = NULL;
     octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->src0_spad.src  = NULL;
     octx->src2_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
 

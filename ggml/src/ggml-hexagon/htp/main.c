@@ -373,12 +373,10 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_queue_delete(ctx->dma[i]);
     }
-#ifdef HTP_HAS_HMX
-    if (ctx->hmx_enabled) {
-        ctx->hmx_enabled = 0;
-    }
-#endif
 
+#ifdef HTP_HAS_HMX
+    ctx->hmx_enabled = 0;
+#endif
 
     vtcm_free(ctx);
 
