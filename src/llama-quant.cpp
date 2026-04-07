@@ -285,7 +285,7 @@ static void llama_tensor_dequantize_impl(
 // do we allow this tensor to be quantized?
 //
 
-static bool tensor_allows_quantization(const llama_model_quantize_params * params, llm_arch arch, const ggml_tensor * tensor) {
+static bool tensor_allows_quantization(const llama_model_quantize_params * params, [[maybe_unused]] llm_arch arch, const ggml_tensor * tensor) {
     // trivial checks first -- no string ops needed
     if (params->only_copy)       return false;
 
@@ -314,8 +314,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
     // do not quantize positional embeddings and token types (BERT)
-    quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
-    quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+    // NOTE: can't use LLM_TN here because the layer is uncertain
+    quantize &= name.find("position_embd.weight") == std::string::npos;
+    quantize &= name.find("token_types.weight") == std::string::npos;
 
     // do not quantize Mamba/Kimi's small conv1d weights
     // NOTE: can't use LLM_TN here because the layer number is not known
