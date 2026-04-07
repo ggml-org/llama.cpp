@@ -2066,22 +2066,22 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_NORM: (
             "conformer.layers.{bid}.conv.batch_norm", # lfm2
-            "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n
+            "conformer.layers.{bid}.lconv1d.conv_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
             "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
-            "conformer.layers.{bid}.lconv1d.linear_start", # gemma3n
+            "conformer.layers.{bid}.lconv1d.linear_start", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW2: (
             "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
-            "conformer.layers.{bid}.lconv1d.linear_end", # gemma3n
+            "conformer.layers.{bid}.lconv1d.linear_end", # gemma4
         ),
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
-            "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n
+            "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma4
         ),
 
         MODEL_TENSOR.A_PER_DIM_K_SCALE: (

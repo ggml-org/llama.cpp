@@ -3438,13 +3438,13 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 // Blocked causal attention mask: [context_size, chunk_size, num_blocks]
                 {
-                    std::vector<float> mask(context_size * chunk_size * num_blocks, -INFINITY);
+                    std::vector<float> mask(context_size * chunk_size * num_blocks, -1e9f);
                     for (int b = 0; b < num_blocks; b++) {
                         for (int q = 0; q < chunk_size; q++) {
                             int gq = b * chunk_size + q;
                             for (int k = 0; k < context_size; k++) {
                                 int gk = b * chunk_size - max_past + k;
-                                if (gq < n_pos && gk >= 0 && gk < n_pos && gk <= gq) {
+                                if (gq < n_pos && gk >= 0 && gk < n_pos && gk <= gq && (gq - gk) < max_past) {
                                     mask[k + q * context_size + b * context_size * chunk_size] = 0.0f;
                                 }
                             }
