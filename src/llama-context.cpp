@@ -160,8 +160,9 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
-    cparams.op_offload = params.op_offload;
-    cparams.kv_unified = params.kv_unified;
+    cparams.op_offload   = params.op_offload;
+    cparams.expert_cache = params.expert_cache;
+    cparams.kv_unified   = params.kv_unified;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -365,6 +366,18 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (cparams.expert_cache && sched) {
+        int64_t hits, misses, fate, saved, copied;
+        ggml_backend_sched_get_expert_cache_stats(sched.get(), &hits, &misses, &fate, &saved, &copied);
+        if (hits + misses > 0) {
+            LLAMA_LOG_INFO("%s: expert-cache: hits=%" PRId64 " (%.1f%%) misses=%" PRId64
+                " fate_hits=%" PRId64 " saved=%.1fMB copied=%.1fMB\n",
+                __func__,
+                hits, 100.0 * hits / (hits + misses),
+                misses, fate,
+                saved / 1048576.0, copied / 1048576.0);
+        }
+    }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -408,6 +421,10 @@ void llama_context::sched_reserve() {
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+
+    if (cparams.expert_cache) {
+        ggml_backend_sched_set_expert_cache(sched.get(), true);
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -2910,6 +2927,7 @@ llama_context_params llama_context_default_params() {
         /*.offload_kqv                 =*/ true,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
+        /*.expert_cache                =*/ false,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,

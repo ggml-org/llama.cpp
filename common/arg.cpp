@@ -2328,6 +2328,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
+    add_opt(common_arg(
+        {"--expert-cache"},
+        "enable MoE expert GPU cache to avoid redundant CPU->GPU copies (use with --cpu-moe)",
+        [](common_params & params) {
+            params.expert_cache = true;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_CACHE"));
+    add_opt(common_arg(
+        {"--expert-cache-stats"},
+        "print MoE expert cache statistics on context free",
+        [](common_params & params) {
+            params.expert_cache_stats = true;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_CACHE_STATS"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
