@@ -20,6 +20,7 @@
 //
 
 #include "unified-kernel.hpp"
+
 #include "mmvq.hpp"
 #include "quantize.hpp"
 
@@ -35,29 +36,30 @@
 #ifdef UNIFIED_KERNEL_TEST_STANDALONE
 
 // Stub global debug flags
-bool g_ggml_sycl_debug = false;
+bool g_ggml_sycl_debug            = false;
 bool g_ggml_sycl_debug_forced_off = false;
 
 // Stub device info structure (minimal for testing)
 struct ggml_sycl_device_info_stub {
-    int nsm = 20;
+    int          nsm         = 20;
     const char * device_name = "Intel(R) Arc(TM) B580 Graphics";
+
     struct {
-        bool supported = true;
-        bool supports_int8 = true;
-        bool supports_fp16 = true;
-        int slm_size = 65536;
-        int max_wg_size = 1024;
-        int sg_size_preferred = 16;
-        int M = 8;   // XMX tile M dimension
-        int N = 16;  // XMX tile N dimension
-        int K = 32;  // XMX tile K dimension (for INT8)
+        bool supported         = true;
+        bool supports_int8     = true;
+        bool supports_fp16     = true;
+        int  slm_size          = 65536;
+        int  max_wg_size       = 1024;
+        int  sg_size_preferred = 16;
+        int  M                 = 8;   // XMX tile M dimension
+        int  N                 = 16;  // XMX tile N dimension
+        int  K                 = 32;  // XMX tile K dimension (for INT8)
     } xmx_caps;
 };
 
 struct ggml_sycl_info_stub {
-    int device_count = 1;
-    ggml_sycl_device_info_stub devices[1] = {};
+    int                        device_count = 1;
+    ggml_sycl_device_info_stub devices[1]   = {};
 };
 
 static ggml_sycl_info_stub g_stub_sycl_info;
@@ -67,21 +69,23 @@ const ggml_sycl_info_stub & ggml_sycl_info() {
 }
 
 // Stub GGML_SYCL_DEBUG macro (no-op in standalone mode)
-#define GGML_SYCL_DEBUG(...) do {} while(0)
+#    define GGML_SYCL_DEBUG(...) \
+        do {                     \
+        } while (0)
 
 // Stub GGML_LOG macros (normally from ggml-impl.h)
-#define GGML_LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
-#define GGML_LOG_WARN(...)  fprintf(stderr, __VA_ARGS__)
+#    define GGML_LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
+#    define GGML_LOG_WARN(...)  fprintf(stderr, __VA_ARGS__)
 
-#else  // !UNIFIED_KERNEL_TEST_STANDALONE
+#else                      // !UNIFIED_KERNEL_TEST_STANDALONE
 
-#include "common.hpp"  // For ggml_sycl_info() and GGML_SYCL_DEBUG
+#    include "common.hpp"  // For ggml_sycl_info() and GGML_SYCL_DEBUG
 
-#endif  // UNIFIED_KERNEL_TEST_STANDALONE
+#endif                     // UNIFIED_KERNEL_TEST_STANDALONE
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace ggml_sycl_unified {
@@ -92,7 +96,9 @@ namespace ggml_sycl_unified {
 // Case-insensitive substring search for device name matching
 
 static bool name_contains(const char * name, const char * substr) {
-    if (!name || !substr) return false;
+    if (!name || !substr) {
+        return false;
+    }
 
     // Convert both to lowercase and search
     std::string lower_name   = name;
@@ -109,15 +115,17 @@ static bool name_contains(const char * name, const char * substr) {
 // GPU family enumeration for hardware capability detection
 enum class GPUFamily {
     UNKNOWN,
-    ARC_ALCHEMIST,   // A-series (A770, A750, A580, A380, A310)
-    ARC_BATTLEMAGE,  // B-series (B580, B570)
-    DATA_CENTER_MAX, // PVC (Ponte Vecchio)
-    DATA_CENTER_FLEX // Arctic Sound (Flex series)
+    ARC_ALCHEMIST,    // A-series (A770, A750, A580, A380, A310)
+    ARC_BATTLEMAGE,   // B-series (B580, B570)
+    DATA_CENTER_MAX,  // PVC (Ponte Vecchio)
+    DATA_CENTER_FLEX  // Arctic Sound (Flex series)
 };
 
 // Detect GPU family from device name
 static GPUFamily detect_gpu_family_from_name(const char * name) {
-    if (!name) return GPUFamily::UNKNOWN;
+    if (!name) {
+        return GPUFamily::UNKNOWN;
+    }
 
     // Arc Battlemage (B-series): B580, B570, etc.
     if (name_contains(name, "B580") || name_contains(name, "B570") || name_contains(name, "B50") ||
@@ -158,7 +166,7 @@ static int get_max_esimd_workgroup(GPUFamily family) {
         case GPUFamily::DATA_CENTER_FLEX:
         case GPUFamily::UNKNOWN:
         default:
-            return 64;    // Conservative default
+            return 64;  // Conservative default
     }
 }
 
@@ -212,8 +220,8 @@ XMXConfig XMXConfig::from_device(int device_id) {
     // Note: ggml_sycl_info() is in global namespace (defined in common.hpp)
     const auto & info = ::ggml_sycl_info();
     if (device_id >= info.device_count) {
-        GGML_SYCL_DEBUG("[XMXConfig] device_id=%d >= device_count=%d, returning default config\n",
-                        device_id, info.device_count);
+        GGML_SYCL_DEBUG("[XMXConfig] device_id=%d >= device_count=%d, returning default config\n", device_id,
+                        info.device_count);
         return cfg;
     }
 
@@ -263,19 +271,19 @@ XMXConfig XMXConfig::from_device(int device_id) {
     // Derived: double buffer feasibility
     // Double buffer if SLM can hold 2x tile buffers (conservative: 50% of SLM)
     // Tile buffer = M x K x sizeof(half) for activations + N x K x sizeof(half) for weights
-    size_t tile_size = cfg.xmx_m * cfg.xmx_k_int8 * sizeof(sycl::half) +
-                       cfg.xmx_n * cfg.xmx_k_int8 * sizeof(sycl::half);
+    size_t tile_size =
+        cfg.xmx_m * cfg.xmx_k_int8 * sizeof(sycl::half) + cfg.xmx_n * cfg.xmx_k_int8 * sizeof(sycl::half);
     cfg.use_double_buffer = (2 * tile_size) < (cfg.slm_size / 2);
 
     // Default tiles per work-item (can be tuned later)
     cfg.tiles_per_workitem = 1;
 
-    GGML_SYCL_DEBUG("[XMXConfig] device=%d: M=%zu N=%zu K_INT8=%zu K_FP16=%zu SLM=%zu nsm=%d "
-                    "supported=%d int8=%d fp16=%d double_buf=%d max_esimd_wg=%d nbarrier=%d esimd_dpas=%d\n",
-                    device_id, cfg.xmx_m, cfg.xmx_n, cfg.xmx_k_int8, cfg.xmx_k_fp16,
-                    cfg.slm_size, cfg.nsm, cfg.supported, cfg.supports_int8,
-                    cfg.supports_fp16, cfg.use_double_buffer, cfg.max_esimd_workgroup,
-                    cfg.supports_named_barrier, cfg.supports_esimd_dpas);
+    GGML_SYCL_DEBUG(
+        "[XMXConfig] device=%d: M=%zu N=%zu K_INT8=%zu K_FP16=%zu SLM=%zu nsm=%d "
+        "supported=%d int8=%d fp16=%d double_buf=%d max_esimd_wg=%d nbarrier=%d esimd_dpas=%d\n",
+        device_id, cfg.xmx_m, cfg.xmx_n, cfg.xmx_k_int8, cfg.xmx_k_fp16, cfg.slm_size, cfg.nsm, cfg.supported,
+        cfg.supports_int8, cfg.supports_fp16, cfg.use_double_buffer, cfg.max_esimd_workgroup,
+        cfg.supports_named_barrier, cfg.supports_esimd_dpas);
 
     return cfg;
 }
@@ -284,7 +292,7 @@ static bool ggml_sycl_unified_debug_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_DEBUG");
-        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+        enabled          = (env && std::atoi(env) != 0) ? 1 : 0;
     }
     return enabled != 0;
 }
@@ -293,8 +301,7 @@ static bool ggml_sycl_unified_debug_enabled() {
 // Kernel Class Names for Profiling
 // =============================================================================
 
-template <int TILE_M, int TILE_N, int TILE_K, bool USE_XMX>
-class unified_matmul_kernel_name;
+template <int TILE_M, int TILE_N, int TILE_K, bool USE_XMX> class unified_matmul_kernel_name;
 
 // Separate name for fallback to avoid ODR violation
 class unified_matmul_kernel_fallback;
@@ -402,20 +409,19 @@ SYCL_EXTERNAL inline sycl::half dequant_mxfp4_half(const block_mxfp4_unified * b
  * @param idx_in_blk  Index within block (0..31)
  * @return Dequantized half value
  */
-SYCL_EXTERNAL inline sycl::half dequant_q4_0_half_soa(
-    const uint8_t * qs_base,
-    const sycl::half * d_base,
-    int64_t row,
-    int k_blocks,
-    int block_idx,
-    int idx_in_blk) {
+SYCL_EXTERNAL inline sycl::half dequant_q4_0_half_soa(const uint8_t *    qs_base,
+                                                      const sycl::half * d_base,
+                                                      int64_t            row,
+                                                      int                k_blocks,
+                                                      int                block_idx,
+                                                      int                idx_in_blk) {
     // Each row has k_blocks * 16 bytes of quantized values
-    const int row_qs_bytes = k_blocks * 16;
-    const uint8_t * qs_row = qs_base + row * row_qs_bytes;
-    const sycl::half * d_row = d_base + row * k_blocks;
+    const int          row_qs_bytes = k_blocks * 16;
+    const uint8_t *    qs_row       = qs_base + row * row_qs_bytes;
+    const sycl::half * d_row        = d_base + row * k_blocks;
 
-    const sycl::half d = d_row[block_idx];
-    const uint8_t * qs = qs_row + block_idx * 16;
+    const sycl::half d  = d_row[block_idx];
+    const uint8_t *  qs = qs_row + block_idx * 16;
 
     int qs_val;
     if (idx_in_blk < 16) {
@@ -431,8 +437,7 @@ SYCL_EXTERNAL inline sycl::half dequant_q4_0_half_soa(
 // =============================================================================
 
 #if GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
-template <int TILE_M, int TILE_N, int TILE_K>
-class unified_matmul_xmx_kernel_name;
+template <int TILE_M, int TILE_N, int TILE_K> class unified_matmul_xmx_kernel_name;
 #endif
 
 // =============================================================================
@@ -469,10 +474,10 @@ namespace sycl_xmx = sycl::ext::oneapi::experimental::matrix;
  */
 template <int TILE_M, int TILE_N, int TILE_K>
 SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                    item,
-                                                   const UnifiedKernelArgs             args,
-                                                   sycl::local_accessor<sycl::half, 1> slm_weights,
-                                                   sycl::local_accessor<sycl::half, 1> slm_activations,
-                                                   sycl::local_accessor<float, 1>      slm_acc_out) {
+                                                  const UnifiedKernelArgs             args,
+                                                  sycl::local_accessor<sycl::half, 1> slm_weights,
+                                                  sycl::local_accessor<sycl::half, 1> slm_activations,
+                                                  sycl::local_accessor<float, 1>      slm_acc_out) {
     auto sg = item.get_sub_group();
 
     // Tile coordinates
@@ -480,23 +485,23 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
     const int tile_col = item.get_group(1);  // N dimension (output columns)
 
     // Thread coordinates within work-group
-    const int local_row = item.get_local_id(0);
-    const int local_col = item.get_local_id(1);
+    const int local_row      = item.get_local_id(0);
+    const int local_col      = item.get_local_id(1);
     const int local_size_row = item.get_local_range(0);
     const int local_size_col = item.get_local_range(1);
-    const int local_linear = local_row * local_size_col + local_col;
-    const int local_total = local_size_row * local_size_col;
+    const int local_linear   = local_row * local_size_col + local_col;
+    const int local_total    = local_size_row * local_size_col;
 
     // Sub-group info
     const int sg_id = sg.get_group_linear_id();
-    const int lane = sg.get_local_linear_id();
+    const int lane  = sg.get_local_linear_id();
 
     // Global output coordinates for this work-group
     const int64_t m_start = tile_row * TILE_M;  // Starting output row
     const int64_t n_start = tile_col * TILE_N;  // Starting output column
 
     // Number of K tiles
-    const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
+    const int k_tiles          = (args.K + TILE_K - 1) / TILE_K;
     const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
 
     // Quant type dispatch
@@ -508,12 +513,12 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
 
     // SoA layout pointers (Q4_0 specific — MXFP4 uses AOS path)
     // SoA layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
-    const bool use_soa = (args.layout == LayoutMode::SOA);
-    const int64_t total_blocks = args.N * k_blocks_per_row;
-    const int64_t d_offset = total_blocks * (UNIFIED_QK4_0 / 2);  // Byte offset to scale values
-    const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
-    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(args.weights) + d_offset);
+    const bool         use_soa      = (args.layout == LayoutMode::SOA);
+    const int64_t      total_blocks = args.N * k_blocks_per_row;
+    const int64_t      d_offset     = total_blocks * (UNIFIED_QK4_0 / 2);  // Byte offset to scale values
+    const uint8_t *    qs_base      = static_cast<const uint8_t *>(args.weights);
+    const sycl::half * d_base =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(args.weights) + d_offset);
 
     // XMX tile dimensions and counts
     constexpr int NUM_TILES_M = TILE_M / XMX_TILE_M;
@@ -523,17 +528,16 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
     // Each sub-group handles one (tm, tn) output tile
     // Assign sub-groups to output tiles in row-major order
     const int num_output_tiles = NUM_TILES_M * NUM_TILES_N;
-    const int num_subgroups = (local_total + XMX_SUBGROUP_SIZE - 1) / XMX_SUBGROUP_SIZE;
+    const int num_subgroups    = (local_total + XMX_SUBGROUP_SIZE - 1) / XMX_SUBGROUP_SIZE;
 
     // Joint matrix declarations
-    sycl_xmx::joint_matrix<sycl::sub_group, sycl::half,
-                           sycl_xmx::use::a, XMX_TILE_M, XMX_TILE_K,
-                           sycl_xmx::layout::row_major> mat_a;
-    sycl_xmx::joint_matrix<sycl::sub_group, sycl::half,
-                           sycl_xmx::use::b, XMX_TILE_K, XMX_TILE_N,
-                           sycl_xmx::layout::col_major> mat_b;
-    sycl_xmx::joint_matrix<sycl::sub_group, float,
-                           sycl_xmx::use::accumulator, XMX_TILE_M, XMX_TILE_N> acc;
+    sycl_xmx::joint_matrix<sycl::sub_group, sycl::half, sycl_xmx::use::a, XMX_TILE_M, XMX_TILE_K,
+                           sycl_xmx::layout::row_major>
+        mat_a;
+    sycl_xmx::joint_matrix<sycl::sub_group, sycl::half, sycl_xmx::use::b, XMX_TILE_K, XMX_TILE_N,
+                           sycl_xmx::layout::col_major>
+                                                                                                       mat_b;
+    sycl_xmx::joint_matrix<sycl::sub_group, float, sycl_xmx::use::accumulator, XMX_TILE_M, XMX_TILE_N> acc;
 
     // Initialize accumulator to zero
     sycl_xmx::joint_matrix_fill(sg, acc, 0.0f);
@@ -541,22 +545,22 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
     // Determine which output tile this sub-group handles
     // Each sub-group processes one XMX output tile (8x16)
     const int my_tile_idx = sg_id % num_output_tiles;
-    const int my_tm = my_tile_idx / NUM_TILES_N;
-    const int my_tn = my_tile_idx % NUM_TILES_N;
-    const int m_base = my_tm * XMX_TILE_M;
-    const int n_base = my_tn * XMX_TILE_N;
+    const int my_tm       = my_tile_idx / NUM_TILES_N;
+    const int my_tn       = my_tile_idx % NUM_TILES_N;
+    const int m_base      = my_tm * XMX_TILE_M;
+    const int n_base      = my_tn * XMX_TILE_N;
 
     // K-loop: iterate over K dimension in tiles
     for (int kt = 0; kt < k_tiles; kt++) {
         const int64_t k_start = kt * TILE_K;
-        const int64_t k_end = sycl::min(k_start + TILE_K, args.K);
-        const int     k_len = static_cast<int>(k_end - k_start);
+        const int64_t k_end   = sycl::min(k_start + TILE_K, args.K);
+        const int     k_len   = static_cast<int>(k_end - k_start);
 
         // ==== Cooperative Load: All threads load data to SLM ====
         // Load weights [TILE_N x TILE_K], but only up to k_len valid K elements
         for (int idx = local_linear; idx < TILE_N * TILE_K; idx += local_total) {
-            const int n_off = idx / TILE_K;
-            const int k_off = idx % TILE_K;
+            const int     n_off    = idx / TILE_K;
+            const int     k_off    = idx % TILE_K;
             const int64_t n_global = n_start + n_off;
 
             sycl::half w = sycl::half(0.0f);
@@ -565,9 +569,9 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
             // - n_global < args.N (boundary check on N)
             // - k_off < k_len (only load actual K data for this tile)
             if (n_global < args.N && k_off < k_len) {
-                const int64_t k_global = k_start + k_off;
-                const int block_in_row = static_cast<int>(k_global / UNIFIED_QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+                const int64_t k_global     = k_start + k_off;
+                const int     block_in_row = static_cast<int>(k_global / UNIFIED_QK4_0);
+                const int     idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
                 if (use_soa && !is_mxfp4) {
                     // SoA layout: separate qs and d arrays (Q4_0 only)
                     w = dequant_q4_0_half_soa(qs_base, d_base, n_global, k_blocks_per_row, block_in_row, idx_in_block);
@@ -586,8 +590,8 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
 
         // Load activations [TILE_M x TILE_K], but only up to k_len valid K elements
         for (int idx = local_linear; idx < TILE_M * TILE_K; idx += local_total) {
-            const int m_off = idx / TILE_K;
-            const int k_off = idx % TILE_K;
+            const int     m_off    = idx / TILE_K;
+            const int     k_off    = idx % TILE_K;
             const int64_t m_global = m_start + m_off;
 
             sycl::half a = sycl::half(0.0f);
@@ -597,7 +601,7 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
             // - k_off < k_len (only load actual K data for this tile)
             if (m_global < args.M && k_off < k_len) {
                 const int64_t k_global = k_start + k_off;
-                a = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
+                a                      = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
             }
             slm_activations[m_off * TILE_K + k_off] = a;
         }
@@ -615,15 +619,15 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
                 const int k_base = tk * XMX_TILE_K;
 
                 // Load activations tile (row-major: activations[m, k])
-                auto a_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                       sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(&slm_activations[m_base * TILE_K + k_base]));
+                auto a_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        const_cast<sycl::half *>(&slm_activations[m_base * TILE_K + k_base]));
                 sycl_xmx::joint_matrix_load(sg, mat_a, a_ptr, TILE_K);
 
                 // Load weights tile (col-major for transposed access)
-                auto b_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                       sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(&slm_weights[n_base * TILE_K + k_base]));
+                auto b_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        const_cast<sycl::half *>(&slm_weights[n_base * TILE_K + k_base]));
                 sycl_xmx::joint_matrix_load(sg, mat_b, b_ptr, TILE_K);
 
                 // Compute: acc += A * B
@@ -647,16 +651,15 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
             // Store result directly to global memory
             // Need to handle boundary cases where tile extends beyond matrix
             const bool fully_in_bounds =
-                (m_global_base + XMX_TILE_M <= args.M) &&
-                (n_global_base + XMX_TILE_N <= args.N);
+                (m_global_base + XMX_TILE_M <= args.M) && (n_global_base + XMX_TILE_N <= args.N);
 
             if (fully_in_bounds && (args.N % XMX_TILE_N == 0)) {
                 // Direct store to global memory for fully-in-bounds tiles
                 // NOTE: Only use direct store when N is a multiple of XMX_TILE_N (16)
                 // because joint_matrix_store with non-aligned stride causes data corruption
-                auto out_ptr = sycl::address_space_cast<sycl::access::address_space::global_space,
-                                                         sycl::access::decorated::no>(
-                    &args.output[m_global_base * args.N + n_global_base]);
+                auto out_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::global_space, sycl::access::decorated::no>(
+                        &args.output[m_global_base * args.N + n_global_base]);
                 sycl_xmx::joint_matrix_store(sg, acc, out_ptr, args.N, sycl_xmx::layout::row_major);
             } else {
                 // Boundary case: Store to dedicated float SLM buffer,
@@ -664,16 +667,17 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
                 constexpr int ACC_SIZE = XMX_TILE_M * XMX_TILE_N;
 
                 // Use the dedicated float SLM accessor
-                auto slm_acc_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                            sycl::access::decorated::no>(&slm_acc_out[0]);
+                auto slm_acc_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        &slm_acc_out[0]);
 
                 sycl_xmx::joint_matrix_store(sg, acc, slm_acc_ptr, XMX_TILE_N, sycl_xmx::layout::row_major);
                 sycl::group_barrier(sg);
 
                 // Write valid elements with explicit bounds checking
                 for (int i = lane; i < ACC_SIZE; i += XMX_SUBGROUP_SIZE) {
-                    const int row = i / XMX_TILE_N;
-                    const int col = i % XMX_TILE_N;
+                    const int     row      = i / XMX_TILE_N;
+                    const int     col      = i % XMX_TILE_N;
                     const int64_t m_global = m_global_base + row;
                     const int64_t n_global = n_global_base + col;
 
@@ -705,45 +709,40 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
 #if GGML_SYCL_ESIMD_AVAILABLE
 
 // Kernel class names for SYCL naming and profiling
-template <int TILE_M, int TILE_N>
-class esimd_fp16_kernel;
+template <int TILE_M, int TILE_N> class esimd_fp16_kernel;
 
-template <int TILE_M, int TILE_N>
-class esimd_fp16_double_buffered_kernel;
+template <int TILE_M, int TILE_N> class esimd_fp16_double_buffered_kernel;
 
-template <int TILE_M, int TILE_N>
-class esimd_int8_kernel;
+template <int TILE_M, int TILE_N> class esimd_int8_kernel;
 
-#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 // Cooperative ESIMD kernel: multi-work-item with work-group barrier
 // Uses split barriers (SPV_INTEL_split_barrier) for efficient synchronization on Arc.
-template <int WG_SIZE>
-class esimd_fp16_cooperative_kernel;
-#endif
+template <int WG_SIZE> class esimd_fp16_cooperative_kernel;
+#    endif
 
-#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 // Large-tile ESIMD kernel: 64 work-items for 32x32 output tiles
 // Uses split barriers (SPV_INTEL_split_barrier) for efficient synchronization on Arc.
-template <int WG_SIZE>
-class esimd_fp16_large_tile_kernel;
-#endif
+template <int WG_SIZE> class esimd_fp16_large_tile_kernel;
+#    endif
 
 // =============================================================================
 // ESIMD dpas Constants - FP16
 // =============================================================================
 // Hardware-defined parameters for FP16 dpas on Intel Arc
 constexpr int ESIMD_SYSTOLIC_DEPTH = 8;   // Always 8 for dpas
-constexpr int ESIMD_REPEAT_COUNT = 8;     // M dimension = RepeatCount
-constexpr int ESIMD_EXEC_SIZE = 16;       // N dimension = ExecutionSize
-constexpr int ESIMD_K_PER_DPAS = 16;      // K elements per dpas for FP16
+constexpr int ESIMD_REPEAT_COUNT   = 8;   // M dimension = RepeatCount
+constexpr int ESIMD_EXEC_SIZE      = 16;  // N dimension = ExecutionSize
+constexpr int ESIMD_K_PER_DPAS     = 16;  // K elements per dpas for FP16
 
 // Operand sizes for FP16 dpas
 // A (activations): Repeat * K_per = 8 * 16 = 128 half elements
 // B (weights): K_per * ExecSize = 16 * 16 = 256 half elements
 // Acc (output): Repeat * ExecSize = 8 * 16 = 128 float elements
-constexpr int ESIMD_A_SIZE = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;   // 128
-constexpr int ESIMD_B_SIZE = ESIMD_K_PER_DPAS * ESIMD_EXEC_SIZE;     // 256
-constexpr int ESIMD_ACC_SIZE = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE; // 128
+constexpr int ESIMD_A_SIZE   = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;  // 128
+constexpr int ESIMD_B_SIZE   = ESIMD_K_PER_DPAS * ESIMD_EXEC_SIZE;     // 256
+constexpr int ESIMD_ACC_SIZE = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE;   // 128
 
 // =============================================================================
 // ESIMD dpas Constants - INT8
@@ -756,9 +755,9 @@ constexpr int ESIMD_K_PER_DPAS_INT8 = 32;  // K elements per dpas for INT8
 // A (activations): Repeat * K_per = 8 * 32 = 256 int8 elements
 // B (weights): K_per * ExecSize = 32 * 16 = 512 int8 elements
 // Acc (output): Repeat * ExecSize = 8 * 16 = 128 int32 elements
-constexpr int ESIMD_A_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS_INT8;   // 256
-constexpr int ESIMD_B_SIZE_INT8 = ESIMD_K_PER_DPAS_INT8 * ESIMD_EXEC_SIZE;     // 512
-constexpr int ESIMD_ACC_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE;      // 128
+constexpr int ESIMD_A_SIZE_INT8   = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS_INT8;  // 256
+constexpr int ESIMD_B_SIZE_INT8   = ESIMD_K_PER_DPAS_INT8 * ESIMD_EXEC_SIZE;     // 512
+constexpr int ESIMD_ACC_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE;        // 128
 
 // =============================================================================
 // SLM Double-Buffering Constants for ESIMD FP16 Path (Phase 4)
@@ -778,17 +777,18 @@ constexpr int ESIMD_ACC_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE;      /
 // Buffer 1: [768, 1280): weights_1 [16×16 half]
 //           [1280, 1536): activations_1 [8×16 half]
 
-constexpr int ESIMD_SLM_WEIGHTS_SIZE = ESIMD_EXEC_SIZE * ESIMD_K_PER_DPAS;      // 16 × 16 = 256 half elements
-constexpr int ESIMD_SLM_ACTS_SIZE = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;      // 8 × 16 = 128 half elements
-constexpr int ESIMD_SLM_BUFFER_SIZE = ESIMD_SLM_WEIGHTS_SIZE + ESIMD_SLM_ACTS_SIZE;  // 384 half elements
-constexpr int ESIMD_SLM_TOTAL_SIZE = 2 * ESIMD_SLM_BUFFER_SIZE;                 // 768 half elements for double-buffer
+constexpr int ESIMD_SLM_WEIGHTS_SIZE = ESIMD_EXEC_SIZE * ESIMD_K_PER_DPAS;            // 16 × 16 = 256 half elements
+constexpr int ESIMD_SLM_ACTS_SIZE    = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;         // 8 × 16 = 128 half elements
+constexpr int ESIMD_SLM_BUFFER_SIZE  = ESIMD_SLM_WEIGHTS_SIZE + ESIMD_SLM_ACTS_SIZE;  // 384 half elements
+constexpr int ESIMD_SLM_TOTAL_SIZE   = 2 * ESIMD_SLM_BUFFER_SIZE;  // 768 half elements for double-buffer
 
 // SLM byte offsets for double-buffering
 constexpr uint32_t ESIMD_SLM_BUF0_WEIGHTS = 0;
-constexpr uint32_t ESIMD_SLM_BUF0_ACTS = ESIMD_SLM_WEIGHTS_SIZE * sizeof(sycl::half);                          // 512 bytes
-constexpr uint32_t ESIMD_SLM_BUF1_WEIGHTS = ESIMD_SLM_BUFFER_SIZE * sizeof(sycl::half);                        // 768 bytes
-constexpr uint32_t ESIMD_SLM_BUF1_ACTS = (ESIMD_SLM_BUFFER_SIZE + ESIMD_SLM_WEIGHTS_SIZE) * sizeof(sycl::half); // 1280 bytes
-constexpr uint32_t ESIMD_SLM_TOTAL_BYTES = ESIMD_SLM_TOTAL_SIZE * sizeof(sycl::half);                          // 1536 bytes
+constexpr uint32_t ESIMD_SLM_BUF0_ACTS    = ESIMD_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 512 bytes
+constexpr uint32_t ESIMD_SLM_BUF1_WEIGHTS = ESIMD_SLM_BUFFER_SIZE * sizeof(sycl::half);   // 768 bytes
+constexpr uint32_t ESIMD_SLM_BUF1_ACTS =
+    (ESIMD_SLM_BUFFER_SIZE + ESIMD_SLM_WEIGHTS_SIZE) * sizeof(sycl::half);                // 1280 bytes
+constexpr uint32_t ESIMD_SLM_TOTAL_BYTES = ESIMD_SLM_TOTAL_SIZE * sizeof(sycl::half);     // 1536 bytes
 
 // =============================================================================
 // Cooperative ESIMD Constants (Multi-work-item with named barriers)
@@ -807,28 +807,28 @@ constexpr uint32_t ESIMD_SLM_TOTAL_BYTES = ESIMD_SLM_TOTAL_SIZE * sizeof(sycl::h
 // - Fixed at 32 (2 sub-groups of 16 work-items)
 // - TODO: Add WG_SIZE=64 support in future (4 sub-groups)
 
-constexpr int COOP_SUBGROUP_SIZE = 16;       // Sub-group size for XMX (fixed by hardware)
+constexpr int COOP_SUBGROUP_SIZE = 16;  // Sub-group size for XMX (fixed by hardware)
 
 // Default constants for WG_SIZE=32 (compile-time constants for kernel instantiation)
-constexpr int COOP_WG_SIZE_DEFAULT = 32;     // Default work-group size
+constexpr int COOP_WG_SIZE_DEFAULT       = 32;                                         // Default work-group size
 constexpr int COOP_NUM_SUBGROUPS_DEFAULT = COOP_WG_SIZE_DEFAULT / COOP_SUBGROUP_SIZE;  // 2 sub-groups
 
 // Output tile dimensions per work-group (for WG_SIZE=32)
-constexpr int COOP_WG_TILES_M = 2;           // 2 M-tiles per work-group
-constexpr int COOP_WG_TILES_N = 1;           // 1 N-tile per work-group
-constexpr int COOP_WG_M = COOP_WG_TILES_M * ESIMD_REPEAT_COUNT;   // 16 output rows
-constexpr int COOP_WG_N = COOP_WG_TILES_N * ESIMD_EXEC_SIZE;      // 16 output columns
+constexpr int COOP_WG_TILES_M = 2;                                     // 2 M-tiles per work-group
+constexpr int COOP_WG_TILES_N = 1;                                     // 1 N-tile per work-group
+constexpr int COOP_WG_M       = COOP_WG_TILES_M * ESIMD_REPEAT_COUNT;  // 16 output rows
+constexpr int COOP_WG_N       = COOP_WG_TILES_N * ESIMD_EXEC_SIZE;     // 16 output columns
 
 // SLM sizes for cooperative kernel (single buffer for simplicity)
 // Note: SLM usage stays under 64KB (actual: 1024 bytes) for all supported WG sizes
-constexpr int COOP_SLM_WEIGHTS_SIZE = COOP_WG_N * ESIMD_K_PER_DPAS;  // 16 * 16 = 256 half
-constexpr int COOP_SLM_ACTS_SIZE = COOP_WG_M * ESIMD_K_PER_DPAS;     // 16 * 16 = 256 half
-constexpr int COOP_SLM_TOTAL_HALF = COOP_SLM_WEIGHTS_SIZE + COOP_SLM_ACTS_SIZE;  // 512 half
-constexpr uint32_t COOP_SLM_TOTAL_BYTES = COOP_SLM_TOTAL_HALF * sizeof(sycl::half);  // 1024 bytes
+constexpr int      COOP_SLM_WEIGHTS_SIZE = COOP_WG_N * ESIMD_K_PER_DPAS;                // 16 * 16 = 256 half
+constexpr int      COOP_SLM_ACTS_SIZE    = COOP_WG_M * ESIMD_K_PER_DPAS;                // 16 * 16 = 256 half
+constexpr int      COOP_SLM_TOTAL_HALF   = COOP_SLM_WEIGHTS_SIZE + COOP_SLM_ACTS_SIZE;  // 512 half
+constexpr uint32_t COOP_SLM_TOTAL_BYTES  = COOP_SLM_TOTAL_HALF * sizeof(sycl::half);    // 1024 bytes
 
 // SLM byte offsets for cooperative kernel
 constexpr uint32_t COOP_SLM_WEIGHTS_OFFSET = 0;
-constexpr uint32_t COOP_SLM_ACTS_OFFSET = COOP_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 512 bytes
+constexpr uint32_t COOP_SLM_ACTS_OFFSET    = COOP_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 512 bytes
 
 // Legacy constant for backwards compatibility
 constexpr int COOP_WG_SIZE = COOP_WG_SIZE_DEFAULT;
@@ -854,29 +854,29 @@ constexpr int COOP_WG_SIZE = COOP_WG_SIZE_DEFAULT;
 // Note: Each sub-group actually computes 2 dpas tiles (8×16 each) stacked
 // vertically, for a total of 16 rows per sub-group row.
 
-constexpr int LARGE_WG_SIZE = 64;                           // Work-items per work-group (ESIMD limit)
+constexpr int LARGE_WG_SIZE       = 64;                                  // Work-items per work-group (ESIMD limit)
 constexpr int LARGE_NUM_SUBGROUPS = LARGE_WG_SIZE / COOP_SUBGROUP_SIZE;  // 4 sub-groups
-constexpr int LARGE_SG_COLS = 2;                            // Sub-groups per row (covering N)
-constexpr int LARGE_SG_ROWS = 2;                            // Rows of sub-groups (covering M)
+constexpr int LARGE_SG_COLS       = 2;                                   // Sub-groups per row (covering N)
+constexpr int LARGE_SG_ROWS       = 2;                                   // Rows of sub-groups (covering M)
 
 // Output dimensions match header constants
 // LARGE_TILE_M = 32, LARGE_TILE_N = 32, LARGE_TILE_K = 32 (defined in hpp)
 
 // Each sub-group row handles 16 M-rows (2 dpas tiles of 8 rows each)
-constexpr int LARGE_SG_M = LARGE_TILE_M / LARGE_SG_ROWS;    // 16 rows per sub-group row
+constexpr int LARGE_SG_M = LARGE_TILE_M / LARGE_SG_ROWS;  // 16 rows per sub-group row
 
 // SLM sizes for large-tile kernel
 // Weights: 32 rows × 32 cols = 1024 half = 2048 bytes
 // Activations: 32 rows × 32 cols = 1024 half = 2048 bytes
 // Total: 2048 half = 4096 bytes (well under 64KB limit)
-constexpr int LARGE_SLM_WEIGHTS_SIZE = LARGE_TILE_N * LARGE_TILE_K;  // 32 × 32 = 1024 half
-constexpr int LARGE_SLM_ACTS_SIZE = LARGE_TILE_M * LARGE_TILE_K;     // 32 × 32 = 1024 half
-constexpr int LARGE_SLM_TOTAL_HALF = LARGE_SLM_WEIGHTS_SIZE + LARGE_SLM_ACTS_SIZE;  // 2048 half
-constexpr uint32_t LARGE_SLM_TOTAL_BYTES = LARGE_SLM_TOTAL_HALF * sizeof(sycl::half);  // 4096 bytes
+constexpr int      LARGE_SLM_WEIGHTS_SIZE = LARGE_TILE_N * LARGE_TILE_K;                   // 32 × 32 = 1024 half
+constexpr int      LARGE_SLM_ACTS_SIZE    = LARGE_TILE_M * LARGE_TILE_K;                   // 32 × 32 = 1024 half
+constexpr int      LARGE_SLM_TOTAL_HALF   = LARGE_SLM_WEIGHTS_SIZE + LARGE_SLM_ACTS_SIZE;  // 2048 half
+constexpr uint32_t LARGE_SLM_TOTAL_BYTES  = LARGE_SLM_TOTAL_HALF * sizeof(sycl::half);     // 4096 bytes
 
 // SLM byte offsets for large-tile kernel
 constexpr uint32_t LARGE_SLM_WEIGHTS_OFFSET = 0;
-constexpr uint32_t LARGE_SLM_ACTS_OFFSET = LARGE_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 2048 bytes
+constexpr uint32_t LARGE_SLM_ACTS_OFFSET    = LARGE_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 2048 bytes
 
 // =============================================================================
 // Vectorized Q4_0 Dequantization using ESIMD SIMD Operations
@@ -907,15 +907,15 @@ constexpr uint32_t LARGE_SLM_ACTS_OFFSET = LARGE_SLM_WEIGHTS_SIZE * sizeof(sycl:
  * Performance: ~16 bytes loaded, 32 weights output = 2:1 expansion ratio
  * Target throughput: >100 GB/s for Q4_0 on Intel Arc
  */
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK4_0>
-dequant_q4_0_block_vectorized(const block_q4_0_unified * block) {
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK4_0> dequant_q4_0_block_vectorized(
+    const block_q4_0_unified * block) {
     // Load scale factor
     const sycl::half d = block->d;
 
     // Load all 16 packed bytes at once using pointer cast
     // Note: block->qs is 16 bytes, we load them into a simd vector
     esimd::simd<uint8_t, 16> packed;
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         packed[i] = block->qs[i];
     }
@@ -931,14 +931,14 @@ dequant_q4_0_block_vectorized(const block_q4_0_unified * block) {
     // Result layout: [lo_0, lo_1, ..., lo_15, hi_0, hi_1, ..., hi_15]
     esimd::simd<sycl::half, UNIFIED_QK4_0> result;
 
-    // Low nibbles go to positions 0-15
-    #pragma unroll
+// Low nibbles go to positions 0-15
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         result[i] = static_cast<sycl::half>(lo_nibbles[i]) * d;
     }
 
-    // High nibbles go to positions 16-31
-    #pragma unroll
+// High nibbles go to positions 16-31
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         result[i + 16] = static_cast<sycl::half>(hi_nibbles[i]) * d;
     }
@@ -960,20 +960,19 @@ dequant_q4_0_block_vectorized(const block_q4_0_unified * block) {
  * @param block_idx       Block index within the row
  * @return simd<sycl::half, 32> containing dequantized weights
  */
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK4_0>
-dequant_q4_0_block_vectorized_soa(const uint8_t *    qs_base,
-                                   const sycl::half * d_base,
-                                   int64_t            row,
-                                   int                k_blocks,
-                                   int                block_idx) {
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK4_0> dequant_q4_0_block_vectorized_soa(const uint8_t *    qs_base,
+                                                                                             const sycl::half * d_base,
+                                                                                             int64_t            row,
+                                                                                             int k_blocks,
+                                                                                             int block_idx) {
     // SOA addressing: qs bytes are contiguous per-row
-    const int row_qs_bytes = k_blocks * 16;  // 16 bytes per block (32 nibbles / 2)
-    const uint8_t * qs = qs_base + row * row_qs_bytes + block_idx * 16;
-    const sycl::half d = d_base[row * k_blocks + block_idx];
+    const int        row_qs_bytes = k_blocks * 16;  // 16 bytes per block (32 nibbles / 2)
+    const uint8_t *  qs           = qs_base + row * row_qs_bytes + block_idx * 16;
+    const sycl::half d            = d_base[row * k_blocks + block_idx];
 
     // Load all 16 packed bytes at once
     esimd::simd<uint8_t, 16> packed;
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         packed[i] = qs[i];
     }
@@ -988,14 +987,14 @@ dequant_q4_0_block_vectorized_soa(const uint8_t *    qs_base,
     // Result layout: [lo_0, lo_1, ..., lo_15, hi_0, hi_1, ..., hi_15]
     esimd::simd<sycl::half, UNIFIED_QK4_0> result;
 
-    // Low nibbles go to positions 0-15
-    #pragma unroll
+// Low nibbles go to positions 0-15
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         result[i] = static_cast<sycl::half>(lo_nibbles[i]) * d;
     }
 
-    // High nibbles go to positions 16-31
-    #pragma unroll
+// High nibbles go to positions 16-31
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         result[i + 16] = static_cast<sycl::half>(hi_nibbles[i]) * d;
     }
@@ -1020,16 +1019,13 @@ dequant_q4_0_block_vectorized_soa(const uint8_t *    qs_base,
  * @return simd containing dequantized weights in row-major order
  */
 template <int TILE_K>
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
-dequant_q4_0_tile_vectorized_soa(
-    const uint8_t *    qs_base,
-    const sycl::half * d_base,
-    int64_t            n_global,
-    int64_t            k_start,
-    int64_t            K,
-    int                k_blocks_per_row,
-    int                k_len) {
-
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K> dequant_q4_0_tile_vectorized_soa(const uint8_t *    qs_base,
+                                                                                     const sycl::half * d_base,
+                                                                                     int64_t            n_global,
+                                                                                     int64_t            k_start,
+                                                                                     int64_t            K,
+                                                                                     int k_blocks_per_row,
+                                                                                     int k_len) {
     esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
 
     // For TILE_K=16 (ESIMD_K_PER_DPAS), we may span at most 2 Q4_0 blocks
@@ -1037,17 +1033,17 @@ dequant_q4_0_tile_vectorized_soa(
 
     // Calculate which block(s) we need
     const int first_block_idx = static_cast<int>(k_start / UNIFIED_QK4_0);
-    const int start_in_block = static_cast<int>(k_start % UNIFIED_QK4_0);
+    const int start_in_block  = static_cast<int>(k_start % UNIFIED_QK4_0);
 
     // Dequantize the full first block from SOA layout
     esimd::simd<sycl::half, UNIFIED_QK4_0> full_block =
         dequant_q4_0_block_vectorized_soa(qs_base, d_base, n_global, k_blocks_per_row, first_block_idx);
 
     // Copy weights from the block to result
-    const int remaining_in_block = UNIFIED_QK4_0 - start_in_block;
+    const int remaining_in_block       = UNIFIED_QK4_0 - start_in_block;
     const int weights_from_first_block = (remaining_in_block < k_len) ? remaining_in_block : k_len;
 
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < TILE_K; i++) {
         if (i < weights_from_first_block) {
             result[i] = full_block[start_in_block + i];
@@ -1061,7 +1057,7 @@ dequant_q4_0_tile_vectorized_soa(
             esimd::simd<sycl::half, UNIFIED_QK4_0> full_block_2 =
                 dequant_q4_0_block_vectorized_soa(qs_base, d_base, n_global, k_blocks_per_row, second_block_idx);
 
-            #pragma unroll
+#    pragma unroll
             for (int i = 0; i < TILE_K; i++) {
                 if (i >= weights_from_first_block && i < k_len) {
                     result[i] = full_block_2[i - weights_from_first_block];
@@ -1088,17 +1084,15 @@ dequant_q4_0_tile_vectorized_soa(
  * when processing full blocks.
  */
 template <int MAX_COUNT>
-SYCL_ESIMD_FUNCTION void dequant_q4_0_partial_vectorized(
-    const block_q4_0_unified * block,
-    int                        start_idx,
-    int                        count,
-    esimd::simd<sycl::half, MAX_COUNT> & output) {
-
+SYCL_ESIMD_FUNCTION void dequant_q4_0_partial_vectorized(const block_q4_0_unified *           block,
+                                                         int                                  start_idx,
+                                                         int                                  count,
+                                                         esimd::simd<sycl::half, MAX_COUNT> & output) {
     // Get full block dequantization
     esimd::simd<sycl::half, UNIFIED_QK4_0> full = dequant_q4_0_block_vectorized(block);
 
-    // Copy requested portion
-    #pragma unroll
+// Copy requested portion
+#    pragma unroll
     for (int i = 0; i < MAX_COUNT; i++) {
         if (i < count) {
             output[i] = full[start_idx + i];
@@ -1125,15 +1119,12 @@ SYCL_ESIMD_FUNCTION void dequant_q4_0_partial_vectorized(
  * @return simd containing dequantized weights in row-major order
  */
 template <int TILE_K>
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
-dequant_q4_0_tile_vectorized(
-    const block_q4_0_unified * weights,
-    int64_t                    n_global,
-    int64_t                    k_start,
-    int64_t                    K,
-    int                        k_blocks_per_row,
-    int                        k_len) {
-
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K> dequant_q4_0_tile_vectorized(const block_q4_0_unified * weights,
+                                                                                 int64_t                    n_global,
+                                                                                 int64_t                    k_start,
+                                                                                 int64_t                    K,
+                                                                                 int k_blocks_per_row,
+                                                                                 int k_len) {
     esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
 
     // For TILE_K=16 (ESIMD_K_PER_DPAS), we may span at most 2 Q4_0 blocks
@@ -1141,11 +1132,11 @@ dequant_q4_0_tile_vectorized(
 
     // Calculate which block(s) we need
     const int first_block_idx = static_cast<int>(k_start / UNIFIED_QK4_0);
-    const int start_in_block = static_cast<int>(k_start % UNIFIED_QK4_0);
+    const int start_in_block  = static_cast<int>(k_start % UNIFIED_QK4_0);
 
     // Get the first block
-    const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + first_block_idx);
-    const block_q4_0_unified * blk = &weights[global_block_idx];
+    const int                  global_block_idx = static_cast<int>(n_global * k_blocks_per_row + first_block_idx);
+    const block_q4_0_unified * blk              = &weights[global_block_idx];
 
     // Dequantize the full block
     esimd::simd<sycl::half, UNIFIED_QK4_0> full_block = dequant_q4_0_block_vectorized(blk);
@@ -1153,10 +1144,10 @@ dequant_q4_0_tile_vectorized(
     // Copy weights from the block to result
     // Handle the case where we start mid-block
     // Note: Using ternary instead of sycl::min which is not supported in ESIMD context
-    const int remaining_in_block = UNIFIED_QK4_0 - start_in_block;
+    const int remaining_in_block       = UNIFIED_QK4_0 - start_in_block;
     const int weights_from_first_block = (remaining_in_block < k_len) ? remaining_in_block : k_len;
 
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < TILE_K; i++) {
         if (i < weights_from_first_block) {
             result[i] = full_block[start_in_block + i];
@@ -1167,13 +1158,13 @@ dequant_q4_0_tile_vectorized(
     if (weights_from_first_block < k_len) {
         const int second_block_idx = first_block_idx + 1;
         if (second_block_idx < k_blocks_per_row) {
-            const int global_block_idx_2 = static_cast<int>(n_global * k_blocks_per_row + second_block_idx);
+            const int global_block_idx_2    = static_cast<int>(n_global * k_blocks_per_row + second_block_idx);
             const block_q4_0_unified * blk2 = &weights[global_block_idx_2];
 
             esimd::simd<sycl::half, UNIFIED_QK4_0> full_block_2 = dequant_q4_0_block_vectorized(blk2);
 
             const int weights_from_second = k_len - weights_from_first_block;
-            #pragma unroll
+#    pragma unroll
             for (int i = 0; i < TILE_K; i++) {
                 if (i >= weights_from_first_block && i < k_len) {
                     result[i] = full_block_2[i - weights_from_first_block];
@@ -1235,14 +1226,14 @@ SYCL_ESIMD_FUNCTION float e8m0_to_scale_esimd(uint8_t e) {
  * Performance: ~17 bytes loaded, 32 weights output
  * Target throughput: >100 GB/s for MXFP4 on Intel Arc
  */
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK_MXFP4>
-dequant_mxfp4_block_vectorized(const block_mxfp4_unified * block) {
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK_MXFP4> dequant_mxfp4_block_vectorized(
+    const block_mxfp4_unified * block) {
     // Get scale factor (already halved for MXFP4 kvalues)
     const float scale = e8m0_to_scale_esimd(block->e);
 
     // Load all 16 packed bytes at once
     esimd::simd<uint8_t, 16> packed;
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         packed[i] = block->qs[i];
     }
@@ -1251,18 +1242,18 @@ dequant_mxfp4_block_vectorized(const block_mxfp4_unified * block) {
     // kvalues_mxfp4_unified: maps 4-bit codes to doubled signed integers
     esimd::simd<sycl::half, UNIFIED_QK_MXFP4> result;
 
-    // Low nibbles go to positions 0-15
-    #pragma unroll
+// Low nibbles go to positions 0-15
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         const int8_t kval = kvalues_mxfp4_unified[packed[i] & 0x0F];
-        result[i] = static_cast<sycl::half>(static_cast<float>(kval) * scale);
+        result[i]         = static_cast<sycl::half>(static_cast<float>(kval) * scale);
     }
 
-    // High nibbles go to positions 16-31
-    #pragma unroll
+// High nibbles go to positions 16-31
+#    pragma unroll
     for (int i = 0; i < 16; i++) {
         const int8_t kval = kvalues_mxfp4_unified[packed[i] >> 4];
-        result[i + 16] = static_cast<sycl::half>(static_cast<float>(kval) * scale);
+        result[i + 16]    = static_cast<sycl::half>(static_cast<float>(kval) * scale);
     }
 
     return result;
@@ -1283,15 +1274,12 @@ dequant_mxfp4_block_vectorized(const block_mxfp4_unified * block) {
  * @return simd containing dequantized weights in row-major order
  */
 template <int TILE_K>
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
-dequant_mxfp4_tile_vectorized(
-    const block_mxfp4_unified * weights,
-    int64_t                     n_global,
-    int64_t                     k_start,
-    int64_t                     K,
-    int                         k_blocks_per_row,
-    int                         k_len) {
-
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K> dequant_mxfp4_tile_vectorized(const block_mxfp4_unified * weights,
+                                                                                  int64_t                     n_global,
+                                                                                  int64_t                     k_start,
+                                                                                  int64_t                     K,
+                                                                                  int k_blocks_per_row,
+                                                                                  int k_len) {
     esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
 
     // For TILE_K=16 (ESIMD_K_PER_DPAS), we may span at most 2 MXFP4 blocks
@@ -1299,20 +1287,20 @@ dequant_mxfp4_tile_vectorized(
 
     // Calculate which block(s) we need
     const int first_block_idx = static_cast<int>(k_start / UNIFIED_QK_MXFP4);
-    const int start_in_block = static_cast<int>(k_start % UNIFIED_QK_MXFP4);
+    const int start_in_block  = static_cast<int>(k_start % UNIFIED_QK_MXFP4);
 
     // Get the first block
-    const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + first_block_idx);
-    const block_mxfp4_unified * blk = &weights[global_block_idx];
+    const int                   global_block_idx = static_cast<int>(n_global * k_blocks_per_row + first_block_idx);
+    const block_mxfp4_unified * blk              = &weights[global_block_idx];
 
     // Dequantize the full block
     esimd::simd<sycl::half, UNIFIED_QK_MXFP4> full_block = dequant_mxfp4_block_vectorized(blk);
 
     // Copy weights from the block to result
-    const int remaining_in_block = UNIFIED_QK_MXFP4 - start_in_block;
+    const int remaining_in_block       = UNIFIED_QK_MXFP4 - start_in_block;
     const int weights_from_first_block = (remaining_in_block < k_len) ? remaining_in_block : k_len;
 
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < TILE_K; i++) {
         if (i < weights_from_first_block) {
             result[i] = full_block[start_in_block + i];
@@ -1323,12 +1311,12 @@ dequant_mxfp4_tile_vectorized(
     if (weights_from_first_block < k_len) {
         const int second_block_idx = first_block_idx + 1;
         if (second_block_idx < k_blocks_per_row) {
-            const int global_block_idx_2 = static_cast<int>(n_global * k_blocks_per_row + second_block_idx);
+            const int global_block_idx_2     = static_cast<int>(n_global * k_blocks_per_row + second_block_idx);
             const block_mxfp4_unified * blk2 = &weights[global_block_idx_2];
 
             esimd::simd<sycl::half, UNIFIED_QK_MXFP4> full_block_2 = dequant_mxfp4_block_vectorized(blk2);
 
-            #pragma unroll
+#    pragma unroll
             for (int i = 0; i < TILE_K; i++) {
                 if (i >= weights_from_first_block && i < k_len) {
                     result[i] = full_block_2[i - weights_from_first_block];
@@ -1367,18 +1355,17 @@ dequant_mxfp4_tile_vectorized(
  *
  * Target throughput: >200 GB/s for Q8_0 on Intel Arc (simpler path)
  */
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, 32>
-dequant_q8_0_block_vectorized(const int8_t * qs, sycl::half scale) {
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, 32> dequant_q8_0_block_vectorized(const int8_t * qs, sycl::half scale) {
     // Load all 32 int8 values
     esimd::simd<int32_t, 32> weights_int;
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < 32; i++) {
         weights_int[i] = static_cast<int32_t>(qs[i]);
     }
 
     // Convert to half and apply scale
     esimd::simd<sycl::half, 32> result;
-    #pragma unroll
+#    pragma unroll
     for (int i = 0; i < 32; i++) {
         result[i] = static_cast<sycl::half>(weights_int[i]) * scale;
     }
@@ -1397,22 +1384,19 @@ dequant_q8_0_block_vectorized(const int8_t * qs, sycl::half scale) {
  * @return simd containing dequantized weights
  */
 template <int TILE_K>
-SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
-dequant_q8_0_tile_vectorized(
-    const int8_t * qs,
-    sycl::half     scale,
-    int            k_start,
-    int            k_len) {
-
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K> dequant_q8_0_tile_vectorized(const int8_t * qs,
+                                                                                 sycl::half     scale,
+                                                                                 int            k_start,
+                                                                                 int            k_len) {
     esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
 
-    // For Q8_0, weights are stored directly as int8
-    // Just load, convert, and scale
-    #pragma unroll
+// For Q8_0, weights are stored directly as int8
+// Just load, convert, and scale
+#    pragma unroll
     for (int i = 0; i < TILE_K; i++) {
         if (i < k_len) {
             const int8_t q = qs[k_start + i];
-            result[i] = static_cast<sycl::half>(static_cast<int32_t>(q)) * scale;
+            result[i]      = static_cast<sycl::half>(static_cast<int32_t>(q)) * scale;
         }
     }
 
@@ -1451,14 +1435,12 @@ dequant_q8_0_tile_vectorized(
  * @param N                Total N dimension (for bounds checking)
  */
 template <int K_TILE_SIZE>
-SYCL_ESIMD_FUNCTION void prefetch_weights_block(
-    const block_q4_0_unified * weights,
-    int64_t                    n_global,
-    int64_t                    k_tile_start,
-    int64_t                    K,
-    int                        k_blocks_per_row,
-    int64_t                    N) {
-
+SYCL_ESIMD_FUNCTION void prefetch_weights_block(const block_q4_0_unified * weights,
+                                                int64_t                    n_global,
+                                                int64_t                    k_tile_start,
+                                                int64_t                    K,
+                                                int                        k_blocks_per_row,
+                                                int64_t                    N) {
     // Bounds check: don't prefetch beyond array
     if (n_global >= N || k_tile_start >= K) {
         return;
@@ -1466,7 +1448,7 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block(
 
     // Calculate block address for this K-tile
     // Q4_0 blocks have 32 weights each
-    const int k_block_idx = static_cast<int>(k_tile_start / UNIFIED_QK4_0);
+    const int k_block_idx      = static_cast<int>(k_tile_start / UNIFIED_QK4_0);
     const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
 
     // Prefetch the Q4_0 block using LSC prefetch with streaming cache hints
@@ -1486,19 +1468,16 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block(
     // Solution: Align to 16-byte boundary and prefetch that aligned portion.
     // This covers the entire 18-byte block within a 32-byte range.
     // Calculate 16-byte aligned address (align down)
-    constexpr int ALIGN_SIZE = 16;  // 16-byte alignment for proper DWORD-aligned access
-    const uint8_t * byte_ptr = reinterpret_cast<const uint8_t *>(block_ptr);
-    const uint64_t addr = reinterpret_cast<uint64_t>(byte_ptr);
-    const uint64_t aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
-    const uint32_t * aligned_ptr = reinterpret_cast<const uint32_t *>(aligned_addr);
+    constexpr int    ALIGN_SIZE   = 16;  // 16-byte alignment for proper DWORD-aligned access
+    const uint8_t *  byte_ptr     = reinterpret_cast<const uint8_t *>(block_ptr);
+    const uint64_t   addr         = reinterpret_cast<uint64_t>(byte_ptr);
+    const uint64_t   aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
+    const uint32_t * aligned_ptr  = reinterpret_cast<const uint32_t *>(aligned_addr);
 
-    constexpr auto props = esimd::properties{
-        esimd::cache_hint_L1<esimd::cache_hint::streaming>,
-        esimd::cache_hint_L2<esimd::cache_hint::uncached>
-    };
+    constexpr auto props = esimd::properties{ esimd::cache_hint_L1<esimd::cache_hint::streaming>,
+                                              esimd::cache_hint_L2<esimd::cache_hint::uncached> };
     // Prefetch 4 uint32_t values (16 bytes, covers the entire 18-byte block within aligned boundary)
-    esimd::prefetch<uint32_t, 4>(
-        aligned_ptr, 0, esimd::simd_mask<1>(1), props);
+    esimd::prefetch<uint32_t, 4>(aligned_ptr, 0, esimd::simd_mask<1>(1), props);
 }
 
 /**
@@ -1512,14 +1491,12 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block(
  * @param N                Total N dimension (for bounds checking)
  */
 template <int K_TILE_SIZE>
-SYCL_ESIMD_FUNCTION void prefetch_weights_block_mxfp4(
-    const block_mxfp4_unified * weights,
-    int64_t                     n_global,
-    int64_t                     k_tile_start,
-    int64_t                     K,
-    int                         k_blocks_per_row,
-    int64_t                     N) {
-
+SYCL_ESIMD_FUNCTION void prefetch_weights_block_mxfp4(const block_mxfp4_unified * weights,
+                                                      int64_t                     n_global,
+                                                      int64_t                     k_tile_start,
+                                                      int64_t                     K,
+                                                      int                         k_blocks_per_row,
+                                                      int64_t                     N) {
     // Bounds check: don't prefetch beyond array
     if (n_global >= N || k_tile_start >= K) {
         return;
@@ -1527,26 +1504,23 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block_mxfp4(
 
     // Calculate block address for this K-tile
     // MXFP4 blocks have 32 weights each
-    const int k_block_idx = static_cast<int>(k_tile_start / UNIFIED_QK_MXFP4);
+    const int k_block_idx      = static_cast<int>(k_tile_start / UNIFIED_QK_MXFP4);
     const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
 
     // Prefetch the MXFP4 block using LSC prefetch
     const block_mxfp4_unified * block_ptr = &weights[global_block_idx];
 
     // Align to 16-byte boundary
-    constexpr int ALIGN_SIZE = 16;
-    const uint8_t * byte_ptr = reinterpret_cast<const uint8_t *>(block_ptr);
-    const uint64_t addr = reinterpret_cast<uint64_t>(byte_ptr);
-    const uint64_t aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
-    const uint32_t * aligned_ptr = reinterpret_cast<const uint32_t *>(aligned_addr);
+    constexpr int    ALIGN_SIZE   = 16;
+    const uint8_t *  byte_ptr     = reinterpret_cast<const uint8_t *>(block_ptr);
+    const uint64_t   addr         = reinterpret_cast<uint64_t>(byte_ptr);
+    const uint64_t   aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
+    const uint32_t * aligned_ptr  = reinterpret_cast<const uint32_t *>(aligned_addr);
 
-    constexpr auto props = esimd::properties{
-        esimd::cache_hint_L1<esimd::cache_hint::streaming>,
-        esimd::cache_hint_L2<esimd::cache_hint::uncached>
-    };
+    constexpr auto props = esimd::properties{ esimd::cache_hint_L1<esimd::cache_hint::streaming>,
+                                              esimd::cache_hint_L2<esimd::cache_hint::uncached> };
     // Prefetch 4 uint32_t values (16 bytes, covers the entire 17-byte block within aligned boundary)
-    esimd::prefetch<uint32_t, 4>(
-        aligned_ptr, 0, esimd::simd_mask<1>(1), props);
+    esimd::prefetch<uint32_t, 4>(aligned_ptr, 0, esimd::simd_mask<1>(1), props);
 }
 
 /**
@@ -1561,24 +1535,20 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block_mxfp4(
  * @param quant_type       Quantization type
  */
 template <int K_TILE_SIZE>
-SYCL_ESIMD_FUNCTION void prefetch_weights_block_generic(
-    const void * weights,
-    int64_t      n_global,
-    int64_t      k_tile_start,
-    int64_t      K,
-    int          k_blocks_per_row,
-    int64_t      N,
-    int          quant_type) {
-
+SYCL_ESIMD_FUNCTION void prefetch_weights_block_generic(const void * weights,
+                                                        int64_t      n_global,
+                                                        int64_t      k_tile_start,
+                                                        int64_t      K,
+                                                        int          k_blocks_per_row,
+                                                        int64_t      N,
+                                                        int          quant_type) {
     if (quant_type == QUANT_TYPE_MXFP4) {
-        prefetch_weights_block_mxfp4<K_TILE_SIZE>(
-            static_cast<const block_mxfp4_unified *>(weights),
-            n_global, k_tile_start, K, k_blocks_per_row, N);
+        prefetch_weights_block_mxfp4<K_TILE_SIZE>(static_cast<const block_mxfp4_unified *>(weights), n_global,
+                                                  k_tile_start, K, k_blocks_per_row, N);
     } else {
         // Default: Q4_0
-        prefetch_weights_block<K_TILE_SIZE>(
-            static_cast<const block_q4_0_unified *>(weights),
-            n_global, k_tile_start, K, k_blocks_per_row, N);
+        prefetch_weights_block<K_TILE_SIZE>(static_cast<const block_q4_0_unified *>(weights), n_global, k_tile_start, K,
+                                            k_blocks_per_row, N);
     }
 }
 
@@ -1600,13 +1570,11 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block_generic(
  * @param M                Total M dimension (for bounds checking)
  */
 template <int K_TILE_SIZE>
-SYCL_ESIMD_FUNCTION void prefetch_activations_block(
-    const float * activations,
-    int64_t       m_global,
-    int64_t       k_tile_start,
-    int64_t       K,
-    int64_t       M) {
-
+SYCL_ESIMD_FUNCTION void prefetch_activations_block(const float * activations,
+                                                    int64_t       m_global,
+                                                    int64_t       k_tile_start,
+                                                    int64_t       K,
+                                                    int64_t       M) {
     // Bounds check: don't prefetch beyond array
     if (m_global >= M || k_tile_start >= K) {
         return;
@@ -1619,10 +1587,8 @@ SYCL_ESIMD_FUNCTION void prefetch_activations_block(
     // - L1 cached: activations are reused across N columns
     // - L2 cached: activations have good temporal locality
     // Prefetch K_TILE_SIZE floats (typically 16 floats = 64 bytes)
-    constexpr auto props = esimd::properties{
-        esimd::cache_hint_L1<esimd::cache_hint::cached>,
-        esimd::cache_hint_L2<esimd::cache_hint::cached>
-    };
+    constexpr auto props = esimd::properties{ esimd::cache_hint_L1<esimd::cache_hint::cached>,
+                                              esimd::cache_hint_L2<esimd::cache_hint::cached> };
     esimd::prefetch<float, K_TILE_SIZE>(tile_ptr, 0, esimd::simd_mask<1>(1), props);
 }
 
@@ -1641,20 +1607,17 @@ SYCL_ESIMD_FUNCTION void prefetch_activations_block(
  * @param tile_n           N tile size (COOP_WG_N)
  */
 template <int K_TILE_SIZE, int TILE_N>
-SYCL_ESIMD_FUNCTION void prefetch_weights_cooperative(
-    const block_q4_0_unified *  weights,
-    int64_t                     n_wg_start,
-    int64_t                     k_tile_start,
-    const UnifiedKernelArgs &   args,
-    int                         k_blocks_per_row,
-    int                         local_id,
-    int                         tile_n) {
-
+SYCL_ESIMD_FUNCTION void prefetch_weights_cooperative(const block_q4_0_unified * weights,
+                                                      int64_t                    n_wg_start,
+                                                      int64_t                    k_tile_start,
+                                                      const UnifiedKernelArgs &  args,
+                                                      int                        k_blocks_per_row,
+                                                      int                        local_id,
+                                                      int                        tile_n) {
     // Only work-items [0..TILE_N) prefetch weights
     if (local_id < tile_n) {
         const int64_t n_global = n_wg_start + local_id;
-        prefetch_weights_block<K_TILE_SIZE>(
-            weights, n_global, k_tile_start, args.K, k_blocks_per_row, args.N);
+        prefetch_weights_block<K_TILE_SIZE>(weights, n_global, k_tile_start, args.K, k_blocks_per_row, args.N);
     }
 }
 
@@ -1673,21 +1636,18 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_cooperative(
  * @param tile_m           M tile size (COOP_WG_M)
  */
 template <int K_TILE_SIZE, int TILE_M>
-SYCL_ESIMD_FUNCTION void prefetch_activations_cooperative(
-    const float *             activations,
-    int64_t                   m_wg_start,
-    int64_t                   k_tile_start,
-    const UnifiedKernelArgs & args,
-    int                       local_id,
-    int                       tile_n,
-    int                       tile_m) {
-
+SYCL_ESIMD_FUNCTION void prefetch_activations_cooperative(const float *             activations,
+                                                          int64_t                   m_wg_start,
+                                                          int64_t                   k_tile_start,
+                                                          const UnifiedKernelArgs & args,
+                                                          int                       local_id,
+                                                          int                       tile_n,
+                                                          int                       tile_m) {
     // Work-items [TILE_N..TILE_N+TILE_M) prefetch activations
     const int act_id = local_id - tile_n;
     if (act_id >= 0 && act_id < tile_m) {
         const int64_t m_global = m_wg_start + act_id;
-        prefetch_activations_block<K_TILE_SIZE>(
-            activations, m_global, k_tile_start, args.K, args.M);
+        prefetch_activations_block<K_TILE_SIZE>(activations, m_global, k_tile_start, args.K, args.M);
     }
 }
 
@@ -1770,34 +1730,33 @@ inline bool can_use_cooperative_esimd(int64_t M, int64_t N, int64_t K) {
  * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni(
-    const block_q4_0_unified * weights,
-    uint32_t                   slm_offset,
-    int64_t                    n_start,
-    int64_t                    k_start,
-    int64_t                    N,
-    int64_t                    K,
-    int                        k_blocks_per_row,
-    int                        k_len) {
-
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni(const block_q4_0_unified * weights,
+                                                  uint32_t                   slm_offset,
+                                                  int64_t                    n_start,
+                                                  int64_t                    k_start,
+                                                  int64_t                    N,
+                                                  int64_t                    K,
+                                                  int                        k_blocks_per_row,
+                                                  int                        k_len) {
     // Load and dequantize weights with VNNI packing using vectorized dequantization
     esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
 
-    #pragma unroll
+#    pragma unroll
     for (int n = 0; n < TILE_N; n++) {
         const int64_t n_global = n_start + n;
-        if (n_global >= N) continue;
+        if (n_global >= N) {
+            continue;
+        }
 
         // Use vectorized tile dequantization for this row
         esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
-            dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(
-                weights, n_global, k_start, K, k_blocks_per_row, k_len);
+            dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(weights, n_global, k_start, K, k_blocks_per_row, k_len);
 
-        // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
-        #pragma unroll
+// Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+#    pragma unroll
         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
             const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
-            w_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+            w_vec[vnni_idx]    = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
         }
     }
 
@@ -1818,34 +1777,33 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni(
  * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(
-    const block_mxfp4_unified * weights,
-    uint32_t                    slm_offset,
-    int64_t                     n_start,
-    int64_t                     k_start,
-    int64_t                     N,
-    int64_t                     K,
-    int                         k_blocks_per_row,
-    int                         k_len) {
-
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(const block_mxfp4_unified * weights,
+                                                        uint32_t                    slm_offset,
+                                                        int64_t                     n_start,
+                                                        int64_t                     k_start,
+                                                        int64_t                     N,
+                                                        int64_t                     K,
+                                                        int                         k_blocks_per_row,
+                                                        int                         k_len) {
     // Load and dequantize MXFP4 weights with VNNI packing
     esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
 
-    #pragma unroll
+#    pragma unroll
     for (int n = 0; n < TILE_N; n++) {
         const int64_t n_global = n_start + n;
-        if (n_global >= N) continue;
+        if (n_global >= N) {
+            continue;
+        }
 
         // Use vectorized tile dequantization for this row
         esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
-            dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(
-                weights, n_global, k_start, K, k_blocks_per_row, k_len);
+            dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(weights, n_global, k_start, K, k_blocks_per_row, k_len);
 
-        // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
-        #pragma unroll
+// Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+#    pragma unroll
         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
             const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
-            w_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+            w_vec[vnni_idx]    = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
         }
     }
 
@@ -1869,42 +1827,41 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(
  * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_soa(
-    const void * weights,
-    uint32_t     slm_offset,
-    int64_t      n_start,
-    int64_t      k_start,
-    int64_t      N,
-    int64_t      K,
-    int64_t      N_total,
-    int          k_blocks_per_row,
-    int          k_len) {
-
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_soa(const void * weights,
+                                                      uint32_t     slm_offset,
+                                                      int64_t      n_start,
+                                                      int64_t      k_start,
+                                                      int64_t      N,
+                                                      int64_t      K,
+                                                      int64_t      N_total,
+                                                      int          k_blocks_per_row,
+                                                      int          k_len) {
     // SOA layout pointers
-    const uint8_t *    qs_base = static_cast<const uint8_t *>(weights);
-    const int64_t      total_blocks = N_total * k_blocks_per_row;
+    const uint8_t *    qs_base       = static_cast<const uint8_t *>(weights);
+    const int64_t      total_blocks  = N_total * k_blocks_per_row;
     const int64_t      d_byte_offset = total_blocks * (UNIFIED_QK4_0 / 2);
-    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(weights) + d_byte_offset);
+    const sycl::half * d_base =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(weights) + d_byte_offset);
 
     // Load and dequantize weights with VNNI packing using vectorized SOA dequantization
     esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
 
-    #pragma unroll
+#    pragma unroll
     for (int n = 0; n < TILE_N; n++) {
         const int64_t n_global = n_start + n;
-        if (n_global >= N) continue;
+        if (n_global >= N) {
+            continue;
+        }
 
         // Use vectorized SOA tile dequantization for this row
-        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
-            dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(
-                qs_base, d_base, n_global, k_start, K, k_blocks_per_row, k_len);
+        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights = dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(
+            qs_base, d_base, n_global, k_start, K, k_blocks_per_row, k_len);
 
-        // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
-        #pragma unroll
+// Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+#    pragma unroll
         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
             const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
-            w_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+            w_vec[vnni_idx]    = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
         }
     }
 
@@ -1930,35 +1887,31 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_soa(
  * @param N_total       Total weight rows for SOA offset (only used when layout==SOA)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(
-    const void * weights,
-    uint32_t     slm_offset,
-    int64_t      n_start,
-    int64_t      k_start,
-    int64_t      N,
-    int64_t      K,
-    int          k_blocks_per_row,
-    int          k_len,
-    int          quant_type,
-    LayoutMode   layout = LayoutMode::AOS,
-    int64_t      N_total = 0) {
-
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(const void * weights,
+                                                          uint32_t     slm_offset,
+                                                          int64_t      n_start,
+                                                          int64_t      k_start,
+                                                          int64_t      N,
+                                                          int64_t      K,
+                                                          int          k_blocks_per_row,
+                                                          int          k_len,
+                                                          int          quant_type,
+                                                          LayoutMode   layout  = LayoutMode::AOS,
+                                                          int64_t      N_total = 0) {
     // SOA path: only Q4_0 supported (MXFP4 always uses AOS)
     if (layout == LayoutMode::SOA && quant_type != QUANT_TYPE_MXFP4) {
-        load_weights_to_slm_vnni_soa<TILE_M, TILE_N>(
-            weights, slm_offset, n_start, k_start, N, K, N_total, k_blocks_per_row, k_len);
+        load_weights_to_slm_vnni_soa<TILE_M, TILE_N>(weights, slm_offset, n_start, k_start, N, K, N_total,
+                                                     k_blocks_per_row, k_len);
         return;
     }
 
     if (quant_type == QUANT_TYPE_MXFP4) {
-        load_weights_to_slm_vnni_mxfp4<TILE_M, TILE_N>(
-            static_cast<const block_mxfp4_unified *>(weights),
-            slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
+        load_weights_to_slm_vnni_mxfp4<TILE_M, TILE_N>(static_cast<const block_mxfp4_unified *>(weights), slm_offset,
+                                                       n_start, k_start, N, K, k_blocks_per_row, k_len);
     } else {
         // Default: Q4_0 AOS
-        load_weights_to_slm_vnni<TILE_M, TILE_N>(
-            static_cast<const block_q4_0_unified *>(weights),
-            slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
+        load_weights_to_slm_vnni<TILE_M, TILE_N>(static_cast<const block_q4_0_unified *>(weights), slm_offset, n_start,
+                                                 k_start, N, K, k_blocks_per_row, k_len);
     }
 }
 
@@ -1974,28 +1927,30 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(
  * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void load_activations_to_slm(
-    const float * activations,
-    uint32_t      slm_offset,
-    int64_t       m_start,
-    int64_t       k_start,
-    int64_t       M,
-    int64_t       K,   // Total K dimension (used to index activations)
-    int           k_len) {
-
+SYCL_ESIMD_FUNCTION void load_activations_to_slm(const float * activations,
+                                                 uint32_t      slm_offset,
+                                                 int64_t       m_start,
+                                                 int64_t       k_start,
+                                                 int64_t       M,
+                                                 int64_t       K,  // Total K dimension (used to index activations)
+                                                 int           k_len) {
     esimd::simd<sycl::half, ESIMD_SLM_ACTS_SIZE> a_vec = sycl::half(0.0f);
 
-    #pragma unroll
+#    pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
-        if (m_global >= M) continue;
+        if (m_global >= M) {
+            continue;
+        }
 
-        #pragma unroll
+#    pragma unroll
         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
-            if (k >= k_len) break;
+            if (k >= k_len) {
+                break;
+            }
 
-            const int64_t k_global = k_start + k;
-            const float act_f32 = activations[m_global * K + k_global];
+            const int64_t k_global          = k_start + k;
+            const float   act_f32           = activations[m_global * K + k_global];
             // Row-major: a[m * K_per + k]
             a_vec[m * ESIMD_K_PER_DPAS + k] = static_cast<sycl::half>(act_f32);
         }
@@ -2031,8 +1986,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
     const UnifiedKernelArgs args,
     int64_t                 m_start,
     int64_t                 n_start,
-    const XMXConfig &       /* cfg - reserved for future tuning */) {
-
+    const XMXConfig & /* cfg - reserved for future tuning */) {
     // Validate tile sizes match dpas requirements
     static_assert(TILE_M == ESIMD_REPEAT_COUNT, "TILE_M must be 8 for dpas");
     static_assert(TILE_N == ESIMD_EXEC_SIZE, "TILE_N must be 16 for dpas");
@@ -2043,8 +1997,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
     }
 
     // Number of blocks per weight row (both Q4_0 and MXFP4 have 32 elements/block)
-    constexpr int QK = 32;
-    const int k_blocks_per_row = static_cast<int>(args.K / QK);
+    constexpr int QK               = 32;
+    const int     k_blocks_per_row = static_cast<int>(args.K / QK);
 
     // Initialize SLM for double-buffering
     esimd::slm_init<ESIMD_SLM_TOTAL_BYTES>();
@@ -2059,18 +2013,16 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
     // No overlap opportunity, but still works correctly
     if (k_tiles <= 1) {
         // Just load and compute directly without double-buffering
-        const int64_t k_start = 0;
+        const int64_t k_start     = 0;
         const int64_t k_remaining = args.K;
-        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+        const int     k_len       = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
         // Load weights and activations to buffer 0
-        load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
-            args.weights, ESIMD_SLM_BUF0_WEIGHTS,
-            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type,
-            args.layout, args.N);
-        load_activations_to_slm<TILE_M, TILE_N>(
-            args.activations, ESIMD_SLM_BUF0_ACTS,
-            m_start, k_start, args.M, args.K, k_len);
+        load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(args.weights, ESIMD_SLM_BUF0_WEIGHTS, n_start, k_start, args.N,
+                                                         args.K, k_blocks_per_row, k_len, args.quant_type, args.layout,
+                                                         args.N);
+        load_activations_to_slm<TILE_M, TILE_N>(args.activations, ESIMD_SLM_BUF0_ACTS, m_start, k_start, args.M, args.K,
+                                                k_len);
 
         // Fence to ensure SLM writes complete before reads
         esimd::fence<esimd::fence_mask::local_barrier>();
@@ -2082,8 +2034,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
             esimd::slm_block_load<sycl::half, ESIMD_SLM_ACTS_SIZE>(ESIMD_SLM_BUF0_ACTS);
 
         // Execute dpas
-        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                        float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(acc, b_vec,
+                                                                                                        a_vec);
     } else {
         // ========================================================================
         // Double-buffered K-loop for memory/compute overlap
@@ -2091,17 +2043,15 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
 
         // Pre-load first K-tile into buffer 0
         {
-            const int64_t k_start = 0;
+            const int64_t k_start     = 0;
             const int64_t k_remaining = args.K;
-            const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+            const int     k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
-            load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
-                args.weights, ESIMD_SLM_BUF0_WEIGHTS,
-                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type,
-                args.layout, args.N);
-            load_activations_to_slm<TILE_M, TILE_N>(
-                args.activations, ESIMD_SLM_BUF0_ACTS,
-                m_start, k_start, args.M, args.K, k_len);
+            load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(args.weights, ESIMD_SLM_BUF0_WEIGHTS, n_start, k_start,
+                                                             args.N, args.K, k_blocks_per_row, k_len, args.quant_type,
+                                                             args.layout, args.N);
+            load_activations_to_slm<TILE_M, TILE_N>(args.activations, ESIMD_SLM_BUF0_ACTS, m_start, k_start, args.M,
+                                                    args.K, k_len);
         }
 
         // Fence after pre-loading buffer 0
@@ -2123,18 +2073,18 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
             if (prefetch_distance > 1 && kt + prefetch_distance < k_tiles) {
                 const int64_t prefetch_k_start = (kt + prefetch_distance) * ESIMD_K_PER_DPAS;
 
-                // Prefetch weights for future K-tile
-                #pragma unroll
+// Prefetch weights for future K-tile
+#    pragma unroll
                 for (int n = 0; n < TILE_N; n++) {
-                    prefetch_weights_block_generic<ESIMD_K_PER_DPAS>(
-                        args.weights, n_start + n, prefetch_k_start, args.K, k_blocks_per_row, args.N, args.quant_type);
+                    prefetch_weights_block_generic<ESIMD_K_PER_DPAS>(args.weights, n_start + n, prefetch_k_start,
+                                                                     args.K, k_blocks_per_row, args.N, args.quant_type);
                 }
 
-                // Prefetch activations for future K-tile
-                #pragma unroll
+// Prefetch activations for future K-tile
+#    pragma unroll
                 for (int m = 0; m < TILE_M; m++) {
-                    prefetch_activations_block<ESIMD_K_PER_DPAS>(
-                        args.activations, m_start + m, prefetch_k_start, args.K, args.M);
+                    prefetch_activations_block<ESIMD_K_PER_DPAS>(args.activations, m_start + m, prefetch_k_start,
+                                                                 args.K, args.M);
                 }
             }
 
@@ -2154,22 +2104,21 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
 
             // Prefetch/load next K-tile into alternate buffer (if not last iteration)
             if (kt + 1 < k_tiles) {
-                const int64_t next_k_start = (kt + 1) * ESIMD_K_PER_DPAS;
+                const int64_t next_k_start     = (kt + 1) * ESIMD_K_PER_DPAS;
                 const int64_t next_k_remaining = args.K - next_k_start;
-                const int next_k_len = static_cast<int>(next_k_remaining < ESIMD_K_PER_DPAS ? next_k_remaining : ESIMD_K_PER_DPAS);
+                const int     next_k_len =
+                    static_cast<int>(next_k_remaining < ESIMD_K_PER_DPAS ? next_k_remaining : ESIMD_K_PER_DPAS);
 
-                load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
-                    args.weights, load_w_off,
-                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len, args.quant_type,
-                    args.layout, args.N);
-                load_activations_to_slm<TILE_M, TILE_N>(
-                    args.activations, load_a_off,
-                    m_start, next_k_start, args.M, args.K, next_k_len);
+                load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(args.weights, load_w_off, n_start, next_k_start,
+                                                                 args.N, args.K, k_blocks_per_row, next_k_len,
+                                                                 args.quant_type, args.layout, args.N);
+                load_activations_to_slm<TILE_M, TILE_N>(args.activations, load_a_off, m_start, next_k_start, args.M,
+                                                        args.K, next_k_len);
             }
 
             // Execute dpas on current buffer's data
-            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                            float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(acc, b_vec,
+                                                                                                            a_vec);
 
             // Fence after SLM writes (ensure next iteration's loads are visible)
             if (kt + 1 < k_tiles) {
@@ -2181,17 +2130,21 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
         }
     }
 
-    // Write output with boundary checking
-    // Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
-    #pragma unroll
+// Write output with boundary checking
+// Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
+#    pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
-        if (m_global >= args.M) continue;
+        if (m_global >= args.M) {
+            continue;
+        }
 
-        #pragma unroll
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             args.output[m_global * args.N + n_global] = acc[m * TILE_N + n];
         }
@@ -2220,11 +2173,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
  * @tparam TILE_N  N tile size (must be 16 for dpas)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
-    const UnifiedKernelArgs args,
-    int64_t                 m_start,
-    int64_t                 n_start) {
-
+SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(const UnifiedKernelArgs args, int64_t m_start, int64_t n_start) {
     // Validate tile sizes match dpas requirements
     static_assert(TILE_M == ESIMD_REPEAT_COUNT, "TILE_M must be 8 for dpas");
     static_assert(TILE_N == ESIMD_EXEC_SIZE, "TILE_N must be 16 for dpas");
@@ -2235,7 +2184,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
     }
 
     // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
-    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const int  k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
     const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
     // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
@@ -2243,12 +2192,12 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
-    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
-    const uint8_t *    qs_base = static_cast<const uint8_t *>(args.weights);
+    const bool         use_soa          = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base          = static_cast<const uint8_t *>(args.weights);
     const int64_t      total_blocks_soa = args.N * static_cast<int64_t>(k_blocks_per_row);
-    const int64_t      d_byte_offset = total_blocks_soa * (UNIFIED_QK4_0 / 2);
-    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(args.weights) + d_byte_offset);
+    const int64_t      d_byte_offset    = total_blocks_soa * (UNIFIED_QK4_0 / 2);
+    const sycl::half * d_base =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(args.weights) + d_byte_offset);
 
     // Initialize accumulator: [8 x 16] float
     esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
@@ -2258,10 +2207,10 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
 
     // K-loop: iterate over K dimension in tiles of 16
     for (int64_t kt = 0; kt < k_tiles; kt++) {
-        const int64_t k_start = kt * ESIMD_K_PER_DPAS;
+        const int64_t k_start     = kt * ESIMD_K_PER_DPAS;
         // Calculate remaining K elements (avoid sycl::min which is not supported in ESIMD)
         const int64_t k_remaining = args.K - k_start;
-        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+        const int     k_len       = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
         // ============================================================
         // Load and dequantize weights into B matrix with VNNI packing
@@ -2277,11 +2226,13 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
         // ============================================================
         esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec = sycl::half(0.0f);
 
-        // Use vectorized dequantization for each weight row, then repack to VNNI
-        #pragma unroll
+// Use vectorized dequantization for each weight row, then repack to VNNI
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             // Vectorized tile dequantization: dispatch based on quant type and layout
             esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights;
@@ -2289,18 +2240,18 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
                 row_weights = dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(weights_mx, n_global, k_start, args.K,
                                                                               k_blocks_per_row, k_len);
             } else if (use_soa) {
-                row_weights = dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(qs_base, d_base, n_global, k_start, args.K,
-                                                                                  k_blocks_per_row, k_len);
+                row_weights = dequant_q4_0_tile_vectorized_soa<ESIMD_K_PER_DPAS>(qs_base, d_base, n_global, k_start,
+                                                                                 args.K, k_blocks_per_row, k_len);
             } else {
                 row_weights = dequant_q4_0_tile_vectorized<ESIMD_K_PER_DPAS>(weights_q4, n_global, k_start, args.K,
                                                                              k_blocks_per_row, k_len);
             }
 
-            // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
-            #pragma unroll
+// Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+#    pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                 const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
-                b_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+                b_vec[vnni_idx]    = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
             }
         }
 
@@ -2310,17 +2261,21 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
         // ============================================================
         esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec = sycl::half(0.0f);
 
-        #pragma unroll
+#    pragma unroll
         for (int m = 0; m < TILE_M; m++) {
             const int64_t m_global = m_start + m;
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
-            #pragma unroll
+#    pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
-                if (k >= k_len) break;
+                if (k >= k_len) {
+                    break;
+                }
 
-                const int64_t k_global = k_start + k;
-                const float act_f32 = args.activations[m_global * args.K + k_global];
+                const int64_t k_global          = k_start + k;
+                const float   act_f32           = args.activations[m_global * args.K + k_global];
                 // A layout for dpas: a[m * K_per + k]
                 a_vec[m * ESIMD_K_PER_DPAS + k] = static_cast<sycl::half>(act_f32);
             }
@@ -2336,21 +2291,25 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
         // A layout: row-major, a[m * K + k] where m=0..7, k=0..15
         // B layout: VNNI-packed, b[(k/2) * N * 2 + n * 2 + (k%2)] for k=0..15, n=0..15
         // ============================================================
-        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                        float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(acc, b_vec,
+                                                                                                        a_vec);
     }
 
-    // Write output with boundary checking
-    // Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
-    #pragma unroll
+// Write output with boundary checking
+// Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
+#    pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
-        if (m_global >= args.M) continue;
+        if (m_global >= args.M) {
+            continue;
+        }
 
-        #pragma unroll
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             args.output[m_global * args.N + n_global] = acc[m * TILE_N + n];
         }
@@ -2392,11 +2351,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
  * @tparam TILE_N  N tile size (must be 16 for dpas)
  */
 template <int TILE_M, int TILE_N>
-SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
-    const UnifiedKernelArgs args,
-    int64_t                 m_start,
-    int64_t                 n_start) {
-
+SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(const UnifiedKernelArgs args, int64_t m_start, int64_t n_start) {
     // Validate tile sizes match dpas requirements
     static_assert(TILE_M == ESIMD_REPEAT_COUNT, "TILE_M must be 8 for dpas");
     static_assert(TILE_N == ESIMD_EXEC_SIZE, "TILE_N must be 16 for dpas");
@@ -2407,7 +2362,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     }
 
     // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
-    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const int  k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
     const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
     // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
@@ -2415,12 +2370,12 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
-    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
-    const uint8_t *    qs_base_i8 = static_cast<const uint8_t *>(args.weights);
-    const int64_t      total_blocks_i8 = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const bool         use_soa          = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_i8       = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_i8  = args.N * static_cast<int64_t>(k_blocks_per_row);
     const int64_t      d_byte_offset_i8 = total_blocks_i8 * (UNIFIED_QK4_0 / 2);
-    const sycl::half * d_base_i8 = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(args.weights) + d_byte_offset_i8);
+    const sycl::half * d_base_i8 =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(args.weights) + d_byte_offset_i8);
 
     // Initialize FP32 accumulator for final result: [8 x 16]
     // We accumulate in FP32 because each K-tile has different scales
@@ -2435,7 +2390,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     // ========================================================================
     esimd::simd<float, TILE_M> act_max_abs = 0.0f;
 
-    #pragma unroll
+#    pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
         if (m_global >= args.M) {
@@ -2445,7 +2400,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
 
         float max_abs = 0.0f;
         for (int64_t k = 0; k < args.K; k++) {
-            float val = args.activations[m_global * args.K + k];
+            float val     = args.activations[m_global * args.K + k];
             float abs_val = (val >= 0.0f) ? val : -val;
             if (abs_val > max_abs) {
                 max_abs = abs_val;
@@ -2459,30 +2414,30 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     // ========================================================================
     for (int64_t kt = 0; kt < k_tiles; kt++) {
         const int64_t k_start_local = kt * ESIMD_K_PER_DPAS_INT8;
-        const int64_t k_remaining = args.K - k_start_local;
+        const int64_t k_remaining   = args.K - k_start_local;
         const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS_INT8 ? k_remaining : ESIMD_K_PER_DPAS_INT8);
 
         // ====================================================================
         // Step 2a: Dequantize Q4_0 weights to FP and find max-abs per N column
         // ====================================================================
         // Temporary storage for dequantized weights [TILE_N x K_TILE]
-        float w_fp[TILE_N][ESIMD_K_PER_DPAS_INT8];
+        float                      w_fp[TILE_N][ESIMD_K_PER_DPAS_INT8];
         esimd::simd<float, TILE_N> w_max_abs = 0.0f;
 
-        #pragma unroll
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
 
-            #pragma unroll
+#    pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
                 if (n_global >= args.N || k >= k_len) {
                     w_fp[n][k] = 0.0f;
                     continue;
                 }
 
-                const int64_t k_global = k_start_local + k;
-                const int k_block_idx = static_cast<int>(k_global / UNIFIED_QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+                const int64_t k_global     = k_start_local + k;
+                const int     k_block_idx  = static_cast<int>(k_global / UNIFIED_QK4_0);
+                const int     idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
                 const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
 
@@ -2500,11 +2455,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
                     w_val = static_cast<float>(kval) * scale;
                 } else if (use_soa) {
                     // SOA layout: separate qs and d arrays
-                    const int row_qs_bytes = k_blocks_per_row * 16;
-                    const uint8_t * qs_row = qs_base_i8 + n_global * row_qs_bytes;
-                    const float d = static_cast<float>(d_base_i8[n_global * k_blocks_per_row + k_block_idx]);
+                    const int       row_qs_bytes = k_blocks_per_row * 16;
+                    const uint8_t * qs_row       = qs_base_i8 + n_global * row_qs_bytes;
+                    const float     d  = static_cast<float>(d_base_i8[n_global * k_blocks_per_row + k_block_idx]);
                     const uint8_t * qs = qs_row + k_block_idx * 16;
-                    int qs_val;
+                    int             qs_val;
                     if (idx_in_block < 16) {
                         qs_val = qs[idx_in_block] & 0x0F;
                     } else {
@@ -2532,8 +2487,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
             }
         }
 
-        // Ensure no divide by zero
-        #pragma unroll
+// Ensure no divide by zero
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             if (w_max_abs[n] < 1e-10f) {
                 w_max_abs[n] = 1.0f;
@@ -2545,19 +2500,23 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         // ====================================================================
         esimd::simd<int8_t, ESIMD_B_SIZE_INT8> b_vec = 0;
 
-        #pragma unroll
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
-            #pragma unroll
+#    pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
                 // Quantize: w_int8 = w_fp * 127 / max_abs
                 float qval = w_fp[n][k] * 127.0f / w_max_abs[n];
-                if (qval > 127.0f) qval = 127.0f;
-                if (qval < -127.0f) qval = -127.0f;
+                if (qval > 127.0f) {
+                    qval = 127.0f;
+                }
+                if (qval < -127.0f) {
+                    qval = -127.0f;
+                }
                 const int8_t w_int8 = static_cast<int8_t>(qval);
 
                 // VNNI layout for INT8: b[(k/4) * N * 4 + n * 4 + (k%4)]
                 const int vnni_idx = (k / 4) * (TILE_N * 4) + n * 4 + (k % 4);
-                b_vec[vnni_idx] = w_int8;
+                b_vec[vnni_idx]    = w_int8;
             }
         }
 
@@ -2566,25 +2525,33 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         // ====================================================================
         esimd::simd<int8_t, ESIMD_A_SIZE_INT8> a_vec = 0;
 
-        #pragma unroll
+#    pragma unroll
         for (int m = 0; m < TILE_M; m++) {
             const int64_t m_global = m_start + m;
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
             const float scale_inv = 127.0f / act_max_abs[m];
 
-            #pragma unroll
+#    pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
-                if (k >= k_len) break;
+                if (k >= k_len) {
+                    break;
+                }
 
                 const int64_t k_global = k_start_local + k;
-                const float act_f32 = args.activations[m_global * args.K + k_global];
+                const float   act_f32  = args.activations[m_global * args.K + k_global];
 
                 float qval = act_f32 * scale_inv;
-                if (qval > 127.0f) qval = 127.0f;
-                if (qval < -127.0f) qval = -127.0f;
+                if (qval > 127.0f) {
+                    qval = 127.0f;
+                }
+                if (qval < -127.0f) {
+                    qval = -127.0f;
+                }
 
-                const int8_t a_int8 = static_cast<int8_t>(qval);
+                const int8_t a_int8                  = static_cast<int8_t>(qval);
                 a_vec[m * ESIMD_K_PER_DPAS_INT8 + k] = a_int8;
             }
         }
@@ -2593,8 +2560,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         // Step 4: Execute dpas: int32_acc = sum_k(w_int8 * a_int8)
         // ====================================================================
         esimd::simd<int32_t, ESIMD_ACC_SIZE_INT8> int32_acc = 0;
-        int32_acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                              int32_t, int32_t, int8_t, int8_t>(int32_acc, b_vec, a_vec);
+        int32_acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, int32_t, int32_t, int8_t, int8_t>(int32_acc,
+                                                                                                          b_vec, a_vec);
 
         // ====================================================================
         // Step 5: Dequantize and accumulate to FP32
@@ -2603,14 +2570,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         // ====================================================================
         constexpr float scale_denom = 127.0f * 127.0f;
 
-        #pragma unroll
+#    pragma unroll
         for (int m = 0; m < TILE_M; m++) {
             const float a_scale = act_max_abs[m] / scale_denom;
 
-            #pragma unroll
+#    pragma unroll
             for (int n = 0; n < TILE_N; n++) {
-                const int idx = m * TILE_N + n;
-                const float w_scale = w_max_abs[n];
+                const int   idx            = m * TILE_N + n;
+                const float w_scale        = w_max_abs[n];
                 const float combined_scale = w_scale * a_scale;
 
                 fp_acc[idx] += static_cast<float>(int32_acc[idx]) * combined_scale;
@@ -2618,25 +2585,29 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
         }
     }
 
-    // ========================================================================
-    // Write output with boundary checking
-    // ========================================================================
-    #pragma unroll
+// ========================================================================
+// Write output with boundary checking
+// ========================================================================
+#    pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
-        if (m_global >= args.M) continue;
+        if (m_global >= args.M) {
+            continue;
+        }
 
-        #pragma unroll
+#    pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             args.output[m_global * args.N + n_global] = fp_acc[m * TILE_N + n];
         }
     }
 }
 
-#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 // =============================================================================
 // Cooperative ESIMD FP16 Kernel Implementation
 // =============================================================================
@@ -2677,13 +2648,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
  * @param lane        Lane ID within sub-group [0..15]
  */
 template <int WG_SIZE>
-SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
-    sycl::nd_item<2>            item,
-    const UnifiedKernelArgs     args,
-    int                         local_id,
-    int                         sg_id,
-    int                         lane) {
-
+SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(sycl::nd_item<2>        item,
+                                                            const UnifiedKernelArgs args,
+                                                            int                     local_id,
+                                                            int                     sg_id,
+                                                            int                     lane) {
     // Compile-time validation of WG_SIZE constraints
     static_assert(WG_SIZE % 16 == 0, "WG_SIZE must be multiple of 16 for sub-group size");
     static_assert(WG_SIZE >= 32, "WG_SIZE must be at least 32 (2 sub-groups)");
@@ -2710,7 +2679,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
 
     // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
-    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const int  k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
     const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
     // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
@@ -2718,12 +2687,12 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
-    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
-    const uint8_t *    qs_base_coop = static_cast<const uint8_t *>(args.weights);
-    const int64_t      total_blocks_coop = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const bool         use_soa            = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_coop       = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_coop  = args.N * static_cast<int64_t>(k_blocks_per_row);
     const int64_t      d_byte_offset_coop = total_blocks_coop * (UNIFIED_QK4_0 / 2);
-    const sycl::half * d_base_coop = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(args.weights) + d_byte_offset_coop);
+    const sycl::half * d_base_coop =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(args.weights) + d_byte_offset_coop);
 
     // Initialize SLM for this work-group
     // Layout: [weights: 16 x 16 half][activations: 16 x 16 half]
@@ -2741,9 +2710,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
     // K-loop: iterate over K dimension in tiles of 16
     for (int64_t kt = 0; kt < k_tiles; kt++) {
-        const int64_t k_start = kt * ESIMD_K_PER_DPAS;
+        const int64_t k_start     = kt * ESIMD_K_PER_DPAS;
         const int64_t k_remaining = args.K - k_start;
-        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+        const int     k_len       = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
         // ================================================================
         // Phase 0: LSC Prefetch for Future K-Tiles (Memory/Compute Overlap)
@@ -2768,8 +2737,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
             // Prefetch activations for future K-tile (work-items 16..31)
             prefetch_activations_cooperative<ESIMD_K_PER_DPAS, COOP_WG_M>(
-                args.activations, m_wg_start, prefetch_k_start, args,
-                local_id, COOP_WG_N, COOP_WG_M);
+                args.activations, m_wg_start, prefetch_k_start, args, local_id, COOP_WG_N, COOP_WG_M);
         }
 
         // ================================================================
@@ -2788,7 +2756,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
         if (local_id < COOP_WG_N) {
             // Work-items 0-15: Load weight row local_id using vectorized dequantization
-            const int n_off = local_id;
+            const int     n_off    = local_id;
             const int64_t n_global = n_wg_start + n_off;
 
             // Use vectorized tile dequantization for this row
@@ -2800,15 +2768,15 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
                     w_row = dequant_mxfp4_tile_vectorized<ELEMS_PER_ROW>(weights_mx, n_global, k_start, args.K,
                                                                          k_blocks_per_row, k_len);
                 } else if (use_soa) {
-                    w_row = dequant_q4_0_tile_vectorized_soa<ELEMS_PER_ROW>(qs_base_coop, d_base_coop, n_global, k_start, args.K,
-                                                                             k_blocks_per_row, k_len);
+                    w_row = dequant_q4_0_tile_vectorized_soa<ELEMS_PER_ROW>(qs_base_coop, d_base_coop, n_global,
+                                                                            k_start, args.K, k_blocks_per_row, k_len);
                 } else {
                     w_row = dequant_q4_0_tile_vectorized<ELEMS_PER_ROW>(weights_q4, n_global, k_start, args.K,
                                                                         k_blocks_per_row, k_len);
                 }
 
-                // Zero out elements beyond k_len for boundary handling
-                #pragma unroll
+// Zero out elements beyond k_len for boundary handling
+#        pragma unroll
                 for (int k = 0; k < ELEMS_PER_ROW; k++) {
                     if (k >= k_len) {
                         w_row[k] = sycl::half(0.0f);
@@ -2822,18 +2790,20 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
         } else {
             // Work-items 16-31: Load activation row (local_id - 16)
-            const int m_off = local_id - COOP_WG_N;  // 0-15
+            const int     m_off    = local_id - COOP_WG_N;  // 0-15
             const int64_t m_global = m_wg_start + m_off;
 
             // Build row vector in registers, then block store
             esimd::simd<sycl::half, ELEMS_PER_ROW> a_row = sycl::half(0.0f);
 
             if (m_global < args.M) {
-                #pragma unroll
+#        pragma unroll
                 for (int k = 0; k < ELEMS_PER_ROW; k++) {
-                    if (k >= k_len) break;
+                    if (k >= k_len) {
+                        break;
+                    }
                     const int64_t k_global = k_start + k;
-                    a_row[k] = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
+                    a_row[k]               = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
                 }
             }
 
@@ -2855,19 +2825,18 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             // Block load activations for this sub-group's M-rows [sg_id*8 .. sg_id*8+7]
             // SLM layout is row-major: row m at offset m * 16 * sizeof(half)
             // A layout for dpas: a[m * K_per + k] for m in [0..7], k in [0..15]
-            const int m_base = sg_id * ESIMD_REPEAT_COUNT;  // 0 or 8
+            const int      m_base     = sg_id * ESIMD_REPEAT_COUNT;  // 0 or 8
             const uint32_t a_slm_base = COOP_SLM_ACTS_OFFSET + m_base * ELEMS_PER_ROW * sizeof(sycl::half);
 
             // Block load all 8 rows (8 x 16 = 128 half values)
-            esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec =
-                esimd::slm_block_load<sycl::half, ESIMD_A_SIZE>(a_slm_base);
+            esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec = esimd::slm_block_load<sycl::half, ESIMD_A_SIZE>(a_slm_base);
 
-            // Handle boundary: zero out rows beyond M
-            #pragma unroll
+// Handle boundary: zero out rows beyond M
+#        pragma unroll
             for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
                 const int64_t m_global = m_wg_start + m_base + m;
                 if (m_global >= args.M) {
-                    #pragma unroll
+#        pragma unroll
                     for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                         a_vec[m * ESIMD_K_PER_DPAS + k] = sycl::half(0.0f);
                     }
@@ -2883,31 +2852,31 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             // Row-major: w_raw[n * 16 + k] for n in [0..15], k in [0..15]
             // VNNI: b_vec[(k/2) * N * 2 + n * 2 + (k%2)]
             esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec;
-            #pragma unroll
+#        pragma unroll
             for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
-                #pragma unroll
+#        pragma unroll
                 for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                     const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
-                    b_vec[vnni_idx] = w_raw[n * ESIMD_K_PER_DPAS + k];
+                    b_vec[vnni_idx]    = w_raw[n * ESIMD_K_PER_DPAS + k];
                 }
             }
 
-            // Handle boundary: zero out weights beyond N
-            #pragma unroll
+// Handle boundary: zero out weights beyond N
+#        pragma unroll
             for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                 const int64_t n_global = n_wg_start + n;
                 if (n_global >= args.N) {
-                    #pragma unroll
+#        pragma unroll
                     for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                         const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
-                        b_vec[vnni_idx] = sycl::half(0.0f);
+                        b_vec[vnni_idx]    = sycl::half(0.0f);
                     }
                 }
             }
 
             // Execute dpas: acc += A @ B
-            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                            float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(acc, b_vec,
+                                                                                                            a_vec);
         }
 
         // Split barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
@@ -2922,24 +2891,28 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     // Phase 3: Write output (each sub-group writes its tile)
     // ================================================================
     if (sg_has_work) {
-        #pragma unroll
+#        pragma unroll
         for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
             const int64_t m_global = m_sg_start + m;
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
-            #pragma unroll
+#        pragma unroll
             for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                 const int64_t n_global = n_sg_start + n;
-                if (n_global >= args.N) continue;
+                if (n_global >= args.N) {
+                    continue;
+                }
 
                 args.output[m_global * args.N + n_global] = acc[m * ESIMD_EXEC_SIZE + n];
             }
         }
     }
 }
-#endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 
-#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 /**
  * Large-tile ESIMD kernel implementation for 32×32 output tiles.
  *
@@ -2970,12 +2943,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
  * @param lane      Lane ID within sub-group [0..15]
  */
 template <int WG_SIZE>
-SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
-    sycl::nd_item<2>            item,
-    const UnifiedKernelArgs     args,
-    int                         local_id,
-    int                         sg_id,
-    int                         /* lane */) {  // lane unused in this kernel
+SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(sycl::nd_item<2>        item,
+                                                      const UnifiedKernelArgs args,
+                                                      int                     local_id,
+                                                      int                     sg_id,
+                                                      int /* lane */) {  // lane unused in this kernel
 
     // Compile-time validation of WG_SIZE constraints
     static_assert(WG_SIZE == 64, "Large-tile kernel requires WG_SIZE=64 (ESIMD hw limit)");
@@ -3001,14 +2973,14 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
     // This sub-group's output tile coordinates
     // Each sub-group computes 2 stacked 8×16 tiles = 16×16 total output
-    const int64_t m_sg_start = m_wg_start + sg_row * LARGE_SG_M;  // 16 rows per sg_row
+    const int64_t m_sg_start = m_wg_start + sg_row * LARGE_SG_M;       // 16 rows per sg_row
     const int64_t n_sg_start = n_wg_start + sg_col * ESIMD_EXEC_SIZE;  // 16 cols per sub-group
 
     // Check if this sub-group has work (boundary check)
     const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
 
     // Number of quantized blocks per weight row (QK=32 for both Q4_0 and MXFP4)
-    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+    const int  k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
     const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
     // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
@@ -3016,12 +2988,12 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
     const block_mxfp4_unified * weights_mx = static_cast<const block_mxfp4_unified *>(args.weights);
 
     // SOA layout pointers (Q4_0 only — MXFP4 always uses AOS)
-    const bool use_soa = (args.layout == LayoutMode::SOA) && !is_mxfp4;
-    const uint8_t *    qs_base_lg = static_cast<const uint8_t *>(args.weights);
-    const int64_t      total_blocks_lg = args.N * static_cast<int64_t>(k_blocks_per_row);
+    const bool         use_soa          = (args.layout == LayoutMode::SOA) && !is_mxfp4;
+    const uint8_t *    qs_base_lg       = static_cast<const uint8_t *>(args.weights);
+    const int64_t      total_blocks_lg  = args.N * static_cast<int64_t>(k_blocks_per_row);
     const int64_t      d_byte_offset_lg = total_blocks_lg * (UNIFIED_QK4_0 / 2);
-    const sycl::half * d_base_lg = reinterpret_cast<const sycl::half *>(
-        static_cast<const char *>(args.weights) + d_byte_offset_lg);
+    const sycl::half * d_base_lg =
+        reinterpret_cast<const sycl::half *>(static_cast<const char *>(args.weights) + d_byte_offset_lg);
 
     // Initialize SLM for this work-group
     esimd::slm_init<LARGE_SLM_TOTAL_BYTES>();
@@ -3037,9 +3009,9 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
     // K-loop: iterate over K dimension in tiles of 32
     for (int64_t kt = 0; kt < k_tiles; kt++) {
-        const int64_t k_start = kt * LARGE_TILE_K;
+        const int64_t k_start     = kt * LARGE_TILE_K;
         const int64_t k_remaining = args.K - k_start;
-        const int k_len = static_cast<int>(k_remaining < LARGE_TILE_K ? k_remaining : LARGE_TILE_K);
+        const int     k_len       = static_cast<int>(k_remaining < LARGE_TILE_K ? k_remaining : LARGE_TILE_K);
 
         // ================================================================
         // Phase 1: Cooperative Loading with Block Operations
@@ -3053,7 +3025,7 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
         if (local_id < LARGE_TILE_N) {
             // Work-items 0-31: Load weight row local_id
-            const int n_off = local_id;
+            const int     n_off    = local_id;
             const int64_t n_global = n_wg_start + n_off;
 
             // Build row vector with dequantized weights
@@ -3106,18 +3078,20 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
         } else if (local_id < LARGE_TILE_N + LARGE_TILE_M) {
             // Work-items 32-63: Load activation rows 0-31
-            const int m_off = local_id - LARGE_TILE_N;  // 0-31
+            const int     m_off    = local_id - LARGE_TILE_N;  // 0-31
             const int64_t m_global = m_wg_start + m_off;
 
             // Build row vector in registers, then block store
             esimd::simd<sycl::half, ELEMS_PER_ROW> a_row = sycl::half(0.0f);
 
             if (m_global < args.M) {
-                #pragma unroll
+#        pragma unroll
                 for (int k = 0; k < ELEMS_PER_ROW; k++) {
-                    if (k >= k_len) break;
+                    if (k >= k_len) {
+                        break;
+                    }
                     const int64_t k_global = k_start + k;
-                    a_row[k] = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
+                    a_row[k]               = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
                 }
             }
 
@@ -3142,15 +3116,17 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
         // We process K=32 in two K-tile iterations of 16 each
 
         if (sg_has_work) {
-            // Process two K-subtiles of 16 each within the K=32 tile
-            #pragma unroll
+// Process two K-subtiles of 16 each within the K=32 tile
+#        pragma unroll
             for (int k_sub = 0; k_sub < 2; k_sub++) {
                 const int k_sub_start = k_sub * ESIMD_K_PER_DPAS;  // 0 or 16
-                const int k_sub_len = (k_sub_start + ESIMD_K_PER_DPAS <= k_len) ?
-                                      ESIMD_K_PER_DPAS :
-                                      (k_len > k_sub_start ? k_len - k_sub_start : 0);
+                const int k_sub_len   = (k_sub_start + ESIMD_K_PER_DPAS <= k_len) ?
+                                            ESIMD_K_PER_DPAS :
+                                            (k_len > k_sub_start ? k_len - k_sub_start : 0);
 
-                if (k_sub_len == 0) continue;
+                if (k_sub_len == 0) {
+                    continue;
+                }
 
                 // ---- Load weights for this sub-group's N-column ----
                 // SLM weight offset for this sub-group's 16 columns
@@ -3159,17 +3135,17 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
                 // Load 16 weight rows × 16 K elements = 256 half
                 // Row-major in SLM: row n at offset [n * 32 + k_sub_start]
                 esimd::simd<sycl::half, ESIMD_B_SIZE> w_raw;  // 256 elements
-                #pragma unroll
+#        pragma unroll
                 for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                     const uint32_t row_offset = LARGE_SLM_WEIGHTS_OFFSET +
-                        (n_local_base + n) * LARGE_TILE_K * sizeof(sycl::half) +
-                        k_sub_start * sizeof(sycl::half);
+                                                (n_local_base + n) * LARGE_TILE_K * sizeof(sycl::half) +
+                                                k_sub_start * sizeof(sycl::half);
 
                     // Load 16 half values (one row slice)
                     esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
                         esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
 
-                    #pragma unroll
+#        pragma unroll
                     for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                         w_raw[n * ESIMD_K_PER_DPAS + k] = row_slice[k];
                     }
@@ -3177,24 +3153,24 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
                 // Repack weights from row-major to VNNI format for dpas
                 esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec;
-                #pragma unroll
+#        pragma unroll
                 for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
-                    #pragma unroll
+#        pragma unroll
                     for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                         const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
-                        b_vec[vnni_idx] = w_raw[n * ESIMD_K_PER_DPAS + k];
+                        b_vec[vnni_idx]    = w_raw[n * ESIMD_K_PER_DPAS + k];
                     }
                 }
 
-                // Handle boundary: zero out weights beyond N
-                #pragma unroll
+// Handle boundary: zero out weights beyond N
+#        pragma unroll
                 for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                     const int64_t n_global = n_sg_start + n;
                     if (n_global >= args.N) {
-                        #pragma unroll
+#        pragma unroll
                         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                             const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
-                            b_vec[vnni_idx] = sycl::half(0.0f);
+                            b_vec[vnni_idx]    = sycl::half(0.0f);
                         }
                     }
                 }
@@ -3205,27 +3181,27 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
                     // Load 8 activation rows × 16 K elements = 128 half
                     esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec;
-                    #pragma unroll
+#        pragma unroll
                     for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
                         const uint32_t row_offset = LARGE_SLM_ACTS_OFFSET +
-                            (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
-                            k_sub_start * sizeof(sycl::half);
+                                                    (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
+                                                    k_sub_start * sizeof(sycl::half);
 
                         esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
                             esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
 
-                        #pragma unroll
+#        pragma unroll
                         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                             a_vec[m * ESIMD_K_PER_DPAS + k] = row_slice[k];
                         }
                     }
 
-                    // Handle boundary: zero out rows beyond M
-                    #pragma unroll
+// Handle boundary: zero out rows beyond M
+#        pragma unroll
                     for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
                         const int64_t m_global = m_sg_start + m;
                         if (m_global >= args.M) {
-                            #pragma unroll
+#        pragma unroll
                             for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                                 a_vec[m * ESIMD_K_PER_DPAS + k] = sycl::half(0.0f);
                             }
@@ -3233,8 +3209,8 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
                     }
 
                     // Execute dpas: acc_lo += A @ B
-                    acc_lo = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                                       float, float, sycl::half, sycl::half>(acc_lo, b_vec, a_vec);
+                    acc_lo = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(
+                        acc_lo, b_vec, a_vec);
                 }
 
                 // ---- Process upper 8 rows (acc_hi) ----
@@ -3243,27 +3219,27 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
 
                     // Load 8 activation rows × 16 K elements = 128 half
                     esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec;
-                    #pragma unroll
+#        pragma unroll
                     for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
                         const uint32_t row_offset = LARGE_SLM_ACTS_OFFSET +
-                            (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
-                            k_sub_start * sizeof(sycl::half);
+                                                    (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
+                                                    k_sub_start * sizeof(sycl::half);
 
                         esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
                             esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
 
-                        #pragma unroll
+#        pragma unroll
                         for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                             a_vec[m * ESIMD_K_PER_DPAS + k] = row_slice[k];
                         }
                     }
 
-                    // Handle boundary: zero out rows beyond M
-                    #pragma unroll
+// Handle boundary: zero out rows beyond M
+#        pragma unroll
                     for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
                         const int64_t m_global = m_sg_start + ESIMD_REPEAT_COUNT + m;
                         if (m_global >= args.M) {
-                            #pragma unroll
+#        pragma unroll
                             for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
                                 a_vec[m * ESIMD_K_PER_DPAS + k] = sycl::half(0.0f);
                             }
@@ -3271,8 +3247,8 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
                     }
 
                     // Execute dpas: acc_hi += A @ B
-                    acc_hi = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                                       float, float, sycl::half, sycl::half>(acc_hi, b_vec, a_vec);
+                    acc_hi = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT, float, float, sycl::half, sycl::half>(
+                        acc_hi, b_vec, a_vec);
                 }
             }
         }
@@ -3289,38 +3265,46 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
     // Phase 3: Write output (each sub-group writes its 16×16 tile)
     // ================================================================
     if (sg_has_work) {
-        // Write lower 8 rows
-        #pragma unroll
+// Write lower 8 rows
+#        pragma unroll
         for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
             const int64_t m_global = m_sg_start + m;
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
-            #pragma unroll
+#        pragma unroll
             for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                 const int64_t n_global = n_sg_start + n;
-                if (n_global >= args.N) continue;
+                if (n_global >= args.N) {
+                    continue;
+                }
 
                 args.output[m_global * args.N + n_global] = acc_lo[m * ESIMD_EXEC_SIZE + n];
             }
         }
 
-        // Write upper 8 rows
-        #pragma unroll
+// Write upper 8 rows
+#        pragma unroll
         for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
             const int64_t m_global = m_sg_start + ESIMD_REPEAT_COUNT + m;
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
-            #pragma unroll
+#        pragma unroll
             for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
                 const int64_t n_global = n_sg_start + n;
-                if (n_global >= args.N) continue;
+                if (n_global >= args.N) {
+                    continue;
+                }
 
                 args.output[m_global * args.N + n_global] = acc_hi[m * ESIMD_EXEC_SIZE + n];
             }
         }
     }
 }
-#endif  // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    endif  // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 
 /**
  * Check if INT8 ESIMD dpas path can be used for given dimensions.
@@ -3406,17 +3390,17 @@ inline bool can_use_esimd_dpas(int64_t M, int64_t N, int64_t K) {
  * - Output: write tile_m x tile_n results
  */
 template <int TILE_M, int TILE_N, int TILE_K, bool USE_XMX>
-void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
-                                const UnifiedKernelArgs            args,
-                                sycl::local_accessor<float, 1>     slm_weights,
-                                sycl::local_accessor<float, 1>     slm_activations) {
+void unified_matmul_kernel_impl(sycl::nd_item<2>               item,
+                                const UnifiedKernelArgs        args,
+                                sycl::local_accessor<float, 1> slm_weights,
+                                sycl::local_accessor<float, 1> slm_activations) {
     // Tile coordinates
     const int tile_row = item.get_group(0);  // M dimension (output rows)
     const int tile_col = item.get_group(1);  // N dimension (output columns)
 
     // Thread coordinates within work-group
-    const int local_row = item.get_local_id(0);
-    const int local_col = item.get_local_id(1);
+    const int local_row      = item.get_local_id(0);
+    const int local_col      = item.get_local_id(1);
     const int local_size_row = item.get_local_range(0);
     const int local_size_col = item.get_local_range(1);
 
@@ -3425,8 +3409,8 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
     const int64_t n_start = tile_col * TILE_N;  // Starting output column
 
     // Number of K tiles
-    const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
-    const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
+    const int  k_tiles          = (args.K + TILE_K - 1) / TILE_K;
+    const int  k_blocks_per_row = args.K / UNIFIED_QK4_0;
     const bool is_mxfp4         = (args.quant_type == QUANT_TYPE_MXFP4);
 
     // Cast weight pointers based on quant type (different struct sizes: Q4_0=18B, MXFP4=17B)
@@ -3435,7 +3419,7 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
 
     // Initialize accumulator for each thread's output elements
     // Each thread computes multiple output elements
-    float acc[4][4] = {{0.0f}};  // Thread computes up to 4x4 outputs
+    float acc[4][4] = { { 0.0f } };  // Thread computes up to 4x4 outputs
 
     // Determine how many outputs each thread computes
     const int outputs_per_thread_m = (TILE_M + local_size_row - 1) / local_size_row;
@@ -3444,8 +3428,8 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
     // K-loop: iterate over K dimension in tiles
     for (int kt = 0; kt < k_tiles; kt++) {
         const int64_t k_start = kt * TILE_K;
-        const int64_t k_end = sycl::min(k_start + TILE_K, args.K);
-        const int     k_len = static_cast<int>(k_end - k_start);
+        const int64_t k_end   = sycl::min(k_start + TILE_K, args.K);
+        const int     k_len   = static_cast<int>(k_end - k_start);
 
         // Barrier before loading new tile data
         item.barrier(sycl::access::fence_space::local_space);
@@ -3456,13 +3440,15 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
         // SLM layout: [TILE_N x TILE_K] indexed as [n_off * TILE_K + k_off]
         for (int n_off = local_row; n_off < TILE_N; n_off += local_size_row) {
             const int64_t n_global = n_start + n_off;  // Output column = weight row
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             for (int k_off = local_col; k_off < k_len; k_off += local_size_col) {
                 const int64_t k_global = k_start + k_off;
 
                 // GGML: weights[n_global, k_global]
-                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                const int block_idx    = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
                 // Dequantize and store to SLM (dispatch based on quant type)
@@ -3481,13 +3467,15 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
         // SLM layout: [TILE_M x TILE_K] indexed as [m_off * TILE_K + k_off]
         for (int m_off = local_row; m_off < TILE_M; m_off += local_size_row) {
             const int64_t m_global = m_start + m_off;  // Output row
-            if (m_global >= args.M) continue;
+            if (m_global >= args.M) {
+                continue;
+            }
 
             for (int k_off = local_col; k_off < k_len; k_off += local_size_col) {
                 const int64_t k_global = k_start + k_off;
 
                 // GGML: activations[m_global, k_global]
-                float a = args.activations[m_global * args.K + k_global];
+                float a                                 = args.activations[m_global * args.K + k_global];
                 slm_activations[m_off * TILE_K + k_off] = a;
             }
         }
@@ -3500,20 +3488,28 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
         // Each thread computes its assigned outputs
         for (int mo = 0; mo < outputs_per_thread_m; mo++) {
             const int m_off = local_row + mo * local_size_row;
-            if (m_off >= TILE_M) continue;
-            if (m_start + m_off >= args.M) continue;
+            if (m_off >= TILE_M) {
+                continue;
+            }
+            if (m_start + m_off >= args.M) {
+                continue;
+            }
 
             for (int no = 0; no < outputs_per_thread_n; no++) {
                 const int n_off = local_col + no * local_size_col;
-                if (n_off >= TILE_N) continue;
-                if (n_start + n_off >= args.N) continue;
+                if (n_off >= TILE_N) {
+                    continue;
+                }
+                if (n_start + n_off >= args.N) {
+                    continue;
+                }
 
                 // Dot product over K tile
                 // dst[m,n] = sum_k(weights[n,k] * activations[m,k])
                 float sum = 0.0f;
                 for (int k = 0; k < k_len; k++) {
-                    float w = slm_weights[n_off * TILE_K + k];     // weights[n, k]
-                    float a = slm_activations[m_off * TILE_K + k]; // activations[m, k]
+                    float w = slm_weights[n_off * TILE_K + k];      // weights[n, k]
+                    float a = slm_activations[m_off * TILE_K + k];  // activations[m, k]
                     sum += w * a;
                 }
 
@@ -3529,15 +3525,23 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
     // Barrier not strictly needed here since we're writing to global memory
     for (int mo = 0; mo < outputs_per_thread_m && mo < 4; mo++) {
         const int m_off = local_row + mo * local_size_row;
-        if (m_off >= TILE_M) continue;
+        if (m_off >= TILE_M) {
+            continue;
+        }
         const int64_t m_global = m_start + m_off;
-        if (m_global >= args.M) continue;
+        if (m_global >= args.M) {
+            continue;
+        }
 
         for (int no = 0; no < outputs_per_thread_n && no < 4; no++) {
             const int n_off = local_col + no * local_size_col;
-            if (n_off >= TILE_N) continue;
+            if (n_off >= TILE_N) {
+                continue;
+            }
             const int64_t n_global = n_start + n_off;
-            if (n_global >= args.N) continue;
+            if (n_global >= args.N) {
+                continue;
+            }
 
             args.output[m_global * args.N + n_global] = acc[mo][no];
         }
@@ -3582,18 +3586,16 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     const int batch_size = static_cast<int>(args.M);
 
     // Select kernel path based on batch size and hardware capabilities
-    KernelPath selected_path = select_kernel_path(
-        batch_size, args.M, args.N, args.K, args.quant_type, cfg);
+    KernelPath selected_path = select_kernel_path(batch_size, args.M, args.N, args.K, args.quant_type, cfg);
 
     // Debug: Print dispatch decision (controlled by GGML_SYCL_DEBUG=1)
     if (ggml_sycl_unified_debug_enabled()) {
-        fprintf(stderr, "[unified-kernel] DISPATCH: batch=%d path=%s M=%lld N=%lld K=%lld "
+        fprintf(stderr,
+                "[unified-kernel] DISPATCH: batch=%d path=%s M=%lld N=%lld K=%lld "
                 "min_batch=%d xmx_supported=%d force_mmvq=%d force_esimd=%d\n",
-                batch_size, kernel_path_name(selected_path),
-                static_cast<long long>(args.M), static_cast<long long>(args.N),
-                static_cast<long long>(args.K),
-                get_esimd_min_batch(), cfg.supported ? 1 : 0,
-                env_force_mmvq() ? 1 : 0, env_force_esimd() ? 1 : 0);
+                batch_size, kernel_path_name(selected_path), static_cast<long long>(args.M),
+                static_cast<long long>(args.N), static_cast<long long>(args.K), get_esimd_min_batch(),
+                cfg.supported ? 1 : 0, env_force_mmvq() ? 1 : 0, env_force_esimd() ? 1 : 0);
         fflush(stderr);
     }
 
@@ -3608,9 +3610,8 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // Debug: Print launch parameters (opt-in to avoid log spam in production)
     if (ggml_sycl_unified_debug_enabled()) {
         fprintf(stderr, "[unified-kernel] LAUNCH: M=%lld N=%lld K=%lld type=%d tile=(%d,%d,%d) xmx=%d\n",
-                static_cast<long long>(args.M), static_cast<long long>(args.N),
-                static_cast<long long>(args.K), args.quant_type,
-                args.tile_m, args.tile_n, args.tile_k, args.use_xmx ? 1 : 0);
+                static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                args.quant_type, args.tile_m, args.tile_n, args.tile_k, args.use_xmx ? 1 : 0);
         fflush(stderr);
     }
 
@@ -3631,14 +3632,14 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     const bool prefer_esimd_small = ggml_sycl_unified::prefer_esimd_small();
     const int  esimd_min_batch    = ggml_sycl_unified::get_esimd_min_batch();
     const int  prefer_esimd_max_m = ggml_sycl_unified::prefer_esimd_max_m();
-    const bool allow_joint_matrix = !(prefer_esimd_small &&
-                                     (batch_size < esimd_min_batch || args.M <= prefer_esimd_max_m));
+    const bool allow_joint_matrix =
+        !(prefer_esimd_small && (batch_size < esimd_min_batch || args.M <= prefer_esimd_max_m));
     bool use_xmx_path = false;
 #if GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
     if (allow_joint_matrix && args.use_xmx && can_use_xmx(args.M, args.N, args.K)) {
         // Check if device supports XMX
         sycl::device dev = q.get_device();
-        use_xmx_path = dev.has(sycl::aspect::ext_intel_matrix);
+        use_xmx_path     = dev.has(sycl::aspect::ext_intel_matrix);
     }
 #endif
 
@@ -3660,8 +3661,8 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         const int xmx_grid_n = (static_cast<int>(args.N) + XMX_TN - 1) / XMX_TN;
         if (ggml_sycl_unified_debug_enabled()) {
             fprintf(stderr, "[unified-kernel] XMX path: M=%lld N=%lld K=%lld grid=(%d,%d)\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), xmx_grid_m, xmx_grid_n);
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    xmx_grid_m, xmx_grid_n);
             fflush(stderr);
         }
 
@@ -3675,20 +3676,15 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
             sycl::local_accessor<sycl::half, 1> slm_w(XMX_TN * XMX_TK, cgh);  // Weights
             sycl::local_accessor<sycl::half, 1> slm_a(XMX_TM * XMX_TK, cgh);  // Activations
             // Float SLM for boundary case accumulator output
-            sycl::local_accessor<float, 1> slm_acc_out(XMX_TILE_M * XMX_TILE_N, cgh);
+            sycl::local_accessor<float, 1>      slm_acc_out(XMX_TILE_M * XMX_TILE_N, cgh);
 
-            sycl::nd_range<2> range(
-                sycl::range<2>(xmx_grid_m * xmx_wg_m, xmx_grid_n * xmx_wg_n),
-                sycl::range<2>(xmx_wg_m, xmx_wg_n)
-            );
+            sycl::nd_range<2> range(sycl::range<2>(xmx_grid_m * xmx_wg_m, xmx_grid_n * xmx_wg_n),
+                                    sycl::range<2>(xmx_wg_m, xmx_wg_n));
 
             cgh.parallel_for<unified_matmul_xmx_kernel_name<XMX_TM, XMX_TN, XMX_TK>>(
-                range,
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SUBGROUP_SIZE)]] {
-                    unified_matmul_xmx_kernel_impl<XMX_TM, XMX_TN, XMX_TK>(
-                        item, args, slm_w, slm_a, slm_acc_out);
-                }
-            );
+                range, [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SUBGROUP_SIZE)]] {
+                    unified_matmul_xmx_kernel_impl<XMX_TM, XMX_TN, XMX_TK>(item, args, slm_w, slm_a, slm_acc_out);
+                });
         });
         return;
     }
@@ -3737,7 +3733,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     const bool esimd_enabled_by_gating = esimd_hw_supported && (selected_path == KernelPath::ESIMD_DPAS);
     const bool large_tile_selected     = esimd_hw_supported && (selected_path == KernelPath::ESIMD_LARGE_TILE);
 
-#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
     // Large-tile ESIMD path - adaptive based on hardware capabilities
     // Uses cooperative loading with multiple sub-groups for better memory bandwidth
     // Tile configuration selected based on max ESIMD work-group size:
@@ -3757,11 +3753,11 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         const int large_grid_n = (static_cast<int>(args.N) + tile_cfg.tile_n - 1) / tile_cfg.tile_n;
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] Large-tile ESIMD path: M=%lld N=%lld K=%lld "
+            fprintf(stderr,
+                    "[unified-kernel] Large-tile ESIMD path: M=%lld N=%lld K=%lld "
                     "grid=(%d,%d) tile=(%d,%d) wg=%d\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), large_grid_m, large_grid_n,
-                    tile_cfg.tile_m, tile_cfg.tile_n, tile_cfg.wg_size);
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    large_grid_m, large_grid_n, tile_cfg.tile_m, tile_cfg.tile_n, tile_cfg.wg_size);
             fflush(stderr);
         }
 
@@ -3769,13 +3765,12 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         // Each WG_SIZE requires a separate template instantiation
         if (tile_cfg.wg_size == 64) {
             q.submit([&](sycl::handler & cgh) {
-                constexpr int WG_SIZE = 64;
+                constexpr int  WG_SIZE = 64;
                 sycl::range<2> global(large_grid_m * WG_SIZE, large_grid_n);
                 sycl::range<2> local(WG_SIZE, 1);
 
                 cgh.parallel_for<esimd_fp16_large_tile_kernel<WG_SIZE>>(
-                    sycl::nd_range<2>(global, local),
-                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                    sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
                         const int local_id = item.get_local_id(0);
                         const int sg_id    = local_id / 16;
                         const int lane     = local_id % 16;
@@ -3788,9 +3783,9 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         // when validated on hardware that supports larger work-groups
     }
 cooperative_path:;  // Fallthrough label for large-tile to cooperative path
-#else
-    (void)large_tile_selected;  // Suppress unused variable warning when kernels disabled
-#endif  // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    else
+    (void) large_tile_selected;  // Suppress unused variable warning when kernels disabled
+#    endif          // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 
     // Try INT8 path first (requires both ESIMD and INT8 flags AND batch-size gating)
     if (esimd_enabled_by_gating && can_use_esimd_int8_dpas(args.M, args.N, args.K)) {
@@ -3803,8 +3798,8 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
         if (ggml_sycl_unified_debug_enabled()) {
             fprintf(stderr, "[unified-kernel] ESIMD INT8 path: M=%lld N=%lld K=%lld grid=(%d,%d)\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), esimd_grid_m, esimd_grid_n);
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    esimd_grid_m, esimd_grid_n);
             fflush(stderr);
         }
 
@@ -3815,8 +3810,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
             sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
 
             cgh.parallel_for<esimd_int8_kernel<ESIMD_TM, ESIMD_TN>>(
-                sycl::nd_range<2>(global, local),
-                [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
                     // Calculate tile coordinates
                     const int tile_row = item.get_global_id(0);  // M tile index
                     const int tile_col = item.get_global_id(1);  // N tile index
@@ -3826,13 +3820,12 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
                     // Call ESIMD INT8 kernel implementation
                     esimd_matmul_int8_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
-                }
-            );
+                });
         });
         return;
     }
 
-#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
     // Cooperative ESIMD FP16 path (multi-work-item with work-group barrier)
     // Uses SPIR-V split barriers for synchronization (Arc-compatible).
     // Enabled by default; set GGML_SYCL_XMX_COOPERATIVE=0 to disable
@@ -3846,37 +3839,35 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
         const int coop_grid_n = (static_cast<int>(args.N) + COOP_WG_N - 1) / COOP_WG_N;
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] Cooperative ESIMD FP16 path: M=%lld N=%lld K=%lld "
+            fprintf(stderr,
+                    "[unified-kernel] Cooperative ESIMD FP16 path: M=%lld N=%lld K=%lld "
                     "grid=(%d,%d) wg_size=%d\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), coop_grid_m, coop_grid_n, wg_size);
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    coop_grid_m, coop_grid_n, wg_size);
             fflush(stderr);
         }
 
         // Currently only WG_SIZE=32 is fully implemented
         // WG_SIZE=64 requires larger SLM tiles (TODO: implement in future)
         // The wg_size variable is checked but always returns 32 for now
-        (void)wg_size;  // Suppress unused variable warning
+        (void) wg_size;  // Suppress unused variable warning
 
         q.submit([&](sycl::handler & cgh) {
-            constexpr int WG_SIZE = 32;
+            constexpr int  WG_SIZE = 32;
             sycl::range<2> global(coop_grid_m * WG_SIZE, coop_grid_n);
             sycl::range<2> local(WG_SIZE, 1);
 
             cgh.parallel_for<esimd_fp16_cooperative_kernel<WG_SIZE>>(
-                sycl::nd_range<2>(global, local),
-                [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
                     const int local_id = item.get_local_id(0);
-                    const int sg_id = local_id / COOP_SUBGROUP_SIZE;
-                    const int lane = local_id % COOP_SUBGROUP_SIZE;
-                    esimd_matmul_fp16_cooperative_impl<WG_SIZE>(
-                        item, args, local_id, sg_id, lane);
-                }
-            );
+                    const int sg_id    = local_id / COOP_SUBGROUP_SIZE;
+                    const int lane     = local_id % COOP_SUBGROUP_SIZE;
+                    esimd_matmul_fp16_cooperative_impl<WG_SIZE>(item, args, local_id, sg_id, lane);
+                });
         });
         return;
     }
-#endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 
     // FP16 path (ESIMD enabled but INT8 not enabled)
     if (esimd_enabled_by_gating && can_use_esimd_dpas(args.M, args.N, args.K)) {
@@ -3893,9 +3884,8 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
         if (ggml_sycl_unified_debug_enabled()) {
             fprintf(stderr, "[unified-kernel] ESIMD FP16 path: M=%lld N=%lld K=%lld grid=(%d,%d) double_buf=%d\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), esimd_grid_m, esimd_grid_n,
-                    cfg.use_double_buffer ? 1 : 0);
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    esimd_grid_m, esimd_grid_n, cfg.use_double_buffer ? 1 : 0);
             fflush(stderr);
         }
 
@@ -3910,8 +3900,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                 XMXConfig cfg_copy = cfg;
 
                 cgh.parallel_for<esimd_fp16_double_buffered_kernel<ESIMD_TM, ESIMD_TN>>(
-                    sycl::nd_range<2>(global, local),
-                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                    sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
                         // Calculate tile coordinates
                         const int tile_row = item.get_global_id(0);  // M tile index
                         const int tile_col = item.get_global_id(1);  // N tile index
@@ -3920,10 +3909,8 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                         const int64_t n_start = tile_col * ESIMD_TN;
 
                         // Call double-buffered ESIMD FP16 kernel implementation
-                        esimd_matmul_fp16_double_buffered_impl<ESIMD_TM, ESIMD_TN>(
-                            args, m_start, n_start, cfg_copy);
-                    }
-                );
+                        esimd_matmul_fp16_double_buffered_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start, cfg_copy);
+                    });
             });
         } else {
             // Fall back to non-buffered path
@@ -3933,8 +3920,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                 sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
 
                 cgh.parallel_for<esimd_fp16_kernel<ESIMD_TM, ESIMD_TN>>(
-                    sycl::nd_range<2>(global, local),
-                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                    sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
                         // Calculate tile coordinates
                         const int tile_row = item.get_global_id(0);  // M tile index
                         const int tile_col = item.get_global_id(1);  // N tile index
@@ -3944,8 +3930,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
                         // Call ESIMD FP16 kernel implementation
                         esimd_matmul_fp16_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
-                    }
-                );
+                    });
             });
         }
         return;
@@ -3970,48 +3955,47 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
     // - Work-group: WARP_SIZE threads (32)
     // - Each thread: processes K/WARP_SIZE blocks, reduces partial sums
 
-    constexpr int DMMV_WARP_SIZE = 32;  // Match GGML_SYCL_WARP_SIZE
-    constexpr int DMMV_BLOCK_SIZE = 32; // Block size for both Q4_0 and MXFP4
+    constexpr int DMMV_WARP_SIZE  = 32;  // Match GGML_SYCL_WARP_SIZE
+    constexpr int DMMV_BLOCK_SIZE = 32;  // Block size for both Q4_0 and MXFP4
 
     // Use DMMV path for batch=1 when ESIMD path was not selected
     // (selected_path would be DMMV or we fell through ESIMD checks)
     if (batch_size == 1 && selected_path != KernelPath::ESIMD_DPAS) {
         // Grid: one work-group per output column (N dimension)
         // Each work-group computes the dot product for one output element
-        const int grid_n = static_cast<int>(args.N);
-        const bool use_soa = (args.layout == LayoutMode::SOA);
+        const int  grid_n   = static_cast<int>(args.N);
+        const bool use_soa  = (args.layout == LayoutMode::SOA);
         const bool is_mxfp4 = (args.quant_type == QUANT_TYPE_MXFP4);
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d layout=%s type=%s\n",
-                    static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), grid_n, DMMV_WARP_SIZE,
-                    use_soa ? "SOA" : "AOS",
-                    is_mxfp4 ? "MXFP4" : "Q4_0");
+            fprintf(stderr,
+                    "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d layout=%s type=%s\n",
+                    static_cast<long long>(args.M), static_cast<long long>(args.N), static_cast<long long>(args.K),
+                    grid_n, DMMV_WARP_SIZE, use_soa ? "SOA" : "AOS", is_mxfp4 ? "MXFP4" : "Q4_0");
             fflush(stderr);
         }
 
         // SoA layout calculations (precomputed on host)
         // Q4_0 SoA:  [qs: N*K/2 bytes][d: N*(K/32) * sizeof(half)]
         // MXFP4 SoA: [qs: N*K/2 bytes][e: N*(K/32) * sizeof(uint8_t)]
-        const int64_t total_blocks = args.N * (args.K / DMMV_BLOCK_SIZE);
+        const int64_t total_blocks   = args.N * (args.K / DMMV_BLOCK_SIZE);
         const int64_t qs_total_bytes = total_blocks * (DMMV_BLOCK_SIZE / 2);  // Byte offset to scale/exponent values
 
         q.submit([&](sycl::handler & cgh) {
-            sycl::nd_range<1> range(
-                sycl::range<1>(grid_n * DMMV_WARP_SIZE),  // Global: N * WARP_SIZE threads
-                sycl::range<1>(DMMV_WARP_SIZE)           // Local: WARP_SIZE threads per work-group
+            sycl::nd_range<1> range(sycl::range<1>(grid_n * DMMV_WARP_SIZE),  // Global: N * WARP_SIZE threads
+                                    sycl::range<1>(DMMV_WARP_SIZE)            // Local: WARP_SIZE threads per work-group
             );
 
             cgh.parallel_for<unified_dmmv_kernel_name>(
-                range,
-                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(DMMV_WARP_SIZE)]] {
+                range, [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(DMMV_WARP_SIZE)]] {
                     // Work-group handles one output column (n)
-                    const int n = item.get_group(0);  // Output column index
+                    const int n   = item.get_group(0);     // Output column index
                     const int tid = item.get_local_id(0);  // Thread within warp
 
                     // Bounds check
-                    if (n >= args.N) return;
+                    if (n >= args.N) {
+                        return;
+                    }
 
                     const int k_blocks_per_row = args.K / DMMV_BLOCK_SIZE;
 
@@ -4034,19 +4018,19 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                             const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
                             const uint8_t * e_base  = qs_base + qs_total_bytes;
 
-                            const int row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);
-                            const uint8_t * qs_row = qs_base + n * row_qs_bytes;
-                            const uint8_t * e_row  = e_base  + n * k_blocks_per_row;
+                            const int       row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);
+                            const uint8_t * qs_row       = qs_base + n * row_qs_bytes;
+                            const uint8_t * e_row        = e_base + n * k_blocks_per_row;
 
                             for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
                                 // Get E8M0 scale factor
                                 const float scale = e8m0_to_float_half(e_row[block_idx]);
 
-                                const uint8_t * qs = qs_row + block_idx * (DMMV_BLOCK_SIZE / 2);
-                                const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+                                const uint8_t * qs       = qs_row + block_idx * (DMMV_BLOCK_SIZE / 2);
+                                const int       k_offset = block_idx * DMMV_BLOCK_SIZE;
 
                                 float block_sum = 0.0f;
-                                #pragma unroll
+#pragma unroll
                                 for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
                                     const uint8_t qs_byte = qs[i];
                                     const float w0 = static_cast<float>(kvalues_mxfp4_unified[qs_byte & 0x0F]) * scale;
@@ -4063,14 +4047,14 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                                 static_cast<const block_mxfp4_unified *>(args.weights);
 
                             for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
-                                const int global_block_idx = n * k_blocks_per_row + block_idx;
-                                const block_mxfp4_unified * blk = &weights_mx[global_block_idx];
+                                const int                   global_block_idx = n * k_blocks_per_row + block_idx;
+                                const block_mxfp4_unified * blk              = &weights_mx[global_block_idx];
 
-                                const float scale = e8m0_to_float_half(blk->e);
-                                const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+                                const float scale    = e8m0_to_float_half(blk->e);
+                                const int   k_offset = block_idx * DMMV_BLOCK_SIZE;
 
                                 float block_sum = 0.0f;
-                                #pragma unroll
+#pragma unroll
                                 for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
                                     const uint8_t qs_byte = blk->qs[i];
                                     const float w0 = static_cast<float>(kvalues_mxfp4_unified[qs_byte & 0x0F]) * scale;
@@ -4089,14 +4073,14 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                         // Layout: [all qs bytes contiguous][all d values contiguous]
                         // qs: row n starts at qs_base + n * k_blocks_per_row * 16 bytes
                         // d:  row n starts at d_base + n * k_blocks_per_row * sizeof(half)
-                        const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
-                        const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+                        const uint8_t *    qs_base = static_cast<const uint8_t *>(args.weights);
+                        const sycl::half * d_base  = reinterpret_cast<const sycl::half *>(
                             static_cast<const char *>(args.weights) + qs_total_bytes);
 
                         // Calculate base pointers for row n
-                        const int row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);  // 16 bytes per block
-                        const uint8_t * qs_row = qs_base + n * row_qs_bytes;
-                        const sycl::half * d_row = d_base + n * k_blocks_per_row;
+                        const int       row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);  // 16 bytes per block
+                        const uint8_t * qs_row       = qs_base + n * row_qs_bytes;
+                        const sycl::half * d_row     = d_base + n * k_blocks_per_row;
 
                         // Thread tid processes blocks: tid, tid+WARP_SIZE, tid+2*WARP_SIZE, ...
                         for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
@@ -4111,13 +4095,13 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
                             // Process all 32 weights in this block
                             float block_sum = 0.0f;
-                            #pragma unroll
+#pragma unroll
                             for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
                                 const uint8_t qs_byte = qs[i];
-                                const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
-                                const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
-                                const float a0 = activations[k_offset + i];
-                                const float a1 = activations[k_offset + i + 16];
+                                const float   w0      = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                                const float   w1      = static_cast<float>((qs_byte >> 4) - 8) * d;
+                                const float   a0      = activations[k_offset + i];
+                                const float   a1      = activations[k_offset + i + 16];
                                 block_sum += w0 * a0 + w1 * a1;
                             }
                             partial_sum += block_sum;
@@ -4127,14 +4111,13 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                         // Q4_0 AoS Layout: Array of Structures (original)
                         // ==============================================
                         // Each block is contiguous: [d: fp16][qs: 16 bytes]
-                        const block_q4_0_unified * weights =
-                            static_cast<const block_q4_0_unified *>(args.weights);
+                        const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
 
                         // Thread tid processes blocks: tid, tid+WARP_SIZE, tid+2*WARP_SIZE, ...
                         for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
                             // Global block index for weight row n
-                            const int global_block_idx = n * k_blocks_per_row + block_idx;
-                            const block_q4_0_unified * blk = &weights[global_block_idx];
+                            const int                  global_block_idx = n * k_blocks_per_row + block_idx;
+                            const block_q4_0_unified * blk              = &weights[global_block_idx];
 
                             // Get scale factor
                             const float d = static_cast<float>(blk->d);
@@ -4144,7 +4127,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
                             // Process all 32 weights in this block
                             float block_sum = 0.0f;
-                            #pragma unroll
+#pragma unroll
                             for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
                                 // Each byte contains 2 nibbles
                                 const uint8_t qs_byte = blk->qs[i];
@@ -4165,7 +4148,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
                     // Warp-level reduction using shuffle
                     auto sg = item.get_sub_group();
-                    #pragma unroll
+#pragma unroll
                     for (int mask = DMMV_WARP_SIZE >> 1; mask > 0; mask >>= 1) {
                         partial_sum += sycl::shift_group_left(sg, partial_sum, mask);
                     }
@@ -4175,8 +4158,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
                         // Output is [M=1, N], so just index by n
                         args.output[n] = partial_sum;
                     }
-                }
-            );
+                });
         });
         return;
     }
@@ -4205,17 +4187,12 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
             sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);
 
-            sycl::nd_range<2> range(
-                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
-                sycl::range<2>(wg_m, wg_n)
-            );
+            sycl::nd_range<2> range(sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n), sycl::range<2>(wg_m, wg_n));
 
             cgh.parallel_for<unified_matmul_kernel_name<TM, TN, TK, false>>(
-                range,
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
+                range, [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
                     unified_matmul_kernel_impl<TM, TN, TK, false>(item, args, slm_w, slm_a);
-                }
-            );
+                });
         });
     } else if (tile_m <= 8 && tile_n <= 16 && tile_k <= 32) {
         // Small tiles: 8x16x32
@@ -4230,17 +4207,13 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
             sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
-            sycl::nd_range<2> range(
-                sycl::range<2>(grid_m * wg_size_m, grid_n * wg_size_n),
-                sycl::range<2>(wg_size_m, wg_size_n)
-            );
+            sycl::nd_range<2> range(sycl::range<2>(grid_m * wg_size_m, grid_n * wg_size_n),
+                                    sycl::range<2>(wg_size_m, wg_size_n));
 
             cgh.parallel_for<unified_matmul_kernel_name<TM, TN, TK, false>>(
-                range,
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
+                range, [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
                     unified_matmul_kernel_impl<TM, TN, TK, false>(item, args, slm_w, slm_a);
-                }
-            );
+                });
         });
     } else if (tile_m <= 16 && tile_n <= 32 && tile_k <= 32) {
         // Medium tiles: 16x32x32
@@ -4256,8 +4229,8 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
         const int wg_n = std::min(TN, 16);
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] MEDIUM path: TM=%d TN=%d TK=%d grid=(%d,%d) wg=(%d,%d)\n",
-                    TM, TN, TK, tm_grid_m, tm_grid_n, wg_m, wg_n);
+            fprintf(stderr, "[unified-kernel] MEDIUM path: TM=%d TN=%d TK=%d grid=(%d,%d) wg=(%d,%d)\n", TM, TN, TK,
+                    tm_grid_m, tm_grid_n, wg_m, wg_n);
             fflush(stderr);
         }
 
@@ -4267,17 +4240,12 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
             sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
-            sycl::nd_range<2> range(
-                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
-                sycl::range<2>(wg_m, wg_n)
-            );
+            sycl::nd_range<2> range(sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n), sycl::range<2>(wg_m, wg_n));
 
             cgh.parallel_for<unified_matmul_kernel_name<TM, TN, TK, false>>(
-                range,
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
+                range, [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
                     unified_matmul_kernel_impl<TM, TN, TK, false>(item, args, slm_w, slm_a);
-                }
-            );
+                });
         });
         // NOTE: Don't call q.wait_and_throw() here - incompatible with SYCL command graphs.
         // Errors will be caught when the queue is synchronized elsewhere.
@@ -4302,17 +4270,12 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
             sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
-            sycl::nd_range<2> range(
-                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
-                sycl::range<2>(wg_m, wg_n)
-            );
+            sycl::nd_range<2> range(sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n), sycl::range<2>(wg_m, wg_n));
 
             cgh.parallel_for<unified_matmul_kernel_fallback>(
-                range,
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
+                range, [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
                     unified_matmul_kernel_impl<TM, TN, TK, false>(item, args, slm_w, slm_a);
-                }
-            );
+                });
         });
     }
 }
@@ -4334,10 +4297,18 @@ namespace ggml_sycl {
 
 static void * pinned_alloc(size_t bytes, sycl::queue & queue, bool & from_pool) {
     from_pool = false;
-    if (bytes == 0) return nullptr;
-    if (vram_arena_enabled()) {
-        auto * hcache = try_get_host_cache();
-        if (hcache) {
+    if (bytes == 0) {
+        return nullptr;
+    }
+    auto * hcache = try_get_host_cache();
+    if (hcache) {
+        if (hcache->host_zones_configured()) {
+            void * ptr = hcache->host_zone_alloc(host_zone_id::SCRATCH, bytes, 64);
+            if (ptr) {
+                from_pool = true;
+                return ptr;
+            }
+        } else if (vram_arena_enabled()) {
             void * ptr = hcache->allocate_pinned_runtime(bytes, 64);
             if (ptr) {
                 from_pool = true;
@@ -4350,13 +4321,16 @@ static void * pinned_alloc(size_t bytes, sycl::queue & queue, bool & from_pool) 
 }
 
 static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from_pool) {
-    if (!ptr) return;
+    if (!ptr) {
+        return;
+    }
     if (from_pool) {
         auto * hcache = try_get_host_cache();
-        if (hcache) {
+        if (hcache && !hcache->host_zones_configured()) {
             hcache->free_pinned_runtime(ptr, bytes);
             return;
         }
+        return;
     }
     sycl::free(ptr, queue);
 }
@@ -4369,7 +4343,9 @@ static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from
 
 static void * device_alloc_persistent(size_t bytes, sycl::queue & queue, int device_id, bool & from_arena) {
     from_arena = false;
-    if (bytes == 0) return nullptr;
+    if (bytes == 0) {
+        return nullptr;
+    }
     if (vram_arena_enabled() && device_id >= 0) {
         void * ptr = unified_cache_arena_alloc_weight(device_id, bytes);
         if (ptr) {
@@ -4382,7 +4358,9 @@ static void * device_alloc_persistent(size_t bytes, sycl::queue & queue, int dev
 
 static void * device_alloc_scratch(size_t bytes, sycl::queue & queue, int device_id, bool & from_arena) {
     from_arena = false;
-    if (bytes == 0) return nullptr;
+    if (bytes == 0) {
+        return nullptr;
+    }
     if (vram_arena_enabled() && device_id >= 0) {
         void * ptr = unified_cache_arena_alloc(device_id, bytes);
         if (ptr) {
@@ -4394,39 +4372,62 @@ static void * device_alloc_scratch(size_t bytes, sycl::queue & queue, int device
 }
 
 static void device_free(void * ptr, sycl::queue & queue, bool from_arena) {
-    if (!ptr) return;
-    if (from_arena) return;  // Arena memory freed when arena is destroyed
+    if (!ptr) {
+        return;
+    }
+    if (from_arena) {
+        return;  // Arena memory freed when arena is destroyed
+    }
     sycl::free(ptr, queue);
 }
 
 static const char * persistent_op_type_name(OperationType type) {
     switch (type) {
-        case OperationType::RMS_NORM:       return "RMS_NORM";
-        case OperationType::ADD:            return "ADD";
-        case OperationType::MUL:            return "MUL";
-        case OperationType::GET_ROWS:       return "GET_ROWS";
-        case OperationType::MATMUL_Q_PROJ:  return "MATMUL_Q_PROJ";
-        case OperationType::MATMUL_K_PROJ:  return "MATMUL_K_PROJ";
-        case OperationType::MATMUL_V_PROJ:  return "MATMUL_V_PROJ";
-        case OperationType::MATMUL_OUT_PROJ:return "MATMUL_OUT_PROJ";
-        case OperationType::MATMUL_GATE:    return "MATMUL_GATE";
-        case OperationType::MATMUL_UP:      return "MATMUL_UP";
-        case OperationType::MATMUL_DOWN:    return "MATMUL_DOWN";
-        case OperationType::MATMUL_GATE_UP_SILU: return "MATMUL_GATE_UP_SILU";
-        case OperationType::ROPE:           return "ROPE";
-        case OperationType::ATTENTION_F16:  return "ATTENTION_F16";
-        case OperationType::ATTENTION_F32:  return "ATTENTION_F32";
-        case OperationType::SILU_MUL:       return "SILU_MUL";
-        case OperationType::SET_ROWS:       return "SET_ROWS";
-        case OperationType::STRIDED_COPY:   return "STRIDED_COPY";
-        case OperationType::SOFTMAX:        return "SOFTMAX";
+        case OperationType::RMS_NORM:
+            return "RMS_NORM";
+        case OperationType::ADD:
+            return "ADD";
+        case OperationType::MUL:
+            return "MUL";
+        case OperationType::GET_ROWS:
+            return "GET_ROWS";
+        case OperationType::MATMUL_Q_PROJ:
+            return "MATMUL_Q_PROJ";
+        case OperationType::MATMUL_K_PROJ:
+            return "MATMUL_K_PROJ";
+        case OperationType::MATMUL_V_PROJ:
+            return "MATMUL_V_PROJ";
+        case OperationType::MATMUL_OUT_PROJ:
+            return "MATMUL_OUT_PROJ";
+        case OperationType::MATMUL_GATE:
+            return "MATMUL_GATE";
+        case OperationType::MATMUL_UP:
+            return "MATMUL_UP";
+        case OperationType::MATMUL_DOWN:
+            return "MATMUL_DOWN";
+        case OperationType::MATMUL_GATE_UP_SILU:
+            return "MATMUL_GATE_UP_SILU";
+        case OperationType::ROPE:
+            return "ROPE";
+        case OperationType::ATTENTION_F16:
+            return "ATTENTION_F16";
+        case OperationType::ATTENTION_F32:
+            return "ATTENTION_F32";
+        case OperationType::SILU_MUL:
+            return "SILU_MUL";
+        case OperationType::SET_ROWS:
+            return "SET_ROWS";
+        case OperationType::STRIDED_COPY:
+            return "STRIDED_COPY";
+        case OperationType::SOFTMAX:
+            return "SOFTMAX";
     }
     return "UNKNOWN";
 }
 
 static int persistent_parse_tile_cols_env(const char * env_name, int fallback) {
     if (const char * env = std::getenv(env_name)) {
-        char * end = nullptr;
+        char *     end    = nullptr;
         const long parsed = std::strtol(env, &end, 10);
         if (end && end != env && parsed >= 16 && parsed <= 256 && (parsed % 16) == 0) {
             return static_cast<int>(parsed);
@@ -4439,7 +4440,7 @@ static bool persistent_attention_subgroup_dot_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_ATTN_SUBGROUP_DOT");
-        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+        enabled          = (env && std::atoi(env) != 0) ? 1 : 0;
     }
     return enabled != 0;
 }
@@ -4448,7 +4449,7 @@ static bool persistent_aggressive_wg_policy_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_AGGRESSIVE_WG");
-        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+        enabled          = (env && std::atoi(env) != 0) ? 1 : 0;
     }
     return enabled != 0;
 }
@@ -4459,7 +4460,7 @@ static bool persistent_aggressive_wg_policy_enabled() {
 
 // Packed operation descriptor for device access (aligned for efficient global reads)
 struct alignas(64) DeviceOperation {
-    int          type;           // OperationType as int
+    int          type;  // OperationType as int
     int          layer;
     const void * weights;
     const void * input;
@@ -4479,7 +4480,7 @@ struct alignas(64) DeviceOperation {
     int64_t      v_nb2;
     int64_t      v_nb3;
     int          M, N, K;
-    int          tile_cols;      // Matmul N columns per tile (0 = default)
+    int          tile_cols;  // Matmul N columns per tile (0 = default)
     int64_t      output_bytes;
     int          hidden_dim;
     int          intermediate_dim;
@@ -4487,9 +4488,9 @@ struct alignas(64) DeviceOperation {
     float        scale;
     int          quant_type;
     int          weight_layout;
-    int          n_tiles;        // Number of tiles for this operation
-    int          n_kv_heads;     // Number of KV heads for GQA (0 = same as n_heads)
-    int          mask_type;      // 0=f32, 1=f16, -1=none
+    int          n_tiles;     // Number of tiles for this operation
+    int          n_kv_heads;  // Number of KV heads for GQA (0 = same as n_heads)
+    int          mask_type;   // 0=f32, 1=f16, -1=none
     int64_t      mask_nb0;
     int64_t      mask_nb1;
     int64_t      mask_nb2;
@@ -4498,24 +4499,24 @@ struct alignas(64) DeviceOperation {
     int          mask_ne3;
 
     // Multi-device row-split fields (zero = single-device, no split)
-    int          row_start;      // First output row this device computes (0 for primary)
-    int          row_count;      // Number of output rows this device computes (0 = use N)
-    void *       merge_src;      // Host-pinned buffer for secondary device's partial output
-    void *       merge_dst;      // Device pointer where merged output goes (primary only)
-    float *      input_staging;  // Host-pinned activation staging (primary writes, secondary reads)
-    int *        progress_counter; // Device-local (malloc_device): kernel writes via atomic_ref, host reads via D2H BCS
-    int *        merge_complete;   // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
-    int          op_idx;         // Matmul index for progress/merge addressing
-    int          device_idx;     // 0=primary (B580), 1=secondary (B50)
-    int          n_devices;      // Total number of GPU devices in split (0 or 1 = no split)
-    int          merge_count;    // Number of floats to merge from secondary (N - row_count)
-    int          input_K;        // K dimension for activation staging (number of floats to stage)
+    int     row_start;         // First output row this device computes (0 for primary)
+    int     row_count;         // Number of output rows this device computes (0 = use N)
+    void *  merge_src;         // Host-pinned buffer for secondary device's partial output
+    void *  merge_dst;         // Device pointer where merged output goes (primary only)
+    float * input_staging;     // Host-pinned activation staging (primary writes, secondary reads)
+    int *   progress_counter;  // Device-local (malloc_device): kernel writes via atomic_ref, host reads via D2H BCS
+    int *   merge_complete;    // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
+    int     op_idx;            // Matmul index for progress/merge addressing
+    int     device_idx;        // 0=primary (B580), 1=secondary (B50)
+    int     n_devices;         // Total number of GPU devices in split (0 or 1 = no split)
+    int     merge_count;       // Number of floats to merge from secondary (N - row_count)
+    int     input_K;           // K dimension for activation staging (number of floats to stage)
 
     // Embedded per-op metadata (eliminates separate device allocations + per-token memcpy uploads).
     // With malloc_host ops table, host writes directly and kernel reads via PCIe zero-copy.
     union {
-        SetRowsMeta       set_rows_meta;
-        StridedCopyMeta   strided_copy_meta;
+        SetRowsMeta     set_rows_meta;
+        StridedCopyMeta strided_copy_meta;
     };
 };
 
@@ -4531,16 +4532,16 @@ struct PersistentKernelArgs {
     void *                  scratch_buffers[4];
     int                     hidden_dim;
     int                     intermediate_dim;
-    DeviceDAGState          dag;              // DAG scheduling state
-    int                     use_dag;          // 1 = DAG mode, 0 = legacy barriers
-    DevicePhaseSchedule     phase;            // Phase scheduling state
-    int                     use_phase;        // 1 = phase mode, 0 = DAG/legacy
-    int                     n_workgroups;     // Total WGs for device-scope barrier
-    DeviceRoleSchedule      role;             // Role-based WG specialization state
-    int                     use_role;         // 1 = role mode, 0 = fallback to phase/DAG/legacy
-    int                     skip_barriers;    // 1 = skip device-scope barriers (profiling only, wrong output)
-    int *                   light_flags;      // [n_phases] Per-phase completion flags for light barriers
-    int                     use_light_barriers; // 1 = use two-tier barriers (light for cheap phases)
+    DeviceDAGState          dag;                 // DAG scheduling state
+    int                     use_dag;             // 1 = DAG mode, 0 = legacy barriers
+    DevicePhaseSchedule     phase;               // Phase scheduling state
+    int                     use_phase;           // 1 = phase mode, 0 = DAG/legacy
+    int                     n_workgroups;        // Total WGs for device-scope barrier
+    DeviceRoleSchedule      role;                // Role-based WG specialization state
+    int                     use_role;            // 1 = role mode, 0 = fallback to phase/DAG/legacy
+    int                     skip_barriers;       // 1 = skip device-scope barriers (profiling only, wrong output)
+    int *                   light_flags;         // [n_phases] Per-phase completion flags for light barriers
+    int                     use_light_barriers;  // 1 = use two-tier barriers (light for cheap phases)
 };
 
 // =============================================================================
@@ -4552,13 +4553,13 @@ struct PersistentKernelArgs {
 // PCIe zero-copy, same as the monolithic kernel.
 
 struct MicroPhaseArgs {
-    const DeviceOperation * operations;        // Full ops table (malloc_host, shared across phases)
-    const DevicePhaseEntry * phase_entries;     // Phase entries array (malloc_host)
-    int                      phase_start;       // Start index into phase_entries
-    int                      phase_end;         // End index into phase_entries
-    int                      total_tiles;       // Total tiles in this phase
-    int *                    tile_counter;       // Per-phase tile counter (device alloc)
-    const int *              generation;         // Generation counter (malloc_host), for counter-less zeroing
+    const DeviceOperation *  operations;     // Full ops table (malloc_host, shared across phases)
+    const DevicePhaseEntry * phase_entries;  // Phase entries array (malloc_host)
+    int                      phase_start;    // Start index into phase_entries
+    int                      phase_end;      // End index into phase_entries
+    int                      total_tiles;    // Total tiles in this phase
+    int *                    tile_counter;   // Per-phase tile counter (device alloc)
+    const int *              generation;     // Generation counter (malloc_host), for counter-less zeroing
     int                      use_attn_subgroup_dot;
     void *                   scratch_buffers[4];
     int                      hidden_dim;
@@ -4594,28 +4595,29 @@ struct MicroSingleOpArgs {
 //   ATTENTION:    [0..head_dim-1] query cache, [head_dim..head_dim+2*N_SGS-1] reduction
 // Operations are serialized with device-scope barriers, so SLM is safely reused.
 
-template<int BLOCK_SIZE>
-class PersistentTGKernelImpl {
-public:
-    PersistentTGKernelImpl(const PersistentKernelArgs & args,
+template <int BLOCK_SIZE> class PersistentTGKernelImpl {
+  public:
+    PersistentTGKernelImpl(const PersistentKernelArgs &   args,
                            sycl::local_accessor<float, 1> slm,
-                           sycl::nd_item<1> item)
-        : args_(args), slm_(slm), item_(item) {}
+                           sycl::nd_item<1>               item) :
+        args_(args),
+        slm_(slm),
+        item_(item) {}
 
     // Helper to identify MUL_MAT operations that need cross-device row-split sync.
     // Defined before run() so SYCL device code compilation can resolve the call.
     static bool is_matmul_op(int type) {
         const auto t = static_cast<OperationType>(type);
-        return t == OperationType::MATMUL_Q_PROJ  || t == OperationType::MATMUL_K_PROJ  ||
-               t == OperationType::MATMUL_V_PROJ  || t == OperationType::MATMUL_OUT_PROJ ||
-               t == OperationType::MATMUL_GATE    || t == OperationType::MATMUL_UP       ||
-               t == OperationType::MATMUL_DOWN    || t == OperationType::MATMUL_GATE_UP_SILU;
+        return t == OperationType::MATMUL_Q_PROJ || t == OperationType::MATMUL_K_PROJ ||
+               t == OperationType::MATMUL_V_PROJ || t == OperationType::MATMUL_OUT_PROJ ||
+               t == OperationType::MATMUL_GATE || t == OperationType::MATMUL_UP || t == OperationType::MATMUL_DOWN ||
+               t == OperationType::MATMUL_GATE_UP_SILU;
     }
 
     void run() {
-        const int local_id = item_.get_local_id(0);
-        const int wg_id    = item_.get_group_linear_id();
-        const int n_wgs    = item_.get_group_range(0);
+        const int  local_id          = item_.get_local_id(0);
+        const int  wg_id             = item_.get_group_linear_id();
+        const int  n_wgs             = item_.get_group_range(0);
         const bool use_split_barrier = (args_.use_split_barrier != 0);
 
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
@@ -4627,8 +4629,7 @@ public:
 
                 // Thread 0 claims the next tile
                 if (local_id == 0) {
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         counter(*args_.tile_counter);
                     tile_idx = counter.fetch_add(1);
@@ -4637,7 +4638,9 @@ public:
                 // Broadcast to all threads in the work-group
                 tile_idx = sycl::group_broadcast(item_.get_group(), tile_idx, 0);
 
-                if (tile_idx >= op.n_tiles) break;
+                if (tile_idx >= op.n_tiles) {
+                    break;
+                }
 
                 // Dispatch to the appropriate operation handler
                 dispatch_operation(op, tile_idx);
@@ -4700,10 +4703,10 @@ public:
     // with per-operation dependency counters and dynamic work scheduling.
     // ZERO device-scope barriers — only intra-WG group_barrier after tile processing.
     void run_dag() {
-        const int local_id = item_.get_local_id(0);
-        const DeviceDAGState & dag = args_.dag;
-        const int n_ops = dag.n_ops;
-        int scan_hint = 0;  // start scanning from here (locality optimization)
+        const int              local_id  = item_.get_local_id(0);
+        const DeviceDAGState & dag       = args_.dag;
+        const int              n_ops     = dag.n_ops;
+        int                    scan_hint = 0;  // start scanning from here (locality optimization)
 
         while (true) {
             int op_idx = -1;
@@ -4712,14 +4715,14 @@ public:
             if (local_id == 0) {
                 for (int attempt = 0; attempt < n_ops; attempt++) {
                     const int scan = (scan_hint + attempt) % n_ops;
-                    sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         rc(dag.ready_counter[scan]);
-                    if (rc.load() != 0) continue;  // predecessors pending
+                    if (rc.load() != 0) {
+                        continue;  // predecessors pending
+                    }
 
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         tc(dag.tile_claimed[scan]);
                     if (tc.load() < dag.n_tiles[scan]) {
@@ -4729,58 +4732,60 @@ public:
                 }
                 // Check termination
                 if (op_idx < 0) {
-                    sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         cc(*dag.completed_count);
-                    if (cc.load() >= n_ops) op_idx = -2;  // TERMINATE
+                    if (cc.load() >= n_ops) {
+                        op_idx = -2;  // TERMINATE
+                    }
                 }
             }
             op_idx = sycl::group_broadcast(item_.get_group(), op_idx, 0);
 
-            if (op_idx == -2) break;       // all ops done
-            if (op_idx < 0)  continue;     // nothing ready, spin-retry
+            if (op_idx == -2) {
+                break;  // all ops done
+            }
+            if (op_idx < 0) {
+                continue;  // nothing ready, spin-retry
+            }
 
             // Update scan hint for locality (next scan starts near current op)
             scan_hint = op_idx;
 
             // Claim and process tiles (same work-stealing pattern as legacy run())
-            const DeviceOperation & op = args_.operations[op_idx];
-            int my_tiles = 0;
+            const DeviceOperation & op       = args_.operations[op_idx];
+            int                     my_tiles = 0;
             while (true) {
                 int tile_idx = -1;
                 if (local_id == 0) {
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         tc(dag.tile_claimed[op_idx]);
                     tile_idx = tc.fetch_add(1);
                 }
                 tile_idx = sycl::group_broadcast(item_.get_group(), tile_idx, 0);
-                if (tile_idx >= op.n_tiles) break;
+                if (tile_idx >= op.n_tiles) {
+                    break;
+                }
                 dispatch_operation(op, tile_idx);
                 my_tiles++;
             }
 
             // Signal completion: last WG to finish this op wakes successors
             if (my_tiles > 0 && local_id == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                 sycl::memory_scope::device,
+                sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>
-                    td(dag.tiles_done[op_idx]);
+                          td(dag.tiles_done[op_idx]);
                 const int done = td.fetch_add(my_tiles);
                 if (done + my_tiles == dag.n_tiles[op_idx]) {
                     // All tiles complete — decrement successors' ready counters
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         cc(*dag.completed_count);
                     cc.fetch_add(1);
-                    for (int s = dag.successor_offset[op_idx];
-                         s < dag.successor_offset[op_idx + 1]; s++) {
+                    for (int s = dag.successor_offset[op_idx]; s < dag.successor_offset[op_idx + 1]; s++) {
                         const int succ = dag.successor_list[s];
-                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             rc(dag.ready_counter[succ]);
                         rc.fetch_sub(1);
@@ -4799,20 +4804,19 @@ public:
     // WGs grab tiles freely. Between phases, device_split_barrier ensures all WGs
     // see the previous phase's results before proceeding.
     void run_phase() {
-        const int local_id = item_.get_local_id(0);
-        const int wg_id    = item_.get_group_linear_id();
-        const int n_wgs    = item_.get_group_range(0);
-        const bool use_split = (args_.use_split_barrier != 0);
-        const bool use_light = (args_.use_light_barriers != 0) && (args_.light_flags != nullptr);
-        const DevicePhaseSchedule & sched = args_.phase;
+        const int                   local_id  = item_.get_local_id(0);
+        const int                   wg_id     = item_.get_group_linear_id();
+        const int                   n_wgs     = item_.get_group_range(0);
+        const bool                  use_split = (args_.use_split_barrier != 0);
+        const bool                  use_light = (args_.use_light_barriers != 0) && (args_.light_flags != nullptr);
+        const DevicePhaseSchedule & sched     = args_.phase;
 
         for (int phase = 0; phase < sched.n_phases; phase++) {
             const int phase_start = sched.phase_offset[phase];
             const int phase_end   = sched.phase_offset[phase + 1];
             const int total_tiles = sched.phase_tiles[phase];
             // Phase type: 0=HEAVY (device barrier), 1=LIGHT (flag-based)
-            const int ptype = (use_light && sched.phase_type != nullptr)
-                                  ? sched.phase_type[phase] : 0;
+            const int ptype       = (use_light && sched.phase_type != nullptr) ? sched.phase_type[phase] : 0;
 
             if (ptype == 1 && total_tiles > 0) {
                 // ── LIGHT phase: static assignment to WG 0 ──────────────
@@ -4870,18 +4874,21 @@ public:
                 while (true) {
                     int flat_tile = -1;
                     if (local_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             tc(*args_.tile_counter);
                         flat_tile = tc.fetch_add(1);
                     }
                     flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
-                    if (flat_tile >= total_tiles) break;
+                    if (flat_tile >= total_tiles) {
+                        break;
+                    }
 
                     int op_entry_idx = phase_start;
                     for (int e = phase_start + 1; e < phase_end; e++) {
-                        if (sched.entries[e].tile_offset > flat_tile) break;
+                        if (sched.entries[e].tile_offset > flat_tile) {
+                            break;
+                        }
                         op_entry_idx = e;
                     }
                     const int op_idx   = sched.entries[op_entry_idx].op_idx;
@@ -4914,10 +4921,10 @@ public:
     // instead of expensive device-scope barriers.
     // -------------------------------------------------------------------------
     void run_role_specialized() {
-        const int local_id = item_.get_local_id(0);
-        const int wg_id    = item_.get_group_linear_id();
-        const int n_wgs    = item_.get_group_range(0);
-        const DeviceRoleSchedule & role = args_.role;
+        const int                  local_id = item_.get_local_id(0);
+        const int                  wg_id    = item_.get_group_linear_id();
+        const int                  n_wgs    = item_.get_group_range(0);
+        const DeviceRoleSchedule & role     = args_.role;
 
         // --- Kernel-side reset of role sync flags (L2 coherency fix) ---
         // BCS memset from host writes directly to VRAM but does NOT invalidate
@@ -4929,36 +4936,30 @@ public:
         if (local_id == 0 && wg_id == 0) {
             // Zero all cross-role sync flags
             for (int i = 0; i < role.n_sync_points * 2; i++) {
-                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                 sycl::memory_scope::device,
+                sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>
                     flag(role.sync_flags[i]);
                 flag.store(0, sycl::memory_order::release);
             }
             // Zero role tile counter
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 tc(*role.role_tile_counter);
             tc.store(0, sycl::memory_order::release);
             // Zero per-role barrier counters and sense flags
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 ec(*role.elem_barrier_cnt);
             ec.store(0, sycl::memory_order::release);
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 es(*role.elem_barrier_sense);
             es.store(0, sycl::memory_order::release);
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 mc(*role.mm_barrier_cnt);
             mc.store(0, sycl::memory_order::release);
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 ms(*role.mm_barrier_sense);
             ms.store(0, sycl::memory_order::release);
@@ -4990,8 +4991,7 @@ public:
                         // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
                         const int flag_idx = seg.sync_before * 2 + 1;
                         if (local_id == 0 && wg_id == 0) {
-                            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                             sycl::memory_scope::device,
+                            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>
                                 flag(role.sync_flags[flag_idx]);
                             while (flag.load(sycl::memory_order::acquire) == 0) {
@@ -5017,8 +5017,7 @@ public:
                         device_barrier_atomic_n(local_id, role.n_elem_wgs, role.role_tile_counter);
                     } else {
                         if (local_id == 0) {
-                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                             sycl::memory_scope::device,
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>
                                 tc(*role.role_tile_counter);
                             tc.store(0);
@@ -5028,8 +5027,7 @@ public:
                 } else {
                     // First segment or after cross-role sync: just reset counter + barrier
                     if (local_id == 0 && wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             tc(*role.role_tile_counter);
                         tc.store(0);
@@ -5046,14 +5044,15 @@ public:
                 while (true) {
                     int flat_tile = -1;
                     if (local_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             tc(*role.role_tile_counter);
                         flat_tile = tc.fetch_add(1);
                     }
                     flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
-                    if (flat_tile >= seg_total_tiles) break;
+                    if (flat_tile >= seg_total_tiles) {
+                        break;
+                    }
 
                     // Map flat tile to op within segment.
                     // Walk ops sequentially (typically 1-4 ops per segment).
@@ -5079,11 +5078,11 @@ public:
                     // elem_done flag is at sync_flags[sync_idx * 2]
                     const int flag_idx = seg.sync_after * 2;
                     if (local_id == 0 && wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             flag(role.sync_flags[flag_idx]);
-                        flag.store(seg.sync_after + 1, sycl::memory_order::release);  // Use sync index + 1 as non-zero sentinel
+                        flag.store(seg.sync_after + 1,
+                                   sycl::memory_order::release);  // Use sync index + 1 as non-zero sentinel
                     }
                 }
             }
@@ -5091,8 +5090,8 @@ public:
             // --- Matmul role ---
             // Matmul WGs are numbered from n_elem_wgs to n_total-1.
             // They use a separate atomic tile counter for work-stealing.
-            const int matmul_wg_id    = wg_id - role.n_elem_wgs;
-            const int n_matmul_wgs    = item_.get_group_range(0) - role.n_elem_wgs;
+            const int matmul_wg_id = wg_id - role.n_elem_wgs;
+            const int n_matmul_wgs = item_.get_group_range(0) - role.n_elem_wgs;
 
             for (int seg_idx = 0; seg_idx < role.n_matmul_segments; seg_idx++) {
                 const RoleSegment & seg = role.matmul_segments[seg_idx];
@@ -5104,8 +5103,7 @@ public:
                         const int flag_idx = seg.sync_before * 2;
                         const int expected = seg.sync_before + 1;
                         if (local_id == 0 && matmul_wg_id == 0) {
-                            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                             sycl::memory_scope::device,
+                            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>
                                 flag(role.sync_flags[flag_idx]);
                             while (flag.load(sycl::memory_order::acquire) < expected) {
@@ -5133,8 +5131,7 @@ public:
                     } else {
                         // Single WG: just reset counter directly (no race possible)
                         if (local_id == 0) {
-                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                             sycl::memory_scope::device,
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>
                                 tc(*args_.tile_counter);
                             tc.store(0);
@@ -5144,8 +5141,7 @@ public:
                 } else {
                     // First segment or after cross-role sync: just reset counter + barrier
                     if (local_id == 0 && matmul_wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             tc(*args_.tile_counter);
                         tc.store(0);
@@ -5162,14 +5158,15 @@ public:
                 while (true) {
                     int flat_tile = -1;
                     if (local_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             tc(*args_.tile_counter);
                         flat_tile = tc.fetch_add(1);
                     }
                     flat_tile = sycl::group_broadcast(item_.get_group(), flat_tile, 0);
-                    if (flat_tile >= seg_total_tiles) break;
+                    if (flat_tile >= seg_total_tiles) {
+                        break;
+                    }
 
                     // Map flat tile to op within segment
                     int cumulative = 0;
@@ -5225,8 +5222,7 @@ public:
                     // matmul_done flag is at sync_flags[sync_idx * 2 + 1]
                     const int flag_idx = seg.sync_after * 2 + 1;
                     if (local_id == 0 && matmul_wg_id == 0) {
-                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                                         sycl::memory_scope::device,
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                                          sycl::access::address_space::global_space>
                             flag(role.sync_flags[flag_idx]);
                         flag.store(seg.sync_after + 1, sycl::memory_order::release);
@@ -5244,20 +5240,22 @@ public:
     // Uses a separate MicroPhaseArgs struct to avoid carrying the full
     // PersistentKernelArgs (which contains barrier/DAG/role state unused here).
     // The dispatch_operation() calls are identical to run_phase().
-    static void run_micro_phase(const MicroPhaseArgs & margs,
+    static void run_micro_phase(const MicroPhaseArgs &         margs,
                                 sycl::local_accessor<float, 1> slm,
-                                sycl::nd_item<1> item) {
+                                sycl::nd_item<1>               item) {
         const int local_id    = item.get_local_id(0);
         const int total_tiles = margs.total_tiles;
-        if (total_tiles <= 0) return;
+        if (total_tiles <= 0) {
+            return;
+        }
 
         // Build a minimal PersistentKernelArgs for dispatch_operation().
         // Only the fields accessed by compute_*_tile functions are needed:
         //   operations, scratch_buffers, hidden_dim, intermediate_dim,
         //   use_attn_subgroup_dot.
-        PersistentKernelArgs args_shim = {};
-        args_shim.operations           = margs.operations;
-        args_shim.n_operations         = 0;  // unused by dispatch
+        PersistentKernelArgs args_shim  = {};
+        args_shim.operations            = margs.operations;
+        args_shim.n_operations          = 0;  // unused by dispatch
         args_shim.use_attn_subgroup_dot = margs.use_attn_subgroup_dot;
         for (int i = 0; i < 4; i++) {
             args_shim.scratch_buffers[i] = margs.scratch_buffers[i];
@@ -5276,22 +5274,25 @@ public:
         while (true) {
             int flat_tile = -1;
             if (local_id == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                 sycl::memory_scope::device,
+                sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>
                     tc(*margs.tile_counter);
                 flat_tile = tc.fetch_add(1);
             }
             flat_tile = sycl::group_broadcast(item.get_group(), flat_tile, 0);
-            if (flat_tile >= base + total_tiles) break;
+            if (flat_tile >= base + total_tiles) {
+                break;
+            }
             flat_tile -= base;
 
             // Map flat_tile to (op_idx, tile_idx) via phase entries
-            const int phase_start = margs.phase_start;
-            const int phase_end   = margs.phase_end;
-            int op_entry_idx = phase_start;
+            const int phase_start  = margs.phase_start;
+            const int phase_end    = margs.phase_end;
+            int       op_entry_idx = phase_start;
             for (int e = phase_start + 1; e < phase_end; e++) {
-                if (margs.phase_entries[e].tile_offset > flat_tile) break;
+                if (margs.phase_entries[e].tile_offset > flat_tile) {
+                    break;
+                }
                 op_entry_idx = e;
             }
             const int op_idx   = margs.phase_entries[op_entry_idx].op_idx;
@@ -5349,8 +5350,8 @@ public:
         }
     }
 
-private:
-    const PersistentKernelArgs &    args_;
+  private:
+    const PersistentKernelArgs &   args_;
     sycl::local_accessor<float, 1> slm_;
     sycl::nd_item<1>               item_;
 
@@ -5393,8 +5394,7 @@ private:
             // Only WG 0 resets the tile counter to avoid race where multiple
             // WGs reset it while others are still claiming tiles (infinite loop).
             if (reset_tile_counter && local_id == 0 && item_.get_group_linear_id() == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                 sycl::memory_scope::device,
+                sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>
                     tile_counter(*args_.tile_counter);
                 tile_counter.store(0);
@@ -5408,12 +5408,10 @@ private:
 
         // Only thread 0 per work-group participates in device-scope barrier
         if (local_id == 0) {
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 cnt(*args_.barrier_counter);
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 sense(*args_.barrier_sense);
 
@@ -5424,8 +5422,7 @@ private:
             if (cnt.fetch_add(1) == n_wgs - 1) {
                 cnt.store(0);
                 if (reset_tile_counter) {
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         tile_counter(*args_.tile_counter);
                     tile_counter.store(0);
@@ -5489,8 +5486,7 @@ private:
         if (local_id == 0) {
             const int wg_id = item_.get_group_linear_id();
 
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 flag(args_.light_flags[phase_idx]);
 
@@ -5524,8 +5520,7 @@ private:
         if (args_.skip_barriers) {
             sycl::group_barrier(item_.get_group());
             if (tile_counter_to_reset && local_id == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                 sycl::memory_scope::device,
+                sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>
                     tc(*tile_counter_to_reset);
                 tc.store(0);
@@ -5534,21 +5529,19 @@ private:
             return;
         }
 
-        const int wg_id = item_.get_group_linear_id();
+        const int  wg_id   = item_.get_group_linear_id();
         const bool is_elem = (wg_id < args_.role.n_elem_wgs);
 
         sycl::group_barrier(item_.get_group());
 
         if (local_id == 0) {
-            int * cnt_ptr   = is_elem ? args_.role.elem_barrier_cnt   : args_.role.mm_barrier_cnt;
+            int * cnt_ptr   = is_elem ? args_.role.elem_barrier_cnt : args_.role.mm_barrier_cnt;
             int * sense_ptr = is_elem ? args_.role.elem_barrier_sense : args_.role.mm_barrier_sense;
 
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 cnt(*cnt_ptr);
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
-                             sycl::memory_scope::device,
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 sense(*sense_ptr);
 
@@ -5556,8 +5549,7 @@ private:
             if (cnt.fetch_add(1) == n_role_wgs - 1) {
                 cnt.store(0);
                 if (tile_counter_to_reset) {
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                     sycl::memory_scope::device,
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
                         tc(*tile_counter_to_reset);
                     tc.store(0);
@@ -5717,7 +5709,7 @@ private:
 
     __attribute__((noinline)) void compute_rms_norm_tile(const DeviceOperation & op, int tile_idx) {
         // RMS norm is a single-tile cooperative operation (tile_idx ignored)
-        (void)tile_idx;
+        (void) tile_idx;
 
         const int     tid        = item_.get_local_id(0);
         const int     hidden_dim = op.hidden_dim;
@@ -5726,9 +5718,9 @@ private:
         const float * weights    = static_cast<const float *>(op.weights);
         float *       output     = static_cast<float *>(op.output);
 
-        auto      sg      = item_.get_sub_group();
-        const int warp_id = sg.get_group_linear_id();
-        const int lane_id = sg.get_local_linear_id();
+        auto          sg      = item_.get_sub_group();
+        const int     warp_id = sg.get_group_linear_id();
+        const int     lane_id = sg.get_local_linear_id();
         constexpr int sg_size = 16;
         constexpr int n_warps = BLOCK_SIZE / sg_size;
 
@@ -5763,15 +5755,15 @@ private:
 
         for (int i = tid; i < hidden_dim; i += BLOCK_SIZE) {
             const float w = weights ? weights[i] : 1.0f;
-            output[i] = input[i] * scale * w;
+            output[i]     = input[i] * scale * w;
         }
     }
 
     __attribute__((noinline)) void compute_silu_mul_tile(const DeviceOperation & op, int tile_idx) {
-        const int     tid              = item_.get_local_id(0);
-        const int     intermediate_dim = op.intermediate_dim;
-        const int     tile_size        = BLOCK_SIZE;  // Elements per tile = work-group size
-        const int     start            = tile_idx * tile_size;
+        const int tid              = item_.get_local_id(0);
+        const int intermediate_dim = op.intermediate_dim;
+        const int tile_size        = BLOCK_SIZE;  // Elements per tile = work-group size
+        const int start            = tile_idx * tile_size;
 
         const float * gate   = static_cast<const float *>(op.input);
         const float * up     = static_cast<const float *>(op.aux);
@@ -5781,7 +5773,7 @@ private:
         if (idx < intermediate_dim) {
             const float g         = gate[idx];
             const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
-            output[idx] = g * sigmoid_g * up[idx];
+            output[idx]           = g * sigmoid_g * up[idx];
         }
     }
 
@@ -5811,12 +5803,12 @@ private:
         if (!op.mask || op.mask_type < 0) {
             return 0.0f;
         }
-        const int64_t m_ne2 = op.mask_ne2 > 0 ? op.mask_ne2 : 1;
-        const int64_t m_ne3 = op.mask_ne3 > 0 ? op.mask_ne3 : 1;
-        const int64_t m02   = m_ne2 > 0 ? (i02 % m_ne2) : 0;
-        const int64_t m03   = m_ne3 > 0 ? (i03 % m_ne3) : 0;
-        const int64_t off   = i01 * op.mask_nb1 + m02 * op.mask_nb2 + m03 * op.mask_nb3 + (int64_t) col * op.mask_nb0;
-        const char * mask_b = static_cast<const char *>(op.mask);
+        const int64_t m_ne2  = op.mask_ne2 > 0 ? op.mask_ne2 : 1;
+        const int64_t m_ne3  = op.mask_ne3 > 0 ? op.mask_ne3 : 1;
+        const int64_t m02    = m_ne2 > 0 ? (i02 % m_ne2) : 0;
+        const int64_t m03    = m_ne3 > 0 ? (i03 % m_ne3) : 0;
+        const int64_t off    = i01 * op.mask_nb1 + m02 * op.mask_nb2 + m03 * op.mask_nb3 + (int64_t) col * op.mask_nb0;
+        const char *  mask_b = static_cast<const char *>(op.mask);
         if (op.mask_type == 1) {
             return static_cast<float>(*reinterpret_cast<const sycl::half *>(mask_b + off));
         }
@@ -5831,7 +5823,7 @@ private:
         const float * a = static_cast<const float *>(op.input);
         const float * b = static_cast<const float *>(op.aux);
         float *       y = static_cast<float *>(op.output);
-        y[idx] = a[idx] + b[idx];
+        y[idx]          = a[idx] + b[idx];
     }
 
     __attribute__((noinline)) void compute_mul_tile(const DeviceOperation & op, int tile_idx) {
@@ -5842,7 +5834,7 @@ private:
         const float * a = static_cast<const float *>(op.input);
         const float * b = static_cast<const float *>(op.aux);
         float *       y = static_cast<float *>(op.output);
-        y[idx] = a[idx] * b[idx];
+        y[idx]          = a[idx] * b[idx];
     }
 
     __attribute__((noinline)) void compute_get_rows_tile(const DeviceOperation & op, int tile_idx) {
@@ -5866,15 +5858,15 @@ private:
         const int64_t i01 = r2 / ne00;
         const int64_t i00 = r2 - i01 * ne00;
 
-        const int64_t nb01 = op.k_nb0;
-        const int64_t nb02 = op.k_nb1;
-        const int64_t nb03 = op.k_nb2;
-        const int64_t s10  = op.v_nb0;
-        const int64_t s11  = op.v_nb1;
-        const int64_t s12  = op.v_nb2;
-        const int64_t s1   = op.v_nb3;
-        const int64_t s2   = op.mask_nb0;
-        const int64_t s3   = op.mask_nb1;
+        const int64_t nb01      = op.k_nb0;
+        const int64_t nb02      = op.k_nb1;
+        const int64_t nb03      = op.k_nb2;
+        const int64_t s10       = op.v_nb0;
+        const int64_t s11       = op.v_nb1;
+        const int64_t s12       = op.v_nb2;
+        const int64_t s1        = op.v_nb3;
+        const int64_t s2        = op.mask_nb0;
+        const int64_t s3        = op.mask_nb1;
         const int     src0_type = op.quant_type;  // 0=f32, 1=f16
 
         const char * src0 = static_cast<const char *>(op.input);
@@ -5890,12 +5882,12 @@ private:
             return;
         }
 
-        const int src_elem_size = (src0_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
-        const int64_t src_off = (int64_t) src_row * nb01 + i02 * nb02 + i03 * nb03 + i00 * src_elem_size;
-        const float v = load_f32_or_f16(src0 + src_off, src0_type);
+        const int     src_elem_size = (src0_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int64_t src_off       = (int64_t) src_row * nb01 + i02 * nb02 + i03 * nb03 + i00 * src_elem_size;
+        const float   v             = load_f32_or_f16(src0 + src_off, src0_type);
 
         const int64_t dst_off = i00 + i01 * s1 + i02 * s2 + i03 * s3;
-        dst[dst_off] = v;
+        dst[dst_off]          = v;
     }
 
     __attribute__((noinline)) void compute_set_rows_tile(const DeviceOperation & op, int tile_idx) {
@@ -5937,11 +5929,11 @@ private:
             return;
         }
 
-        const int src_elem_size = (meta->src_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
-        const int dst_elem_size = (meta->dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
-        const int64_t src_off = i01 * meta->nb01 + i02 * meta->nb02 + i03 * meta->nb03 + i00 * src_elem_size;
-        const int64_t dst_off = dst_row * meta->nb1 + i02 * meta->nb2 + i03 * meta->nb3 + i00 * dst_elem_size;
-        const float v = load_f32_or_f16(src0 + src_off, meta->src_type);
+        const int     src_elem_size = (meta->src_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int     dst_elem_size = (meta->dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int64_t src_off       = i01 * meta->nb01 + i02 * meta->nb02 + i03 * meta->nb03 + i00 * src_elem_size;
+        const int64_t dst_off       = dst_row * meta->nb1 + i02 * meta->nb2 + i03 * meta->nb3 + i00 * dst_elem_size;
+        const float   v             = load_f32_or_f16(src0 + src_off, meta->src_type);
         store_f32_or_f16(dst + dst_off, meta->dst_type, v);
     }
 
@@ -5972,8 +5964,8 @@ private:
 
         const int64_t src_off = i0 * meta->nb[0] + i1 * meta->nb[1] + i2 * meta->nb[2] + i3 * meta->nb[3];
         const int64_t dst_off = (int64_t) idx * meta->type_size;
-        const char * src = static_cast<const char *>(op.input);
-        char *       dst = static_cast<char *>(op.output);
+        const char *  src     = static_cast<const char *>(op.input);
+        char *        dst     = static_cast<char *>(op.output);
 
         if (meta->type_size == 4) {
             *reinterpret_cast<uint32_t *>(dst + dst_off) = *reinterpret_cast<const uint32_t *>(src + src_off);
@@ -5994,11 +5986,11 @@ private:
             return;
         }
 
-        const int tid = item_.get_local_id(0);
-        const int n_cols = op.N;
-        const float * x = static_cast<const float *>(op.input);
-        float *       y = static_cast<float *>(op.output);
-        const float   scale = op.scale;
+        const int     tid    = item_.get_local_id(0);
+        const int     n_cols = op.N;
+        const float * x      = static_cast<const float *>(op.input);
+        float *       y      = static_cast<float *>(op.output);
+        const float   scale  = op.scale;
 
         const int64_t ne01 = op.q_nb0 > 0 ? op.q_nb0 : 1;
         const int64_t ne02 = op.q_nb1 > 0 ? op.q_nb1 : 1;
@@ -6011,7 +6003,7 @@ private:
 
         float local_max = -INFINITY;
         for (int col = tid; col < n_cols; col += BLOCK_SIZE) {
-            float v = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
+            float v   = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
             local_max = sycl::fmax(local_max, v);
         }
         const float row_max = sycl::reduce_over_group(item_.get_group(), local_max, sycl::maximum<float>());
@@ -6025,7 +6017,7 @@ private:
         const float inv_sum = row_sum > 0.0f ? (1.0f / row_sum) : 0.0f;
 
         for (int col = tid; col < n_cols; col += BLOCK_SIZE) {
-            float v = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
+            float v          = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
             y[row_off + col] = sycl::exp(v - row_max) * inv_sum;
         }
     }
@@ -6053,7 +6045,9 @@ private:
 
         const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
         const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
-        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) {
+            return;
+        }
         const int tile_start = tile_idx * tile_cols;
 
         const float * activations = static_cast<const float *>(op.input);
@@ -6061,14 +6055,16 @@ private:
         const int     K           = op.K;
         const int     N           = (op.row_count > 0) ? op.row_count : op.N;
         const int     k_blocks    = K / QK6_K;
-        if (k_blocks <= 0) return;
+        if (k_blocks <= 0) {
+            return;
+        }
 
         // Use struct-based access (matches DMMV reference exactly).
         const ggml_sycl_unified::block_q6_K_unified * weight_base =
             static_cast<const ggml_sycl_unified::block_q6_K_unified *>(op.weights);
 
         float partial_sums[MAX_ITERS];
-        #pragma unroll
+#pragma unroll
         for (int it = 0; it < MAX_ITERS; ++it) {
             partial_sums[it] = 0.0f;
         }
@@ -6077,11 +6073,15 @@ private:
         for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
             const int k_offset = block_idx * QK6_K;
 
-            #pragma unroll
+#pragma unroll
             for (int iter = 0; iter < MAX_ITERS; ++iter) {
-                if (iter >= iter_count) break;
+                if (iter >= iter_count) {
+                    break;
+                }
                 const int n = tile_start + iter * N_SGS + sg_id;
-                if (n >= N) continue;
+                if (n >= N) {
+                    continue;
+                }
 
                 // Row n, block block_idx: struct access (AOS layout)
                 const ggml_sycl_unified::block_q6_K_unified & blk =
@@ -6095,11 +6095,11 @@ private:
 
                 for (int ip = 0; ip < 2; ++ip) {
                     for (int il = 0; il < 32; ++il) {
-                        const int     is      = 8 * ip + il / 16;
-                        const uint8_t ql_val  = blk.ql[64 * ip + il];
-                        const uint8_t ql_val2 = blk.ql[64 * ip + il + 32];
-                        const uint8_t qh_val  = blk.qh[32 * ip + il];
-                        const int8_t * sc     = blk.scales + is;
+                        const int      is      = 8 * ip + il / 16;
+                        const uint8_t  ql_val  = blk.ql[64 * ip + il];
+                        const uint8_t  ql_val2 = blk.ql[64 * ip + il + 32];
+                        const uint8_t  qh_val  = blk.qh[32 * ip + il];
+                        const int8_t * sc      = blk.scales + is;
 
                         // Element 128*ip + il
                         {
@@ -6129,11 +6129,13 @@ private:
 
         // Final subgroup reduction + output write
         auto sg = item_.get_sub_group();
-        #pragma unroll
+#pragma unroll
         for (int iter = 0; iter < MAX_ITERS; ++iter) {
-            if (iter >= iter_count) break;
-            const int n = tile_start + iter * N_SGS + sg_id;
-            float partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
+            if (iter >= iter_count) {
+                break;
+            }
+            const int n           = tile_start + iter * N_SGS + sg_id;
+            float     partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
             if (lane_id == 0 && n < N) {
                 out[n] = partial_sum;
             }
@@ -6150,10 +6152,10 @@ private:
         // The unsigned nibble bias (0-15 vs signed -8..+7) is corrected via:
         //   result = d_weight * (d_activation * sumi - 8 * sum_activation)
 
-        constexpr int SG_SIZE      = 16;   // Must match reqd_sub_group_size(16)
-        constexpr int DP4A_QK4_0   = 32;   // Q4_0 block size
+        constexpr int SG_SIZE      = 16;                    // Must match reqd_sub_group_size(16)
+        constexpr int DP4A_QK4_0   = 32;                    // Q4_0 block size
         constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
-        constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
+        constexpr int MAX_ITERS    = 16;                    // Supports tile_cols up to 256
         constexpr int QK4_0_PACKED = DP4A_QK4_0 / 2;        // 16 bytes
 
         // Dispatch Q6_K to dedicated handler (used by output.weight in Q4_0 models)
@@ -6162,7 +6164,9 @@ private:
             return;
         }
 
-        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
+        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) {
+            return;
+        }
 
         const int local_id = item_.get_local_id(0);
         const int sg_id    = local_id / SG_SIZE;  // Which sub-group (0-15)
@@ -6170,7 +6174,9 @@ private:
 
         const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
         const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
-        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) {
+            return;
+        }
         const int tile_start = tile_idx * tile_cols;
 
         const float * activations = static_cast<const float *>(op.input);
@@ -6178,25 +6184,27 @@ private:
         const int     K           = op.K;
         const int     N           = (op.row_count > 0) ? op.row_count : op.N;
         const int     k_blocks    = K / DP4A_QK4_0;
-        if (k_blocks <= 0) return;
+        if (k_blocks <= 0) {
+            return;
+        }
 
         const bool use_soa =
             (static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout) == ggml_sycl_unified::LayoutMode::SOA);
         const ggml_sycl_unified::block_q4_0_unified * weights =
             static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
-        const uint8_t * qs_base = static_cast<const uint8_t *>(op.weights);
-        const int row_qs_bytes = k_blocks * QK4_0_PACKED;
+        const uint8_t *    qs_base      = static_cast<const uint8_t *>(op.weights);
+        const int          row_qs_bytes = k_blocks * QK4_0_PACKED;
         // SOA layout: all quantized bytes for N_total rows first, then all scales.
         // Use op.N (full row count) for d_offset, not the computation bound N.
         // When row_count < N, we still need the correct scale offset.
-        const int     N_soa       = op.N;  // Full weight tensor rows for SOA addressing
-        const int64_t total_blocks = static_cast<int64_t>(N_soa) * k_blocks;
-        const int64_t d_offset = total_blocks * QK4_0_PACKED;  // Byte offset to scale values
-        const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
-            static_cast<const char *>(op.weights) + d_offset);
+        const int          N_soa        = op.N;                         // Full weight tensor rows for SOA addressing
+        const int64_t      total_blocks = static_cast<int64_t>(N_soa) * k_blocks;
+        const int64_t      d_offset     = total_blocks * QK4_0_PACKED;  // Byte offset to scale values
+        const sycl::half * d_base =
+            reinterpret_cast<const sycl::half *>(static_cast<const char *>(op.weights) + d_offset);
 
         float partial_sums[MAX_ITERS];
-        #pragma unroll
+#pragma unroll
         for (int it = 0; it < MAX_ITERS; ++it) {
             partial_sums[it] = 0.0f;
         }
@@ -6209,16 +6217,16 @@ private:
             // Load 32 float activations, compute amax, quantize to int8.
             // Layout: act[0..15] = "lo" half, act[16..31] = "hi" half
             float act[DP4A_QK4_0];
-            float amax = 0.0f;
+            float amax    = 0.0f;
             float act_sum = 0.0f;
-            #pragma unroll
+#pragma unroll
             for (int i = 0; i < DP4A_QK4_0; ++i) {
                 act[i] = activations[k_offset + i];
-                amax = sycl::fmax(amax, sycl::fabs(act[i]));
+                amax   = sycl::fmax(amax, sycl::fabs(act[i]));
                 act_sum += act[i];
             }
 
-            const float d_act = (amax != 0.0f) ? amax / 127.0f : 0.0f;
+            const float d_act  = (amax != 0.0f) ? amax / 127.0f : 0.0f;
             const float id_act = (d_act != 0.0f) ? 1.0f / d_act : 0.0f;
 
             // Quantize and pack into int32 for dp4a.
@@ -6227,55 +6235,55 @@ private:
             //   u_hi[j] = pack(q8[j*4+16], q8[j*4+17], q8[j*4+18], q8[j*4+19]) -- for high nibbles
             int u_lo[4];  // 4 packed int32 for lo half (elements 0..15)
             int u_hi[4];  // 4 packed int32 for hi half (elements 16..31)
-            #pragma unroll
+#pragma unroll
             for (int j = 0; j < 4; ++j) {
                 int8_t q_lo[4], q_hi[4];
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < 4; ++k) {
                     q_lo[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k] * id_act));
                     q_hi[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k + 16] * id_act));
                 }
                 // Pack 4 int8 into int32 (little-endian byte order)
-                u_lo[j] = (static_cast<uint8_t>(q_lo[0]))       |
-                           (static_cast<uint8_t>(q_lo[1]) << 8)  |
-                           (static_cast<uint8_t>(q_lo[2]) << 16) |
-                           (static_cast<uint8_t>(q_lo[3]) << 24);
-                u_hi[j] = (static_cast<uint8_t>(q_hi[0]))       |
-                           (static_cast<uint8_t>(q_hi[1]) << 8)  |
-                           (static_cast<uint8_t>(q_hi[2]) << 16) |
-                           (static_cast<uint8_t>(q_hi[3]) << 24);
+                u_lo[j] = (static_cast<uint8_t>(q_lo[0])) | (static_cast<uint8_t>(q_lo[1]) << 8) |
+                          (static_cast<uint8_t>(q_lo[2]) << 16) | (static_cast<uint8_t>(q_lo[3]) << 24);
+                u_hi[j] = (static_cast<uint8_t>(q_hi[0])) | (static_cast<uint8_t>(q_hi[1]) << 8) |
+                          (static_cast<uint8_t>(q_hi[2]) << 16) | (static_cast<uint8_t>(q_hi[3]) << 24);
             }
 
-            // ── Phase 2: dp4a matmul across output rows ──
-            #pragma unroll
+// ── Phase 2: dp4a matmul across output rows ──
+#pragma unroll
             for (int iter = 0; iter < MAX_ITERS; ++iter) {
-                if (iter >= iter_count) break;
+                if (iter >= iter_count) {
+                    break;
+                }
                 const int n = tile_start + iter * N_SGS + sg_id;
-                if (n >= N) continue;
+                if (n >= N) {
+                    continue;
+                }
 
-                const uint8_t * qs = nullptr;
-                float d_weight = 0.0f;
+                const uint8_t * qs       = nullptr;
+                float           d_weight = 0.0f;
                 if (use_soa) {
-                    const uint8_t * qs_row = qs_base + static_cast<int64_t>(n) * row_qs_bytes;
-                    const sycl::half * d_row = d_base + static_cast<int64_t>(n) * k_blocks;
-                    qs = qs_row + block_idx * QK4_0_PACKED;
-                    d_weight = static_cast<float>(d_row[block_idx]);
+                    const uint8_t *    qs_row = qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const sycl::half * d_row  = d_base + static_cast<int64_t>(n) * k_blocks;
+                    qs                        = qs_row + block_idx * QK4_0_PACKED;
+                    d_weight                  = static_cast<float>(d_row[block_idx]);
                 } else {
-                    const int64_t global_block = static_cast<int64_t>(n) * k_blocks + block_idx;
+                    const int64_t global_block                        = static_cast<int64_t>(n) * k_blocks + block_idx;
                     const ggml_sycl_unified::block_q4_0_unified * blk = &weights[global_block];
-                    qs = blk->qs;
-                    d_weight = static_cast<float>(blk->d);
+                    qs                                                = blk->qs;
+                    d_weight                                          = static_cast<float>(blk->d);
                 }
 
                 // Load 16 weight bytes as 4 int32, extract nibbles, dp4a
                 int sumi = 0;
-                #pragma unroll
+#pragma unroll
                 for (int j = 0; j < 4; ++j) {
-                    const int v = *reinterpret_cast<const int *>(qs + j * 4);
+                    const int v     = *reinterpret_cast<const int *>(qs + j * 4);
                     const int vi_lo = v & 0x0F0F0F0F;
                     const int vi_hi = (v >> 4) & 0x0F0F0F0F;
-                    sumi = dpct::dp4a(vi_lo, u_lo[j], sumi);
-                    sumi = dpct::dp4a(vi_hi, u_hi[j], sumi);
+                    sumi            = dpct::dp4a(vi_lo, u_lo[j], sumi);
+                    sumi            = dpct::dp4a(vi_hi, u_hi[j], sumi);
                 }
 
                 // Correct for unsigned nibbles: true_weight = nibble - 8
@@ -6286,11 +6294,13 @@ private:
 
         // Final subgroup reduction + output write per N-iteration.
         auto sg = item_.get_sub_group();
-        #pragma unroll
+#pragma unroll
         for (int iter = 0; iter < MAX_ITERS; ++iter) {
-            if (iter >= iter_count) break;
-            const int n = tile_start + iter * N_SGS + sg_id;
-            float partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
+            if (iter >= iter_count) {
+                break;
+            }
+            const int n           = tile_start + iter * N_SGS + sg_id;
+            float     partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
             if (lane_id == 0 && n < N) {
                 out[n] = partial_sum;
             }
@@ -6308,10 +6318,12 @@ private:
         constexpr int SG_SIZE      = 16;
         constexpr int DP4A_QK4_0   = 32;
         constexpr int N_SGS        = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
-        constexpr int MAX_ITERS    = 16;   // Supports tile_cols up to 256
+        constexpr int MAX_ITERS    = 16;                    // Supports tile_cols up to 256
         constexpr int QK4_0_PACKED = DP4A_QK4_0 / 2;        // 16 bytes
 
-        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
+        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) {
+            return;
+        }
 
         const int local_id = item_.get_local_id(0);
         const int sg_id    = local_id / SG_SIZE;
@@ -6319,7 +6331,9 @@ private:
 
         const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
         const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
-        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) {
+            return;
+        }
         const int tile_start = tile_idx * tile_cols;
 
         const float * activations = static_cast<const float *>(op.input);
@@ -6327,7 +6341,9 @@ private:
         const int     K           = op.K;
         const int     N           = (op.row_count > 0) ? op.row_count : op.N;
         const int     k_blocks    = K / DP4A_QK4_0;
-        if (k_blocks <= 0) return;
+        if (k_blocks <= 0) {
+            return;
+        }
 
         const bool use_soa =
             (static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout) == ggml_sycl_unified::LayoutMode::SOA);
@@ -6335,23 +6351,25 @@ private:
             static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
         const ggml_sycl_unified::block_q4_0_unified * up_weights =
             static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.aux);
-        if (!gate_weights || !up_weights || !activations || !out) return;
+        if (!gate_weights || !up_weights || !activations || !out) {
+            return;
+        }
 
-        const uint8_t * gate_qs_base = static_cast<const uint8_t *>(op.weights);
-        const uint8_t * up_qs_base   = static_cast<const uint8_t *>(op.aux);
-        const int row_qs_bytes       = k_blocks * QK4_0_PACKED;
+        const uint8_t *    gate_qs_base = static_cast<const uint8_t *>(op.weights);
+        const uint8_t *    up_qs_base   = static_cast<const uint8_t *>(op.aux);
+        const int          row_qs_bytes = k_blocks * QK4_0_PACKED;
         // SOA layout: use op.N (full row count) for d_offset, not computation-bound N.
-        const int     N_soa          = op.N;
-        const int64_t total_blocks   = static_cast<int64_t>(N_soa) * k_blocks;
-        const int64_t d_offset       = total_blocks * QK4_0_PACKED;
-        const sycl::half * gate_d_base = reinterpret_cast<const sycl::half *>(
-            static_cast<const char *>(op.weights) + d_offset);
-        const sycl::half * up_d_base = reinterpret_cast<const sycl::half *>(
-            static_cast<const char *>(op.aux) + d_offset);
+        const int          N_soa        = op.N;
+        const int64_t      total_blocks = static_cast<int64_t>(N_soa) * k_blocks;
+        const int64_t      d_offset     = total_blocks * QK4_0_PACKED;
+        const sycl::half * gate_d_base =
+            reinterpret_cast<const sycl::half *>(static_cast<const char *>(op.weights) + d_offset);
+        const sycl::half * up_d_base =
+            reinterpret_cast<const sycl::half *>(static_cast<const char *>(op.aux) + d_offset);
 
         float partial_gate[MAX_ITERS];
         float partial_up[MAX_ITERS];
-        #pragma unroll
+#pragma unroll
         for (int it = 0; it < MAX_ITERS; ++it) {
             partial_gate[it] = 0.0f;
             partial_up[it]   = 0.0f;
@@ -6363,94 +6381,96 @@ private:
             // ── In-register activation quantization to int8 ──
             // (Intentionally duplicated from compute_matmul_tile for kernel inlining.)
             float act[DP4A_QK4_0];
-            float amax = 0.0f;
+            float amax    = 0.0f;
             float act_sum = 0.0f;
-            #pragma unroll
+#pragma unroll
             for (int i = 0; i < DP4A_QK4_0; ++i) {
                 act[i] = activations[k_offset + i];
-                amax = sycl::fmax(amax, sycl::fabs(act[i]));
+                amax   = sycl::fmax(amax, sycl::fabs(act[i]));
                 act_sum += act[i];
             }
 
-            const float d_act = (amax != 0.0f) ? amax / 127.0f : 0.0f;
+            const float d_act  = (amax != 0.0f) ? amax / 127.0f : 0.0f;
             const float id_act = (d_act != 0.0f) ? 1.0f / d_act : 0.0f;
 
             int u_lo[4], u_hi[4];
-            #pragma unroll
+#pragma unroll
             for (int j = 0; j < 4; ++j) {
                 int8_t q_lo[4], q_hi[4];
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < 4; ++k) {
                     q_lo[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k] * id_act));
                     q_hi[k] = static_cast<int8_t>(sycl::round(act[j * 4 + k + 16] * id_act));
                 }
-                u_lo[j] = (static_cast<uint8_t>(q_lo[0]))       |
-                           (static_cast<uint8_t>(q_lo[1]) << 8)  |
-                           (static_cast<uint8_t>(q_lo[2]) << 16) |
-                           (static_cast<uint8_t>(q_lo[3]) << 24);
-                u_hi[j] = (static_cast<uint8_t>(q_hi[0]))       |
-                           (static_cast<uint8_t>(q_hi[1]) << 8)  |
-                           (static_cast<uint8_t>(q_hi[2]) << 16) |
-                           (static_cast<uint8_t>(q_hi[3]) << 24);
+                u_lo[j] = (static_cast<uint8_t>(q_lo[0])) | (static_cast<uint8_t>(q_lo[1]) << 8) |
+                          (static_cast<uint8_t>(q_lo[2]) << 16) | (static_cast<uint8_t>(q_lo[3]) << 24);
+                u_hi[j] = (static_cast<uint8_t>(q_hi[0])) | (static_cast<uint8_t>(q_hi[1]) << 8) |
+                          (static_cast<uint8_t>(q_hi[2]) << 16) | (static_cast<uint8_t>(q_hi[3]) << 24);
             }
 
-            // ── dp4a matmul for gate and up weights ──
-            #pragma unroll
+// ── dp4a matmul for gate and up weights ──
+#pragma unroll
             for (int iter = 0; iter < MAX_ITERS; ++iter) {
-                if (iter >= iter_count) break;
+                if (iter >= iter_count) {
+                    break;
+                }
                 const int n = tile_start + iter * N_SGS + sg_id;
-                if (n >= N) continue;
+                if (n >= N) {
+                    continue;
+                }
 
                 const uint8_t * gate_qs = nullptr;
                 const uint8_t * up_qs   = nullptr;
-                float gate_d            = 0.0f;
-                float up_d              = 0.0f;
+                float           gate_d  = 0.0f;
+                float           up_d    = 0.0f;
 
                 if (use_soa) {
-                    const uint8_t * gate_qs_row = gate_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
-                    const uint8_t * up_qs_row   = up_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
-                    const sycl::half * gate_d_row = gate_d_base + static_cast<int64_t>(n) * k_blocks;
-                    const sycl::half * up_d_row   = up_d_base + static_cast<int64_t>(n) * k_blocks;
-                    gate_qs = gate_qs_row + block_idx * QK4_0_PACKED;
-                    up_qs   = up_qs_row + block_idx * QK4_0_PACKED;
-                    gate_d  = static_cast<float>(gate_d_row[block_idx]);
-                    up_d    = static_cast<float>(up_d_row[block_idx]);
+                    const uint8_t *    gate_qs_row = gate_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const uint8_t *    up_qs_row   = up_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const sycl::half * gate_d_row  = gate_d_base + static_cast<int64_t>(n) * k_blocks;
+                    const sycl::half * up_d_row    = up_d_base + static_cast<int64_t>(n) * k_blocks;
+                    gate_qs                        = gate_qs_row + block_idx * QK4_0_PACKED;
+                    up_qs                          = up_qs_row + block_idx * QK4_0_PACKED;
+                    gate_d                         = static_cast<float>(gate_d_row[block_idx]);
+                    up_d                           = static_cast<float>(up_d_row[block_idx]);
                 } else {
                     const int64_t global_block = static_cast<int64_t>(n) * k_blocks + block_idx;
                     const ggml_sycl_unified::block_q4_0_unified * gate_blk = &gate_weights[global_block];
                     const ggml_sycl_unified::block_q4_0_unified * up_blk   = &up_weights[global_block];
-                    gate_qs = gate_blk->qs;
-                    up_qs   = up_blk->qs;
-                    gate_d  = static_cast<float>(gate_blk->d);
-                    up_d    = static_cast<float>(up_blk->d);
+                    gate_qs                                                = gate_blk->qs;
+                    up_qs                                                  = up_blk->qs;
+                    gate_d                                                 = static_cast<float>(gate_blk->d);
+                    up_d                                                   = static_cast<float>(up_blk->d);
                 }
 
                 int gate_sumi = 0;
                 int up_sumi   = 0;
-                #pragma unroll
+#pragma unroll
                 for (int j = 0; j < 4; ++j) {
-                    const int gv = *reinterpret_cast<const int *>(gate_qs + j * 4);
+                    const int gv    = *reinterpret_cast<const int *>(gate_qs + j * 4);
                     const int gv_lo = gv & 0x0F0F0F0F;
                     const int gv_hi = (gv >> 4) & 0x0F0F0F0F;
-                    gate_sumi = dpct::dp4a(gv_lo, u_lo[j], gate_sumi);
-                    gate_sumi = dpct::dp4a(gv_hi, u_hi[j], gate_sumi);
+                    gate_sumi       = dpct::dp4a(gv_lo, u_lo[j], gate_sumi);
+                    gate_sumi       = dpct::dp4a(gv_hi, u_hi[j], gate_sumi);
 
-                    const int uv = *reinterpret_cast<const int *>(up_qs + j * 4);
+                    const int uv    = *reinterpret_cast<const int *>(up_qs + j * 4);
                     const int uv_lo = uv & 0x0F0F0F0F;
                     const int uv_hi = (uv >> 4) & 0x0F0F0F0F;
-                    up_sumi = dpct::dp4a(uv_lo, u_lo[j], up_sumi);
-                    up_sumi = dpct::dp4a(uv_hi, u_hi[j], up_sumi);
+                    up_sumi         = dpct::dp4a(uv_lo, u_lo[j], up_sumi);
+                    up_sumi         = dpct::dp4a(uv_hi, u_hi[j], up_sumi);
                 }
 
                 partial_gate[iter] += gate_d * (d_act * static_cast<float>(gate_sumi) - 8.0f * act_sum);
-                partial_up[iter]   += up_d * (d_act * static_cast<float>(up_sumi) - 8.0f * act_sum);
+                partial_up[iter] += up_d * (d_act * static_cast<float>(up_sumi) - 8.0f * act_sum);
             }
         }
 
         auto sg = item_.get_sub_group();
-        #pragma unroll
+#pragma unroll
         for (int iter = 0; iter < MAX_ITERS; ++iter) {
-            if (iter >= iter_count) break;
+            if (iter >= iter_count) {
+                break;
+            }
             const int n = tile_start + iter * N_SGS + sg_id;
 
             const float gate = sycl::reduce_over_group(sg, partial_gate[iter], sycl::plus<float>());
@@ -6458,7 +6478,7 @@ private:
 
             if (lane_id == 0 && n < N) {
                 const float sigmoid_gate = 1.0f / (1.0f + sycl::exp(-gate));
-                out[n] = gate * sigmoid_gate * up;
+                out[n]                   = gate * sigmoid_gate * up;
             }
         }
     }
@@ -6493,33 +6513,33 @@ private:
         constexpr int SG_SIZE = 16;
         constexpr int N_SGS   = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
 
-        const int tid        = item_.get_local_id(0);
-        auto      sg         = item_.get_sub_group();
-        const int sg_id      = sg.get_group_linear_id();
-        const int lane_id    = sg.get_local_linear_id();
-        const int head       = tile_idx;
-        const int seq_len    = op.M;
-        const int n_heads    = op.N;
-        const int head_dim   = op.K;
-        const int n_kv_heads = op.n_kv_heads;
-        const float scale    = op.scale;
-        const bool use_sg_dot = (args_.use_attn_subgroup_dot != 0);
-        const int  kv_type   = op.type;  // ATTENTION_F16 or ATTENTION_F32
+        const int   tid        = item_.get_local_id(0);
+        auto        sg         = item_.get_sub_group();
+        const int   sg_id      = sg.get_group_linear_id();
+        const int   lane_id    = sg.get_local_linear_id();
+        const int   head       = tile_idx;
+        const int   seq_len    = op.M;
+        const int   n_heads    = op.N;
+        const int   head_dim   = op.K;
+        const int   n_kv_heads = op.n_kv_heads;
+        const float scale      = op.scale;
+        const bool  use_sg_dot = (args_.use_attn_subgroup_dot != 0);
+        const int   kv_type    = op.type;  // ATTENTION_F16 or ATTENTION_F32
 
-        if (head >= n_heads || seq_len <= 0) return;
+        if (head >= n_heads || seq_len <= 0) {
+            return;
+        }
 
-        const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads)
-                            ? head / (n_heads / n_kv_heads)
-                            : head;
+        const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads) ? head / (n_heads / n_kv_heads) : head;
 
         // Q is always F32. Use byte-based head stride (q_nb2).
-        const char * q_base = static_cast<const char *>(op.input);
+        const char *  q_base = static_cast<const char *>(op.input);
         const float * q_head = reinterpret_cast<const float *>(q_base + head * op.q_nb2);
 
         // K/V cache: use byte-based strides for head and position addressing.
         // k_nb0 = element size, k_nb1 = seq stride, k_nb2 = head stride
-        const char * k_base = static_cast<const char *>(op.weights);
-        const char * v_base = static_cast<const char *>(op.aux);
+        const char *  k_base        = static_cast<const char *>(op.weights);
+        const char *  v_base        = static_cast<const char *>(op.aux);
         const int64_t k_head_offset = static_cast<int64_t>(kv_head) * op.k_nb2;
         const int64_t v_head_offset = static_cast<int64_t>(kv_head) * op.v_nb2;
         const int64_t k_seq_stride  = op.k_nb1;
@@ -6529,7 +6549,7 @@ private:
 
         float * output_ptr = static_cast<float *>(op.output);
         float * o_head     = output_ptr + head * head_dim;
-        auto wg = item_.get_group();
+        auto    wg         = item_.get_group();
 
         // SLM layout:
         //   [0 .. head_dim-1]                  = query vector
@@ -6550,7 +6570,7 @@ private:
             if (use_sg_dot) {
                 for (int p = sg_id; p < seq_len; p += N_SGS) {
                     const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
-                    float partial = 0.0f;
+                    float         partial      = 0.0f;
                     for (int d = lane_id; d < head_dim; d += SG_SIZE) {
                         const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
                         partial += slm_[d] * k_val;
@@ -6559,12 +6579,12 @@ private:
                     if (lane_id == 0) {
                         score *= scale;
                         slm_[slm_scores_base + p] = score;
-                        local_max = sycl::fmax(local_max, score);
+                        local_max                 = sycl::fmax(local_max, score);
                     }
                 }
             } else {
                 for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
-                    float score = 0.0f;
+                    float         score        = 0.0f;
                     const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                     for (int d = 0; d < head_dim; d++) {
                         const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
@@ -6572,7 +6592,7 @@ private:
                     }
                     score *= scale;
                     slm_[slm_scores_base + p] = score;
-                    local_max = sycl::fmax(local_max, score);
+                    local_max                 = sycl::fmax(local_max, score);
                 }
             }
 
@@ -6583,14 +6603,14 @@ private:
             if (use_sg_dot) {
                 for (int p = sg_id; p < seq_len; p += N_SGS) {
                     if (lane_id == 0) {
-                        const float e = sycl::exp(slm_[slm_scores_base + p] - global_max);
+                        const float e             = sycl::exp(slm_[slm_scores_base + p] - global_max);
                         slm_[slm_scores_base + p] = e;
                         local_sum += e;
                     }
                 }
             } else {
                 for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
-                    const float e = sycl::exp(slm_[slm_scores_base + p] - global_max);
+                    const float e             = sycl::exp(slm_[slm_scores_base + p] - global_max);
                     slm_[slm_scores_base + p] = e;
                     local_sum += e;
                 }
@@ -6598,16 +6618,16 @@ private:
 
             const float sum_contrib = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
             const float global_sum  = sycl::reduce_over_group(wg, sum_contrib, sycl::plus<float>());
-            const float inv_sum    = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
+            const float inv_sum     = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
 
             sycl::group_barrier(wg);
 
             for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
                 float acc = 0.0f;
                 for (int p = 0; p < seq_len; ++p) {
-                    const float prob = slm_[slm_scores_base + p] * inv_sum;
+                    const float   prob         = slm_[slm_scores_base + p] * inv_sum;
                     const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
-                    const float v_val = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
+                    const float   v_val        = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
                     acc += prob * v_val;
                 }
                 o_head[d] = acc;
@@ -6620,7 +6640,7 @@ private:
         if (use_sg_dot) {
             for (int p = sg_id; p < seq_len; p += N_SGS) {
                 const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
-                float partial = 0.0f;
+                float         partial      = 0.0f;
                 for (int d = lane_id; d < head_dim; d += SG_SIZE) {
                     const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
                     partial += slm_[d] * k_val;
@@ -6633,7 +6653,7 @@ private:
             }
         } else {
             for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
-                float score = 0.0f;
+                float         score        = 0.0f;
                 const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int d = 0; d < head_dim; ++d) {
                     const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
@@ -6650,7 +6670,7 @@ private:
         if (use_sg_dot) {
             for (int p = sg_id; p < seq_len; p += N_SGS) {
                 const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
-                float partial = 0.0f;
+                float         partial      = 0.0f;
                 for (int d = lane_id; d < head_dim; d += SG_SIZE) {
                     const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
                     partial += slm_[d] * k_val;
@@ -6663,7 +6683,7 @@ private:
             }
         } else {
             for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
-                float score = 0.0f;
+                float         score        = 0.0f;
                 const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int d = 0; d < head_dim; ++d) {
                     const float k_val = load_kv_element(k_base, k_pos_offset + d * k_elem_stride, kv_type);
@@ -6675,21 +6695,21 @@ private:
         }
         const float sum_contrib = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
         const float global_sum  = sycl::reduce_over_group(wg, sum_contrib, sycl::plus<float>());
-        const float inv_sum    = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
+        const float inv_sum     = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
 
         for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
             float acc = 0.0f;
             for (int p = 0; p < seq_len; ++p) {
-                float score = 0.0f;
+                float         score        = 0.0f;
                 const int64_t k_pos_offset = k_head_offset + static_cast<int64_t>(p) * k_seq_stride;
                 for (int dd = 0; dd < head_dim; ++dd) {
                     const float k_val = load_kv_element(k_base, k_pos_offset + dd * k_elem_stride, kv_type);
                     score += slm_[dd] * k_val;
                 }
                 score *= scale;
-                const float prob = sycl::exp(score - global_max) * inv_sum;
+                const float   prob         = sycl::exp(score - global_max) * inv_sum;
                 const int64_t v_pos_offset = v_head_offset + static_cast<int64_t>(p) * v_seq_stride;
-                const float v_val = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
+                const float   v_val        = load_kv_element(v_base, v_pos_offset + d * v_elem_stride, kv_type);
                 acc += prob * v_val;
             }
             o_head[d] = acc;
@@ -6720,21 +6740,21 @@ private:
         //    - weights = cos_cache
         //    - aux     = sin_cache (field overloaded)
 
-        (void)tile_idx;  // Single tile, not used
+        (void) tile_idx;  // Single tile, not used
 
-        const int tid        = item_.get_local_id(0);
-        const int n_heads    = op.N;
-        const int head_dim   = op.K;
-        const int n_kv_heads = op.n_kv_heads;
-        const int half_dim   = head_dim / 2;
-        const bool is_neox   = (op.scale > 0.5f);
+        const int  tid        = item_.get_local_id(0);
+        const int  n_heads    = op.N;
+        const int  head_dim   = op.K;
+        const int  n_kv_heads = op.n_kv_heads;
+        const int  half_dim   = head_dim / 2;
+        const bool is_neox    = (op.scale > 0.5f);
 
         const float * cos_cache = static_cast<const float *>(op.weights);
 
         if (n_kv_heads > 0) {
             // Dual-tensor mode: rotate both Q and K in-place
-            float *       q_data    = const_cast<float *>(static_cast<const float *>(op.input));
-            float *       k_data    = static_cast<float *>(op.aux);
+            float *       q_data         = const_cast<float *>(static_cast<const float *>(op.input));
+            float *       k_data         = static_cast<float *>(op.aux);
             const float * sin_cache_dual = static_cast<const float *>(op.output);
 
             const int total_heads = n_heads + n_kv_heads;
@@ -6756,22 +6776,22 @@ private:
 
                 if (is_neox) {
                     // NEOX: pairs at [dim_idx] and [dim_idx + half_dim]
-                    const float x0 = data[dim_idx];
-                    const float x1 = data[dim_idx + half_dim];
+                    const float x0           = data[dim_idx];
+                    const float x1           = data[dim_idx + half_dim];
                     data[dim_idx]            = x0 * cos_val - x1 * sin_val;
                     data[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
                 } else {
                     // NORMAL: pairs at [2*dim_idx] and [2*dim_idx + 1]
-                    const float x0 = data[2 * dim_idx];
-                    const float x1 = data[2 * dim_idx + 1];
+                    const float x0        = data[2 * dim_idx];
+                    const float x1        = data[2 * dim_idx + 1];
                     data[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
                     data[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
                 }
             }
         } else {
             // Single-tensor mode: read from input, write to output
-            const float * src_data  = static_cast<const float *>(op.input);
-            float *       dst_data  = static_cast<float *>(op.output);
+            const float * src_data         = static_cast<const float *>(op.input);
+            float *       dst_data         = static_cast<float *>(op.output);
             const float * sin_cache_single = static_cast<const float *>(op.aux);
 
             const int total_pairs = n_heads * half_dim;
@@ -6788,14 +6808,14 @@ private:
 
                 if (is_neox) {
                     // NEOX: pairs at [dim_idx] and [dim_idx + half_dim]
-                    const float x0 = src[dim_idx];
-                    const float x1 = src[dim_idx + half_dim];
+                    const float x0          = src[dim_idx];
+                    const float x1          = src[dim_idx + half_dim];
                     dst[dim_idx]            = x0 * cos_val - x1 * sin_val;
                     dst[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
                 } else {
                     // NORMAL: pairs at [2*dim_idx] and [2*dim_idx + 1]
-                    const float x0 = src[2 * dim_idx];
-                    const float x1 = src[2 * dim_idx + 1];
+                    const float x0       = src[2 * dim_idx];
+                    const float x1       = src[2 * dim_idx + 1];
                     dst[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
                     dst[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
                 }
@@ -6808,12 +6828,12 @@ private:
 // Constructor, Destructor, Configuration
 // -----------------------------------------------------------------------------
 
-UnifiedKernel::UnifiedKernel(sycl::queue & queue)
-    : queue_(queue)
-    , device_id_(ggml_sycl_get_device_id_from_queue(queue)) {
-    xmx_config_ = {};
+UnifiedKernel::UnifiedKernel(sycl::queue & queue) :
+    queue_(queue),
+    device_id_(ggml_sycl_get_device_id_from_queue(queue)) {
+    xmx_config_           = {};
     xmx_config_.supported = false;
-    last_stats_ = {};
+    last_stats_           = {};
 }
 
 UnifiedKernel::~UnifiedKernel() {
@@ -6828,13 +6848,13 @@ UnifiedKernel::~UnifiedKernel() {
                                                        ggml_sycl::runtime_category::GRAPH);
         }
         device_free(micro_tile_counters_, queue_, arena_micro_tile_counters_);
-        micro_tile_counters_ = nullptr;
-        micro_tile_counters_n_ = 0;
+        micro_tile_counters_       = nullptr;
+        micro_tile_counters_n_     = 0;
         arena_micro_tile_counters_ = false;
     }
     if (micro_generation_) {
         pinned_free(micro_generation_, sizeof(int), queue_, pinned_pool_micro_gen_);
-        micro_generation_ = nullptr;
+        micro_generation_      = nullptr;
         pinned_pool_micro_gen_ = false;
     }
     // Free MMVQ micro-graph Q8 and scratch buffers
@@ -6848,7 +6868,7 @@ UnifiedKernel::~UnifiedKernel() {
             mmvq_q8_bufs_[i] = nullptr;
         }
     }
-    mmvq_q8_buf_size_ = 0;
+    mmvq_q8_buf_size_   = 0;
     arena_mmvq_q8_bufs_ = false;
     if (mmvq_gate_scratch_sz_ > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
@@ -6856,19 +6876,19 @@ UnifiedKernel::~UnifiedKernel() {
     }
     if (mmvq_gate_scratch_) {
         device_free(mmvq_gate_scratch_, queue_, arena_mmvq_gate_scratch_);
-        mmvq_gate_scratch_ = nullptr;
+        mmvq_gate_scratch_       = nullptr;
         arena_mmvq_gate_scratch_ = false;
     }
     if (mmvq_up_scratch_) {
         device_free(mmvq_up_scratch_, queue_, arena_mmvq_up_scratch_);
-        mmvq_up_scratch_ = nullptr;
+        mmvq_up_scratch_       = nullptr;
         arena_mmvq_up_scratch_ = false;
     }
     mmvq_gate_scratch_sz_ = 0;
 }
 
 void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
-    xmx_config_ = xmx_config;
+    xmx_config_     = xmx_config;
     xmx_configured_ = true;
 }
 
@@ -6905,21 +6925,25 @@ bool UnifiedKernel::persistent_use_split_barrier() const {
 bool UnifiedKernel::persistent_dispatch_uses_dag() const {
     // Returns true when DAG mode will be the active dispatch mode.
     // Phase mode supersedes DAG mode.  Both can be disabled via env vars.
-    if (!dag_allocated_) return false;
+    if (!dag_allocated_) {
+        return false;
+    }
     // Check if phase mode is active (supersedes DAG)
     if (phase_allocated_) {
         static int phase_env = -1;
         if (phase_env < 0) {
             const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
-            phase_env = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+            phase_env        = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
         }
-        if (phase_env != 0) return false;  // Phase mode active → DAG not used
+        if (phase_env != 0) {
+            return false;  // Phase mode active → DAG not used
+        }
     }
     // Phase is disabled or not allocated; check if DAG itself is disabled
     static int dag_env = -1;
     if (dag_env < 0) {
         const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
-        dag_env = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+        dag_env          = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
     }
     return (dag_env != 0);
 }
@@ -6927,10 +6951,8 @@ bool UnifiedKernel::persistent_dispatch_uses_dag() const {
 int UnifiedKernel::persistent_matmul_tile_cols(OperationType type, int N, int K) const {
     (void) N;
     (void) K;
-    static const int tile_cols_attn =
-        persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_ATTN", 32);
-    static const int tile_cols_ffn =
-        persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_FFN", 128);
+    static const int tile_cols_attn = persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_ATTN", 32);
+    static const int tile_cols_ffn  = persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_FFN", 128);
 
     switch (type) {
         case OperationType::MATMUL_GATE:
@@ -6947,14 +6969,17 @@ int UnifiedKernel::persistent_matmul_tile_cols(OperationType type, int N, int K)
     }
 }
 
-int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention, bool has_ffn, bool use_split_barrier) const {
+int UnifiedKernel::persistent_num_workgroups(int  total_tiles,
+                                             bool has_attention,
+                                             bool has_ffn,
+                                             bool use_split_barrier) const {
     int n_workgroups = 16;
     if (use_split_barrier) {
         // Split barrier overhead scales poorly with many participating work-groups.
         // Favor a low default here; callers can still override via env vars.
         n_workgroups = 4;
         if (const char * env_split_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_SPLIT_N_WGS")) {
-            char * end = nullptr;
+            char *     end    = nullptr;
             const long parsed = std::strtol(env_split_wgs, &end, 10);
             if (end && end != env_split_wgs && parsed > 0 && parsed <= 64) {
                 n_workgroups = static_cast<int>(parsed);
@@ -6962,8 +6987,7 @@ int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention
         }
     } else {
         try {
-            const int max_compute_units =
-                (int) queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+            const int max_compute_units = (int) queue_.get_device().get_info<sycl::info::device::max_compute_units>();
             if (max_compute_units > 0) {
                 if (persistent_aggressive_wg_policy_enabled()) {
                     // Aggressive occupancy policy for experimentation/profiling.
@@ -6993,7 +7017,7 @@ int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention
         n_workgroups = std::min(n_workgroups, std::max(1, total_tiles));
     }
     if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
-        char * end = nullptr;
+        char *     end    = nullptr;
         const long parsed = std::strtol(env_wgs, &end, 10);
         if (end && end != env_wgs && parsed > 0 && parsed <= 64) {
             n_workgroups = static_cast<int>(parsed);
@@ -7008,8 +7032,8 @@ int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention
 // -----------------------------------------------------------------------------
 
 void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate_dim) {
-    size_t hidden_size = hidden_dim * sizeof(sycl::half);
-    size_t ffn_size = intermediate_dim * sizeof(sycl::half);
+    size_t hidden_size   = hidden_dim * sizeof(sycl::half);
+    size_t ffn_size      = intermediate_dim * sizeof(sycl::half);
     size_t required_size = std::max(hidden_size * 4, ffn_size * 2);
 
     if (persistent_buffer_size_ >= required_size) {
@@ -7020,15 +7044,19 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
 
     arena_persistent_bufs_ = false;
     for (int i = 0; i < 4; i++) {
-        bool arena_i = false;
+        bool arena_i           = false;
         persistent_buffers_[i] = device_alloc_persistent(required_size, queue_, device_id_, arena_i);
-        if (arena_i) arena_persistent_bufs_ = true;
+        if (arena_i) {
+            arena_persistent_bufs_ = true;
+        }
     }
 
     if (!sync_block_) {
         bool arena_sync = false;
-        sync_block_ = static_cast<int *>(device_alloc_persistent(3 * sizeof(int), queue_, device_id_, arena_sync));
-        if (arena_sync) arena_persistent_bufs_ = true;
+        sync_block_     = static_cast<int *>(device_alloc_persistent(3 * sizeof(int), queue_, device_id_, arena_sync));
+        if (arena_sync) {
+            arena_persistent_bufs_ = true;
+        }
     }
     tile_counter_    = sync_block_;
     barrier_counter_ = sync_block_ + 1;
@@ -7050,7 +7078,8 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
 void UnifiedKernel::free_persistent_buffers() {
     // Untrack from cache budget before freeing
     if (runtime_tracked_bytes_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, runtime_tracked_bytes_, ggml_sycl::runtime_category::GRAPH);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, runtime_tracked_bytes_,
+                                                   ggml_sycl::runtime_category::GRAPH);
         GGML_SYCL_DEBUG("[UNIFIED-KERNEL] Untracked persistent buffers: %.1f MB on device %d\n",
                         runtime_tracked_bytes_ / (1024.0f * 1024.0f), device_id_);
         runtime_tracked_bytes_ = 0;
@@ -7062,12 +7091,20 @@ void UnifiedKernel::free_persistent_buffers() {
             persistent_buffers_[i] = nullptr;
         }
     }
-    if (sync_block_) { device_free(sync_block_, queue_, arena_persistent_bufs_); sync_block_ = nullptr; }
+    if (sync_block_) {
+        device_free(sync_block_, queue_, arena_persistent_bufs_);
+        sync_block_ = nullptr;
+    }
     arena_persistent_bufs_ = false;
-    tile_counter_    = nullptr;
-    barrier_counter_ = nullptr;
-    barrier_sense_   = nullptr;
-    if (d_ops_pool_) { pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; pinned_pool_ops_ = false; }
+    tile_counter_          = nullptr;
+    barrier_counter_       = nullptr;
+    barrier_sense_         = nullptr;
+    if (d_ops_pool_) {
+        pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        d_ops_pool_      = nullptr;
+        d_ops_pool_size_ = 0;
+        pinned_pool_ops_ = false;
+    }
     for (auto & slot : get_rows_slots_) {
         if (slot.ptr) {
             if (slot.size > 0 && device_id_ >= 0) {
@@ -7084,26 +7121,48 @@ void UnifiedKernel::free_persistent_buffers() {
     free_scratch_pool();
     // Free DAG allocations
     if (dag_allocated_) {
-        if (dag_state_.ready_counter)    device_free(dag_state_.ready_counter, queue_, arena_dag_device_);
-        if (dag_state_.tile_claimed)     device_free(dag_state_.tile_claimed, queue_, arena_dag_device_);
-        if (dag_state_.tiles_done)       device_free(dag_state_.tiles_done, queue_, arena_dag_device_);
-        if (dag_state_.successor_offset) pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
-        if (dag_state_.successor_list)   pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
-        if (dag_state_.n_tiles)          pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
-        if (dag_state_.completed_count)  device_free(dag_state_.completed_count, queue_, arena_dag_device_);
-        dag_state_          = {};
-        dag_allocated_      = false;
-        dag_pool_n_ops_     = 0;
-        dag_pool_n_edges_   = 0;
-        pinned_pool_dag_    = false;
-        arena_dag_device_   = false;
+        if (dag_state_.ready_counter) {
+            device_free(dag_state_.ready_counter, queue_, arena_dag_device_);
+        }
+        if (dag_state_.tile_claimed) {
+            device_free(dag_state_.tile_claimed, queue_, arena_dag_device_);
+        }
+        if (dag_state_.tiles_done) {
+            device_free(dag_state_.tiles_done, queue_, arena_dag_device_);
+        }
+        if (dag_state_.successor_offset) {
+            pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
+        }
+        if (dag_state_.successor_list) {
+            pinned_free(dag_state_.successor_list, pinned_dag_successor_list_bytes_, queue_, pinned_pool_dag_);
+        }
+        if (dag_state_.n_tiles) {
+            pinned_free(dag_state_.n_tiles, pinned_dag_n_tiles_bytes_, queue_, pinned_pool_dag_);
+        }
+        if (dag_state_.completed_count) {
+            device_free(dag_state_.completed_count, queue_, arena_dag_device_);
+        }
+        dag_state_        = {};
+        dag_allocated_    = false;
+        dag_pool_n_ops_   = 0;
+        dag_pool_n_edges_ = 0;
+        pinned_pool_dag_  = false;
+        arena_dag_device_ = false;
     }
     // Free phase schedule allocations
     if (phase_allocated_) {
-        if (phase_schedule_.entries)       pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
-        if (phase_schedule_.phase_offset)  pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
-        if (phase_schedule_.phase_tiles)   pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
-        if (phase_schedule_.phase_type)    pinned_free(phase_schedule_.phase_type,   pinned_phase_type_bytes_,    queue_, pinned_pool_phase_);
+        if (phase_schedule_.entries) {
+            pinned_free(phase_schedule_.entries, pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+        }
+        if (phase_schedule_.phase_offset) {
+            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_, queue_, pinned_pool_phase_);
+        }
+        if (phase_schedule_.phase_tiles) {
+            pinned_free(phase_schedule_.phase_tiles, pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_);
+        }
+        if (phase_schedule_.phase_type) {
+            pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
+        }
 
         phase_schedule_      = {};
         phase_allocated_     = false;
@@ -7114,28 +7173,36 @@ void UnifiedKernel::free_persistent_buffers() {
     // Free light barrier flags
     if (light_flags_) {
         device_free(light_flags_, queue_, arena_light_flags_);
-        light_flags_        = nullptr;
-        light_flags_size_   = 0;
-        arena_light_flags_  = false;
+        light_flags_       = nullptr;
+        light_flags_size_  = 0;
+        arena_light_flags_ = false;
     }
     // Free role schedule allocations
     if (role_allocated_) {
-        if (role_schedule_.elem_segments)    pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments),   pinned_role_elem_bytes_,   queue_, pinned_pool_role_);
-        if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
+        if (role_schedule_.elem_segments) {
+            pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments), pinned_role_elem_bytes_, queue_,
+                        pinned_pool_role_);
+        }
+        if (role_schedule_.matmul_segments) {
+            pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_,
+                        pinned_pool_role_);
+        }
         // sync_flags is the base of a single contiguous allocation that includes
         // role_tile_counter, elem_barrier_cnt/sense, mm_barrier_cnt/sense
-        if (role_schedule_.sync_flags)       device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
+        if (role_schedule_.sync_flags) {
+            device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
+        }
 
-        role_schedule_       = {};
-        role_allocated_      = false;
-        role_pool_n_elem_    = 0;
-        role_pool_n_matmul_  = 0;
-        role_pool_n_sync_    = 0;
-        pinned_pool_role_    = false;
-        arena_role_sync_     = false;
+        role_schedule_      = {};
+        role_allocated_     = false;
+        role_pool_n_elem_   = 0;
+        role_pool_n_matmul_ = 0;
+        role_pool_n_sync_   = 0;
+        pinned_pool_role_   = false;
+        arena_role_sync_    = false;
     }
     invalidate_plan_cache();
-    host_ops_ = {};  // Release heap memory (invalidate_plan_cache only clears, keeps capacity)
+    host_ops_               = {};  // Release heap memory (invalidate_plan_cache only clears, keeps capacity)
     persistent_buffer_size_ = 0;
 }
 
@@ -7143,10 +7210,9 @@ void UnifiedKernel::free_persistent_buffers() {
 // DAG Scheduling Methods
 // -----------------------------------------------------------------------------
 
-void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
-                              const std::vector<int> & in_degree) {
-    const int n_ops     = static_cast<int>(in_degree.size());
-    int       n_edges   = 0;
+void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors, const std::vector<int> & in_degree) {
+    const int n_ops   = static_cast<int>(in_degree.size());
+    int       n_edges = 0;
     for (const auto & s : successors) {
         n_edges += static_cast<int>(s.size());
     }
@@ -7156,8 +7222,7 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
         // Untrack old DAG device bytes from budget
         if (dag_allocated_ && device_id_ >= 0) {
             const size_t old_dag_bytes = (3 * dag_pool_n_ops_ + 1) * sizeof(int);  // ready+claimed+done + completed
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, old_dag_bytes,
-                                                       ggml_sycl::runtime_category::GRAPH);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, old_dag_bytes, ggml_sycl::runtime_category::GRAPH);
             runtime_tracked_bytes_ -= old_dag_bytes;
         }
         // Free old allocations
@@ -7166,36 +7231,47 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
             device_free(dag_state_.tile_claimed, queue_, arena_dag_device_);
             device_free(dag_state_.tiles_done, queue_, arena_dag_device_);
             pinned_free(dag_state_.successor_offset, pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_);
-            pinned_free(dag_state_.successor_list,   pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_);
-            pinned_free(dag_state_.n_tiles,           pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_);
+            pinned_free(dag_state_.successor_list, pinned_dag_successor_list_bytes_, queue_, pinned_pool_dag_);
+            pinned_free(dag_state_.n_tiles, pinned_dag_n_tiles_bytes_, queue_, pinned_pool_dag_);
             device_free(dag_state_.completed_count, queue_, arena_dag_device_);
             arena_dag_device_ = false;
         }
         // Allocate new with some headroom
         const int alloc_ops   = n_ops + 64;
         const int alloc_edges = n_edges + 128;
-        bool arena_tmp = false;
-        dag_state_.ready_counter    = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        bool      arena_tmp   = false;
+        dag_state_.ready_counter =
+            static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
         arena_dag_device_ = arena_tmp;
-        dag_state_.tile_claimed     = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
-        if (arena_tmp) arena_dag_device_ = true;
-        dag_state_.tiles_done       = static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
-        if (arena_tmp) arena_dag_device_ = true;
+        dag_state_.tile_claimed =
+            static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) {
+            arena_dag_device_ = true;
+        }
+        dag_state_.tiles_done =
+            static_cast<int *>(device_alloc_persistent(alloc_ops * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) {
+            arena_dag_device_ = true;
+        }
         pinned_dag_successor_offset_bytes_ = (alloc_ops + 1) * sizeof(int);
         pinned_dag_successor_list_bytes_   = std::max(alloc_edges, 1) * sizeof(int);
         pinned_dag_n_tiles_bytes_          = alloc_ops * sizeof(int);
-        dag_state_.successor_offset = static_cast<int *>(pinned_alloc(pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_));
-        dag_state_.successor_list   = static_cast<int *>(pinned_alloc(pinned_dag_successor_list_bytes_,   queue_, pinned_pool_dag_));
-        dag_state_.n_tiles          = static_cast<int *>(pinned_alloc(pinned_dag_n_tiles_bytes_,           queue_, pinned_pool_dag_));
-        dag_state_.completed_count  = static_cast<int *>(device_alloc_persistent(1 * sizeof(int), queue_, device_id_, arena_tmp));
-        if (arena_tmp) arena_dag_device_ = true;
+        dag_state_.successor_offset =
+            static_cast<int *>(pinned_alloc(pinned_dag_successor_offset_bytes_, queue_, pinned_pool_dag_));
+        dag_state_.successor_list =
+            static_cast<int *>(pinned_alloc(pinned_dag_successor_list_bytes_, queue_, pinned_pool_dag_));
+        dag_state_.n_tiles = static_cast<int *>(pinned_alloc(pinned_dag_n_tiles_bytes_, queue_, pinned_pool_dag_));
+        dag_state_.completed_count =
+            static_cast<int *>(device_alloc_persistent(1 * sizeof(int), queue_, device_id_, arena_tmp));
+        if (arena_tmp) {
+            arena_dag_device_ = true;
+        }
         dag_pool_n_ops_   = alloc_ops;
         dag_pool_n_edges_ = alloc_edges;
         // Track new DAG device bytes (3 arrays of alloc_ops + 1 completed_count)
         if (device_id_ >= 0) {
             const size_t new_dag_bytes = (3 * alloc_ops + 1) * sizeof(int);
-            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_dag_bytes,
-                                                       ggml_sycl::runtime_category::GRAPH);
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_dag_bytes, ggml_sycl::runtime_category::GRAPH);
             runtime_tracked_bytes_ += new_dag_bytes;
         }
     }
@@ -7224,19 +7300,21 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
     // Log DAG statistics
     int source_count = 0;
     for (int i = 0; i < n_ops; i++) {
-        if (in_degree[i] == 0) source_count++;
+        if (in_degree[i] == 0) {
+            source_count++;
+        }
     }
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] DAG built: %d ops, %d edges, %d sources\n",
-                    n_ops, n_edges, source_count);
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] DAG built: %d ops, %d edges, %d sources\n", n_ops, n_edges, source_count);
 }
 
 void UnifiedKernel::reset_dag_counters() {
-    if (!dag_allocated_) return;
+    if (!dag_allocated_) {
+        return;
+    }
     const int n_ops = dag_state_.n_ops;
 
     // Restore in-degree values (predecessors remaining) from cached initial state
-    queue_.memcpy(dag_state_.ready_counter, host_initial_ready_counter_.data(),
-                  n_ops * sizeof(int));
+    queue_.memcpy(dag_state_.ready_counter, host_initial_ready_counter_.data(), n_ops * sizeof(int));
     // Reset per-token mutable counters to zero
     queue_.memset(dag_state_.tile_claimed, 0, n_ops * sizeof(int));
     queue_.memset(dag_state_.tiles_done, 0, n_ops * sizeof(int));
@@ -7249,9 +7327,11 @@ void UnifiedKernel::reset_dag_counters() {
 // -----------------------------------------------------------------------------
 
 void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & successors,
-                                          const std::vector<int> & in_degree) {
+                                         const std::vector<int> &              in_degree) {
     const int n_ops = static_cast<int>(in_degree.size());
-    if (n_ops <= 0) return;
+    if (n_ops <= 0) {
+        return;
+    }
 
     // Compute topological levels (BFS-based level assignment).
     // Level 0 = source ops (in_degree 0), level k = max(predecessors' levels) + 1.
@@ -7318,33 +7398,39 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
             phase_tile_total += 0;  // placeholder
         }
         host_phase_offset_[p + 1] = static_cast<int>(host_phase_entries_.size());
-        host_phase_tiles_[p] = 0;  // placeholder, updated in launch_persistent_kernel
+        host_phase_tiles_[p]      = 0;  // placeholder, updated in launch_persistent_kernel
     }
 
     // Allocate host-pinned arrays (grow-on-demand; kernel reads via PCIe zero-copy)
     if (n_ops > phase_pool_n_ops_ || n_phases > phase_pool_n_phases_) {
         if (phase_allocated_) {
-            pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
-            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
-            pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
-            if (phase_schedule_.phase_type) pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.entries, pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_tiles, pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_);
+            if (phase_schedule_.phase_type) {
+                pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
+            }
         }
-        const int alloc_ops    = n_ops + 64;
-        const int alloc_phases = n_phases + 16;
+        const int alloc_ops         = n_ops + 64;
+        const int alloc_phases      = n_phases + 16;
         pinned_phase_entries_bytes_ = alloc_ops * sizeof(DevicePhaseEntry);
         pinned_phase_offset_bytes_  = (alloc_phases + 1) * sizeof(int);
         pinned_phase_tiles_bytes_   = alloc_phases * sizeof(int);
         pinned_phase_type_bytes_    = alloc_phases * sizeof(int);
-        phase_schedule_.entries      = static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
-        phase_schedule_.phase_offset = static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_));
-        phase_schedule_.phase_tiles  = static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_));
-        phase_schedule_.phase_type   = static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_,    queue_, pinned_pool_phase_));
+        phase_schedule_.entries =
+            static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
+        phase_schedule_.phase_offset =
+            static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_, queue_, pinned_pool_phase_));
+        phase_schedule_.phase_tiles =
+            static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_));
+        phase_schedule_.phase_type =
+            static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_, queue_, pinned_pool_phase_));
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }
     phase_schedule_.n_phases  = n_phases;
     phase_schedule_.total_ops = n_ops;
-    phase_allocated_ = true;
+    phase_allocated_          = true;
 
     // Copy static topology to host-pinned buffer (no queue memcpy needed)
     std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(), (n_phases + 1) * sizeof(int));
@@ -7357,8 +7443,7 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
     orig_phase_offset_  = host_phase_offset_;
     orig_phase_tiles_   = host_phase_tiles_;
 
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule built: %d ops, %d phases\n",
-                    n_ops, n_phases);
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule built: %d ops, %d phases\n", n_ops, n_phases);
 }
 
 // -----------------------------------------------------------------------------
@@ -7381,12 +7466,14 @@ static bool is_compute_role_op(int type) {
 
 void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & host_ops) {
     const int n_ops = static_cast<int>(host_ops.size());
-    if (n_ops <= 0) return;
+    if (n_ops <= 0) {
+        return;
+    }
 
     // Step 1: Classify each op as ELEM or MATMUL
     std::vector<OpRole> op_roles(n_ops);
-    int n_elem_ops = 0;
-    int n_matmul_ops = 0;
+    int                 n_elem_ops   = 0;
+    int                 n_matmul_ops = 0;
     for (int i = 0; i < n_ops; i++) {
         if (is_compute_role_op(host_ops[i].type)) {
             op_roles[i] = OpRole::MATMUL;
@@ -7434,26 +7521,27 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     host_sync_points_.clear();
 
     struct TempSegment {
-        int first_op;
-        int last_op;
+        int    first_op;
+        int    last_op;
         OpRole role;
-        int total_tiles;
+        int    total_tiles;
     };
+
     std::vector<TempSegment> all_segments;
     all_segments.reserve(n_ops);
 
     // Helper: check if an op is a matmul projection (can be merged with adjacent matmuls)
     auto is_mergeable_matmul = [](int type) -> bool {
         const auto t = static_cast<OperationType>(type);
-        return t == OperationType::MATMUL_Q_PROJ  || t == OperationType::MATMUL_K_PROJ  ||
-               t == OperationType::MATMUL_V_PROJ  || t == OperationType::MATMUL_OUT_PROJ ||
-               t == OperationType::MATMUL_GATE    || t == OperationType::MATMUL_UP       ||
-               t == OperationType::MATMUL_DOWN    || t == OperationType::MATMUL_GATE_UP_SILU;
+        return t == OperationType::MATMUL_Q_PROJ || t == OperationType::MATMUL_K_PROJ ||
+               t == OperationType::MATMUL_V_PROJ || t == OperationType::MATMUL_OUT_PROJ ||
+               t == OperationType::MATMUL_GATE || t == OperationType::MATMUL_UP || t == OperationType::MATMUL_DOWN ||
+               t == OperationType::MATMUL_GATE_UP_SILU;
     };
 
-    int seg_start = 0;
-    OpRole cur_role = op_roles[0];
-    int seg_tiles = host_ops[0].n_tiles;
+    int    seg_start = 0;
+    OpRole cur_role  = op_roles[0];
+    int    seg_tiles = host_ops[0].n_tiles;
 
     for (int i = 1; i < n_ops; i++) {
         // Always break at role transitions
@@ -7465,20 +7553,20 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
             // data-dependency ordering via the completion barrier.
             const bool prev_is_matmul = is_mergeable_matmul(host_ops[i - 1].type);
             const bool curr_is_matmul = is_mergeable_matmul(host_ops[i].type);
-            break_segment = !(prev_is_matmul && curr_is_matmul);
+            break_segment             = !(prev_is_matmul && curr_is_matmul);
         }
 
         if (break_segment) {
-            all_segments.push_back({seg_start, i - 1, cur_role, seg_tiles});
+            all_segments.push_back({ seg_start, i - 1, cur_role, seg_tiles });
             seg_start = i;
-            cur_role = op_roles[i];
+            cur_role  = op_roles[i];
             seg_tiles = host_ops[i].n_tiles;
         } else {
             seg_tiles += host_ops[i].n_tiles;
         }
     }
     // Final segment
-    all_segments.push_back({seg_start, n_ops - 1, cur_role, seg_tiles});
+    all_segments.push_back({ seg_start, n_ops - 1, cur_role, seg_tiles });
 
     // Step 3: Create sync points at role transitions.
     // Between consecutive segments of different roles, we need a sync point.
@@ -7487,9 +7575,9 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     for (size_t s = 1; s < all_segments.size(); s++) {
         if (all_segments[s].role != all_segments[s - 1].role) {
             RoleSyncPoint sp;
-            sp.op_before  = all_segments[s - 1].last_op;
-            sp.op_after   = all_segments[s].first_op;
-            sp.from_role  = static_cast<int>(all_segments[s - 1].role);
+            sp.op_before = all_segments[s - 1].last_op;
+            sp.op_after  = all_segments[s].first_op;
+            sp.from_role = static_cast<int>(all_segments[s - 1].role);
             host_sync_points_.push_back(sp);
             n_sync++;
         }
@@ -7500,7 +7588,7 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     int sync_idx = 0;
     for (size_t s = 0; s < all_segments.size(); s++) {
         const auto & ts = all_segments[s];
-        RoleSegment seg;
+        RoleSegment  seg;
         seg.first_op    = ts.first_op;
         seg.last_op     = ts.last_op;
         seg.role        = static_cast<int>(ts.role);
@@ -7531,22 +7619,28 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     // We need: n_sync_points * 2 ints for sync flags (elem_done + matmul_done)
     //          1 int for role_tile_counter
     //          4 ints for per-role barrier (elem_cnt, elem_sense, mm_cnt, mm_sense)
-    const int sync_ints = n_sync * 2 + 1 + 4;  // sync_flags + tile_counter + barriers
+    const int sync_ints     = n_sync * 2 + 1 + 4;  // sync_flags + tile_counter + barriers
     const int n_elem_segs   = static_cast<int>(host_elem_segments_.size());
     const int n_matmul_segs = static_cast<int>(host_matmul_segments_.size());
 
     // Allocate or reuse device arrays
-    if (!role_allocated_ ||
-        n_elem_segs > role_pool_n_elem_ ||
-        n_matmul_segs > role_pool_n_matmul_ ||
+    if (!role_allocated_ || n_elem_segs > role_pool_n_elem_ || n_matmul_segs > role_pool_n_matmul_ ||
         n_sync > role_pool_n_sync_) {
         // Free old allocations
         if (role_allocated_) {
-            if (role_schedule_.elem_segments)    pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments),   pinned_role_elem_bytes_,   queue_, pinned_pool_role_);
-            if (role_schedule_.matmul_segments)  pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_, queue_, pinned_pool_role_);
+            if (role_schedule_.elem_segments) {
+                pinned_free(const_cast<RoleSegment *>(role_schedule_.elem_segments), pinned_role_elem_bytes_, queue_,
+                            pinned_pool_role_);
+            }
+            if (role_schedule_.matmul_segments) {
+                pinned_free(const_cast<RoleSegment *>(role_schedule_.matmul_segments), pinned_role_matmul_bytes_,
+                            queue_, pinned_pool_role_);
+            }
             // sync_flags is the base of a single contiguous device allocation;
             // role_tile_counter and barrier counters are offsets within it.
-            if (role_schedule_.sync_flags)       device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
+            if (role_schedule_.sync_flags) {
+                device_free(role_schedule_.sync_flags, queue_, arena_role_sync_);
+            }
             arena_role_sync_ = false;
             // Barrier counters are within the sync_flags allocation (contiguous block)
             // Actually let's use a single allocation for all sync ints
@@ -7559,29 +7653,31 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
 
         pinned_role_elem_bytes_   = alloc_elem * sizeof(RoleSegment);
         pinned_role_matmul_bytes_ = alloc_matmul * sizeof(RoleSegment);
-        role_schedule_.elem_segments   = static_cast<RoleSegment *>(pinned_alloc(pinned_role_elem_bytes_,   queue_, pinned_pool_role_));
-        role_schedule_.matmul_segments = static_cast<RoleSegment *>(pinned_alloc(pinned_role_matmul_bytes_, queue_, pinned_pool_role_));
+        role_schedule_.elem_segments =
+            static_cast<RoleSegment *>(pinned_alloc(pinned_role_elem_bytes_, queue_, pinned_pool_role_));
+        role_schedule_.matmul_segments =
+            static_cast<RoleSegment *>(pinned_alloc(pinned_role_matmul_bytes_, queue_, pinned_pool_role_));
 
         // Single allocation for all sync/counter/barrier ints.
         // Each atomic counter/sense pair is padded to 64 bytes (16 ints) to avoid
         // false sharing on GPU L2 cache lines. Without padding, the elem and matmul
         // barrier counters share a cache line, causing stale reads in spin-wait loops
         // and barrier malfunction with 3+ elementwise WGs.
-        constexpr int CL_INTS = 16;  // 64 bytes / 4 bytes per int
-        const int total_ints = alloc_sync * 2 + CL_INTS * 5;  // sync_flags + 5 padded slots
-        int * sync_block = static_cast<int *>(device_alloc_persistent(total_ints * sizeof(int), queue_, device_id_, arena_role_sync_));
-        role_schedule_.sync_flags        = sync_block;                                    // [0..2*alloc_sync)
-        role_schedule_.role_tile_counter = sync_block + alloc_sync * 2;                   // CL-aligned slot 0
-        role_schedule_.elem_barrier_cnt  = sync_block + alloc_sync * 2 + CL_INTS;         // CL-aligned slot 1
-        role_schedule_.elem_barrier_sense= sync_block + alloc_sync * 2 + CL_INTS * 2;     // CL-aligned slot 2
-        role_schedule_.mm_barrier_cnt    = sync_block + alloc_sync * 2 + CL_INTS * 3;     // CL-aligned slot 3
-        role_schedule_.mm_barrier_sense  = sync_block + alloc_sync * 2 + CL_INTS * 4;     // CL-aligned slot 4
+        constexpr int CL_INTS    = 16;                            // 64 bytes / 4 bytes per int
+        const int     total_ints = alloc_sync * 2 + CL_INTS * 5;  // sync_flags + 5 padded slots
+        int *         sync_block =
+            static_cast<int *>(device_alloc_persistent(total_ints * sizeof(int), queue_, device_id_, arena_role_sync_));
+        role_schedule_.sync_flags         = sync_block;                                 // [0..2*alloc_sync)
+        role_schedule_.role_tile_counter  = sync_block + alloc_sync * 2;                // CL-aligned slot 0
+        role_schedule_.elem_barrier_cnt   = sync_block + alloc_sync * 2 + CL_INTS;      // CL-aligned slot 1
+        role_schedule_.elem_barrier_sense = sync_block + alloc_sync * 2 + CL_INTS * 2;  // CL-aligned slot 2
+        role_schedule_.mm_barrier_cnt     = sync_block + alloc_sync * 2 + CL_INTS * 3;  // CL-aligned slot 3
+        role_schedule_.mm_barrier_sense   = sync_block + alloc_sync * 2 + CL_INTS * 4;  // CL-aligned slot 4
 
         // Track role schedule device bytes (sync_block is the only device allocation)
         if (device_id_ >= 0) {
             const size_t role_dev_bytes = total_ints * sizeof(int);
-            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, role_dev_bytes,
-                                                       ggml_sycl::runtime_category::GRAPH);
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, role_dev_bytes, ggml_sycl::runtime_category::GRAPH);
             runtime_tracked_bytes_ += role_dev_bytes;
         }
 
@@ -7592,10 +7688,10 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     }
 
     // Copy segment data to host-pinned buffers (kernel reads via PCIe zero-copy)
-    std::memcpy(const_cast<RoleSegment *>(role_schedule_.elem_segments),
-                host_elem_segments_.data(), n_elem_segs * sizeof(RoleSegment));
-    std::memcpy(const_cast<RoleSegment *>(role_schedule_.matmul_segments),
-                host_matmul_segments_.data(), n_matmul_segs * sizeof(RoleSegment));
+    std::memcpy(const_cast<RoleSegment *>(role_schedule_.elem_segments), host_elem_segments_.data(),
+                n_elem_segs * sizeof(RoleSegment));
+    std::memcpy(const_cast<RoleSegment *>(role_schedule_.matmul_segments), host_matmul_segments_.data(),
+                n_matmul_segs * sizeof(RoleSegment));
 
     // Zero sync flags + counters (these are device memory for kernel atomics)
     const int total_zero = n_sync * 2 + 1 + 4;
@@ -7606,65 +7702,83 @@ void UnifiedKernel::build_role_schedule(const std::vector<DeviceOperation> & hos
     role_schedule_.n_matmul_segments = n_matmul_segs;
     role_schedule_.n_sync_points     = n_sync;
 
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] Role schedule: %d elem segs, %d matmul segs, %d cross-role syncs "
-                    "(%d elem ops, %d matmul ops, %d total segs)\n",
-                    n_elem_segs, n_matmul_segs, n_sync, n_elem_ops, n_matmul_ops,
-                    n_elem_segs + n_matmul_segs);
+    GGML_SYCL_DEBUG(
+        "[PERSISTENT-TG] Role schedule: %d elem segs, %d matmul segs, %d cross-role syncs "
+        "(%d elem ops, %d matmul ops, %d total segs)\n",
+        n_elem_segs, n_matmul_segs, n_sync, n_elem_ops, n_matmul_ops, n_elem_segs + n_matmul_segs);
 }
 
 // -----------------------------------------------------------------------------
 // Persistent Plan Building Methods
 // -----------------------------------------------------------------------------
 
-void UnifiedKernel::begin_persistent(int n_layers, int batch_size, int hidden_dim,
-                                      int intermediate_dim, int n_heads, int n_kv_heads,
-                                      int head_dim, int quant_type) {
+void UnifiedKernel::begin_persistent(int n_layers,
+                                     int batch_size,
+                                     int hidden_dim,
+                                     int intermediate_dim,
+                                     int n_heads,
+                                     int n_kv_heads,
+                                     int head_dim,
+                                     int quant_type) {
     cancel_persistent();
 
-    current_plan_ = std::make_unique<PersistentPlan>();
-    current_plan_->n_layers = n_layers;
-    current_plan_->batch_size = batch_size;
-    current_plan_->hidden_dim = hidden_dim;
+    current_plan_                   = std::make_unique<PersistentPlan>();
+    current_plan_->n_layers         = n_layers;
+    current_plan_->batch_size       = batch_size;
+    current_plan_->hidden_dim       = hidden_dim;
     current_plan_->intermediate_dim = intermediate_dim;
-    current_plan_->n_heads = n_heads;
-    current_plan_->n_kv_heads = n_kv_heads;
-    current_plan_->head_dim = head_dim;
-    current_plan_->quant_type = quant_type;
+    current_plan_->n_heads          = n_heads;
+    current_plan_->n_kv_heads       = n_kv_heads;
+    current_plan_->head_dim         = head_dim;
+    current_plan_->quant_type       = quant_type;
     current_plan_->operations.reserve(n_layers * 10);
 
     allocate_persistent_buffers(hidden_dim, intermediate_dim);
 }
 
-void UnifiedKernel::add_rms_norm(int layer, const void * weights,
-                                 const void * input, void * output,
-                                 float eps, int hidden_dim, int64_t output_bytes) {
+void UnifiedKernel::add_rms_norm(int          layer,
+                                 const void * weights,
+                                 const void * input,
+                                 void *       output,
+                                 float        eps,
+                                 int          hidden_dim,
+                                 int64_t      output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_rms_norm called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type = OperationType::RMS_NORM;
-    op.layer = layer;
-    op.weights = weights;
-    op.input = input;
-    op.output = output;
-    op.hidden_dim = hidden_dim > 0 ? hidden_dim : current_plan_->hidden_dim;
-    op.eps = eps;
-    op.output_bytes = output_bytes;
+    op.type                = OperationType::RMS_NORM;
+    op.layer               = layer;
+    op.weights             = weights;
+    op.input               = input;
+    op.output              = output;
+    op.hidden_dim          = hidden_dim > 0 ? hidden_dim : current_plan_->hidden_dim;
+    op.eps                 = eps;
+    op.output_bytes        = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_matmul(int layer, const void * weights, const void * input,
-                               void * output, MatmulType type, int M, int N, int K,
-                               int quant_type, int weight_layout,
+void UnifiedKernel::add_matmul(int             layer,
+                               const void *    weights,
+                               const void *    input,
+                               void *          output,
+                               MatmulType      type,
+                               int             M,
+                               int             N,
+                               int             K,
+                               int             quant_type,
+                               int             weight_layout,
                                const int64_t * weight_nb,
                                const int64_t * input_nb,
                                const int64_t * output_nb,
-                               int weight_ne2, int weight_ne3,
-                               int input_ne2, int input_ne3,
-                               int64_t output_bytes) {
+                               int             weight_ne2,
+                               int             weight_ne3,
+                               int             input_ne2,
+                               int             input_ne3,
+                               int64_t         output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_matmul called without begin_persistent\n");
         return;
@@ -7673,24 +7787,40 @@ void UnifiedKernel::add_matmul(int layer, const void * weights, const void * inp
     OperationDescriptor op = {};
 
     switch (type) {
-        case MatmulType::Q_PROJ:    op.type = OperationType::MATMUL_Q_PROJ; break;
-        case MatmulType::K_PROJ:    op.type = OperationType::MATMUL_K_PROJ; break;
-        case MatmulType::V_PROJ:    op.type = OperationType::MATMUL_V_PROJ; break;
-        case MatmulType::OUT_PROJ:  op.type = OperationType::MATMUL_OUT_PROJ; break;
-        case MatmulType::GATE:      op.type = OperationType::MATMUL_GATE; break;
-        case MatmulType::UP:        op.type = OperationType::MATMUL_UP; break;
-        case MatmulType::DOWN:      op.type = OperationType::MATMUL_DOWN; break;
-        default:                    op.type = OperationType::MATMUL_Q_PROJ; break;
+        case MatmulType::Q_PROJ:
+            op.type = OperationType::MATMUL_Q_PROJ;
+            break;
+        case MatmulType::K_PROJ:
+            op.type = OperationType::MATMUL_K_PROJ;
+            break;
+        case MatmulType::V_PROJ:
+            op.type = OperationType::MATMUL_V_PROJ;
+            break;
+        case MatmulType::OUT_PROJ:
+            op.type = OperationType::MATMUL_OUT_PROJ;
+            break;
+        case MatmulType::GATE:
+            op.type = OperationType::MATMUL_GATE;
+            break;
+        case MatmulType::UP:
+            op.type = OperationType::MATMUL_UP;
+            break;
+        case MatmulType::DOWN:
+            op.type = OperationType::MATMUL_DOWN;
+            break;
+        default:
+            op.type = OperationType::MATMUL_Q_PROJ;
+            break;
     }
 
-    op.layer = layer;
-    op.weights = weights;
-    op.input = input;
-    op.output = output;
-    op.M = M;
-    op.N = N;
-    op.K = K;
-    op.quant_type = quant_type;
+    op.layer         = layer;
+    op.weights       = weights;
+    op.input         = input;
+    op.output        = output;
+    op.M             = M;
+    op.N             = N;
+    op.K             = K;
+    op.quant_type    = quant_type;
     op.weight_layout = weight_layout;
     if (weight_nb) {
         op.q_nb0 = weight_nb[0];
@@ -7711,8 +7841,8 @@ void UnifiedKernel::add_matmul(int layer, const void * weights, const void * inp
         op.v_nb3 = output_nb[3];
     }
     // Reuse mask dims to carry batched matmul extent metadata for persistent tiles.
-    op.mask_ne2 = input_ne2;
-    op.mask_ne3 = input_ne3;
+    op.mask_ne2     = input_ne2;
+    op.mask_ne3     = input_ne3;
     op.output_bytes = output_bytes;
     (void) weight_ne2;
     (void) weight_ne3;
@@ -7727,211 +7857,252 @@ void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc, i
     }
 
     OperationDescriptor op = {};
-    op.type = (desc.kv_type == KvCacheType::F16)
-                  ? OperationType::ATTENTION_F16
-                  : OperationType::ATTENTION_F32;
-    op.layer = layer;
-    op.input = desc.q;
-    op.weights = desc.k_cache;
-    op.aux = const_cast<void *>(static_cast<const void *>(desc.v_cache));
-    op.mask = desc.mask;
-    op.output = desc.output;
-    op.M = desc.seq_len;
-    op.N = desc.n_heads;
-    op.K = desc.head_dim;
-    op.scale = desc.scale;
-    op.n_kv_heads = desc.n_kv_heads;  // GQA: propagate KV head count
-    op.q_nb0 = desc.q_nb0;
-    op.q_nb1 = desc.q_nb1;
-    op.q_nb2 = desc.q_nb2;
-    op.q_nb3 = desc.q_nb3;
-    op.k_nb0 = desc.k_nb0;
-    op.k_nb1 = desc.k_nb1;
-    op.k_nb2 = desc.k_nb2;
-    op.k_nb3 = desc.k_nb3;
-    op.v_nb0 = desc.v_nb0;
-    op.v_nb1 = desc.v_nb1;
-    op.v_nb2 = desc.v_nb2;
-    op.v_nb3 = desc.v_nb3;
-    op.mask_type = desc.mask_type;
-    op.mask_nb0  = desc.mask_nb0;
-    op.mask_nb1  = desc.mask_nb1;
-    op.mask_nb2  = desc.mask_nb2;
-    op.mask_nb3  = desc.mask_nb3;
-    op.mask_ne2  = desc.mask_ne2;
-    op.mask_ne3  = desc.mask_ne3;
+    op.type         = (desc.kv_type == KvCacheType::F16) ? OperationType::ATTENTION_F16 : OperationType::ATTENTION_F32;
+    op.layer        = layer;
+    op.input        = desc.q;
+    op.weights      = desc.k_cache;
+    op.aux          = const_cast<void *>(static_cast<const void *>(desc.v_cache));
+    op.mask         = desc.mask;
+    op.output       = desc.output;
+    op.M            = desc.seq_len;
+    op.N            = desc.n_heads;
+    op.K            = desc.head_dim;
+    op.scale        = desc.scale;
+    op.n_kv_heads   = desc.n_kv_heads;  // GQA: propagate KV head count
+    op.q_nb0        = desc.q_nb0;
+    op.q_nb1        = desc.q_nb1;
+    op.q_nb2        = desc.q_nb2;
+    op.q_nb3        = desc.q_nb3;
+    op.k_nb0        = desc.k_nb0;
+    op.k_nb1        = desc.k_nb1;
+    op.k_nb2        = desc.k_nb2;
+    op.k_nb3        = desc.k_nb3;
+    op.v_nb0        = desc.v_nb0;
+    op.v_nb1        = desc.v_nb1;
+    op.v_nb2        = desc.v_nb2;
+    op.v_nb3        = desc.v_nb3;
+    op.mask_type    = desc.mask_type;
+    op.mask_nb0     = desc.mask_nb0;
+    op.mask_nb1     = desc.mask_nb1;
+    op.mask_nb2     = desc.mask_nb2;
+    op.mask_nb3     = desc.mask_nb3;
+    op.mask_ne2     = desc.mask_ne2;
+    op.mask_ne3     = desc.mask_ne3;
     op.output_bytes = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, void * output,
-                                 int64_t output_bytes) {
+void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, void * output, int64_t output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_silu_mul called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type = OperationType::SILU_MUL;
-    op.layer = layer;
-    op.input = gate;
-    op.aux = const_cast<void *>(up);
-    op.output = output;
-    op.intermediate_dim = current_plan_->intermediate_dim;
-    op.output_bytes = output_bytes;
+    op.type                = OperationType::SILU_MUL;
+    op.layer               = layer;
+    op.input               = gate;
+    op.aux                 = const_cast<void *>(up);
+    op.output              = output;
+    op.intermediate_dim    = current_plan_->intermediate_dim;
+    op.output_bytes        = output_bytes;
 
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_add(int layer, const void * src0, const void * src1, void * output, int n_elements,
-                            int64_t output_bytes) {
+void UnifiedKernel::add_add(int          layer,
+                            const void * src0,
+                            const void * src1,
+                            void *       output,
+                            int          n_elements,
+                            int64_t      output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_add called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type         = OperationType::ADD;
-    op.layer        = layer;
-    op.input        = src0;
-    op.aux          = const_cast<void *>(src1);
-    op.output       = output;
-    op.M            = n_elements;
-    op.output_bytes = output_bytes;
+    op.type                = OperationType::ADD;
+    op.layer               = layer;
+    op.input               = src0;
+    op.aux                 = const_cast<void *>(src1);
+    op.output              = output;
+    op.M                   = n_elements;
+    op.output_bytes        = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements,
-                            int64_t output_bytes) {
+void UnifiedKernel::add_mul(int          layer,
+                            const void * src0,
+                            const void * src1,
+                            void *       output,
+                            int          n_elements,
+                            int64_t      output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_mul called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type         = OperationType::MUL;
-    op.layer        = layer;
-    op.input        = src0;
-    op.aux          = const_cast<void *>(src1);
-    op.output       = output;
-    op.M            = n_elements;
-    op.output_bytes = output_bytes;
+    op.type                = OperationType::MUL;
+    op.layer               = layer;
+    op.input               = src0;
+    op.aux                 = const_cast<void *>(src1);
+    op.output              = output;
+    op.M                   = n_elements;
+    op.output_bytes        = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_get_rows(int layer, const void * src0, const void * indices, void * output,
-                                 int n_elements, int64_t ne00, int64_t ne10, int64_t ne11, int64_t ne12,
-                                 int64_t nb01, int64_t nb02, int64_t nb03,
-                                 int64_t s10, int64_t s11, int64_t s12,
-                                 int64_t s1, int64_t s2, int64_t s3, int src0_type) {
+void UnifiedKernel::add_get_rows(int          layer,
+                                 const void * src0,
+                                 const void * indices,
+                                 void *       output,
+                                 int          n_elements,
+                                 int64_t      ne00,
+                                 int64_t      ne10,
+                                 int64_t      ne11,
+                                 int64_t      ne12,
+                                 int64_t      nb01,
+                                 int64_t      nb02,
+                                 int64_t      nb03,
+                                 int64_t      s10,
+                                 int64_t      s11,
+                                 int64_t      s12,
+                                 int64_t      s1,
+                                 int64_t      s2,
+                                 int64_t      s3,
+                                 int          src0_type) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_get_rows called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type       = OperationType::GET_ROWS;
-    op.layer      = layer;
-    op.input      = src0;
-    op.aux        = const_cast<void *>(indices);
-    op.output     = output;
-    op.M          = n_elements;
-    op.q_nb0      = ne00;
-    op.q_nb1      = ne10;
-    op.q_nb2      = ne11;
-    op.q_nb3      = ne12;
-    op.k_nb0      = nb01;
-    op.k_nb1      = nb02;
-    op.k_nb2      = nb03;
-    op.v_nb0      = s10;
-    op.v_nb1      = s11;
-    op.v_nb2      = s12;
-    op.v_nb3      = s1;
-    op.mask_nb0   = s2;
-    op.mask_nb1   = s3;
-    op.quant_type = src0_type;
+    op.type                = OperationType::GET_ROWS;
+    op.layer               = layer;
+    op.input               = src0;
+    op.aux                 = const_cast<void *>(indices);
+    op.output              = output;
+    op.M                   = n_elements;
+    op.q_nb0               = ne00;
+    op.q_nb1               = ne10;
+    op.q_nb2               = ne11;
+    op.q_nb3               = ne12;
+    op.k_nb0               = nb01;
+    op.k_nb1               = nb02;
+    op.k_nb2               = nb03;
+    op.v_nb0               = s10;
+    op.v_nb1               = s11;
+    op.v_nb2               = s12;
+    op.v_nb3               = s1;
+    op.mask_nb0            = s2;
+    op.mask_nb1            = s3;
+    op.quant_type          = src0_type;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_set_rows(int layer, const void * src0, const void * indices,
-                                 void * dst, const SetRowsMeta & meta, int n_elements,
-                                 const void * debug_ptr, int64_t output_bytes) {
+void UnifiedKernel::add_set_rows(int                 layer,
+                                 const void *        src0,
+                                 const void *        indices,
+                                 void *              dst,
+                                 const SetRowsMeta & meta,
+                                 int                 n_elements,
+                                 const void *        debug_ptr,
+                                 int64_t             output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_set_rows called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type              = OperationType::SET_ROWS;
-    op.layer             = layer;
-    op.input             = src0;
-    op.aux               = const_cast<void *>(indices);
-    op.output            = dst;
-    op.weights           = nullptr;  // Not used; metadata is embedded
-    op.mask              = debug_ptr;
-    op.M                 = n_elements;
-    op.output_bytes      = output_bytes;
-    op.set_rows_meta     = meta;
-    op.has_embedded_meta = true;
+    op.type                = OperationType::SET_ROWS;
+    op.layer               = layer;
+    op.input               = src0;
+    op.aux                 = const_cast<void *>(indices);
+    op.output              = dst;
+    op.weights             = nullptr;  // Not used; metadata is embedded
+    op.mask                = debug_ptr;
+    op.M                   = n_elements;
+    op.output_bytes        = output_bytes;
+    op.set_rows_meta       = meta;
+    op.has_embedded_meta   = true;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_strided_copy(int layer, const void * src, void * dst,
-                                     const StridedCopyMeta & meta, int n_elements,
-                                     int64_t output_bytes) {
+void UnifiedKernel::add_strided_copy(int                     layer,
+                                     const void *            src,
+                                     void *                  dst,
+                                     const StridedCopyMeta & meta,
+                                     int                     n_elements,
+                                     int64_t                 output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_strided_copy called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type               = OperationType::STRIDED_COPY;
-    op.layer              = layer;
-    op.input              = src;
-    op.output             = dst;
-    op.weights            = nullptr;  // Not used; metadata is embedded
-    op.M                  = n_elements;
-    op.output_bytes       = output_bytes;
-    op.strided_copy_meta  = meta;
-    op.has_embedded_meta  = true;
+    op.type                = OperationType::STRIDED_COPY;
+    op.layer               = layer;
+    op.input               = src;
+    op.output              = dst;
+    op.weights             = nullptr;  // Not used; metadata is embedded
+    op.M                   = n_elements;
+    op.output_bytes        = output_bytes;
+    op.strided_copy_meta   = meta;
+    op.has_embedded_meta   = true;
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_softmax(int layer, const void * input, const void * mask,
-                                const void * sinks, void * output, int n_rows, int n_cols,
-                                int ne01, int ne02, int ne03, float scale, float max_bias,
-                                int mask_type, int64_t mask_nb0, int64_t mask_nb1,
-                                int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3,
-                                int64_t output_bytes) {
+void UnifiedKernel::add_softmax(int          layer,
+                                const void * input,
+                                const void * mask,
+                                const void * sinks,
+                                void *       output,
+                                int          n_rows,
+                                int          n_cols,
+                                int          ne01,
+                                int          ne02,
+                                int          ne03,
+                                float        scale,
+                                float        max_bias,
+                                int          mask_type,
+                                int64_t      mask_nb0,
+                                int64_t      mask_nb1,
+                                int64_t      mask_nb2,
+                                int64_t      mask_nb3,
+                                int          mask_ne2,
+                                int          mask_ne3,
+                                int64_t      output_bytes) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_softmax called without begin_persistent\n");
         return;
     }
 
     OperationDescriptor op = {};
-    op.type         = OperationType::SOFTMAX;
-    op.layer        = layer;
-    op.input        = input;
-    op.mask         = mask;
-    op.aux          = const_cast<void *>(sinks);
-    op.output       = output;
-    op.M            = n_rows;
-    op.N            = n_cols;
-    op.K            = ne01;
-    op.q_nb0        = ne01;
-    op.q_nb1        = ne02;
-    op.q_nb2        = ne03;
-    op.scale        = scale;
-    op.eps          = max_bias;
-    op.mask_type    = mask_type;
-    op.mask_nb0     = mask_nb0;
-    op.mask_nb1     = mask_nb1;
-    op.mask_nb2     = mask_nb2;
-    op.mask_nb3     = mask_nb3;
-    op.mask_ne2     = mask_ne2;
-    op.mask_ne3     = mask_ne3;
-    op.output_bytes = output_bytes;
+    op.type                = OperationType::SOFTMAX;
+    op.layer               = layer;
+    op.input               = input;
+    op.mask                = mask;
+    op.aux                 = const_cast<void *>(sinks);
+    op.output              = output;
+    op.M                   = n_rows;
+    op.N                   = n_cols;
+    op.K                   = ne01;
+    op.q_nb0               = ne01;
+    op.q_nb1               = ne02;
+    op.q_nb2               = ne03;
+    op.scale               = scale;
+    op.eps                 = max_bias;
+    op.mask_type           = mask_type;
+    op.mask_nb0            = mask_nb0;
+    op.mask_nb1            = mask_nb1;
+    op.mask_nb2            = mask_nb2;
+    op.mask_nb3            = mask_nb3;
+    op.mask_ne2            = mask_ne2;
+    op.mask_ne3            = mask_ne3;
+    op.output_bytes        = output_bytes;
     current_plan_->operations.push_back(op);
 }
 
@@ -7954,11 +8125,15 @@ void UnifiedKernel::set_persistent_debug_rms(float * debug_ptr, int layer, int h
     current_plan_->debug_rms_flag  = flag;
 }
 
-void UnifiedKernel::set_persistent_debug_matmul(float * debug_ptr, int layer, MatmulType type, int out_dim, int * flag) {
+void UnifiedKernel::set_persistent_debug_matmul(float *    debug_ptr,
+                                                int        layer,
+                                                MatmulType type,
+                                                int        out_dim,
+                                                int *      flag) {
     if (!current_plan_) {
         return;
     }
-    current_plan_->debug_matmul_ptr  = debug_ptr;
+    current_plan_->debug_matmul_ptr   = debug_ptr;
     current_plan_->debug_matmul_layer = layer;
     current_plan_->debug_matmul_type  = static_cast<int>(type);
     current_plan_->debug_matmul_dim   = out_dim;
@@ -7980,33 +8155,33 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc, int64_t out
     }
 
     OperationDescriptor op = {};
-    op.type = OperationType::ROPE;
-    op.layer = layer;
-    op.weights = desc.cos_cache;
-    op.N = desc.n_heads;
-    op.K = desc.head_dim;
-    op.M = desc.position;
+    op.type                = OperationType::ROPE;
+    op.layer               = layer;
+    op.weights             = desc.cos_cache;
+    op.N                   = desc.n_heads;
+    op.K                   = desc.head_dim;
+    op.M                   = desc.position;
     // Encode RoPE mode in scale: 1.0 = NEOX (split pairs), 0.0 = NORMAL (adjacent pairs)
-    op.scale = desc.is_neox ? 1.0f : 0.0f;
-    op.output_bytes = output_bytes;
+    op.scale               = desc.is_neox ? 1.0f : 0.0f;
+    op.output_bytes        = output_bytes;
 
     if (desc.k) {
         // Dual-tensor mode: rotate both Q and K in-place
         //   input  = q_data (in-place)
         //   aux    = k_data (in-place)
         //   output = sin_cache (overloaded)
-        op.input     = desc.q;
-        op.aux       = desc.k;
-        op.output    = const_cast<float *>(desc.sin_cache);
+        op.input      = desc.q;
+        op.aux        = desc.k;
+        op.output     = const_cast<float *>(desc.sin_cache);
         op.n_kv_heads = current_plan_->n_kv_heads;
     } else {
         // Single-tensor mode: read from input, write to output
         //   input  = source data (read)
         //   output = destination data (write)
         //   aux    = sin_cache (overloaded)
-        op.input     = desc.q;            // Source pointer (set by caller)
-        op.output    = desc.rope_dst;     // Destination pointer
-        op.aux       = const_cast<float *>(desc.sin_cache);
+        op.input      = desc.q;         // Source pointer (set by caller)
+        op.output     = desc.rope_dst;  // Destination pointer
+        op.aux        = const_cast<float *>(desc.sin_cache);
         op.n_kv_heads = 0;
     }
 
@@ -8015,7 +8190,7 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc, int64_t out
 
 void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
     if (current_plan_ && ptr) {
-        current_plan_->temp_device_allocs.push_back({ptr, bytes});
+        current_plan_->temp_device_allocs.push_back({ ptr, bytes });
         current_plan_->temp_device_alloc_bytes += bytes;
         if (device_id_ >= 0) {
             ggml_sycl::unified_cache_add_runtime_bytes(device_id_, bytes, ggml_sycl::runtime_category::GRAPH);
@@ -8027,7 +8202,7 @@ void UnifiedKernel::add_temp_device_alloc_handle(const ggml_sycl::alloc_handle &
     if (!current_plan_ || handle.ptr == nullptr) {
         return;
     }
-    current_plan_->temp_device_allocs.push_back({handle.ptr, handle.size});
+    current_plan_->temp_device_allocs.push_back({ handle.ptr, handle.size });
     current_plan_->temp_device_alloc_handles[handle.ptr] = handle;
 }
 
@@ -8043,7 +8218,8 @@ void UnifiedKernel::get_split_config(KernelSplitConfig & out) const {
 void UnifiedKernel::cancel_persistent() {
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes,
+                                                       ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
             auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
@@ -8101,7 +8277,8 @@ void UnifiedKernel::begin_plan_update() {
     // Cancel any in-flight plan but DON'T free cached data
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes,
+                                                       ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
             auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
@@ -8118,7 +8295,7 @@ void UnifiedKernel::begin_plan_update() {
     // Clone from cached template
     current_plan_ = std::make_unique<PersistentPlan>();
     copy_plan_shape(cached_plan_template_, *current_plan_);
-    current_plan_->operations        = cached_ops_;  // copy the vector
+    current_plan_->operations = cached_ops_;  // copy the vector
 }
 
 bool UnifiedKernel::get_op_descriptor(int op_idx, OperationDescriptor & out) const {
@@ -8144,25 +8321,48 @@ OperationDescriptor * UnifiedKernel::get_op_descriptor_mut(int op_idx) {
     return &current_plan_->operations[op_idx];
 }
 
-void UnifiedKernel::update_op_pointers(int op_idx, const void * input, void * output,
-                                        const void * aux, const void * mask) {
+void UnifiedKernel::update_op_pointers(int          op_idx,
+                                       const void * input,
+                                       void *       output,
+                                       const void * aux,
+                                       const void * mask) {
     if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
         return;
     }
     auto & op = current_plan_->operations[op_idx];
-    if (input)  op.input  = input;
-    if (output) op.output = output;
-    if (aux)    op.aux    = const_cast<void *>(aux);
-    if (mask)   op.mask   = mask;
+    if (input) {
+        op.input = input;
+    }
+    if (output) {
+        op.output = output;
+    }
+    if (aux) {
+        op.aux = const_cast<void *>(aux);
+    }
+    if (mask) {
+        op.mask = mask;
+    }
 }
 
-void UnifiedKernel::update_op_attention(int op_idx, const void * q, const void * k_cache,
-                                         const void * v_cache, const void * mask,
-                                         void * output,
-                                         int64_t q_nb0, int64_t q_nb1, int64_t q_nb2, int64_t q_nb3,
-                                         int64_t k_nb0, int64_t k_nb1, int64_t k_nb2, int64_t k_nb3,
-                                         int64_t v_nb0, int64_t v_nb1, int64_t v_nb2, int64_t v_nb3,
-                                         int seq_len) {
+void UnifiedKernel::update_op_attention(int          op_idx,
+                                        const void * q,
+                                        const void * k_cache,
+                                        const void * v_cache,
+                                        const void * mask,
+                                        void *       output,
+                                        int64_t      q_nb0,
+                                        int64_t      q_nb1,
+                                        int64_t      q_nb2,
+                                        int64_t      q_nb3,
+                                        int64_t      k_nb0,
+                                        int64_t      k_nb1,
+                                        int64_t      k_nb2,
+                                        int64_t      k_nb3,
+                                        int64_t      v_nb0,
+                                        int64_t      v_nb1,
+                                        int64_t      v_nb2,
+                                        int64_t      v_nb3,
+                                        int          seq_len) {
     if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
         return;
     }
@@ -8172,19 +8372,32 @@ void UnifiedKernel::update_op_attention(int op_idx, const void * q, const void *
     op.aux     = const_cast<void *>(v_cache);
     op.mask    = mask;
     op.output  = output;
-    op.q_nb0   = q_nb0;  op.q_nb1 = q_nb1;  op.q_nb2 = q_nb2;  op.q_nb3 = q_nb3;
-    op.k_nb0   = k_nb0;  op.k_nb1 = k_nb1;  op.k_nb2 = k_nb2;  op.k_nb3 = k_nb3;
-    op.v_nb0   = v_nb0;  op.v_nb1 = v_nb1;  op.v_nb2 = v_nb2;  op.v_nb3 = v_nb3;
+    op.q_nb0   = q_nb0;
+    op.q_nb1   = q_nb1;
+    op.q_nb2   = q_nb2;
+    op.q_nb3   = q_nb3;
+    op.k_nb0   = k_nb0;
+    op.k_nb1   = k_nb1;
+    op.k_nb2   = k_nb2;
+    op.k_nb3   = k_nb3;
+    op.v_nb0   = v_nb0;
+    op.v_nb1   = v_nb1;
+    op.v_nb2   = v_nb2;
+    op.v_nb3   = v_nb3;
     op.M       = seq_len;
 }
 
-void UnifiedKernel::update_op_rope(int op_idx, void * q, void * k, void * rope_dst,
-                                    const float * cos_cache, const float * sin_cache,
-                                    int position) {
+void UnifiedKernel::update_op_rope(int           op_idx,
+                                   void *        q,
+                                   void *        k,
+                                   void *        rope_dst,
+                                   const float * cos_cache,
+                                   const float * sin_cache,
+                                   int           position) {
     if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
         return;
     }
-    auto & op = current_plan_->operations[op_idx];
+    auto & op  = current_plan_->operations[op_idx];
     op.input   = q;
     op.weights = cos_cache;
     op.M       = position;
@@ -8208,7 +8421,7 @@ void UnifiedKernel::invalidate_plan_cache() {
     free_scratch_pool();
     deferred_copies_.clear();
     final_output_ggml_dst_ = nullptr;
-    plan_cache_valid_ = false;
+    plan_cache_valid_      = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
     // Clear original phase schedule data (rebuilt on next full build)
@@ -8216,7 +8429,8 @@ void UnifiedKernel::invalidate_plan_cache() {
     orig_phase_offset_.clear();
     orig_phase_tiles_.clear();
     if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_, ggml_sycl::runtime_category::GRAPH);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_,
+                                                   ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : cached_temp_device_allocs_) {
         auto hit = cached_temp_device_alloc_handles_.find(ptr);
@@ -8273,8 +8487,10 @@ void * UnifiedKernel::get_rows_stable_ptr(int get_rows_index, size_t bytes) {
         }
     }
     bool arena_tmp = false;
-    slot.ptr  = device_alloc_scratch(bytes, queue_, device_id_, arena_tmp);
-    if (arena_tmp) arena_get_rows_ = true;
+    slot.ptr       = device_alloc_scratch(bytes, queue_, device_id_, arena_tmp);
+    if (arena_tmp) {
+        arena_get_rows_ = true;
+    }
     slot.size = slot.ptr ? bytes : 0;
     if (slot.size > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot.size, ggml_sycl::runtime_category::GRAPH);
@@ -8297,7 +8513,7 @@ void UnifiedKernel::build_scratch_pool() {
         return;
     }
 
-    const auto & ops = current_plan_->operations;
+    const auto & ops   = current_plan_->operations;
     const int    n_ops = static_cast<int>(ops.size());
 
     // Phase 1: compute total scratch needed
@@ -8305,7 +8521,7 @@ void UnifiedKernel::build_scratch_pool() {
     scratch_outputs_.resize(n_ops, nullptr);
 
     int n_with_bytes = 0;
-    int n_skipped = 0;
+    int n_skipped    = 0;
     for (int i = 0; i < n_ops; i++) {
         const auto & op = ops[i];
         // Skip ops with dedicated buffer management or no output_bytes
@@ -8320,8 +8536,8 @@ void UnifiedKernel::build_scratch_pool() {
         total_bytes += aligned;
     }
 
-    GGML_SYCL_DEBUG("[SCRATCH-POOL] n_ops=%d with_bytes=%d skipped=%d total_bytes=%zu\n",
-                    n_ops, n_with_bytes, n_skipped, total_bytes);
+    GGML_SYCL_DEBUG("[SCRATCH-POOL] n_ops=%d with_bytes=%d skipped=%d total_bytes=%zu\n", n_ops, n_with_bytes,
+                    n_skipped, total_bytes);
 
     if (total_bytes == 0) {
         GGML_SYCL_DEBUG("[SCRATCH-POOL] total_bytes=0, returning early\n");
@@ -8359,8 +8575,8 @@ void UnifiedKernel::build_scratch_pool() {
     size_t offset    = 0;
 
     // Track final op for copy-back
-    int    final_op_idx    = -1;
-    size_t final_op_bytes  = 0;
+    int    final_op_idx   = -1;
+    size_t final_op_bytes = 0;
 
     int n_linked_input = 0, n_linked_aux = 0;
 
@@ -8416,12 +8632,11 @@ void UnifiedKernel::build_scratch_pool() {
             }
         }
 
-        op.output          = scratch_ptr;
+        op.output           = scratch_ptr;
         scratch_outputs_[i] = scratch_ptr;
     }
 
-    GGML_SYCL_DEBUG("[SCRATCH-POOL] linkage stats: linked_input=%d linked_aux=%d\n",
-                    n_linked_input, n_linked_aux);
+    GGML_SYCL_DEBUG("[SCRATCH-POOL] linkage stats: linked_input=%d linked_aux=%d\n", n_linked_input, n_linked_aux);
 
     // Register deferred copy-back for the final operation's output.
     // After kernel execution, the logits live in scratch; llama.cpp reads
@@ -8430,12 +8645,11 @@ void UnifiedKernel::build_scratch_pool() {
     // on fast-path tokens, op.output is already a scratch pointer.
     void * copy_back_dst = final_output_ggml_dst_;
     if (final_op_idx >= 0 && copy_back_dst && final_op_bytes > 0) {
-        GGML_SYCL_DEBUG("[SCRATCH-POOL] Final output copy-back: op=%d type=%d "
-                        "dst=%p bytes=%zu scratch=%p\n",
-                        final_op_idx,
-                        (int) current_plan_->operations[final_op_idx].type,
-                        copy_back_dst, final_op_bytes,
-                        scratch_outputs_[final_op_idx]);
+        GGML_SYCL_DEBUG(
+            "[SCRATCH-POOL] Final output copy-back: op=%d type=%d "
+            "dst=%p bytes=%zu scratch=%p\n",
+            final_op_idx, (int) current_plan_->operations[final_op_idx].type, copy_back_dst, final_op_bytes,
+            scratch_outputs_[final_op_idx]);
         add_deferred_copy(final_op_idx, nullptr, copy_back_dst, final_op_bytes);
     }
 }
@@ -8448,9 +8662,9 @@ void * UnifiedKernel::scratch_output(int op_idx) const {
 }
 
 void UnifiedKernel::add_deferred_copy(int source_op_idx, void * src_ptr, void * dst, size_t bytes) {
-    GGML_SYCL_DEBUG("[DEFERRED-CPY] Registered: op_idx=%d src_ptr=%p dst=%p bytes=%zu\n",
-                    source_op_idx, src_ptr, dst, bytes);
-    deferred_copies_.push_back({source_op_idx, src_ptr, dst, bytes});
+    GGML_SYCL_DEBUG("[DEFERRED-CPY] Registered: op_idx=%d src_ptr=%p dst=%p bytes=%zu\n", source_op_idx, src_ptr, dst,
+                    bytes);
+    deferred_copies_.push_back({ source_op_idx, src_ptr, dst, bytes });
 }
 
 void UnifiedKernel::execute_deferred_copies() {
@@ -8515,12 +8729,11 @@ void UnifiedKernel::benchmark_graph_overhead() {
     namespace sycl_ex = sycl::ext::oneapi::experimental;
 
     fprintf(stderr, "\n[GRAPH-OVERHEAD] === SYCL Graph Per-Node Overhead Benchmark ===\n");
-    fprintf(stderr, "[GRAPH-OVERHEAD] Device: %s\n",
-            queue_.get_device().get_info<sycl::info::device::name>().c_str());
+    fprintf(stderr, "[GRAPH-OVERHEAD] Device: %s\n", queue_.get_device().get_info<sycl::info::device::name>().c_str());
 
     // Allocate scratch for kernels (tracked via unified cache)
     const int bench_device = ggml_sycl_get_device_id_from_queue(queue_);
-    int * dummy = static_cast<int *>(ggml_sycl_malloc_device(4096 * sizeof(int), queue_, "graph_bench:dummy"));
+    int *     dummy = static_cast<int *>(ggml_sycl_malloc_device(4096 * sizeof(int), queue_, "graph_bench:dummy"));
     if (!dummy) {
         fprintf(stderr, "[GRAPH-OVERHEAD] ERROR: failed to allocate device memory\n");
         return;
@@ -8535,9 +8748,7 @@ void UnifiedKernel::benchmark_graph_overhead() {
         sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
         g.begin_recording(queue_);
         for (int i = 0; i < N_NODES; i++) {
-            queue_.submit([&](sycl::handler & cgh) {
-                cgh.single_task([=]() { dummy[0] = i; });
-            });
+            queue_.submit([&](sycl::handler & cgh) { cgh.single_task([=]() { dummy[0] = i; }); });
         }
         g.end_recording();
         auto exec = g.finalize();
@@ -8552,16 +8763,16 @@ void UnifiedKernel::benchmark_graph_overhead() {
             queue_.ext_oneapi_graph(exec);
             queue_.wait();
         }
-        auto t1 = std::chrono::high_resolution_clock::now();
+        auto   t1 = std::chrono::high_resolution_clock::now();
         double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
-        fprintf(stderr, "[GRAPH-OVERHEAD] Test 1 (single_task): %d nodes, %.1f us/replay, %.2f us/node\n",
-                N_NODES, us, us / N_NODES);
+        fprintf(stderr, "[GRAPH-OVERHEAD] Test 1 (single_task): %d nodes, %.1f us/replay, %.2f us/node\n", N_NODES, us,
+                us / N_NODES);
     }
 
     // ---------- Test 2: parallel_for with varying NDRange sizes ----------
     {
         const int nd_range_sizes[] = { 256, 4096, 32768 };
-        const int wg_size = 256;
+        const int wg_size          = 256;
 
         for (int nd_size : nd_range_sizes) {
             const int N_NODES = 350;
@@ -8573,13 +8784,12 @@ void UnifiedKernel::benchmark_graph_overhead() {
             g.begin_recording(queue_);
             for (int i = 0; i < N_NODES; i++) {
                 queue_.submit([&](sycl::handler & cgh) {
-                    cgh.parallel_for(
-                        sycl::nd_range<1>(total, wg_size),
-                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                            if (item.get_global_linear_id() == 0) {
-                                dummy[0] = i;
-                            }
-                        });
+                    cgh.parallel_for(sycl::nd_range<1>(total, wg_size),
+                                     [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                         if (item.get_global_linear_id() == 0) {
+                                             dummy[0] = i;
+                                         }
+                                     });
                 });
             }
             g.end_recording();
@@ -8593,17 +8803,18 @@ void UnifiedKernel::benchmark_graph_overhead() {
                 queue_.ext_oneapi_graph(exec);
                 queue_.wait();
             }
-            auto t1 = std::chrono::high_resolution_clock::now();
+            auto   t1 = std::chrono::high_resolution_clock::now();
             double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
-            fprintf(stderr, "[GRAPH-OVERHEAD] Test 2 (parallel_for nd=%d, wg=%d): %d nodes, %.1f us/replay, %.2f us/node\n",
+            fprintf(stderr,
+                    "[GRAPH-OVERHEAD] Test 2 (parallel_for nd=%d, wg=%d): %d nodes, %.1f us/replay, %.2f us/node\n",
                     nd_size, wg_size, N_NODES, us, us / N_NODES);
         }
     }
 
     // ---------- Test 3: parallel_for with SLM (local memory) ----------
     {
-        const int N_NODES = 350;
-        const int N_REPS  = 100;
+        const int N_NODES     = 350;
+        const int N_REPS      = 100;
         const int slm_sizes[] = { 640, 2048, 16384 };  // attention, matmul, rms_norm (floats)
 
         for (int slm_floats : slm_sizes) {
@@ -8612,15 +8823,14 @@ void UnifiedKernel::benchmark_graph_overhead() {
             for (int i = 0; i < N_NODES; i++) {
                 queue_.submit([&](sycl::handler & cgh) {
                     sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-                    cgh.parallel_for(
-                        sycl::nd_range<1>(10 * 256, 256),
-                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                            slm[item.get_local_linear_id()] = static_cast<float>(i);
-                            sycl::group_barrier(item.get_group());
-                            if (item.get_global_linear_id() == 0) {
-                                dummy[0] = static_cast<int>(slm[0]);
-                            }
-                        });
+                    cgh.parallel_for(sycl::nd_range<1>(10 * 256, 256),
+                                     [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                         slm[item.get_local_linear_id()] = static_cast<float>(i);
+                                         sycl::group_barrier(item.get_group());
+                                         if (item.get_global_linear_id() == 0) {
+                                             dummy[0] = static_cast<int>(slm[0]);
+                                         }
+                                     });
                 });
             }
             g.end_recording();
@@ -8634,9 +8844,10 @@ void UnifiedKernel::benchmark_graph_overhead() {
                 queue_.ext_oneapi_graph(exec);
                 queue_.wait();
             }
-            auto t1 = std::chrono::high_resolution_clock::now();
+            auto   t1 = std::chrono::high_resolution_clock::now();
             double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
-            fprintf(stderr, "[GRAPH-OVERHEAD] Test 3 (parallel_for+SLM=%d floats): %d nodes, %.1f us/replay, %.2f us/node\n",
+            fprintf(stderr,
+                    "[GRAPH-OVERHEAD] Test 3 (parallel_for+SLM=%d floats): %d nodes, %.1f us/replay, %.2f us/node\n",
                     slm_floats, N_NODES, us, us / N_NODES);
         }
     }
@@ -8646,17 +8857,27 @@ void UnifiedKernel::benchmark_graph_overhead() {
     // ~32 ADD/MUL (16 tiles), ~32 attention (32 tiles), ~32 ROPE (1 tile), etc.
     {
         const int N_REPS = 100;
+
         // Simulate: 128 matmul-like + 32 norm-like + 32 add-like + 32 attn-like + ~126 misc
-        struct NodeSpec { int count; int nd_total; int wg_size; int slm_floats; const char * label; };
+        struct NodeSpec {
+            int          count;
+            int          nd_total;
+            int          wg_size;
+            int          slm_floats;
+            const char * label;
+        };
+
         NodeSpec specs[] = {
-            { 128,  64 * 256, 256, 512,   "matmul"    },  // 64 WGs, small SLM
-            {  32,   1 * 256, 256, 4096,  "rms_norm"  },  // 1 WG, large SLM
-            {  32,  16 * 256, 256, 0,     "add/mul"   },  // 16 WGs, no SLM
-            {  32,  32 * 256, 256, 640,   "attention"  }, // 32 WGs, medium SLM
-            {  32,   1 * 256, 256, 0,     "rope/misc"  }, // 1 WG, no SLM
+            { 128, 64 * 256, 256, 512,  "matmul"    }, // 64 WGs, small SLM
+            { 32,  1 * 256,  256, 4096, "rms_norm"  }, // 1 WG, large SLM
+            { 32,  16 * 256, 256, 0,    "add/mul"   }, // 16 WGs, no SLM
+            { 32,  32 * 256, 256, 640,  "attention" }, // 32 WGs, medium SLM
+            { 32,  1 * 256,  256, 0,    "rope/misc" }, // 1 WG, no SLM
         };
         int total_nodes = 0;
-        for (auto & s : specs) total_nodes += s.count;
+        for (auto & s : specs) {
+            total_nodes += s.count;
+        }
 
         sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
         g.begin_recording(queue_);
@@ -8665,23 +8886,21 @@ void UnifiedKernel::benchmark_graph_overhead() {
                 queue_.submit([&](sycl::handler & cgh) {
                     if (spec.slm_floats > 0) {
                         sycl::local_accessor<float, 1> slm(spec.slm_floats, cgh);
-                        cgh.parallel_for(
-                            sycl::nd_range<1>(spec.nd_total, spec.wg_size),
-                            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                                slm[item.get_local_linear_id()] = static_cast<float>(i);
-                                sycl::group_barrier(item.get_group());
-                                if (item.get_global_linear_id() == 0) {
-                                    dummy[0] = static_cast<int>(slm[0]);
-                                }
-                            });
+                        cgh.parallel_for(sycl::nd_range<1>(spec.nd_total, spec.wg_size),
+                                         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                             slm[item.get_local_linear_id()] = static_cast<float>(i);
+                                             sycl::group_barrier(item.get_group());
+                                             if (item.get_global_linear_id() == 0) {
+                                                 dummy[0] = static_cast<int>(slm[0]);
+                                             }
+                                         });
                     } else {
-                        cgh.parallel_for(
-                            sycl::nd_range<1>(spec.nd_total, spec.wg_size),
-                            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                                if (item.get_global_linear_id() == 0) {
-                                    dummy[0] = i;
-                                }
-                            });
+                        cgh.parallel_for(sycl::nd_range<1>(spec.nd_total, spec.wg_size),
+                                         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                             if (item.get_global_linear_id() == 0) {
+                                                 dummy[0] = i;
+                                             }
+                                         });
                     }
                 });
             }
@@ -8697,10 +8916,10 @@ void UnifiedKernel::benchmark_graph_overhead() {
             queue_.ext_oneapi_graph(exec);
             queue_.wait();
         }
-        auto t1 = std::chrono::high_resolution_clock::now();
+        auto   t1 = std::chrono::high_resolution_clock::now();
         double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
-        fprintf(stderr, "[GRAPH-OVERHEAD] Test 4 (mixed %d nodes): %.1f us/replay, %.2f us/node\n",
-                total_nodes, us, us / total_nodes);
+        fprintf(stderr, "[GRAPH-OVERHEAD] Test 4 (mixed %d nodes): %.1f us/replay, %.2f us/node\n", total_nodes, us,
+                us / total_nodes);
     }
 
     // ---------- Test 5: Baseline comparison — no graph, raw submissions ----------
@@ -8710,22 +8929,18 @@ void UnifiedKernel::benchmark_graph_overhead() {
 
         // Warm up
         for (int i = 0; i < N_NODES; i++) {
-            queue_.submit([&](sycl::handler & cgh) {
-                cgh.single_task([=]() { dummy[0] = i; });
-            });
+            queue_.submit([&](sycl::handler & cgh) { cgh.single_task([=]() { dummy[0] = i; }); });
         }
         queue_.wait();
 
         auto t0 = std::chrono::high_resolution_clock::now();
         for (int rep = 0; rep < N_REPS; rep++) {
             for (int i = 0; i < N_NODES; i++) {
-                queue_.submit([&](sycl::handler & cgh) {
-                    cgh.single_task([=]() { dummy[0] = i; });
-                });
+                queue_.submit([&](sycl::handler & cgh) { cgh.single_task([=]() { dummy[0] = i; }); });
             }
             queue_.wait();
         }
-        auto t1 = std::chrono::high_resolution_clock::now();
+        auto   t1 = std::chrono::high_resolution_clock::now();
         double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
         fprintf(stderr, "[GRAPH-OVERHEAD] Test 5 (no-graph baseline): %d submissions, %.1f us/batch, %.2f us/submit\n",
                 N_NODES, us, us / N_NODES);
@@ -8734,20 +8949,19 @@ void UnifiedKernel::benchmark_graph_overhead() {
     // ---------- Test 6: Scaling test — vary node count ----------
     {
         const int node_counts[] = { 10, 50, 100, 200, 350, 500, 700 };
-        const int N_REPS = 100;
+        const int N_REPS        = 100;
 
         for (int N : node_counts) {
             sycl_ex::command_graph g(queue_.get_context(), queue_.get_device());
             g.begin_recording(queue_);
             for (int i = 0; i < N; i++) {
                 queue_.submit([&](sycl::handler & cgh) {
-                    cgh.parallel_for(
-                        sycl::nd_range<1>(10 * 256, 256),
-                        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                            if (item.get_global_linear_id() == 0) {
-                                dummy[0] = i;
-                            }
-                        });
+                    cgh.parallel_for(sycl::nd_range<1>(10 * 256, 256),
+                                     [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                         if (item.get_global_linear_id() == 0) {
+                                             dummy[0] = i;
+                                         }
+                                     });
                 });
             }
             g.end_recording();
@@ -8761,10 +8975,9 @@ void UnifiedKernel::benchmark_graph_overhead() {
                 queue_.ext_oneapi_graph(exec);
                 queue_.wait();
             }
-            auto t1 = std::chrono::high_resolution_clock::now();
+            auto   t1 = std::chrono::high_resolution_clock::now();
             double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / N_REPS;
-            fprintf(stderr, "[GRAPH-OVERHEAD] Test 6 (scaling N=%d): %.1f us/replay, %.2f us/node\n",
-                    N, us, us / N);
+            fprintf(stderr, "[GRAPH-OVERHEAD] Test 6 (scaling N=%d): %.1f us/replay, %.2f us/node\n", N, us, us / N);
         }
     }
 
@@ -8796,8 +9009,8 @@ struct UnifiedKernel::MicroGraphState {
     sycl_ex::command_graph<sycl_ex::graph_state::executable> exec_graph;
 
     // Constructor: must be constructed from an executable graph
-    explicit MicroGraphState(sycl_ex::command_graph<sycl_ex::graph_state::executable> && g)
-        : exec_graph(std::move(g)) {}
+    explicit MicroGraphState(sycl_ex::command_graph<sycl_ex::graph_state::executable> && g) :
+        exec_graph(std::move(g)) {}
 };
 
 // Check if MMVQ kernel dispatch is enabled for micro-graph matmul nodes.
@@ -8819,25 +9032,20 @@ static bool mmvq_graph_mode_enabled() {
 class mmvq_graph_silu_mul_tag;
 
 // Submit a standalone silu_mul kernel: output[i] = silu(gate[i]) * up[i]
-static void mmvq_submit_silu_mul(sycl::queue & q,
-                                  const float * gate,
-                                  const float * up,
-                                  float *       output,
-                                  int           n) {
+static void mmvq_submit_silu_mul(sycl::queue & q, const float * gate, const float * up, float * output, int n) {
     constexpr int WG_SIZE = 256;
-    const int n_wgs = (n + WG_SIZE - 1) / WG_SIZE;
+    const int     n_wgs   = (n + WG_SIZE - 1) / WG_SIZE;
 
     q.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for<mmvq_graph_silu_mul_tag>(
-            sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE),
-            [=](sycl::nd_item<1> item) {
-                const int idx = item.get_global_linear_id();
-                if (idx < n) {
-                    const float g         = gate[idx];
-                    const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
-                    output[idx] = g * sigmoid_g * up[idx];
-                }
-            });
+        cgh.parallel_for<mmvq_graph_silu_mul_tag>(sycl::nd_range<1>(n_wgs * WG_SIZE, WG_SIZE),
+                                                  [=](sycl::nd_item<1> item) {
+                                                      const int idx = item.get_global_linear_id();
+                                                      if (idx < n) {
+                                                          const float g         = gate[idx];
+                                                          const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+                                                          output[idx]           = g * sigmoid_g * up[idx];
+                                                      }
+                                                  });
     });
 }
 
@@ -9573,20 +9781,20 @@ void UnifiedKernel::record_micro_graph() {
         return;
     }
 
-    const int n_phases = static_cast<int>(host_phase_tiles_.size());
+    const int     n_phases   = static_cast<int>(host_phase_tiles_.size());
     constexpr int BLOCK_SIZE = 256;
-    const bool use_mmvq = mmvq_graph_mode_enabled();
+    const bool    use_mmvq   = mmvq_graph_mode_enabled();
 
     // ── Determine n_workgroups (same logic as launch_persistent_kernel) ──
     int n_workgroups;
     try {
-        const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
-        n_workgroups = std::clamp(max_cu / 4, 4, 64);
+        const int max_cu = (int) queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+        n_workgroups     = std::clamp(max_cu / 4, 4, 64);
     } catch (...) {
         n_workgroups = 16;
     }
     if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
-        char * end = nullptr;
+        char *     end    = nullptr;
         const long parsed = std::strtol(env_wgs, &end, 10);
         if (end && end != env_wgs && parsed > 0 && parsed <= 128) {
             n_workgroups = static_cast<int>(parsed);
@@ -9606,8 +9814,11 @@ void UnifiedKernel::record_micro_graph() {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, micro_tile_counters_n_ * sizeof(int),
                                                        ggml_sycl::runtime_category::GRAPH);
         }
-        if (micro_tile_counters_) device_free(micro_tile_counters_, queue_, arena_micro_tile_counters_);
-        micro_tile_counters_   = static_cast<int *>(device_alloc_scratch(n_counters_needed * sizeof(int), queue_, device_id_, arena_micro_tile_counters_));
+        if (micro_tile_counters_) {
+            device_free(micro_tile_counters_, queue_, arena_micro_tile_counters_);
+        }
+        micro_tile_counters_ = static_cast<int *>(
+            device_alloc_scratch(n_counters_needed * sizeof(int), queue_, device_id_, arena_micro_tile_counters_));
         micro_tile_counters_n_ = n_counters_needed;
         // Track new allocation
         if (device_id_ >= 0) {
@@ -9623,17 +9834,14 @@ void UnifiedKernel::record_micro_graph() {
     // zeroing all tile counters before each graph replay, we increment the
     // generation and kernels compute their tile range as [gen*n_tiles, (gen+1)*n_tiles).
     if (!micro_generation_) {
-        micro_generation_ = static_cast<int *>(pinned_alloc(sizeof(int), queue_, pinned_pool_micro_gen_));
+        micro_generation_  = static_cast<int *>(pinned_alloc(sizeof(int), queue_, pinned_pool_micro_gen_));
         *micro_generation_ = -1;  // First ++generation yields 0, matching zeroed counters
     }
 
     // ── SLM size (same logic as launch_persistent_kernel) ──
-    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
-    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;
-    const int slm_floats    = std::max({BLOCK_SIZE / 16,
-                                        current_plan_->hidden_dim,
-                                        attention_slm,
-                                        matmul_slm});
+    const int  attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int  matmul_slm    = (BLOCK_SIZE / 16) * 32;
+    const int  slm_floats    = std::max({ BLOCK_SIZE / 16, current_plan_->hidden_dim, attention_slm, matmul_slm });
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
 
     // ── MMVQ buffer allocation (once, stable across tokens) ──
@@ -9641,11 +9849,11 @@ void UnifiedKernel::record_micro_graph() {
     // Two Q8 buffers for ping-pong between attn_norm and ffn_norm quantization.
     int mmvq_node_count = 0;
     if (use_mmvq) {
-        const int hidden_dim       = current_plan_->hidden_dim;
-        const int intermediate_dim = current_plan_->intermediate_dim;
-        const size_t q8_hidden     = mmvq_q8_1_soa_size(hidden_dim);
-        const size_t q8_inter      = mmvq_q8_1_soa_size(intermediate_dim);
-        const size_t q8_size       = std::max(q8_hidden, q8_inter);
+        const int    hidden_dim       = current_plan_->hidden_dim;
+        const int    intermediate_dim = current_plan_->intermediate_dim;
+        const size_t q8_hidden        = mmvq_q8_1_soa_size(hidden_dim);
+        const size_t q8_inter         = mmvq_q8_1_soa_size(intermediate_dim);
+        const size_t q8_size          = std::max(q8_hidden, q8_inter);
 
         if (mmvq_q8_buf_size_ < q8_size) {
             // Untrack old allocations
@@ -9654,16 +9862,19 @@ void UnifiedKernel::record_micro_graph() {
                                                            ggml_sycl::runtime_category::GRAPH);
             }
             for (int i = 0; i < 2; i++) {
-                if (mmvq_q8_bufs_[i]) device_free(mmvq_q8_bufs_[i], queue_, arena_mmvq_q8_bufs_);
-                bool arena_tmp = false;
+                if (mmvq_q8_bufs_[i]) {
+                    device_free(mmvq_q8_bufs_[i], queue_, arena_mmvq_q8_bufs_);
+                }
+                bool arena_tmp   = false;
                 mmvq_q8_bufs_[i] = device_alloc_scratch(q8_size, queue_, device_id_, arena_tmp);
-                if (arena_tmp) arena_mmvq_q8_bufs_ = true;
+                if (arena_tmp) {
+                    arena_mmvq_q8_bufs_ = true;
+                }
             }
             mmvq_q8_buf_size_ = q8_size;
             // Track new allocations
             if (device_id_ >= 0) {
-                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, 2 * q8_size,
-                                                           ggml_sycl::runtime_category::GRAPH);
+                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, 2 * q8_size, ggml_sycl::runtime_category::GRAPH);
             }
         }
 
@@ -9674,10 +9885,16 @@ void UnifiedKernel::record_micro_graph() {
                 ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, 2 * mmvq_gate_scratch_sz_,
                                                            ggml_sycl::runtime_category::GRAPH);
             }
-            if (mmvq_gate_scratch_) device_free(mmvq_gate_scratch_, queue_, arena_mmvq_gate_scratch_);
-            if (mmvq_up_scratch_)   device_free(mmvq_up_scratch_, queue_, arena_mmvq_up_scratch_);
-            mmvq_gate_scratch_ = static_cast<float *>(device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_gate_scratch_));
-            mmvq_up_scratch_   = static_cast<float *>(device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_up_scratch_));
+            if (mmvq_gate_scratch_) {
+                device_free(mmvq_gate_scratch_, queue_, arena_mmvq_gate_scratch_);
+            }
+            if (mmvq_up_scratch_) {
+                device_free(mmvq_up_scratch_, queue_, arena_mmvq_up_scratch_);
+            }
+            mmvq_gate_scratch_ = static_cast<float *>(
+                device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_gate_scratch_));
+            mmvq_up_scratch_ =
+                static_cast<float *>(device_alloc_scratch(gate_scratch_sz, queue_, device_id_, arena_mmvq_up_scratch_));
             mmvq_gate_scratch_sz_ = gate_scratch_sz;
             // Track new allocations
             if (device_id_ >= 0) {
@@ -9697,20 +9914,20 @@ void UnifiedKernel::record_micro_graph() {
     // (malloc_host, incremented by host each token) tells kernels the valid range.
 
     // Get pointers to the ops table and phase entries (both malloc_host)
-    const DeviceOperation * d_ops = static_cast<const DeviceOperation *>(d_ops_pool_);
+    const DeviceOperation *  d_ops     = static_cast<const DeviceOperation *>(d_ops_pool_);
     const DevicePhaseEntry * d_entries = phase_schedule_.entries;
 
     // Track which Q8 buffer to use and when to re-quantize.
     // Re-quantize whenever the input pointer or K dimension changes.
     // Ping-pong between buf[0] and buf[1] so concurrent reads from a
     // previous quantize don't conflict with a new write.
-    int cur_q8_buf         = 0;
-    int last_q8_K          = 0;       // K dimension of last quantized vector
-    const void * last_q8_input = nullptr; // Input pointer of last quantize
-    int n_quantize_nodes = 0;
-    int n_fallback_nodes = 0;
-    int n_silu_mul_nodes = 0;
-    int n_skipped_phases = 0;
+    int          cur_q8_buf          = 0;
+    int          last_q8_K           = 0;        // K dimension of last quantized vector
+    const void * last_q8_input       = nullptr;  // Input pointer of last quantize
+    int          n_quantize_nodes    = 0;
+    int          n_fallback_nodes    = 0;
+    int          n_silu_mul_nodes    = 0;
+    int          n_skipped_phases    = 0;
     int          n_dedicated_add     = 0;
     int          n_dedicated_mul     = 0;
     int          n_dedicated_rms     = 0;
@@ -9734,7 +9951,10 @@ void UnifiedKernel::record_micro_graph() {
         const int total_tiles = host_phase_tiles_[p];
 
         // Skip empty phases
-        if (phase_start == phase_end || total_tiles == 0) { n_skipped_phases++; continue; }
+        if (phase_start == phase_end || total_tiles == 0) {
+            n_skipped_phases++;
+            continue;
+        }
 
         // ── Check ALL ops in this phase for MMVQ eligibility ──
         // If every op in the phase is an MMVQ-eligible matmul, emit
@@ -9742,19 +9962,18 @@ void UnifiedKernel::record_micro_graph() {
         // generic run_micro_phase kernel for the entire phase.
         // This avoids double-computation in mixed phases.
         const int n_phase_ops = phase_end - phase_start;
-        bool all_mmvq = false;
+        bool      all_mmvq    = false;
 
         if (use_mmvq && n_phase_ops > 0) {
             all_mmvq = true;
             for (int e = phase_start; e < phase_end; e++) {
-                const int op_idx = d_entries[e].op_idx;
-                const DeviceOperation & op = d_ops[op_idx];
-                const auto layout  = static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout);
-                const bool is_soa  = (layout == ggml_sycl_unified::LayoutMode::SOA);
-                const bool is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
-                const bool is_q6_k = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q6_K);
-                if (!is_soa || !(is_q4_0 || is_q6_k) ||
-                    !PersistentTGKernelImpl<BLOCK_SIZE>::is_matmul_op(op.type)) {
+                const int               op_idx  = d_entries[e].op_idx;
+                const DeviceOperation & op      = d_ops[op_idx];
+                const auto              layout  = static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout);
+                const bool              is_soa  = (layout == ggml_sycl_unified::LayoutMode::SOA);
+                const bool              is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
+                const bool              is_q6_k = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q6_K);
+                if (!is_soa || !(is_q4_0 || is_q6_k) || !PersistentTGKernelImpl<BLOCK_SIZE>::is_matmul_op(op.type)) {
                     all_mmvq = false;
                     break;
                 }
@@ -9764,18 +9983,18 @@ void UnifiedKernel::record_micro_graph() {
         if (all_mmvq) {
             // ── Emit MMVQ nodes for each op in this phase ──
             for (int e = phase_start; e < phase_end; e++) {
-                const int op_idx = d_entries[e].op_idx;
-                const DeviceOperation & op = d_ops[op_idx];
-                const bool is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
+                const int               op_idx  = d_entries[e].op_idx;
+                const DeviceOperation & op      = d_ops[op_idx];
+                const bool              is_q4_0 = (op.quant_type == ggml_sycl_unified::QUANT_TYPE_Q4_0);
 
                 // Quantize if needed (input pointer or K changed)
-                const int K = op.K;
+                const int  K          = op.K;
                 const bool need_quant = (op.input != last_q8_input || K != last_q8_K);
 
                 if (need_quant) {
-                    cur_q8_buf = 1 - cur_q8_buf;
+                    cur_q8_buf              = 1 - cur_q8_buf;
                     const float * input_f32 = static_cast<const float *>(op.input);
-                    void * q8_dst = mmvq_q8_bufs_[cur_q8_buf];
+                    void *        q8_dst    = mmvq_q8_bufs_[cur_q8_buf];
                     mmvq_submit_quantize_q8_1_soa(queue_, input_f32, q8_dst, K);
                     n_quantize_nodes++;
                     last_q8_K     = K;
@@ -9783,25 +10002,25 @@ void UnifiedKernel::record_micro_graph() {
                 }
 
                 // Emit MMVQ node(s)
-                const auto op_type  = static_cast<OperationType>(op.type);
-                const int  N        = (op.row_count > 0) ? op.row_count : op.N;
-                const int  N_total  = op.N;
-                const int  row_low  = op.row_start;
-                const void * q8_src = mmvq_q8_bufs_[cur_q8_buf];
+                const auto   op_type = static_cast<OperationType>(op.type);
+                const int    N       = (op.row_count > 0) ? op.row_count : op.N;
+                const int    N_total = op.N;
+                const int    row_low = op.row_start;
+                const void * q8_src  = mmvq_q8_bufs_[cur_q8_buf];
 
                 if (op_type == OperationType::MATMUL_GATE_UP_SILU) {
                     const void * gate_weights = op.weights;
                     const void * up_weights   = op.aux;
-                    float * gate_out = mmvq_gate_scratch_;
-                    float * up_out   = mmvq_up_scratch_;
-                    float * final_out = static_cast<float *>(op.output);
+                    float *      gate_out     = mmvq_gate_scratch_;
+                    float *      up_out       = mmvq_up_scratch_;
+                    float *      final_out    = static_cast<float *>(op.output);
 
                     if (is_q4_0) {
                         mmvq_submit_q4_0_soa(queue_, gate_weights, q8_src, gate_out, K, N, N_total, row_low);
-                        mmvq_submit_q4_0_soa(queue_, up_weights,   q8_src, up_out,   K, N, N_total, row_low);
+                        mmvq_submit_q4_0_soa(queue_, up_weights, q8_src, up_out, K, N, N_total, row_low);
                     } else {
                         mmvq_submit_q6_k_soa(queue_, gate_weights, q8_src, gate_out, K, N, N_total, row_low);
-                        mmvq_submit_q6_k_soa(queue_, up_weights,   q8_src, up_out,   K, N, N_total, row_low);
+                        mmvq_submit_q6_k_soa(queue_, up_weights, q8_src, up_out, K, N, N_total, row_low);
                     }
                     const int intermediate_dim = op.intermediate_dim > 0 ? op.intermediate_dim : N;
                     mmvq_submit_silu_mul(queue_, gate_out, up_out, final_out, intermediate_dim);
@@ -9963,8 +10182,8 @@ void UnifiedKernel::record_micro_graph() {
     mod_graph.end_recording();
 
     // Finalize into executable graph
-    auto exec = mod_graph.finalize();
-    micro_graph_ = std::make_unique<MicroGraphState>(std::move(exec));
+    auto exec          = mod_graph.finalize();
+    micro_graph_       = std::make_unique<MicroGraphState>(std::move(exec));
     micro_graph_valid_ = true;
 
     const int n_dedicated_total = n_dedicated_add + n_dedicated_mul + n_dedicated_rms + n_dedicated_rope +
@@ -10103,21 +10322,22 @@ void UnifiedKernel::execute_persistent() {
     // are resolved fresh each token via begin_plan_update().
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
-        cached_ops_ = current_plan_->operations;
-        cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        cached_ops_                       = current_plan_->operations;
+        cached_temp_device_allocs_        = current_plan_->temp_device_allocs;
         cached_temp_device_alloc_handles_ = current_plan_->temp_device_alloc_handles;
-        cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
+        cached_temp_device_alloc_bytes_   = current_plan_->temp_device_alloc_bytes;
         current_plan_->temp_device_allocs.clear();
         current_plan_->temp_device_alloc_handles.clear();
         current_plan_->temp_device_alloc_bytes = 0;
         // Budget stays reserved — ownership transfers to cached allocs
-        plan_cache_valid_ = true;
+        plan_cache_valid_                      = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
     }
 
     // Free non-cached temp allocs
     if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes,
+                                                   ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
         auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
@@ -10142,12 +10362,12 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     }
 
     // Build the device-side operation table (same as launch_persistent_kernel)
-    const size_t n_ops = current_plan_->operations.size();
+    const size_t                 n_ops = current_plan_->operations.size();
     std::vector<DeviceOperation> host_ops;
     host_ops.reserve(n_ops);
 
     for (size_t i = 0; i < n_ops; i++) {
-        const auto & src = current_plan_->operations[i];
+        const auto &    src = current_plan_->operations[i];
         DeviceOperation dst = {};
 
         dst.type             = static_cast<int>(src.type);
@@ -10207,8 +10427,8 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
         // n_devices is set to 0 to disable in-kernel sync (host manages sync
         // between phases). progress_counter and merge_complete are left null.
         if (split_config_set_ && split_config_.n_devices > 1) {
-            dst.device_idx = split_config_.device_idx;
-            dst.n_devices  = 0;  // Disable in-kernel sync — host handles it
+            dst.device_idx     = split_config_.device_idx;
+            dst.n_devices      = 0;  // Disable in-kernel sync — host handles it
             // Look up per-op metadata for row range adjustment
             const int meta_idx = static_cast<int>(pre_fusion_idx);
             if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {
@@ -10252,11 +10472,12 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
             case OperationType::MATMUL_GATE:
             case OperationType::MATMUL_UP:
             case OperationType::MATMUL_DOWN:
-            case OperationType::MATMUL_GATE_UP_SILU: {
-                dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
-                dst.n_tiles = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
-                break;
-            }
+            case OperationType::MATMUL_GATE_UP_SILU:
+                {
+                    dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
+                    dst.n_tiles   = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
+                    break;
+                }
             case OperationType::ATTENTION_F16:
             case OperationType::ATTENTION_F32:
                 dst.n_tiles = dst.N;
@@ -10277,81 +10498,80 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     // A "phase" runs from phase_start to the next split matmul (inclusive).
     // After each phase, the host dispatches secondary + merge before proceeding.
     struct phase_info {
-        int start;         // First op index in this phase
-        int count;         // Number of ops in this phase
-        int matmul_idx;    // Sequential matmul index (-1 if phase ends without matmul)
+        int start;       // First op index in this phase
+        int count;       // Number of ops in this phase
+        int matmul_idx;  // Sequential matmul index (-1 if phase ends without matmul)
     };
+
     std::vector<phase_info> phases;
-    int phase_start = 0;
-    int matmul_counter = 0;
+    int                     phase_start    = 0;
+    int                     matmul_counter = 0;
 
     for (int i = 0; i < (int) host_ops.size(); i++) {
-        const auto & op = host_ops[i];
-        const auto op_type = static_cast<OperationType>(op.type);
-        const bool is_split_matmul = (op.row_count > 0) &&
-            PersistentTGKernelImpl<256>::is_matmul_op(op.type);
+        const auto & op              = host_ops[i];
+        const auto   op_type         = static_cast<OperationType>(op.type);
+        const bool   is_split_matmul = (op.row_count > 0) && PersistentTGKernelImpl<256>::is_matmul_op(op.type);
 
         if (is_split_matmul) {
             // End current phase at this matmul (inclusive)
-            phases.push_back({phase_start, i - phase_start + 1, matmul_counter});
+            phases.push_back({ phase_start, i - phase_start + 1, matmul_counter });
             matmul_counter++;
             phase_start = i + 1;
         }
     }
     // Trailing ops after the last matmul (if any)
     if (phase_start < (int) host_ops.size()) {
-        phases.push_back({phase_start, (int) host_ops.size() - phase_start, -1});
+        phases.push_back({ phase_start, (int) host_ops.size() - phase_start, -1 });
     }
 
-    GGML_SYCL_DEBUG("[PERSISTENT-TG-PHASED] %d phases, %d split matmuls, %zu total ops\n",
-                    (int) phases.size(), matmul_counter, host_ops.size());
+    GGML_SYCL_DEBUG("[PERSISTENT-TG-PHASED] %d phases, %d split matmuls, %zu total ops\n", (int) phases.size(),
+                    matmul_counter, host_ops.size());
 
     // Kernel launch configuration (same as launch_persistent_kernel)
-    constexpr int BLOCK_SIZE = 256;
-    const bool use_split_barrier = persistent_use_split_barrier();
-    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
-    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;
-    const int slm_floats   = std::max({BLOCK_SIZE / 16,
-                                       current_plan_->hidden_dim,
-                                       attention_slm,
-                                       matmul_slm});
-    const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
-    double total_elapsed_ms = 0.0;
+    constexpr int BLOCK_SIZE        = 256;
+    const bool    use_split_barrier = persistent_use_split_barrier();
+    const int     attention_slm     = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int     matmul_slm        = (BLOCK_SIZE / 16) * 32;
+    const int     slm_floats = std::max({ BLOCK_SIZE / 16, current_plan_->hidden_dim, attention_slm, matmul_slm });
+    const bool    use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
+    double        total_elapsed_ms      = 0.0;
 
     // Execute each phase as a separate kernel launch
     for (const auto & phase : phases) {
         // Copy phase operations to host-pinned pool (kernel reads via PCIe zero-copy)
         if (phase.count > d_ops_pool_size_) {
-            if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+            if (d_ops_pool_) {
+                pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+            }
             pinned_ops_pool_bytes_ = phase.count * sizeof(DeviceOperation);
-            d_ops_pool_ = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
-            d_ops_pool_size_ = d_ops_pool_ ? phase.count : 0;
+            d_ops_pool_            = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+            d_ops_pool_size_       = d_ops_pool_ ? phase.count : 0;
         }
         DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
         std::memcpy(d_ops, &host_ops[phase.start], phase.count * sizeof(DeviceOperation));
 
         // Compute tiles and work-groups for this phase
-        int phase_tiles = 0;
+        int  phase_tiles         = 0;
         bool phase_has_attention = false;
-        bool phase_has_ffn = false;
+        bool phase_has_ffn       = false;
         for (int j = 0; j < phase.count; j++) {
             phase_tiles += host_ops[phase.start + j].n_tiles;
             const auto t = static_cast<OperationType>(host_ops[phase.start + j].type);
             if (t == OperationType::ATTENTION_F16 || t == OperationType::ATTENTION_F32) {
                 phase_has_attention = true;
             }
-            if (t == OperationType::MATMUL_GATE || t == OperationType::MATMUL_UP ||
-                t == OperationType::MATMUL_DOWN || t == OperationType::MATMUL_GATE_UP_SILU) {
+            if (t == OperationType::MATMUL_GATE || t == OperationType::MATMUL_UP || t == OperationType::MATMUL_DOWN ||
+                t == OperationType::MATMUL_GATE_UP_SILU) {
                 phase_has_ffn = true;
             }
         }
-        const int n_workgroups = persistent_num_workgroups(phase_tiles, phase_has_attention,
-                                                           phase_has_ffn, use_split_barrier);
+        const int n_workgroups =
+            persistent_num_workgroups(phase_tiles, phase_has_attention, phase_has_ffn, use_split_barrier);
 
         // Reset sync state before launch (no .wait() needed: in-order queue)
         queue_.memset(sync_block_, 0, 3 * sizeof(int));
 
-        PersistentKernelArgs args = {};
+        PersistentKernelArgs args  = {};
         args.operations            = d_ops;
         args.n_operations          = phase.count;
         args.use_split_barrier     = use_split_barrier ? 1 : 0;
@@ -10370,13 +10590,12 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
             sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-            const auto args_copy = args;
-            cgh.parallel_for(
-                sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
-                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                    PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                    kernel.run();
-                });
+            const auto                     args_copy = args;
+            cgh.parallel_for(sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+                             [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                 PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                                 kernel.run();
+                             });
         });
         queue_.wait();
         const auto end = std::chrono::high_resolution_clock::now();
@@ -10389,10 +10608,12 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     }
 
     // Record stats
-    last_stats_.n_operations   = static_cast<int>(host_ops.size());
-    last_stats_.n_layers       = current_plan_->n_layers;
-    last_stats_.total_tiles    = 0;
-    for (const auto & op : host_ops) last_stats_.total_tiles += op.n_tiles;
+    last_stats_.n_operations = static_cast<int>(host_ops.size());
+    last_stats_.n_layers     = current_plan_->n_layers;
+    last_stats_.total_tiles  = 0;
+    for (const auto & op : host_ops) {
+        last_stats_.total_tiles += op.n_tiles;
+    }
     last_stats_.kernel_time_ms = total_elapsed_ms;
 
     // Cache plan template after first successful execution.
@@ -10402,20 +10623,21 @@ void UnifiedKernel::execute_persistent_phased(phase_callback_t on_matmul_complet
     // are resolved fresh each token via begin_plan_update().
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
-        cached_ops_ = current_plan_->operations;
-        cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        cached_ops_                       = current_plan_->operations;
+        cached_temp_device_allocs_        = current_plan_->temp_device_allocs;
         cached_temp_device_alloc_handles_ = current_plan_->temp_device_alloc_handles;
-        cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
+        cached_temp_device_alloc_bytes_   = current_plan_->temp_device_alloc_bytes;
         current_plan_->temp_device_allocs.clear();
         current_plan_->temp_device_alloc_handles.clear();
         current_plan_->temp_device_alloc_bytes = 0;
-        plan_cache_valid_ = true;
+        plan_cache_valid_                      = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG-PHASED] Plan cached: %zu operations\n", cached_ops_.size());
     }
 
     // Free non-cached temp allocs
     if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes,
+                                                   ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
         auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
@@ -10550,11 +10772,11 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     // Used to remap phase schedule entries after GATE+UP+SILU fusion.
     std::vector<int> plan_to_device(n_ops, -1);
 
-    int total_tiles = 0;
-    bool has_attention = false;
+    int  total_tiles    = 0;
+    bool has_attention  = false;
     bool has_ffn_matmul = false;
     for (size_t i = 0; i < n_ops; i++) {
-        const auto & src = current_plan_->operations[i];
+        const auto &    src = current_plan_->operations[i];
         DeviceOperation dst = {};
 
         dst.type             = static_cast<int>(src.type);
@@ -10619,26 +10841,16 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         // and multi-device split (deadlocks secondary sync).
         // Phase mode remaps op indices after fusion via plan_to_device[].
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        const bool fusion_ok = !split_active && !persistent_dispatch_uses_dag();
+        const bool fusion_ok    = !split_active && !persistent_dispatch_uses_dag();
         if (fusion_ok && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
-            const bool contiguous_chain =
-                (up.type == OperationType::MATMUL_UP) &&
-                (silu.type == OperationType::SILU_MUL) &&
-                (src.layer == up.layer) &&
-                (up.layer == silu.layer) &&
-                (src.input == up.input) &&
-                (src.M == up.M) &&
-                (src.N == up.N) &&
-                (src.K == up.K) &&
-                (src.quant_type == up.quant_type) &&
-                (src.weight_layout == up.weight_layout) &&
-                (silu.input == src.output) &&
-                (silu.aux == up.output) &&
-                (src.weights != nullptr) &&
-                (up.weights != nullptr) &&
-                (silu.output != nullptr);
+            const bool   contiguous_chain =
+                (up.type == OperationType::MATMUL_UP) && (silu.type == OperationType::SILU_MUL) &&
+                (src.layer == up.layer) && (up.layer == silu.layer) && (src.input == up.input) && (src.M == up.M) &&
+                (src.N == up.N) && (src.K == up.K) && (src.quant_type == up.quant_type) &&
+                (src.weight_layout == up.weight_layout) && (silu.input == src.output) && (silu.aux == up.output) &&
+                (src.weights != nullptr) && (up.weights != nullptr) && (silu.output != nullptr);
 
             if (contiguous_chain) {
                 dst.type   = static_cast<int>(OperationType::MATMUL_GATE_UP_SILU);
@@ -10653,12 +10865,12 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         // Use pre_fusion_idx (saved before GATE+UP+SILU fusion incremented i)
         // because op_meta was indexed by the original plan position.
         if (split_config_set_ && split_config_.n_devices > 1) {
-            dst.device_idx        = split_config_.device_idx;
-            dst.n_devices         = split_config_.n_devices;
-            dst.progress_counter  = split_config_.progress_counter;
-            dst.merge_complete    = split_config_.merge_complete;
+            dst.device_idx       = split_config_.device_idx;
+            dst.n_devices        = split_config_.n_devices;
+            dst.progress_counter = split_config_.progress_counter;
+            dst.merge_complete   = split_config_.merge_complete;
             // Look up per-op metadata (sparse: only matmul ops have entries)
-            const int meta_idx = static_cast<int>(pre_fusion_idx);
+            const int meta_idx   = static_cast<int>(pre_fusion_idx);
             if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {
                 const auto & meta = split_config_.op_meta[meta_idx];
                 dst.op_idx        = meta.op_idx;
@@ -10700,20 +10912,19 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             case OperationType::MATMUL_GATE:
             case OperationType::MATMUL_UP:
             case OperationType::MATMUL_DOWN:
-            case OperationType::MATMUL_GATE_UP_SILU: {
-                dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
-                dst.n_tiles = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
-                if (op_type == OperationType::MATMUL_GATE ||
-                    op_type == OperationType::MATMUL_UP ||
-                    op_type == OperationType::MATMUL_DOWN ||
-                    op_type == OperationType::MATMUL_GATE_UP_SILU) {
-                    has_ffn_matmul = true;
+            case OperationType::MATMUL_GATE_UP_SILU:
+                {
+                    dst.tile_cols = persistent_matmul_tile_cols(op_type, effective_N, dst.K);
+                    dst.n_tiles   = (effective_N + dst.tile_cols - 1) / dst.tile_cols;
+                    if (op_type == OperationType::MATMUL_GATE || op_type == OperationType::MATMUL_UP ||
+                        op_type == OperationType::MATMUL_DOWN || op_type == OperationType::MATMUL_GATE_UP_SILU) {
+                        has_ffn_matmul = true;
+                    }
+                    break;
                 }
-                break;
-            }
             case OperationType::ATTENTION_F16:
             case OperationType::ATTENTION_F32:
-                dst.n_tiles = dst.N;  // One tile per head
+                dst.n_tiles   = dst.N;  // One tile per head
                 has_attention = true;
                 break;
             case OperationType::ROPE:
@@ -10728,7 +10939,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         total_tiles += dst.n_tiles;
         // Record plan-to-device index mapping for phase schedule remapping after fusion.
         // pre_fusion_idx = original plan index; i may have advanced past fused-away ops.
-        const int device_idx = static_cast<int>(host_ops_.size());
+        const int device_idx           = static_cast<int>(host_ops_.size());
         plan_to_device[pre_fusion_idx] = device_idx;
         // Mark fused-away ops (UP, SILU_MUL) as -1 in the mapping
         if (i > pre_fusion_idx) {
@@ -10790,19 +11001,20 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             int phase_tile_total = 0;
             for (int e = host_phase_offset_[p]; e < host_phase_offset_[p + 1]; e++) {
                 const int plan_idx = host_phase_entries_[e].op_idx;
-                const int dev_idx = (plan_idx < (int) plan_to_device.size())
-                                        ? plan_to_device[plan_idx] : plan_idx;
-                if (dev_idx < 0) continue;  // Fused away (UP or SILU_MUL)
+                const int dev_idx  = (plan_idx < (int) plan_to_device.size()) ? plan_to_device[plan_idx] : plan_idx;
+                if (dev_idx < 0) {
+                    continue;  // Fused away (UP or SILU_MUL)
+                }
 
                 DevicePhaseEntry entry;
-                entry.op_idx      = dev_idx;
-                entry.tile_offset = phase_tile_total;
+                entry.op_idx         = dev_idx;
+                entry.tile_offset    = phase_tile_total;
                 const int tile_count = (dev_idx < n_device_ops) ? host_n_tiles_[dev_idx] : 1;
                 phase_tile_total += tile_count;
                 remapped_entries.push_back(entry);
             }
             new_phase_offset[p + 1] = static_cast<int>(remapped_entries.size());
-            new_phase_tiles[p] = phase_tile_total;
+            new_phase_tiles[p]      = phase_tile_total;
         }
 
         // Update host-side arrays
@@ -10813,22 +11025,24 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         // Remove empty phases (e.g., phases that only had SILU_MUL ops, now fused away)
         {
             std::vector<DevicePhaseEntry> compacted_entries;
-            std::vector<int> compacted_offset;
-            std::vector<int> compacted_tiles;
+            std::vector<int>              compacted_offset;
+            std::vector<int>              compacted_tiles;
             compacted_offset.push_back(0);
             for (int p = 0; p < n_phases; p++) {
                 const int start = host_phase_offset_[p];
                 const int end   = host_phase_offset_[p + 1];
-                if (start == end) continue;  // Empty phase, skip
+                if (start == end) {
+                    continue;  // Empty phase, skip
+                }
                 for (int e = start; e < end; e++) {
                     compacted_entries.push_back(host_phase_entries_[e]);
                 }
                 compacted_offset.push_back(static_cast<int>(compacted_entries.size()));
                 compacted_tiles.push_back(host_phase_tiles_[p]);
             }
-            host_phase_entries_ = std::move(compacted_entries);
-            host_phase_offset_  = std::move(compacted_offset);
-            host_phase_tiles_   = std::move(compacted_tiles);
+            host_phase_entries_       = std::move(compacted_entries);
+            host_phase_offset_        = std::move(compacted_offset);
+            host_phase_tiles_         = std::move(compacted_tiles);
             phase_schedule_.n_phases  = static_cast<int>(host_phase_tiles_.size());
             phase_schedule_.total_ops = static_cast<int>(host_phase_entries_.size());
         }
@@ -11040,43 +11254,51 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         const int final_n_ops    = phase_schedule_.total_ops;
         if (final_n_ops > phase_pool_n_ops_ || final_n_phases > phase_pool_n_phases_) {
             // Grow host-pinned arrays (rare: only if fusion increased beyond initial allocation)
-            pinned_free(phase_schedule_.entries,      pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
-            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_);
-            pinned_free(phase_schedule_.phase_tiles,  pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_);
-            if (phase_schedule_.phase_type) pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
-            const int alloc_ops    = final_n_ops + 64;
-            const int alloc_phases = final_n_phases + 16;
+            pinned_free(phase_schedule_.entries, pinned_phase_entries_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_offset, pinned_phase_offset_bytes_, queue_, pinned_pool_phase_);
+            pinned_free(phase_schedule_.phase_tiles, pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_);
+            if (phase_schedule_.phase_type) {
+                pinned_free(phase_schedule_.phase_type, pinned_phase_type_bytes_, queue_, pinned_pool_phase_);
+            }
+            const int alloc_ops         = final_n_ops + 64;
+            const int alloc_phases      = final_n_phases + 16;
             pinned_phase_entries_bytes_ = alloc_ops * sizeof(DevicePhaseEntry);
             pinned_phase_offset_bytes_  = (alloc_phases + 1) * sizeof(int);
             pinned_phase_tiles_bytes_   = alloc_phases * sizeof(int);
             pinned_phase_type_bytes_    = alloc_phases * sizeof(int);
-            phase_schedule_.entries      = static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
-            phase_schedule_.phase_offset = static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_,  queue_, pinned_pool_phase_));
-            phase_schedule_.phase_tiles  = static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_,   queue_, pinned_pool_phase_));
-            phase_schedule_.phase_type   = static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_,    queue_, pinned_pool_phase_));
+            phase_schedule_.entries =
+                static_cast<DevicePhaseEntry *>(pinned_alloc(pinned_phase_entries_bytes_, queue_, pinned_pool_phase_));
+            phase_schedule_.phase_offset =
+                static_cast<int *>(pinned_alloc(pinned_phase_offset_bytes_, queue_, pinned_pool_phase_));
+            phase_schedule_.phase_tiles =
+                static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_));
+            phase_schedule_.phase_type =
+                static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_, queue_, pinned_pool_phase_));
             phase_pool_n_ops_    = alloc_ops;
             phase_pool_n_phases_ = alloc_phases;
         }
 
         // Copy to host-pinned buffers (no queue memcpy needed, kernel reads via PCIe zero-copy)
         // Note: phase_type is populated later (after n_workgroups is known for threshold)
-        std::memcpy(phase_schedule_.entries, host_phase_entries_.data(),
-                    final_n_ops * sizeof(DevicePhaseEntry));
-        std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(),
-                    (final_n_phases + 1) * sizeof(int));
+        std::memcpy(phase_schedule_.entries, host_phase_entries_.data(), final_n_ops * sizeof(DevicePhaseEntry));
+        std::memcpy(phase_schedule_.phase_offset, host_phase_offset_.data(), (final_n_phases + 1) * sizeof(int));
         std::memcpy(phase_schedule_.phase_tiles, host_phase_tiles_.data(), final_n_phases * sizeof(int));
 
-        GGML_SYCL_DEBUG("[PERSISTENT-TG] Phase schedule updated after fusion: %d ops, %d phases "
-                        "(from %d plan ops)\n", final_n_ops, final_n_phases, (int) n_ops);
+        GGML_SYCL_DEBUG(
+            "[PERSISTENT-TG] Phase schedule updated after fusion: %d ops, %d phases "
+            "(from %d plan ops)\n",
+            final_n_ops, final_n_phases, (int) n_ops);
     }
 
     // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy, no device memcpy)
     const int n_ops_device = static_cast<int>(host_ops_.size());
     if (n_ops_device > d_ops_pool_size_) {
-        if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        if (d_ops_pool_) {
+            pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        }
         pinned_ops_pool_bytes_ = n_ops_device * sizeof(DeviceOperation);
-        d_ops_pool_ = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
-        d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
+        d_ops_pool_            = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        d_ops_pool_size_       = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
     std::memcpy(d_ops, host_ops_.data(), host_ops_.size() * sizeof(DeviceOperation));
@@ -11093,9 +11315,9 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         cached_total_tiles_   = total_tiles;
         ops_table_valid_      = true;
 
-        last_stats_.n_operations = n_ops_device;
-        last_stats_.n_layers     = current_plan_->n_layers;
-        last_stats_.total_tiles  = total_tiles;
+        last_stats_.n_operations   = n_ops_device;
+        last_stats_.n_layers       = current_plan_->n_layers;
+        last_stats_.total_tiles    = total_tiles;
         last_stats_.kernel_time_ms = 0.0;
         return;
     }
@@ -11106,17 +11328,17 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     build_role_schedule(host_ops_);
 
     // Kernel configuration
-    constexpr int BLOCK_SIZE = 256;
-    const bool use_split_barrier = persistent_use_split_barrier();
-    int n_workgroups;
+    constexpr int BLOCK_SIZE        = 256;
+    const bool    use_split_barrier = persistent_use_split_barrier();
+    int           n_workgroups;
     // Scheduling mode selection: role > phase > dag > legacy barriers
     // Role mode: split WGs into elementwise + matmul roles with atomic flag sync (fastest)
     // Phase mode: pre-computed topological levels with O(1) tile claiming (default when available)
     // DAG mode: per-op atomic dependency counters (fallback)
     // Legacy: device-scope barriers (slowest, set GGML_SYCL_PERSISTENT_TG_DAG=0)
-    bool use_role_mode = role_allocated_ && !host_elem_segments_.empty() && !host_matmul_segments_.empty();
-    bool use_phase_mode = phase_allocated_;
-    bool use_dag_mode = dag_allocated_;
+    bool          use_role_mode  = role_allocated_ && !host_elem_segments_.empty() && !host_matmul_segments_.empty();
+    bool          use_phase_mode = phase_allocated_;
+    bool          use_dag_mode   = dag_allocated_;
     // Role mode: opt-in via GGML_SYCL_PERSISTENT_TG_ROLE=1 (default OFF, experimental).
     // Also disabled for multi-device split (role sync not yet compatible with cross-device merge).
     if (use_role_mode) {
@@ -11126,18 +11348,18 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             role_env_checked = (env != nullptr && std::strcmp(env, "1") == 0) ? 1 : 0;
         }
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        use_role_mode = (role_env_checked == 1) && !split_active;
+        use_role_mode           = (role_env_checked == 1) && !split_active;
     }
     if (use_role_mode) {
         // Role mode supersedes all other modes
         use_phase_mode = false;
-        use_dag_mode = false;
+        use_dag_mode   = false;
     } else {
         if (use_phase_mode) {
             // Phase mode is default when available. Set GGML_SYCL_PERSISTENT_TG_PHASE=0 to disable.
             static int phase_env_checked = -1;
             if (phase_env_checked < 0) {
-                const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
+                const char * env  = std::getenv("GGML_SYCL_PERSISTENT_TG_PHASE");
                 phase_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
             }
             use_phase_mode = (phase_env_checked != 0);
@@ -11148,7 +11370,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             static int dag_env_checked = -1;
             if (dag_env_checked < 0) {
                 const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
-                dag_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+                dag_env_checked  = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
             }
             use_dag_mode = (dag_env_checked != 0);
         }
@@ -11160,30 +11382,30 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         // Default n_elem=1: most elementwise ops have 1 tile (RMS_NORM, MUL, ADD, ROPE, SOFTMAX),
         // so multi-WG parallelism adds overhead without benefit. The performance win comes from
         // dedicating maximum WGs to the compute-heavy matmul role.
-        n_elem_wgs = 1;   // Default: 1 elementwise WG (sufficient for 1-tile ops)
+        n_elem_wgs       = 1;   // Default: 1 elementwise WG (sufficient for 1-tile ops)
         int n_matmul_wgs = 40;  // Default: 40 matmul WGs
 
         // Allow env var overrides
         if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_N_ELEM_WGS")) {
-            char * end = nullptr;
+            char *     end    = nullptr;
             const long parsed = std::strtol(env, &end, 10);
             if (end && end != env && parsed > 0 && parsed <= 32) {
                 n_elem_wgs = static_cast<int>(parsed);
             }
         }
         if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_N_MATMUL_WGS")) {
-            char * end = nullptr;
+            char *     end    = nullptr;
             const long parsed = std::strtol(env, &end, 10);
             if (end && end != env && parsed > 0 && parsed <= 512) {
                 n_matmul_wgs = static_cast<int>(parsed);
             }
         }
-        n_workgroups = n_elem_wgs + n_matmul_wgs;
+        n_workgroups              = n_elem_wgs + n_matmul_wgs;
         role_schedule_.n_elem_wgs = n_elem_wgs;
     } else if (use_phase_mode || use_dag_mode) {
         // Phase/DAG mode: WG count scales with GPU size.
         try {
-            const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+            const int max_cu = (int) queue_.get_device().get_info<sycl::info::device::max_compute_units>();
             // Optimal WG count balances matmul tile parallelism against
             // barrier overhead. Benchmarked on Arc B580 (160 CUs):
             //   8 WGs: 13.3 tok/s  (starved)
@@ -11195,12 +11417,12 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             //  44 WGs: 34.8 tok/s
             //  48 WGs: 34.0 tok/s
             //  64 WGs: 29.6 tok/s
-            n_workgroups = std::clamp(max_cu / 4, 4, 64);
+            n_workgroups     = std::clamp(max_cu / 4, 4, 64);
         } catch (...) {
             n_workgroups = 16;
         }
         if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
-            char * end = nullptr;
+            char *     end    = nullptr;
             const long parsed = std::strtol(env_wgs, &end, 10);
             if (end && end != env_wgs && parsed > 0 && parsed <= 128) {
                 n_workgroups = static_cast<int>(parsed);
@@ -11209,26 +11431,22 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     } else {
         n_workgroups = persistent_num_workgroups(total_tiles, has_attention, has_ffn_matmul, use_split_barrier);
     }
-    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
-    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;      // SG lanes x Q4_0 block cache
-    const int slm_floats   = std::max({BLOCK_SIZE / 16,               // At least n_warps for reduction
-                                       current_plan_->hidden_dim,      // For RMS norm
-                                       attention_slm,                  // For attention tile
-                                       matmul_slm});                   // For matmul activation staging
+    const int  attention_slm         = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int  matmul_slm            = (BLOCK_SIZE / 16) * 32;                // SG lanes x Q4_0 block cache
+    const int  slm_floats            = std::max({ BLOCK_SIZE / 16,            // At least n_warps for reduction
+                                                  current_plan_->hidden_dim,  // For RMS norm
+                                                  attention_slm,              // For attention tile
+                                                  matmul_slm });              // For matmul activation staging
     const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
     if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
         if (std::atoi(log_policy) != 0) {
-            GGML_LOG_INFO("[PERSISTENT-TG] policy: role=%d(elem=%d,mm=%d,sync=%d) phase=%d dag=%d split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
-                    use_role_mode ? 1 : 0,
-                    use_role_mode ? n_elem_wgs : 0,
-                    use_role_mode ? (n_workgroups - n_elem_wgs) : 0,
-                    use_role_mode ? role_schedule_.n_sync_points : 0,
-                    use_phase_mode ? 1 : 0,
-                    use_dag_mode ? 1 : 0,
-                    use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
-                    has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
-                    use_attn_subgroup_dot ? 1 : 0,
-                    persistent_aggressive_wg_policy_enabled() ? 1 : 0);
+            GGML_LOG_INFO(
+                "[PERSISTENT-TG] policy: role=%d(elem=%d,mm=%d,sync=%d) phase=%d dag=%d split=%d n_wgs=%d tiles=%d "
+                "has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+                use_role_mode ? 1 : 0, use_role_mode ? n_elem_wgs : 0, use_role_mode ? (n_workgroups - n_elem_wgs) : 0,
+                use_role_mode ? role_schedule_.n_sync_points : 0, use_phase_mode ? 1 : 0, use_dag_mode ? 1 : 0,
+                use_split_barrier ? 1 : 0, n_workgroups, total_tiles, has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
+                use_attn_subgroup_dot ? 1 : 0, persistent_aggressive_wg_policy_enabled() ? 1 : 0);
         }
     }
 
@@ -11258,14 +11476,16 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     static const int light_threshold = [] {
         if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_LIGHT_THRESHOLD")) {
             const int v = std::atoi(env);
-            if (v > 0) return v;
+            if (v > 0) {
+                return v;
+            }
         }
         return 0;  // 0 means auto (N_WGS/2 at runtime)
     }();
 
     if (use_phase_mode && light_barriers_enabled) {
-        const int n_final_phases = phase_schedule_.n_phases;
-        const bool split_active = split_config_set_ && split_config_.n_devices > 1;
+        const int  n_final_phases = phase_schedule_.n_phases;
+        const bool split_active   = split_config_set_ && split_config_.n_devices > 1;
         host_phase_type_.resize(n_final_phases);
 
         int n_light = 0, n_heavy = 0;
@@ -11294,23 +11514,24 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                                                            ggml_sycl::runtime_category::GRAPH);
                 runtime_tracked_bytes_ -= light_flags_size_ * sizeof(int);
             }
-            if (light_flags_) device_free(light_flags_, queue_, arena_light_flags_);
+            if (light_flags_) {
+                device_free(light_flags_, queue_, arena_light_flags_);
+            }
             const int alloc_size = n_final_phases + 16;
-            light_flags_      = static_cast<int *>(device_alloc_persistent(alloc_size * sizeof(int), queue_, device_id_, arena_light_flags_));
+            light_flags_         = static_cast<int *>(
+                device_alloc_persistent(alloc_size * sizeof(int), queue_, device_id_, arena_light_flags_));
             light_flags_size_ = alloc_size;
             // Track new allocation
             if (device_id_ >= 0) {
                 const size_t light_bytes = alloc_size * sizeof(int);
-                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, light_bytes,
-                                                           ggml_sycl::runtime_category::GRAPH);
+                ggml_sycl::unified_cache_add_runtime_bytes(device_id_, light_bytes, ggml_sycl::runtime_category::GRAPH);
                 runtime_tracked_bytes_ += light_bytes;
             }
         }
 
         // Copy phase_type to host-pinned buffer
         if (phase_schedule_.phase_type && n_final_phases > 0) {
-            std::memcpy(phase_schedule_.phase_type, host_phase_type_.data(),
-                        n_final_phases * sizeof(int));
+            std::memcpy(phase_schedule_.phase_type, host_phase_type_.data(), n_final_phases * sizeof(int));
         }
 
         {
@@ -11320,8 +11541,7 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                 fprintf(stderr,
                         "[PERSISTENT-TG] Light barriers: %d LIGHT + %d HEAVY "
                         "= %d phases (threshold=%d, n_wgs=%d)\n",
-                        n_light, n_heavy, n_final_phases,
-                        (light_threshold > 0) ? light_threshold : (n_workgroups / 2),
+                        n_light, n_heavy, n_final_phases, (light_threshold > 0) ? light_threshold : (n_workgroups / 2),
                         n_workgroups);
             }
         }
@@ -11329,12 +11549,12 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
 
     // Two-tier light barriers: enabled when phase mode is active and at least one
     // phase is classified as LIGHT.
-    const bool use_light_barriers = use_phase_mode && light_barriers_enabled &&
-        light_flags_ != nullptr &&
+    const bool use_light_barriers =
+        use_phase_mode && light_barriers_enabled && light_flags_ != nullptr &&
         std::any_of(host_phase_type_.begin(), host_phase_type_.end(), [](int t) { return t == 1; });
 
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
-        const bool use_dag = use_dag_mode;
+        const bool use_dag  = use_dag_mode;
         const bool use_role = use_role_mode;
 
         if (use_role) {
@@ -11366,27 +11586,27 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             queue_.memset(sync_block_, 0, 3 * sizeof(int));
         }
 
-        PersistentKernelArgs args = {};
-        args.operations           = operations;
-        args.n_operations         = operation_count;
-        args.use_split_barrier    = use_split_barrier ? 1 : 0;
+        PersistentKernelArgs args  = {};
+        args.operations            = operations;
+        args.n_operations          = operation_count;
+        args.use_split_barrier     = use_split_barrier ? 1 : 0;
         args.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
-        args.tile_counter         = tile_counter_;
-        args.barrier_counter      = barrier_counter_;
-        args.barrier_sense        = barrier_sense_;
+        args.tile_counter          = tile_counter_;
+        args.barrier_counter       = barrier_counter_;
+        args.barrier_sense         = barrier_sense_;
         for (int i = 0; i < 4; i++) {
             args.scratch_buffers[i] = persistent_buffers_[i];
         }
-        args.hidden_dim       = current_plan_->hidden_dim;
-        args.intermediate_dim = current_plan_->intermediate_dim;
-        args.dag              = dag_state_;
-        args.use_dag          = use_dag ? 1 : 0;
-        args.phase            = phase_schedule_;
-        args.use_phase        = use_phase_mode ? 1 : 0;
-        args.n_workgroups     = n_workgroups;
-        args.role             = role_schedule_;
-        args.use_role         = use_role ? 1 : 0;
-        args.light_flags      = use_light_barriers ? light_flags_ : nullptr;
+        args.hidden_dim         = current_plan_->hidden_dim;
+        args.intermediate_dim   = current_plan_->intermediate_dim;
+        args.dag                = dag_state_;
+        args.use_dag            = use_dag ? 1 : 0;
+        args.phase              = phase_schedule_;
+        args.use_phase          = use_phase_mode ? 1 : 0;
+        args.n_workgroups       = n_workgroups;
+        args.role               = role_schedule_;
+        args.use_role           = use_role ? 1 : 0;
+        args.light_flags        = use_light_barriers ? light_flags_ : nullptr;
         args.use_light_barriers = use_light_barriers ? 1 : 0;
         {
             static int skip_env_checked = -1;
@@ -11399,41 +11619,39 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
             sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-            const auto args_copy = args;
-            cgh.parallel_for(
-                sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
-                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                    PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                    if (args_copy.use_role) {
-                        kernel.run_role_specialized();
-                    } else if (args_copy.use_phase) {
-                        kernel.run_phase();
-                    } else if (args_copy.use_dag) {
-                        kernel.run_dag();
-                    } else {
-                        kernel.run();
-                    }
-                });
+            const auto                     args_copy = args;
+            cgh.parallel_for(sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+                             [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                                 PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                                 if (args_copy.use_role) {
+                                     kernel.run_role_specialized();
+                                 } else if (args_copy.use_phase) {
+                                     kernel.run_phase();
+                                 } else if (args_copy.use_dag) {
+                                     kernel.run_dag();
+                                 } else {
+                                     kernel.run();
+                                 }
+                             });
         });
         queue_.wait();
         const auto end = std::chrono::high_resolution_clock::now();
         return std::chrono::duration<double, std::milli>(end - start).count();
     };
 
-    const bool profile_exec_by_op =
-        (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_EXEC_BY_OP") != nullptr);
-    int profile_exec_iters = 1;
+    const bool profile_exec_by_op = (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_EXEC_BY_OP") != nullptr);
+    int        profile_exec_iters = 1;
     if (const char * env_iters = std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_EXEC_ITERS")) {
-        char * end = nullptr;
+        char *     end    = nullptr;
         const long parsed = std::strtol(env_iters, &end, 10);
         if (end && end != env_iters && parsed > 0 && parsed <= 16) {
             profile_exec_iters = static_cast<int>(parsed);
         }
     }
     if (profile_exec_by_op) {
-        constexpr int kTypeCount = static_cast<int>(OperationType::SOFTMAX) + 1;
+        constexpr int                                        kTypeCount = static_cast<int>(OperationType::SOFTMAX) + 1;
         std::array<std::vector<DeviceOperation>, kTypeCount> ops_by_type;
-        std::array<int, kTypeCount> tiles_by_type = {};
+        std::array<int, kTypeCount>                          tiles_by_type = {};
 
         for (const auto & op : host_ops_) {
             const int idx = op.type;
@@ -11444,15 +11662,14 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
             tiles_by_type[idx] += op.n_tiles;
         }
 
-        GGML_LOG_INFO("[PERSISTENT-TG] execute profile by-op: iters=%d n_wgs=%d\n",
-                      profile_exec_iters, n_workgroups);
+        GGML_LOG_INFO("[PERSISTENT-TG] execute profile by-op: iters=%d n_wgs=%d\n", profile_exec_iters, n_workgroups);
         for (int idx = 0; idx < kTypeCount; ++idx) {
             if (ops_by_type[idx].empty()) {
                 continue;
             }
 
-            bool   profile_from_pool = false;
-            size_t profile_alloc_bytes = ops_by_type[idx].size() * sizeof(DeviceOperation);
+            bool              profile_from_pool   = false;
+            size_t            profile_alloc_bytes = ops_by_type[idx].size() * sizeof(DeviceOperation);
             DeviceOperation * d_ops_subset =
                 static_cast<DeviceOperation *>(pinned_alloc(profile_alloc_bytes, queue_, profile_from_pool));
             if (!d_ops_subset) {
@@ -11460,20 +11677,18 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
                               persistent_op_type_name(static_cast<OperationType>(idx)));
                 continue;
             }
-            std::memcpy(d_ops_subset, ops_by_type[idx].data(),
-                         ops_by_type[idx].size() * sizeof(DeviceOperation));
+            std::memcpy(d_ops_subset, ops_by_type[idx].data(), ops_by_type[idx].size() * sizeof(DeviceOperation));
 
             double total_ms = 0.0;
             for (int it = 0; it < profile_exec_iters; ++it) {
                 total_ms += run_persistent_kernel(d_ops_subset, static_cast<int>(ops_by_type[idx].size()));
             }
             const double avg_ms = total_ms / (double) profile_exec_iters;
-            GGML_LOG_INFO("[PERSISTENT-TG] execute profile op=%s ops=%zu tiles=%d "
-                          "avg_ms=%.3f total_ms=%.3f\n",
-                          persistent_op_type_name(static_cast<OperationType>(idx)),
-                          ops_by_type[idx].size(),
-                          tiles_by_type[idx],
-                          avg_ms, total_ms);
+            GGML_LOG_INFO(
+                "[PERSISTENT-TG] execute profile op=%s ops=%zu tiles=%d "
+                "avg_ms=%.3f total_ms=%.3f\n",
+                persistent_op_type_name(static_cast<OperationType>(idx)), ops_by_type[idx].size(), tiles_by_type[idx],
+                avg_ms, total_ms);
 
             pinned_free(d_ops_subset, profile_alloc_bytes, queue_, profile_from_pool);
         }
@@ -11483,10 +11698,10 @@ void UnifiedKernel::launch_persistent_kernel(bool build_only) {
     double elapsed_ms = run_persistent_kernel(d_ops, n_ops_device);
 
     // Record stats
-    last_stats_.n_operations         = n_ops_device;
-    last_stats_.n_layers             = current_plan_->n_layers;
-    last_stats_.total_tiles          = total_tiles;
-    last_stats_.kernel_time_ms       = elapsed_ms;
+    last_stats_.n_operations   = n_ops_device;
+    last_stats_.n_layers       = current_plan_->n_layers;
+    last_stats_.total_tiles    = total_tiles;
+    last_stats_.kernel_time_ms = elapsed_ms;
 
     // Device ops table is pooled — no per-call free needed
 }
@@ -11562,7 +11777,7 @@ void UnifiedKernel::launch_persistent_kernel_async() {
         // or when DAG dispatch mode is active (fusion changes op count but DAG
         // topology uses plan op indices — mismatch causes hang).
         const bool split_active = split_config_set_ && split_config_.n_devices > 1;
-        const bool fusion_ok = !split_active && !persistent_dispatch_uses_dag();
+        const bool fusion_ok    = !split_active && !persistent_dispatch_uses_dag();
         if (fusion_ok && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
@@ -11655,10 +11870,12 @@ void UnifiedKernel::launch_persistent_kernel_async() {
     // Copy operation table to host-pinned pool (kernel reads via PCIe zero-copy)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
-        if (d_ops_pool_) pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        if (d_ops_pool_) {
+            pinned_free(d_ops_pool_, pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        }
         pinned_ops_pool_bytes_ = n_ops_device * sizeof(DeviceOperation);
-        d_ops_pool_      = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
-        d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
+        d_ops_pool_            = pinned_alloc(pinned_ops_pool_bytes_, queue_, pinned_pool_ops_);
+        d_ops_pool_size_       = d_ops_pool_ ? n_ops_device : 0;
     }
     DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
     std::memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation));
@@ -11767,95 +11984,95 @@ void UnifiedKernel::matmul(const ggml_sycl_unified::UnifiedKernelArgs & args) {
 }
 
 void UnifiedKernel::rms_norm(const RmsNormDescriptor & desc) {
-    const int hidden_dim = desc.hidden_dim;
-    const float eps = desc.eps;
-    const float * input = static_cast<const float *>(desc.input);
-    const float * weights = static_cast<const float *>(desc.weights);
-    float * output = static_cast<float *>(desc.output);
+    const int     hidden_dim = desc.hidden_dim;
+    const float   eps        = desc.eps;
+    const float * input      = static_cast<const float *>(desc.input);
+    const float * weights    = static_cast<const float *>(desc.weights);
+    float *       output     = static_cast<float *>(desc.output);
 
     const int block_size = 256;
-    const int sg_size = 16;  // Intel XMX subgroup size
-    const int n_warps = block_size / sg_size;
+    const int sg_size    = 16;  // Intel XMX subgroup size
+    const int n_warps    = block_size / sg_size;
 
     queue_.submit([&](sycl::handler & cgh) {
         sycl::local_accessor<float, 1> slm_reduce(n_warps, cgh);
 
-        cgh.parallel_for(
-            sycl::nd_range<1>(block_size, block_size),
-            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                const int tid = item.get_local_id(0);
-                auto sg = item.get_sub_group();
-                const int warp_id = sg.get_group_linear_id();
-                const int lane_id = sg.get_local_linear_id();
+        cgh.parallel_for(sycl::nd_range<1>(block_size, block_size),
+                         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                             const int tid     = item.get_local_id(0);
+                             auto      sg      = item.get_sub_group();
+                             const int warp_id = sg.get_group_linear_id();
+                             const int lane_id = sg.get_local_linear_id();
 
-                // Phase 1: Compute sum of squares
-                float sum_sq = 0.0f;
-                for (int i = tid; i < hidden_dim; i += block_size) {
-                    float val = input[i];
-                    sum_sq += val * val;
-                }
+                             // Phase 1: Compute sum of squares
+                             float sum_sq = 0.0f;
+                             for (int i = tid; i < hidden_dim; i += block_size) {
+                                 float val = input[i];
+                                 sum_sq += val * val;
+                             }
 
-                // Phase 2: Subgroup reduction
-                sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+                             // Phase 2: Subgroup reduction
+                             sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
 
-                // Phase 3: Cross-subgroup reduction via SLM
-                if (lane_id == 0) {
-                    slm_reduce[warp_id] = sum_sq;
-                }
-                sycl::group_barrier(item.get_group());
+                             // Phase 3: Cross-subgroup reduction via SLM
+                             if (lane_id == 0) {
+                                 slm_reduce[warp_id] = sum_sq;
+                             }
+                             sycl::group_barrier(item.get_group());
 
-                if (warp_id == 0) {
-                    sum_sq = (lane_id < n_warps) ? slm_reduce[lane_id] : 0.0f;
-                    sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
-                    if (lane_id == 0) {
-                        slm_reduce[0] = sum_sq;
-                    }
-                }
-                sycl::group_barrier(item.get_group());
+                             if (warp_id == 0) {
+                                 sum_sq = (lane_id < n_warps) ? slm_reduce[lane_id] : 0.0f;
+                                 sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+                                 if (lane_id == 0) {
+                                     slm_reduce[0] = sum_sq;
+                                 }
+                             }
+                             sycl::group_barrier(item.get_group());
 
-                // Phase 4: Normalize
-                const float rms = sycl::sqrt(slm_reduce[0] / hidden_dim + eps);
-                const float scale = 1.0f / rms;
+                             // Phase 4: Normalize
+                             const float rms   = sycl::sqrt(slm_reduce[0] / hidden_dim + eps);
+                             const float scale = 1.0f / rms;
 
-                for (int i = tid; i < hidden_dim; i += block_size) {
-                    output[i] = input[i] * scale * weights[i];
-                }
-            });
+                             for (int i = tid; i < hidden_dim; i += block_size) {
+                                 output[i] = input[i] * scale * weights[i];
+                             }
+                         });
     });
 }
 
 void UnifiedKernel::rope(const RopeDescriptor & desc) {
     // Stub - will be implemented later
-    (void)desc;
+    (void) desc;
 }
 
 void UnifiedKernel::silu_mul(const void * gate, const void * up, void * output, int dim) {
-    const float * gate_f = static_cast<const float *>(gate);
-    const float * up_f = static_cast<const float *>(up);
-    float * output_f = static_cast<float *>(output);
+    const float * gate_f   = static_cast<const float *>(gate);
+    const float * up_f     = static_cast<const float *>(up);
+    float *       output_f = static_cast<float *>(output);
 
     const int block_size = 256;
-    const int n_blocks = (dim + block_size - 1) / block_size;
+    const int n_blocks   = (dim + block_size - 1) / block_size;
 
     queue_.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
-            sycl::nd_range<1>(n_blocks * block_size, block_size),
-            [=](sycl::nd_item<1> item) {
-                const int gid = item.get_global_id(0);
+        cgh.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size), [=](sycl::nd_item<1> item) {
+            const int gid = item.get_global_id(0);
 
-                if (gid < dim) {
-                    const float g = gate_f[gid];
-                    const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
-                    const float silu_g = g * sigmoid_g;
-                    output_f[gid] = silu_g * up_f[gid];
-                }
-            });
+            if (gid < dim) {
+                const float g         = gate_f[gid];
+                const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+                const float silu_g    = g * sigmoid_g;
+                output_f[gid]         = silu_g * up_f[gid];
+            }
+        });
     });
 }
 
 void UnifiedKernel::softmax(const void * input, void * output, int n, int stride) {
     // Stub - will be implemented later
-    (void)input; (void)output; (void)n; (void)stride;
+    (void) input;
+    (void) output;
+    (void) n;
+    (void) stride;
 }
 
 }  // namespace ggml_sycl

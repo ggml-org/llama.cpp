@@ -134,14 +134,14 @@ enum class multi_gpu_mode : uint8_t {
 
 // Explicit planner inputs used for KV sizing and placement.
 struct placement_kv_info {
-    uint32_t n_layer          = 0;
-    uint32_t n_embd_k_gqa     = 0;
-    uint32_t n_embd_v_gqa     = 0;
-    uint32_t n_ctx            = 0;
-    bool     n_ctx_is_runtime = false;
+    uint32_t          n_layer          = 0;
+    uint32_t          n_embd_k_gqa     = 0;
+    uint32_t          n_embd_v_gqa     = 0;
+    uint32_t          n_ctx            = 0;
+    bool              n_ctx_is_runtime = false;
     // SWA (Sliding Window Attention) — 0 means all layers use full attention
-    uint32_t n_swa            = 0;
-    uint32_t n_swa_layers     = 0;
+    uint32_t          n_swa            = 0;
+    uint32_t          n_swa_layers     = 0;
     // Per-layer SWA flag: swa_layer_mask[il] == true means layer il uses SWA.
     // Empty when n_swa_layers == 0 (all layers use full attention).
     std::vector<bool> swa_layer_mask;
@@ -194,6 +194,11 @@ struct placement_plan {
     size_t                       kv_per_layer             = 0;
     uint32_t                     planner_n_ctx            = 0;
     bool                         planner_n_ctx_is_runtime = false;
+    size_t                       host_zone_weight_bytes   = 0;
+    size_t                       host_zone_kv_bytes       = 0;
+    size_t                       host_zone_staging_bytes  = 0;
+    size_t                       host_zone_scratch_bytes  = 0;
+    size_t                       max_tensor_bytes         = 0;
 
     // Per-device VRAM usage (multi-device only, indexed by position in devices vector)
     std::vector<int>    devices;          // Device IDs participating in this plan
@@ -706,6 +711,8 @@ struct host_cache_entry {
     bool                  pinned       = false;
     bool                  owns_ptr     = true;
     bool                  pinned_alloc = false;  // true if allocated via sycl::malloc_host
+    bool                  zone_managed = false;
+    host_zone_id          zone         = host_zone_id::COUNT;
     cache_location        location     = cache_location::HOST_PINNED;
     cache_layout_xmx_info xmx_info     = {};
 };
@@ -717,7 +724,16 @@ class host_cache {
     ~host_cache();
 
     void * allocate_pinned_runtime(size_t size, size_t alignment = 64);
-    void   free_pinned_runtime(void * ptr, size_t size);
+    [[deprecated("use host_zone_reset() or zone-managed lifetime instead")]] void free_pinned_runtime(void * ptr,
+                                                                                                      size_t size);
+    void * host_zone_alloc(host_zone_id zone, size_t size, size_t alignment = 64);
+    void   host_zone_reset(host_zone_id zone);
+    size_t host_zone_used(host_zone_id zone) const;
+    size_t host_zone_capacity(host_zone_id zone) const;
+    void   configure_host_zones(size_t weight_bytes, size_t kv_bytes, size_t staging_bytes, size_t scratch_bytes);
+    bool   host_zones_configured() const;
+
+    size_t pinned_pool_budget() const { return pinned_pool_ ? pinned_pool_->budget() : 0; }
 
     // Check if a pointer belongs to the pinned pool (for free routing).
     bool contains_pinned(const void * ptr) const;
@@ -1057,12 +1073,12 @@ class unified_cache {
     const weight_entry * lookup_expert(ggml_sycl_cache_id key) const;
 
     // Register a host-arena pointer directly as a HOST_PINNED expert entry.
-    // ptr must be sycl::malloc_host memory (e.g. from host_weight_arena_alloc).
+    // ptr must be host-pinned memory (typically from host_zone_alloc(WEIGHT)).
     // No zone_alloc, no device copy.  Used by S1-PRELOAD for host-planned experts.
     void register_host_expert(ggml_sycl_cache_id key, void * ptr, size_t size, ggml_layout_mode layout);
 
     // Register a host-arena pointer directly as a HOST_PINNED dense weight entry.
-    // ptr must be sycl::malloc_host memory (e.g. from host_weight_arena_alloc).
+    // ptr must be host-pinned memory (typically from host_zone_alloc(WEIGHT)).
     // No zone_alloc, no device copy.  Used by S1-PRELOAD for host-planned dense weights.
     void register_host_weight(ggml_sycl_cache_id key, void * ptr, size_t size, ggml_layout_mode layout);
 
@@ -1724,13 +1740,6 @@ class unified_cache {
 
     size_t scratch_pool_hwm() const { return scratch_pool_hwm_; }
 
-    // === Host Weight Arena ===
-    bool   host_weight_arena_reserve(size_t bytes);
-    void * host_weight_arena_alloc(size_t bytes);
-    bool   host_weight_arena_active() const { return host_weight_arena_ptr_ != nullptr; }
-    size_t host_weight_arena_capacity() const { return host_weight_arena_size_; }
-    size_t host_weight_arena_used() const { return host_weight_arena_off_.load(std::memory_order_relaxed); }
-
     // === Expert Allocation ===
     // Allocates from the expert portion of the cache budget.  Falls back to
     // host-pinned when VRAM is full.  Tracked separately for diagnostics.
@@ -1866,12 +1875,6 @@ class unified_cache {
     size_t              compute_arena_size_ = 0;
     std::atomic<size_t> compute_arena_off_{ 0 };
 
-    // Host weight arena: single sycl::malloc_host for host-planned weights.
-    // Bump-allocated during S1-PRELOAD, persistent for model lifetime.
-    void *              host_weight_arena_ptr_  = nullptr;
-    size_t              host_weight_arena_size_ = 0;
-    std::atomic<size_t> host_weight_arena_off_{ 0 };
-
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;
     size_t     staging_size_ = 0;
@@ -1924,9 +1927,11 @@ class unified_cache {
     // Track pointers returned by allocate() so deallocate() knows whether
     // the pointer is device or host-pinned and which budget to adjust.
     struct managed_alloc_entry {
-        size_t         size      = 0;
-        bool           on_device = false;
-        alloc_lifetime lifetime  = alloc_lifetime::SCRATCH;
+        size_t         size             = 0;
+        bool           on_device        = false;
+        bool           uses_pinned_pool = false;
+        host_zone_id   host_zone        = host_zone_id::COUNT;
+        alloc_lifetime lifetime         = alloc_lifetime::SCRATCH;
     };
 
     std::unordered_map<void *, managed_alloc_entry> managed_allocs_;
@@ -2688,6 +2693,11 @@ bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 void * unified_cache_get_scratch(int device_id, size_t size);
 void   unified_cache_return_scratch(int device_id, void * ptr, size_t size);
 void   unified_cache_reset_scratch_pool(int device_id);
+
+void * unified_cache_host_zone_alloc(host_zone_id zone, size_t size);
+void   unified_cache_host_zone_reset(host_zone_id zone);
+size_t unified_cache_host_zone_used(host_zone_id zone);
+size_t unified_cache_host_zone_capacity(host_zone_id zone);
 
 // Allocate from expert budget (or host fallback).
 unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size);

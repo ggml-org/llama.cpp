@@ -1030,8 +1030,7 @@ unified_cache::~unified_cache() {
         }
         // Abandon arena without calling sycl::free — context is invalid.
         arena_abandon();
-        compute_arena_ptr_     = nullptr;
-        host_weight_arena_ptr_ = nullptr;
+        compute_arena_ptr_ = nullptr;
         return;
     }
 
@@ -1046,8 +1045,7 @@ unified_cache::~unified_cache() {
         if (layout_pool_) {
             layout_pool_->abandon();
         }
-        compute_arena_ptr_     = nullptr;
-        host_weight_arena_ptr_ = nullptr;
+        compute_arena_ptr_ = nullptr;
         return;
     }
 
@@ -1088,13 +1086,6 @@ unified_cache::~unified_cache() {
     scratch_pool_ptr_  = nullptr;
     scratch_pool_size_ = 0;
     scratch_pool_off_.store(0, std::memory_order_relaxed);
-
-    // Free host weight arena (sycl::malloc_host, model lifetime).
-    if (host_weight_arena_ptr_) {
-        try { sycl::free(host_weight_arena_ptr_, queue_); } catch (...) {}
-        host_weight_arena_ptr_  = nullptr;
-        host_weight_arena_size_ = 0;
-    }
 
     // Free oneDNN scratch buffers BEFORE arena destroy (vram_owns() needs live arena).
     if (onednn_weights_scratch_) {
@@ -1443,6 +1434,9 @@ void * host_cache::allocate_pinned_runtime(size_t size, size_t alignment) {
     if (!pinned_pool_) {
         return nullptr;
     }
+    if (pinned_pool_->zones_configured()) {
+        return nullptr;
+    }
     return pinned_pool_->allocate(size, alignment);
 }
 
@@ -1450,7 +1444,54 @@ void host_cache::free_pinned_runtime(void * ptr, size_t size) {
     if (!pinned_pool_ || !ptr || size == 0) {
         return;
     }
+    if (pinned_pool_->zones_configured()) {
+        return;
+    }
     pinned_pool_->deallocate(ptr, size);
+}
+
+void * host_cache::host_zone_alloc(host_zone_id zone, size_t size, size_t alignment) {
+    if (!pinned_pool_) {
+        return nullptr;
+    }
+    if (!pinned_pool_->zones_configured()) {
+        return allocate_pinned_runtime(size, alignment);
+    }
+    return pinned_pool_->zone_alloc(zone, size, alignment);
+}
+
+void host_cache::host_zone_reset(host_zone_id zone) {
+    if (!pinned_pool_ || !pinned_pool_->zones_configured()) {
+        return;
+    }
+    GGML_ASSERT(zone != host_zone_id::WEIGHT && "WEIGHT host zone must not be reset");
+    pinned_pool_->zone_reset(zone);
+}
+
+size_t host_cache::host_zone_used(host_zone_id zone) const {
+    if (!pinned_pool_ || !pinned_pool_->zones_configured()) {
+        return 0;
+    }
+    return pinned_pool_->zone_used(zone);
+}
+
+size_t host_cache::host_zone_capacity(host_zone_id zone) const {
+    if (!pinned_pool_ || !pinned_pool_->zones_configured()) {
+        return 0;
+    }
+    return pinned_pool_->zone_capacity(zone);
+}
+
+void host_cache::configure_host_zones(size_t weight_bytes,
+                                      size_t kv_bytes,
+                                      size_t staging_bytes,
+                                      size_t scratch_bytes) {
+    GGML_ASSERT(pinned_pool_ && "pinned pool must exist before configuring host zones");
+    pinned_pool_->configure_zones(weight_bytes, kv_bytes, staging_bytes, scratch_bytes);
+}
+
+bool host_cache::host_zones_configured() const {
+    return pinned_pool_ && pinned_pool_->zones_configured();
 }
 
 bool host_cache::contains_pinned(const void * ptr) const {
@@ -1597,9 +1638,16 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
                 return entry.host_ptr;
             }
 
-            if (pinned_pool_ && !prefer_unpinned) {
-                new_ptr      = pinned_pool_->allocate(alloc_size);
-                pooled_alloc = (new_ptr != nullptr);
+            bool zone_managed = false;
+            if (!prefer_unpinned) {
+                if (host_zones_configured()) {
+                    new_ptr = host_zone_alloc(host_zone_id::WEIGHT, alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+                    pooled_alloc = (new_ptr != nullptr);
+                    zone_managed = pooled_alloc;
+                } else if (pinned_pool_) {
+                    new_ptr      = pinned_pool_->allocate(alloc_size);
+                    pooled_alloc = (new_ptr != nullptr);
+                }
             }
 
             if (!new_ptr) {
@@ -1658,7 +1706,9 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
             entry.size         = dst_size;
             entry.guard_size   = guard_size;
             entry.pinned_alloc = pooled_alloc;
-            entry.pinned       = was_pinned;
+            entry.zone_managed = zone_managed;
+            entry.zone         = zone_managed ? host_zone_id::WEIGHT : host_zone_id::COUNT;
+            entry.pinned       = was_pinned || zone_managed;
             entry.owns_ptr     = true;
             entry.location     = pooled_alloc ? cache_location::HOST_PINNED : cache_location::HOST_MMAP;
             used_.fetch_add(dst_size, std::memory_order_relaxed);
@@ -1749,9 +1799,16 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
         guard_size = k_host_cache_guard_bytes;
         alloc_size += guard_size;
     }
-    if (pinned_pool_ && !prefer_unpinned) {
-        host_ptr     = pinned_pool_->allocate(alloc_size);
-        pooled_alloc = (host_ptr != nullptr);
+    bool zone_managed = false;
+    if (!prefer_unpinned) {
+        if (host_zones_configured()) {
+            host_ptr     = host_zone_alloc(host_zone_id::WEIGHT, alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+            pooled_alloc = (host_ptr != nullptr);
+            zone_managed = pooled_alloc;
+        } else if (pinned_pool_) {
+            host_ptr     = pinned_pool_->allocate(alloc_size);
+            pooled_alloc = (host_ptr != nullptr);
+        }
     }
     if (!host_ptr) {
         host_ptr     = host_cache_alloc_unpinned(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
@@ -1829,9 +1886,11 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &    key_id,
     }
     entry.access_count = 1;
     entry.last_access  = time_++;
-    entry.pinned       = false;
+    entry.pinned       = zone_managed;
     entry.owns_ptr     = true;
     entry.pinned_alloc = pooled_alloc;
+    entry.zone_managed = zone_managed;
+    entry.zone         = zone_managed ? host_zone_id::WEIGHT : host_zone_id::COUNT;
     entry.location     = pooled_alloc ? cache_location::HOST_PINNED : cache_location::HOST_MMAP;
 
     entries_[key] = entry;
@@ -2083,7 +2142,9 @@ bool host_cache::adopt_evicted(const ggml_sycl_cache_id &    key_id,
     entry.layout       = layout;
     entry.access_count = 1;
     entry.last_access  = time_++;
-    entry.pinned       = false;
+    entry.zone_managed = host_zones_configured();
+    entry.zone         = entry.zone_managed ? host_zone_id::WEIGHT : host_zone_id::COUNT;
+    entry.pinned       = entry.zone_managed;
     entry.owns_ptr     = true;
     entry.pinned_alloc = true;  // Allocated from pinned pool (or originally via sycl::malloc_host)
     entry.location     = cache_location::HOST_PINNED;
@@ -2253,18 +2314,25 @@ void host_cache::free_entry(host_cache_entry & entry) {
                 }
             }
         }
-        if (entry.pinned_alloc) {
+        if (entry.zone_managed) {
+            // Zone-managed host allocations are reclaimed only by zone reset or
+            // pool destruction. Their space stays consumed for the model lifetime.
+        } else if (entry.pinned_alloc) {
             // Return to pinned pool
             pinned_pool_->deallocate(entry.host_ptr, entry.size + entry.guard_size);
         } else {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] Freeing non-pinned host cache entry (unexpected)\n");
             std::free(entry.host_ptr);
         }
-        saturating_sub_used(entry.size);
+        if (!entry.zone_managed) {
+            saturating_sub_used(entry.size);
+        }
     }
-    entry.host_ptr   = nullptr;
-    entry.size       = 0;
-    entry.guard_size = 0;
+    entry.host_ptr     = nullptr;
+    entry.size         = 0;
+    entry.guard_size   = 0;
+    entry.zone_managed = false;
+    entry.zone         = host_zone_id::COUNT;
 }
 
 void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
@@ -2866,7 +2934,9 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
             host_ptr = const_cast<void *>(src_ptr);
             loc      = cache_location::HOST_PINNED;
         } else {
-            host_ptr = host_weight_arena_alloc(src_size);
+            if (auto * hcache = try_get_host_cache()) {
+                host_ptr = hcache->host_zone_alloc(host_zone_id::WEIGHT, src_size, 256);
+            }
             if (host_ptr) {
                 std::memcpy(host_ptr, src_ptr, src_size);
                 loc = cache_location::HOST_PINNED;
@@ -4473,7 +4543,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                 {
                     auto * hcache = try_get_host_cache();
                     if (hcache) {
-                        host_dst = hcache->allocate_pinned_runtime(entry_size, 64);
+                        host_dst = hcache->host_zones_configured() ?
+                                       hcache->host_zone_alloc(host_zone_id::WEIGHT, entry_size, 64) :
+                                       hcache->allocate_pinned_runtime(entry_size, 64);
                     }
                 }
 
@@ -4485,7 +4557,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                         evt = dq.memcpy(host_dst, ptr, entry_size);
                     } catch (...) {
                         if (auto * hc = try_get_host_cache()) {
-                            hc->free_pinned_runtime(host_dst, entry_size);
+                            if (!hc->host_zones_configured()) {
+                                hc->free_pinned_runtime(host_dst, entry_size);
+                            }
                         }
                         host_dst = nullptr;
                     }
@@ -4595,12 +4669,15 @@ size_t unified_cache::finalize_evictions_locked() {
             bool adopted = hcache->adopt_evicted(pair.first.id, entry.eviction_host_ptr, entry.size, entry.type,
                                                  entry.layer_id, entry.expert_id, entry.layout, xmx_ptr);
             if (!adopted) {
-                // Host cache full — return buffer to pinned pool
-                hcache->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
+                if (!hcache->host_zones_configured()) {
+                    hcache->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
+                }
             }
         } else if (entry.eviction_host_ptr) {
             if (auto * hc = try_get_host_cache()) {
-                hc->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
+                if (!hc->host_zones_configured()) {
+                    hc->free_pinned_runtime(entry.eviction_host_ptr, entry.size);
+                }
             }
         }
 
@@ -4845,13 +4922,17 @@ sycl::event unified_cache::copy_to_device(void * dst, const void * src, size_t s
         // pre-allocated in the constructor.  Fall back to host_cache pinned pool
         // to avoid runtime sycl::malloc_host.
         auto * hcache = try_get_host_cache();
-        void * temp   = hcache ? hcache->allocate_pinned_runtime(size, 64) : nullptr;
+        void * temp   = nullptr;
+        if (hcache) {
+            temp = hcache->host_zones_configured() ? hcache->host_zone_alloc(host_zone_id::SCRATCH, size, 64) :
+                                                     hcache->allocate_pinned_runtime(size, 64);
+        }
         if (temp) {
             std::memcpy(temp, src, size);
             sycl::event evt = queue_.memcpy(dst, temp, size);
             // Must wait before freeing temp buffer back to pool
             evt.wait();
-            if (hcache) {
+            if (hcache && !hcache->host_zones_configured()) {
                 hcache->free_pinned_runtime(temp, size);
             }
             return sycl::event{};
@@ -6245,9 +6326,8 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
             return true;
         }
         if (rec.uses_pinned_pool) {
-            if (auto * hcache = try_get_host_cache()) {
-                hcache->free_pinned_runtime(rec.handle.ptr, rec.handle.size);
-            }
+            // Zone-managed host allocations are reclaimed by zone reset or pool
+            // destruction, not individual free().
         } else if (rec.queue != nullptr && rec.handle.ptr != nullptr) {
             sycl::free(rec.handle.ptr, *rec.queue);
         } else if (rec.handle.ptr != nullptr && rec.handle.device >= 0 && rec.handle.device < GGML_SYCL_MAX_DEVICES) {
@@ -6327,10 +6407,10 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     bool         reserve_device = (tier == alloc_tier::DEVICE_VRAM);
     bool         reserve_host   = (tier == alloc_tier::HOST_PINNED);
 
-    bool   uses_pinned_pool  = false;
-    bool   from_arena        = false;
-    bool   kv_spill_to_host  = false;
-    void * ptr               = nullptr;
+    bool   uses_pinned_pool = false;
+    bool   from_arena       = false;
+    bool   kv_spill_to_host = false;
+    void * ptr              = nullptr;
     if (tier == alloc_tier::DEVICE_VRAM) {
         // Guard against Level Zero overcommit: if this allocation would exceed
         // the device's total VRAM, fail early so the caller can retry with
@@ -6398,10 +6478,10 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                     // Shared zone full (weights consumed most of it).
                     // Fall back to host-pinned KV instead of raw device alloc
                     // to avoid VRAM overcommit → DEVICE_LOST.
-                    GGML_LOG_WARN("[UNIFIED-ALLOC] KV arena zone full (need %.1f MB, avail %.1f MB), "
-                                 "falling back to host-pinned KV\n",
-                                 alloc_size / (1024.0 * 1024.0),
-                                 cache->zone_available(vram_zone_id::KV) / (1024.0 * 1024.0));
+                    GGML_LOG_WARN(
+                        "[UNIFIED-ALLOC] KV arena zone full (need %.1f MB, avail %.1f MB), "
+                        "falling back to host-pinned KV\n",
+                        alloc_size / (1024.0 * 1024.0), cache->zone_available(vram_zone_id::KV) / (1024.0 * 1024.0));
                     kv_spill_to_host = true;
                 }
             }
@@ -6418,7 +6498,13 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     if (!ptr && (tier == alloc_tier::HOST_PINNED || kv_spill_to_host)) {
         // Always try the pre-allocated pinned chunk pool first (lock-free path).
         if (auto * hcache = try_get_host_cache()) {
-            ptr              = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+            if (hcache->host_zones_configured()) {
+                const host_zone_id zone =
+                    (kv_spill_to_host || req.intent.role == alloc_role::KV) ? host_zone_id::KV : host_zone_id::STAGING;
+                ptr = hcache->host_zone_alloc(zone, alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+            } else {
+                ptr = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+            }
             uses_pinned_pool = (ptr != nullptr);
         }
         if (!ptr) {
@@ -6479,9 +6565,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                 unified_managed_sub_host_bytes(alloc_size);
             }
             if (uses_pinned_pool) {
-                if (auto * hcache = try_get_host_cache()) {
-                    hcache->free_pinned_runtime(ptr, alloc_size);
-                }
+                // Zone-managed host allocations are released by zone reset.
             } else {
                 sycl::free(ptr, *req.queue);
             }
@@ -8529,14 +8613,22 @@ unified_cache::vram_alloc_result unified_cache::allocate(size_t size, alloc_life
         used_.fetch_add(size, std::memory_order_relaxed);
 
         std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
-        managed_allocs_[ptr] = { size, true, lifetime };
+        managed_allocs_[ptr] = { size, true, false, host_zone_id::COUNT, lifetime };
         return result;
     }
 
     // Step 4: Host-pinned fallback — route through the pre-allocated pinned pool.
     // All host-pinned memory is pre-allocated at init; zero runtime malloc_host.
+    bool         uses_pinned_pool = false;
+    host_zone_id zone             = host_zone_id::COUNT;
     if (auto * hcache = try_get_host_cache()) {
-        ptr = hcache->allocate_pinned_runtime(size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+        if (hcache->host_zones_configured()) {
+            zone = host_zone_id::STAGING;
+            ptr  = hcache->host_zone_alloc(zone, size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+        } else {
+            ptr = hcache->allocate_pinned_runtime(size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+        }
+        uses_pinned_pool = (ptr != nullptr);
     }
     if (!ptr) {
         // Pool exhausted — last resort: raw malloc_host (should not happen
@@ -8562,7 +8654,7 @@ unified_cache::vram_alloc_result unified_cache::allocate(size_t size, alloc_life
 
     // Host-pinned does NOT consume VRAM budget (it is malloc_host).
     std::lock_guard<std::mutex> lock(managed_allocs_mutex_);
-    managed_allocs_[ptr] = { size, false, lifetime };
+    managed_allocs_[ptr] = { size, false, uses_pinned_pool, zone, lifetime };
     return result;
 }
 
@@ -8592,6 +8684,14 @@ void unified_cache::deallocate(void * ptr, size_t size, alloc_lifetime lifetime)
     }
 
     try {
+        if (!entry.on_device && entry.uses_pinned_pool) {
+            if (entry.host_zone == host_zone_id::COUNT) {
+                if (auto * hcache = try_get_host_cache()) {
+                    hcache->free_pinned_runtime(ptr, entry.size);
+                }
+            }
+            return;
+        }
         sycl::free(ptr, queue_);
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] deallocate: sycl::free failed ptr=%p: %s\n", ptr, e.what());
@@ -8855,42 +8955,6 @@ void unified_cache::reset_scratch_pool() {
     scratch_pool_off_.store(0, std::memory_order_relaxed);
 }
 
-// --- Host Weight Arena ---
-
-bool unified_cache::host_weight_arena_reserve(size_t bytes) {
-    if (bytes == 0) { return true; }
-    if (host_weight_arena_ptr_ && host_weight_arena_size_ >= bytes) {
-        return true;
-    }
-    if (host_weight_arena_ptr_) {
-        try { sycl::free(host_weight_arena_ptr_, queue_); } catch (...) {}
-        host_weight_arena_ptr_  = nullptr;
-        host_weight_arena_size_ = 0;
-    }
-    try {
-        host_weight_arena_ptr_ = sycl::malloc_host(bytes, queue_);
-    } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[HOST-WEIGHT-ARENA] sycl::malloc_host failed (%.1f MB): %s\n",
-                       bytes / (1024.0 * 1024.0), e.what());
-        return false;
-    }
-    host_weight_arena_size_ = bytes;
-    host_weight_arena_off_.store(0, std::memory_order_relaxed);
-    GGML_LOG_INFO("[HOST-WEIGHT-ARENA] Reserved %.1f MB host-pinned\n", bytes / (1024.0 * 1024.0));
-    return true;
-}
-
-void * unified_cache::host_weight_arena_alloc(size_t bytes) {
-    if (!host_weight_arena_ptr_ || bytes == 0) { return nullptr; }
-    const size_t aligned = (bytes + 255) & ~size_t(255);
-    size_t off = host_weight_arena_off_.fetch_add(aligned, std::memory_order_relaxed);
-    if (off + aligned > host_weight_arena_size_) {
-        host_weight_arena_off_.fetch_sub(aligned, std::memory_order_relaxed);
-        return nullptr;
-    }
-    return static_cast<uint8_t *>(host_weight_arena_ptr_) + off;
-}
-
 // --- Expert Allocation ---
 
 unified_cache::vram_alloc_result unified_cache::allocate_expert(size_t size) {
@@ -9123,6 +9187,30 @@ void unified_cache_reset_scratch_pool(int device_id) {
     if (cache) {
         cache->reset_scratch_pool();
     }
+}
+
+void * unified_cache_host_zone_alloc(host_zone_id zone, size_t size) {
+    auto * hcache = try_get_host_cache();
+    if (!hcache) {
+        return nullptr;
+    }
+    return hcache->host_zone_alloc(zone, size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+}
+
+void unified_cache_host_zone_reset(host_zone_id zone) {
+    if (auto * hcache = try_get_host_cache()) {
+        hcache->host_zone_reset(zone);
+    }
+}
+
+size_t unified_cache_host_zone_used(host_zone_id zone) {
+    auto * hcache = try_get_host_cache();
+    return hcache ? hcache->host_zone_used(zone) : 0;
+}
+
+size_t unified_cache_host_zone_capacity(host_zone_id zone) {
+    auto * hcache = try_get_host_cache();
+    return hcache ? hcache->host_zone_capacity(zone) : 0;
 }
 
 unified_cache::vram_alloc_result unified_cache_allocate_expert(int device_id, size_t size) {
@@ -9748,8 +9836,7 @@ size_t unified_cache::zone_available(vram_zone_id zone) const {
     // In single-chunk mode, KV and WEIGHT share the same region.
     // Available KV space = total - kv_used - weight_used.
     if (zone == vram_zone_id::KV && arena_n_chunks_ == 1) {
-        size_t weight_used = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)]
-                                 .used.load(std::memory_order_relaxed);
+        size_t weight_used = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)].used.load(std::memory_order_relaxed);
         return z.size > (used + weight_used) ? z.size - used - weight_used : 0;
     }
     return z.size > used ? z.size - used : 0;
@@ -9840,6 +9927,26 @@ static int p4_extract_layer_id(const char * name) {
         return -1;
     }
     return std::atoi(blk + 4);
+}
+
+static void populate_host_zone_sizing(placement_plan &                                    plan,
+                                      const std::vector<std::pair<std::string, size_t>> & tensor_inventory) {
+    constexpr size_t k_min_zone_bytes        = 64ull * 1024ull * 1024ull;
+    constexpr size_t k_tp_staging_headroom   = 16ull * 1024ull * 1024ull;
+    constexpr size_t k_scratch_headroom      = 32ull * 1024ull * 1024ull;
+    constexpr double k_weight_headroom_ratio = 1.2;
+
+    plan.max_tensor_bytes = 0;
+    for (const auto & item : tensor_inventory) {
+        plan.max_tensor_bytes = std::max(plan.max_tensor_bytes, item.second);
+    }
+
+    plan.host_zone_weight_bytes =
+        static_cast<size_t>(static_cast<double>(plan.weight_host_bytes) * k_weight_headroom_ratio);
+    plan.host_zone_kv_bytes = std::max<size_t>(k_min_zone_bytes, plan.kv_host_bytes);
+    plan.host_zone_staging_bytes =
+        std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes * 2 + k_tp_staging_headroom);
+    plan.host_zone_scratch_bytes = std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes + k_scratch_headroom);
 }
 
 placement_plan compute_placement_plan(const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
@@ -10008,10 +10115,10 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
         // configure_from_plan uses plan.kv_per_layer uniformly.  Charging SWA
         // layers at a lower rate causes the plan to overcommit VRAM, leading to
         // divergences where layers planned for device end up on host.
-        const size_t kv_cost = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
-        const size_t total_cost = weight_bytes + kv_cost;
-        const bool   on_device  = total_cost <= remaining;
-        const int    target     = on_device ? device_id : -1;
+        const size_t kv_cost      = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
+        const size_t total_cost   = weight_bytes + kv_cost;
+        const bool   on_device    = total_cost <= remaining;
+        const int    target       = on_device ? device_id : -1;
 
         if (on_device) {
             remaining -= total_cost;
@@ -10060,6 +10167,8 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
             plan.host_bytes += entry.dst_size;
         }
     }
+
+    populate_host_zone_sizing(plan, tensor_inventory);
 
     // Build the name->index lookup for O(1) queries
     plan.build_index();
@@ -10118,8 +10227,7 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
         GGML_LOG_INFO(
             "[PLACEMENT] KV breakdown: full_attn=%u layers, swa=%u layers "
             "(charged uniformly at %.1f MB/layer, theoretical swa=%.1f MB/layer)\n",
-            kv_info.n_full_attn_layers(), kv_info.n_swa_layers,
-            plan.kv_per_layer / (1024.0 * 1024.0),
+            kv_info.n_full_attn_layers(), kv_info.n_swa_layers, plan.kv_per_layer / (1024.0 * 1024.0),
             kv_info.kv_bytes_per_swa_layer() / (1024.0 * 1024.0));
     }
     // Log MoE expert placement breakdown if per-expert entries exist
@@ -10403,8 +10511,8 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
         const size_t weight_bytes = layer_weight_bytes[layer_id];
         // Charge uniform KV cost for all attention layers (see single-device
         // comment above — the allocator sizes slots uniformly).
-        const size_t kv_cost = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
-        const size_t total_cost = weight_bytes + kv_cost;
+        const size_t kv_cost      = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
+        const size_t total_cost   = weight_bytes + kv_cost;
         if (target_dev_idx >= 0 && static_cast<size_t>(target_dev_idx) < n_devs &&
             remaining[target_dev_idx] < total_cost) {
             target_dev_idx = -1;
@@ -10454,6 +10562,8 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
         entry.on_device     = target >= 0;
         entry.target_device = target;
     }
+
+    populate_host_zone_sizing(plan, tensor_inventory);
 
     plan.build_index();
 
@@ -10542,8 +10652,7 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
         GGML_LOG_INFO(
             "[PLACEMENT-MULTI] KV breakdown: full_attn=%u layers, swa=%u layers "
             "(charged uniformly at %.1f MB/layer, theoretical swa=%.1f MB/layer)\n",
-            kv_info.n_full_attn_layers(), kv_info.n_swa_layers,
-            plan.kv_per_layer / (1024.0 * 1024.0),
+            kv_info.n_full_attn_layers(), kv_info.n_swa_layers, plan.kv_per_layer / (1024.0 * 1024.0),
             kv_info.kv_bytes_per_swa_layer() / (1024.0 * 1024.0));
     }
     GGML_LOG_INFO(

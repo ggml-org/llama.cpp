@@ -37,14 +37,14 @@ static bool ggml_sycl_layout_ptr_stats_enabled() {
     return enabled;
 }
 
-static std::atomic<uint64_t> g_layout_ptr_host_cache_target_hit{0};
-static std::atomic<uint64_t> g_layout_ptr_host_cache_aos_hit{0};
-static std::atomic<uint64_t> g_layout_ptr_host_cache_layout_fallback{0};
-static std::atomic<uint64_t> g_layout_ptr_host_cache_data_fallback{0};
-static std::atomic<uint64_t> g_layout_ptr_host_cache_miss{0};
+static std::atomic<uint64_t> g_layout_ptr_host_cache_target_hit{ 0 };
+static std::atomic<uint64_t> g_layout_ptr_host_cache_aos_hit{ 0 };
+static std::atomic<uint64_t> g_layout_ptr_host_cache_layout_fallback{ 0 };
+static std::atomic<uint64_t> g_layout_ptr_host_cache_data_fallback{ 0 };
+static std::atomic<uint64_t> g_layout_ptr_host_cache_miss{ 0 };
 
-static std::mutex                                   g_sycl_host_alloc_mutex;
-static std::unordered_map<void *, size_t>           g_sycl_host_alloc_sizes;
+static std::mutex                         g_sycl_host_alloc_mutex;
+static std::unordered_map<void *, size_t> g_sycl_host_alloc_sizes;
 
 static std::mutex                                   g_opt_feature_registry_mutex;
 static std::unordered_set<const optimize_feature *> g_opt_feature_registry;
@@ -116,8 +116,8 @@ int get_current_device_id() {
 }
 
 // Cached queues for TP mode (use platform default context — all L0 GPUs share it)
-static sycl::queue *   g_tp_shared_queues[GGML_SYCL_MAX_DEVICES] = { nullptr };
-static std::mutex      g_tp_context_mutex;
+static sycl::queue * g_tp_shared_queues[GGML_SYCL_MAX_DEVICES] = { nullptr };
+static std::mutex    g_tp_context_mutex;
 
 // Initialize queues for TP mode using the platform default context
 static void ggml_sycl_init_tp_shared_queues() {
@@ -130,8 +130,8 @@ static void ggml_sycl_init_tp_shared_queues() {
 
     // Create queues for each local TP device using the platform default context
     for (int i = 0; i < num_local_devices; i++) {
-        int          dev_id        = g_sycl_tp_config.devices[i];
-        sycl::device dev           = ggml_sycl_get_device(dev_id);
+        int          dev_id = g_sycl_tp_config.devices[i];
+        sycl::device dev    = ggml_sycl_get_device(dev_id);
         if (g_tp_shared_queues[dev_id] == nullptr) {
             g_tp_shared_queues[dev_id] = new sycl::queue(dev, sycl::property::queue::in_order{});
             GGML_SYCL_DEBUG("SYCL TP: Created queue for device %d at %p (platform default context)\n", dev_id,
@@ -166,7 +166,7 @@ sycl::context * ggml_sycl_get_tp_context() {
     return nullptr;
 }
 
-// Get shared-context queue for a device 
+// Get shared-context queue for a device
 // Returns nullptr if not  or device not part of TP
 sycl::queue * ggml_sycl_get_tp_queue(int device) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
@@ -193,8 +193,8 @@ sycl::queue * ggml_sycl_get_tp_queue(int device) {
 // Device mapping helpers (logical -> actual dpct device id)
 // =============================================================================
 
-static std::array<int, GGML_SYCL_MAX_DEVICES> g_sycl_device_map = {};
-static int g_sycl_device_map_count = -1;  // -1 = identity mapping
+static std::array<int, GGML_SYCL_MAX_DEVICES> g_sycl_device_map       = {};
+static int                                    g_sycl_device_map_count = -1;  // -1 = identity mapping
 
 int ggml_sycl_map_device_id(int device) {
     if (g_sycl_device_map_count <= 0) {
@@ -234,9 +234,10 @@ static std::mutex                                     g_tp_staging_mutex;
 
 // Runtime staging cache for single-GPU mode (non-weight data like positions, masks)
 struct RuntimeStagedData {
-    void * ptr;   // Pinned memory pointer
+    void * ptr;  // Pinned memory pointer
     size_t size;
 };
+
 static std::unordered_map<const void *, RuntimeStagedData> g_runtime_staging_cache;
 static std::mutex                                          g_runtime_staging_mutex;
 
@@ -246,7 +247,7 @@ static size_t runtime_staging_min_bytes() {
         if (!env || env[0] == '\0') {
             return 256ull * 1024ull;
         }
-        char * end = nullptr;
+        char *             end    = nullptr;
         unsigned long long parsed = std::strtoull(env, &end, 10);
         if (end == env) {
             return 256ull * 1024ull;
@@ -256,7 +257,7 @@ static size_t runtime_staging_min_bytes() {
     return min_bytes;
 }
 
-// Get or create a staged copy of mmap'd data for a specific device 
+// Get or create a staged copy of mmap'd data for a specific device
 // Works in both TP mode and single-GPU mode (via host cache pinned memory)
 void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device) {
     if (src == nullptr || size == 0) {
@@ -273,12 +274,14 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
                 return nullptr;
             }
             std::lock_guard<std::mutex> lock(g_runtime_staging_mutex);
-            auto it = g_runtime_staging_cache.find(src);
+            auto                        it = g_runtime_staging_cache.find(src);
             if (it != g_runtime_staging_cache.end() && it->second.size >= size) {
                 return it->second.ptr;
             }
             if (auto * host = ggml_sycl::get_host_cache_for_device(device)) {
-                void * pinned = host->allocate_pinned_runtime(size, 64);
+                void * pinned = host->host_zones_configured() ?
+                                    host->host_zone_alloc(ggml_sycl::host_zone_id::STAGING, size, 64) :
+                                    host->allocate_pinned_runtime(size, 64);
                 if (pinned) {
                     std::memcpy(pinned, src, size);
                     g_runtime_staging_cache[src] = { pinned, size };
@@ -438,14 +441,18 @@ void ggml_sycl_clear_staging_cache() {
 //   4. SIGHUP (terminal closed)
 // Note: SIGKILL (kill -9) cannot be caught — that still requires a reboot.
 
-static std::atomic<bool> g_sycl_cleanup_done{false};
+static std::atomic<bool> g_sycl_cleanup_done{ false };
 
 static void ggml_sycl_cleanup_host_allocations() {
     // Prevent double-cleanup (signal handler + atexit both fire)
-    if (g_sycl_cleanup_done.exchange(true, std::memory_order_acq_rel)) return;
+    if (g_sycl_cleanup_done.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
 
     std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
-    if (g_sycl_host_alloc_sizes.empty()) return;
+    if (g_sycl_host_alloc_sizes.empty()) {
+        return;
+    }
     fprintf(stderr, "[SYCL] cleanup: freeing %zu host allocations to prevent GPU lockup\n",
             g_sycl_host_alloc_sizes.size());
     for (auto & [ptr, sz] : g_sycl_host_alloc_sizes) {
@@ -484,8 +491,8 @@ static void ggml_sycl_signal_handler(int sig) {
 // Controlled by GGML_SYCL_WATCHDOG_TIMEOUT (seconds, default 60, 0 disables).
 // ============================================================================
 
-static std::atomic<uint64_t> g_watchdog_heartbeat{0};
-static std::atomic<bool>     g_watchdog_active{false};
+static std::atomic<uint64_t> g_watchdog_heartbeat{ 0 };
+static std::atomic<bool>     g_watchdog_active{ false };
 static std::thread           g_watchdog_thread;
 
 void ggml_sycl_watchdog_heartbeat() {
@@ -499,7 +506,9 @@ static void watchdog_thread_fn(int timeout_sec) {
         for (int i = 0; i < timeout_sec && g_watchdog_active.load(std::memory_order_acquire); i++) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-        if (!g_watchdog_active.load(std::memory_order_acquire)) break;
+        if (!g_watchdog_active.load(std::memory_order_acquire)) {
+            break;
+        }
         uint64_t after = g_watchdog_heartbeat.load(std::memory_order_relaxed);
         if (before == after) {
             fprintf(stderr, "[SYCL-WATCHDOG] No progress for %d seconds — forcing cleanup and exit\n", timeout_sec);
@@ -514,9 +523,11 @@ static void watchdog_thread_fn(int timeout_sec) {
 
 void ggml_sycl_watchdog_start() {
     static bool started = false;
-    if (started) return;
-    const char * env = std::getenv("GGML_SYCL_WATCHDOG_TIMEOUT");
-    int timeout = env ? std::atoi(env) : 300;
+    if (started) {
+        return;
+    }
+    const char * env     = std::getenv("GGML_SYCL_WATCHDOG_TIMEOUT");
+    int          timeout = env ? std::atoi(env) : 300;
     if (timeout <= 0) {
         GGML_LOG_INFO("[SYCL] Watchdog disabled (GGML_SYCL_WATCHDOG_TIMEOUT=%d)\n", timeout);
         started = true;
@@ -546,8 +557,8 @@ void * ggml_sycl_host_malloc(size_t size) try {
     std::call_once(cleanup_registered, []() {
         std::atexit(ggml_sycl_cleanup_host_allocations);
         signal(SIGTERM, ggml_sycl_signal_handler);
-        signal(SIGINT,  ggml_sycl_signal_handler);
-        signal(SIGHUP,  ggml_sycl_signal_handler);
+        signal(SIGINT, ggml_sycl_signal_handler);
+        signal(SIGHUP, ggml_sycl_signal_handler);
     });
 
     // Warn if allocation exceeds the probed host limit, but attempt it anyway.
@@ -555,9 +566,8 @@ void * ggml_sycl_host_malloc(size_t size) try {
     // standalone tests confirm sycl::malloc_host succeeds for 10+ GB allocations.
     const size_t host_max_alloc = ggml_sycl_get_host_max_alloc_size();
     if (host_max_alloc > 0 && size > host_max_alloc) {
-        GGML_LOG_WARN(
-            "[SYCL] Large host allocation: %.1f GB exceeds soft limit (%.1f GB) — attempting anyway\n",
-            size / (1024.0 * 1024.0 * 1024.0), host_max_alloc / (1024.0 * 1024.0 * 1024.0));
+        GGML_LOG_WARN("[SYCL] Large host allocation: %.1f GB exceeds soft limit (%.1f GB) — attempting anyway\n",
+                      size / (1024.0 * 1024.0 * 1024.0), host_max_alloc / (1024.0 * 1024.0 * 1024.0));
     }
 
     void * ptr = nullptr;
@@ -570,8 +580,8 @@ void * ggml_sycl_host_malloc(size_t size) try {
         ggml_sycl_init_tp_shared_queues();
 
         // Use the platform default context from the first TP queue
-        int first_dev_id = g_sycl_tp_config.devices[0];
-        const sycl::context & tp_ctx = g_tp_shared_queues[first_dev_id]->get_context();
+        int                   first_dev_id = g_sycl_tp_config.devices[0];
+        const sycl::context & tp_ctx       = g_tp_shared_queues[first_dev_id]->get_context();
 
         // Allocate host memory accessible from all TP devices (platform default context)
         ggml_sycl::unified_cache_add_runtime_host_bytes(size);
@@ -606,15 +616,17 @@ void * ggml_sycl_host_malloc(size_t size) try {
         try {
             ptr = sycl::malloc_host(size, queue);
         } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED: %s "
-                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
-                           size / (1024.0 * 1024.0 * 1024.0), e.what());
+            GGML_LOG_ERROR(
+                "[SYCL] sycl::malloc_host(%.1f GB) FAILED: %s "
+                "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
+                size / (1024.0 * 1024.0 * 1024.0), e.what());
             ptr = nullptr;
             err = 1;
         } catch (...) {
-            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED with unknown exception "
-                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
-                           size / (1024.0 * 1024.0 * 1024.0));
+            GGML_LOG_ERROR(
+                "[SYCL] sycl::malloc_host(%.1f GB) FAILED with unknown exception "
+                "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
+                size / (1024.0 * 1024.0 * 1024.0));
             ptr = nullptr;
             err = 1;
         }
@@ -623,9 +635,10 @@ void * ggml_sycl_host_malloc(size_t size) try {
     if (err != 0 || !ptr) {
         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
         if (err == 0) {
-            GGML_LOG_ERROR("[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null "
-                           "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
-                           size / (1024.0 * 1024.0 * 1024.0));
+            GGML_LOG_ERROR(
+                "[SYCL] sycl::malloc_host(%.1f GB) FAILED — returned null "
+                "(try: sudo modprobe -r xe && sudo modprobe xe)\n",
+                size / (1024.0 * 1024.0 * 1024.0));
         }
         return nullptr;
     }
@@ -655,7 +668,7 @@ void ggml_sycl_host_free(void * ptr) try {
     size_t alloc_size = 0;
     {
         std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
-        auto it = g_sycl_host_alloc_sizes.find(ptr);
+        auto                        it = g_sycl_host_alloc_sizes.find(ptr);
         if (it != g_sycl_host_alloc_sizes.end()) {
             alloc_size = it->second;
             g_sycl_host_alloc_sizes.erase(it);
@@ -823,8 +836,8 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
         // Free XMX MXFP4 tiled cache (legacy - will be migrated to layout system)
         if (extra->xmx_mxfp4_tiled[i] != nullptr && streams.size() > 0) {
-            const bool layout_alias = (extra->layout.mode == GGML_LAYOUT_XMX_TILED &&
-                                       extra->layout.data_ptr == extra->xmx_mxfp4_tiled[i]);
+            const bool layout_alias =
+                (extra->layout.mode == GGML_LAYOUT_XMX_TILED && extra->layout.data_ptr == extra->xmx_mxfp4_tiled[i]);
             if (!layout_alias && extra->xmx_mxfp4_tiled_owned[i]) {
                 ggml_sycl_set_device(i);
                 if (extra->xmx_mxfp4_tiled_size > 0) {
@@ -832,7 +845,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
                 }
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
             }
-            extra->xmx_mxfp4_tiled[i] = nullptr;
+            extra->xmx_mxfp4_tiled[i]       = nullptr;
             extra->xmx_mxfp4_tiled_owned[i] = false;
         }
         if (extra->xmx_mxfp4_tiled_aos_staging[i] != nullptr && streams.size() > 0) {
@@ -841,7 +854,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
                 ggml_sycl::unified_cache_sub_runtime_bytes(i, extra->xmx_mxfp4_tiled_aos_staging_size[i]);
             }
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled_aos_staging[i], *(streams[i]))));
-            extra->xmx_mxfp4_tiled_aos_staging[i] = nullptr;
+            extra->xmx_mxfp4_tiled_aos_staging[i]      = nullptr;
             extra->xmx_mxfp4_tiled_aos_staging_size[i] = 0;
         }
 
@@ -866,8 +879,8 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
                 ggml_sycl::unified_cache_sub_runtime_bytes(i, extra->moe_expert_ptrs_compact_capacity[i]);
             }
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_compact_device[i], *(streams[i]))));
-            extra->moe_expert_ptrs_compact_device[i] = nullptr;
-            extra->moe_expert_ptrs_compact_size[i] = 0;
+            extra->moe_expert_ptrs_compact_device[i]   = nullptr;
+            extra->moe_expert_ptrs_compact_size[i]     = 0;
             extra->moe_expert_ptrs_compact_capacity[i] = 0;
         }
         if (extra->moe_expert_ptrs_missing_device[i] != nullptr && streams.size() > 0) {
@@ -1419,8 +1432,8 @@ float * ggml_sycl_tp_ensure_host_staging(size_t size, queue_ptr stream) {
     }
 
     // Allocate with headroom
-    size_t new_capacity        = size + (size / 4);  // 25% headroom
-    g_tp_host_staging.buf      =
+    size_t new_capacity = size + (size / 4);  // 25% headroom
+    g_tp_host_staging.buf =
         static_cast<float *>(ggml_sycl_malloc_host_tracked_bytes(new_capacity, *stream, "tp_host_staging"));
     g_tp_host_staging.capacity = new_capacity;
     g_tp_host_staging.size     = size;
@@ -1449,13 +1462,13 @@ static ggml_sycl_tp_quant_comm_buffers g_tp_quant_comm_bufs = {};
 static std::mutex                      g_tp_quant_comm_mutex;
 
 bool ggml_sycl_quant_allreduce_enabled() {
-    static std::atomic<int> enabled{-1};
-    int val = enabled.load(std::memory_order_acquire);
+    static std::atomic<int> enabled{ -1 };
+    int                     val = enabled.load(std::memory_order_acquire);
     if (val < 0) {
-        const char * env = getenv("GGML_SYCL_QUANT_ALLREDUCE");
+        const char * env     = getenv("GGML_SYCL_QUANT_ALLREDUCE");
         // Enable by default for TP mode (33% bandwidth reduction)
         // Disable with GGML_SYCL_QUANT_ALLREDUCE=0
-        int new_val = (env != nullptr) ? atoi(env) : 1;
+        int          new_val = (env != nullptr) ? atoi(env) : 1;
 
         // Only one thread will successfully CAS from -1
         if (enabled.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire)) {
@@ -1472,15 +1485,15 @@ bool ggml_sycl_quant_allreduce_enabled() {
 // Returns threshold from GGML_SYCL_QUANT_THRESHOLD env var, or default
 static size_t get_quant_allreduce_threshold() {
     // Use atomic with sentinel value (SIZE_MAX) for uninitialized state
-    static std::atomic<size_t> threshold{SIZE_MAX};
-    size_t val = threshold.load(std::memory_order_acquire);
+    static std::atomic<size_t> threshold{ SIZE_MAX };
+    size_t                     val = threshold.load(std::memory_order_acquire);
     if (val == SIZE_MAX) {
-        const char * env = getenv("GGML_SYCL_QUANT_THRESHOLD");
+        const char * env     = getenv("GGML_SYCL_QUANT_THRESHOLD");
         // Default: 65536 elements (256KB FP32)
         // Benchmarks show quant overhead hurts small tensors (tg128: 8.1 -> 6.3 t/s)
         // but helps or is neutral for larger tensors (pp512: ~same performance)
         // Crossover is around 32K-64K elements
-        size_t new_val = (env != nullptr) ? (size_t) atol(env) : 65536;
+        size_t       new_val = (env != nullptr) ? (size_t) atol(env) : 65536;
         // Only one thread will successfully CAS from SIZE_MAX
         if (threshold.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire)) {
             if (ggml_sycl_quant_allreduce_enabled()) {
@@ -1532,8 +1545,8 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
         if (g_tp_quant_comm_bufs.host_result) {
             ggml_sycl_host_free(g_tp_quant_comm_bufs.host_result);
         }
-        g_tp_quant_comm_bufs.host_q0 = nullptr;
-        g_tp_quant_comm_bufs.host_q1 = nullptr;
+        g_tp_quant_comm_bufs.host_q0     = nullptr;
+        g_tp_quant_comm_bufs.host_q1     = nullptr;
         g_tp_quant_comm_bufs.host_result = nullptr;
         return;
     }
@@ -1751,8 +1764,8 @@ float * ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes) {
 
     // Allocate shared memory for zero-copy ALL_REDUCE
     ggml_sycl::unified_cache_add_runtime_bytes(dpct::dev_mgr::instance().current_device_id(), bytes);
-    g_tp_shared_reduce_buf      = ggml_sycl_malloc_shared_t<float>(bytes / sizeof(float), dpct::get_in_order_queue(),
-                                                              "tp_shared_reduce");
+    g_tp_shared_reduce_buf =
+        ggml_sycl_malloc_shared_t<float>(bytes / sizeof(float), dpct::get_in_order_queue(), "tp_shared_reduce");
     g_tp_shared_reduce_buf_size = bytes;
     if (!g_tp_shared_reduce_buf) {
         ggml_sycl::unified_cache_sub_runtime_bytes(dpct::dev_mgr::instance().current_device_id(), bytes);
@@ -1793,11 +1806,11 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
         if (g_tp_host_buf1) {
             ggml_sycl_host_free(g_tp_host_buf1);
         }
-        g_tp_host_buf0 = nullptr;
-        g_tp_host_buf1 = nullptr;
+        g_tp_host_buf0     = nullptr;
+        g_tp_host_buf1     = nullptr;
         g_tp_host_buf_size = 0;
-        *buf0 = nullptr;
-        *buf1 = nullptr;
+        *buf0              = nullptr;
+        *buf1              = nullptr;
         return;
     }
 
@@ -1825,7 +1838,7 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
 static void *                     g_pp_transfer_buf[2]   = { nullptr, nullptr };  // Double buffers
 static size_t                     g_pp_transfer_buf_size = 0;
 static std::mutex                 g_pp_transfer_mutex;
-static int                        g_pp_current_buf  = 0;  // Which buffer to use next (0 or 1)
+static int                        g_pp_current_buf = 0;   // Which buffer to use next (0 or 1)
 static std::optional<sycl::event> g_pp_pending_event[2];  // Pending events for each buffer
 
 // Forward declaration (defined in ggml-sycl.cpp)
@@ -1841,7 +1854,7 @@ static sycl::context ggml_sycl_get_pp_default_context() {
 
 // Internal: allocate double buffers using platform default context
 static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
-    int num_devices = ggml_backend_sycl_get_device_count();
+    int  num_devices  = ggml_backend_sycl_get_device_count();
     bool multi_device = (num_devices > 1);
 
     // Get platform default context for multi-device transfers
@@ -1919,8 +1932,7 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
         ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
         ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
     }
-    GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory (platform default context)\n",
-                  alloc_size / 1024.0);
+    GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory (platform default context)\n", alloc_size / 1024.0);
     return true;
 }
 
@@ -2196,7 +2208,7 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             GGML_LOG_ERROR("SYCL CCL ALL_REDUCE: failed to resolve src/dst pointers\n");
             return;
         }
-        size_t  count    = ggml_nelements(dst);
+        size_t count = ggml_nelements(dst);
 
         // CCL allreduce: src_data -> dst_data with sum
         // Use the two-buffer overload: (send_buf, recv_buf, count, device)
@@ -2426,7 +2438,7 @@ void * ggml_sycl_pp_ensure_stage_buffer(int stage, size_t size) {
     if (!g_sycl_pp_config.stage_output_buf[stage]) {
         ggml_sycl::unified_cache_sub_runtime_bytes(dpct::dev_mgr::instance().current_device_id(), size);
     }
-    g_sycl_pp_config.stage_output_size       = size;
+    g_sycl_pp_config.stage_output_size = size;
 
     PP_DEBUG("Allocated stage %d buffer: %zu bytes (malloc_shared)\n", stage, size);
 
