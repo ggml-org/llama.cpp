@@ -54,9 +54,11 @@ static std::condition_variable device_cv;
 
 
 // This will also go in deployment file
-#define NUM_OF_TXES 1
-// device availability table
-static bool device_free[NUM_OF_TXES] = { true, true };
+#define NUM_OF_TXES 2
+static uint32_t num_of_txes =  NUM_OF_TXES;
+
+
+static bool *device_free = NULL;
 static bool multi_thread_enable = false;
 
 
@@ -234,16 +236,28 @@ static void ensure_tsi_runtime_initialized() {
   if (!runtime_initialized) {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
+
     // TSI Run time Initalization
     #ifdef GGML_TARGET_POSIX
-        tsi_initialize(1, NULL);
+        num_of_txes = 1;
         multi_thread_enable = false;
     #else
-        tsi_initialize(NUM_OF_TXES, NULL);
+        num_of_txes = NUM_OF_TXES;
         multi_thread_enable = false;
         tsi_load_all_blobs();
     #endif /* GGML_TARGET_POSIX */
+    tsi_initialize(num_of_txes, NULL);
 
+    device_free = (bool *)malloc(num_of_txes * sizeof(bool));
+    if (!device_free) {
+        fprintf(stderr, "Failed to allocate device_free\n");
+        tsi_finalize();
+        abort();
+    }
+    
+    for (int i = 0; i < num_of_txes; i++) {
+        device_free[i] = true;
+    }
 
     workers.reserve(2);
     runtime_initialized = true;
@@ -638,13 +652,13 @@ static inline int acquire_device_blocking() {
     std::unique_lock<std::mutex> lock(device_mutex);
 
     device_cv.wait(lock, [] {
-        for (int i = 0; i < NUM_OF_TXES; ++i)
+        for (int i = 0; i < num_of_txes; ++i)
             if (device_free[i])
                 return true;
         return false;
     });
 
-    for (int i = 0; i < NUM_OF_TXES; ++i) {
+    for (int i = 0; i < num_of_txes; ++i) {
         if (device_free[i]) {
             device_free[i] = false;
             return i;
@@ -673,7 +687,7 @@ static inline void join_all_workers() {
 
     {
         std::lock_guard<std::mutex> lock(device_mutex);
-        for (int i = 0; i < NUM_OF_TXES; ++i)
+        for (int i = 0; i < num_of_txes; ++i)
             device_free[i] = true;
     }
     device_cv.notify_all();
@@ -1213,6 +1227,10 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
       #ifndef GGML_TARGET_POSIX
          tsi_unload_all_blobs();
       #endif /* !GGML_TARGET_POSIX */
+      if(device_free) {
+          free(device_free);
+         device_free = NULL;
+    }
       tsi_finalize();
       tsirt::utils::TSIProfiler::finalize();
       sleep(2);
@@ -1233,6 +1251,10 @@ tsi_cleanup() {
     #ifndef GGML_TARGET_POSIX
        tsi_unload_all_blobs();
     #endif /* !GGML_TARGET_POSIX */
+    if(device_free) {
+        free(device_free);
+        device_free = NULL;
+    }
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
