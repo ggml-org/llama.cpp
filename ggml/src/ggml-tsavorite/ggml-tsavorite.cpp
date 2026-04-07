@@ -17,6 +17,9 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+
+#include <limits.h>
+#include <libgen.h>
 #include <string.h>
 
 #include "ggml-tsavorite.h"
@@ -49,10 +52,13 @@ static std::mutex device_mutex;
 static std::mutex tsi_pack_mutex;
 static std::condition_variable device_cv;
 
+
+// This will also go in deployment file
+#define NUM_OF_TXES 1
 // device availability table
 static bool device_free[NUM_OF_TXES] = { true, true };
-
 static bool multi_thread_enable = false;
+
 
 #ifdef TMU_DEBUG_VALIDATE
 
@@ -133,47 +139,86 @@ bool runtime_initialized = false;
 uint64_t num_of_op;
 
 
-//static TSI_DeviceIdType deviceId_1 = 0, deviceId_2 = 1;
 
-static void *loadResult_add[NUM_OF_TXES], *loadResult_mult[NUM_OF_TXES], *loadResult_rms_norm[NUM_OF_TXES];
-static BlobDescriptor *blobDescriptor_add[NUM_OF_TXES], *blobDescriptor_mult[NUM_OF_TXES], *blobDescriptor_rms_norm[NUM_OF_TXES];
-
-
-
+static BlobDescriptor *blobDescriptor_add[NUM_OF_TXES];
+static BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES];
+static BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES];
 // ============================================================
-// FUNCTION REPLACEMENT: tsi_load_all_blobs()
 // (makes blob names unique per device to avoid collisions)
-// ============================================================
+//  - tsi_load_blob() expects a FILE PREFIX, not a directory.
+//  - It will append ".blob" internally.
+//  - Therefore we must pass ".../blobs/txe_xxx" (NOT ".../blobs").
+//  - This code reconstructs the SAME prefix paths that worked before.
+// =======================================================================
+
+static std::string tsavorite_llama_root() {
+    // __FILE__ =
+    // /proj/work/.../llama.cpp/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+    std::string f(__FILE__);
+    const std::string tag = "/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp";
+    size_t pos = f.find(tag);
+    if (pos == std::string::npos) {
+        // Hard fail — path layout assumption broken
+        return "";
+    }
+    // Result:
+    // /proj/work/.../llama.cpp
+    return f.substr(0, pos);
+}
+
+static std::string blob_prefix(const char *rel) {
+    return tsavorite_llama_root() + rel;
+}
 
 void tsi_load_all_blobs() {
-    for (int i = 0; i < NUM_OF_TXES; ++i) {
-        printf("\n ANOOP Loading Blobs \n");
+    static void *loadResult_add[NUM_OF_TXES];
+    static void *loadResult_mult[NUM_OF_TXES];
+    static void *loadResult_rms_norm[NUM_OF_TXES];
 
-        char name_add[64], name_mult[64], name_rms[64];
+    for (int i = 0; i < NUM_OF_TXES; ++i) {
+        char name_add[64];
+        char name_mult[64];
+        char name_rms[64];
+
         snprintf(name_add,  sizeof(name_add),  "txe_add_dev%d", i);
         snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%d", i);
         snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%d", i);
 
+        // MUST end in ".../blobs/txe_add"
         loadResult_add[i] = tsi_load_blob(
             i,
             name_add,
-            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"));
-        blobDescriptor_add[i] = static_cast<BlobDescriptor *>(loadResult_add[i]);
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
+            ).c_str()
+        );
+        blobDescriptor_add[i] =
+            static_cast<BlobDescriptor *>(loadResult_add[i]);
 
+        // MUST end in ".../blobs/txe_mult"
         loadResult_mult[i] = tsi_load_blob(
             i,
             name_mult,
-            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"));
-       blobDescriptor_mult[i] = static_cast<BlobDescriptor *>(loadResult_mult[i]);
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
+            ).c_str()
+        );
+        blobDescriptor_mult[i] =
+            static_cast<BlobDescriptor *>(loadResult_mult[i]);
 
+        // MUST end in ".../blobs/txe_rms_norm"
         loadResult_rms_norm[i] = tsi_load_blob(
             i,
             name_rms,
-            ("/proj/work/akapoor/llama-cpp-march-30-multi-txe/llama.cpp/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"));
-        blobDescriptor_rms_norm[i] = static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
+            ).c_str()
+        );
+        blobDescriptor_rms_norm[i] =
+            static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
     }
-    return;
 }
+
 
 static void tsi_unload_all_blobs() {
 for (int i=0; i < NUM_OF_TXES; ++i) {
@@ -190,9 +235,15 @@ static void ensure_tsi_runtime_initialized() {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
     // TSI Run time Initalization
-    tsi_initialize(NUM_OF_TXES, NULL);
+    #ifdef GGML_TARGET_POSIX
+        tsi_initialize(1, NULL);
+        multi_thread_enable = false;
+    #else
+        tsi_initialize(NUM_OF_TXES, NULL);
+        multi_thread_enable = false;
+        tsi_load_all_blobs();
+    #endif /* GGML_TARGET_POSIX */
 
-    tsi_load_all_blobs();
 
     workers.reserve(2);
     runtime_initialized = true;
@@ -609,7 +660,8 @@ static inline void release_device(int deviceId) {
 }
 
 // ============================================================
-// FINAL JOIN — CALL AT END OF ggml_tsavorite_graph_compute()
+// Final join — invoke at the end of each node’s execution
+// within the ggml_tsavorite_graph_compute() subgraph loop.
 // ============================================================
 
 static inline void join_all_workers() {
@@ -680,20 +732,22 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
 
 static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
     if (!multi_thread_enable) {
+      _mlir_ciface_txe_add_host(a, b, res);
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+       #if 0
        void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
         tsi_blob_execution_internal(commandList);
+       #endif
         return;
     }
 
     int deviceId = acquire_device_blocking();
-printf("\n ANOOP ADD device ID %d", deviceId);
 
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
-        printf("\n ANOOP Release ADD device ID %d", deviceId);
     });
 }
 
@@ -741,20 +795,23 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
 
 static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
     if (!multi_thread_enable) {
+        _mlir_ciface_txe_mult_host(a, b, res);
+      
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+        #if 0
         void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
         tsi_blob_execution_internal(commandList);
+        #endif
         return;
     }
 
     int deviceId = acquire_device_blocking();
 
-printf("\n ANOOP MUL device ID %d", deviceId);
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
-        printf("\n ANOOP Release MUL device ID %d", deviceId);
     });
 }
 
@@ -803,20 +860,22 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
 
 static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     if (!multi_thread_enable) {
+        _mlir_ciface_txe_rms_norm_host(a, b, buf);
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+      #if 0
         void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
         tsi_blob_execution_internal(commandList);
+      #endif
         return;
     }
 
     int deviceId = acquire_device_blocking();
-printf("\n ANOOP RMS_NORM device ID %d", deviceId);
 
     // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
     void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
-       printf("\n ANOOP RMS_NORM Releasing device ID %d", deviceId);
     });
 }
 
@@ -837,8 +896,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_test;
           else {
-              //kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host;
-              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host_new;
+              #ifdef GGML_TARGET_POSIX
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host;
+              #else
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host_new;
+              #endif /* GGML_TARGET_POSIX */
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_add_16_host;
 	  }
           kernel_pipeline->kernel_name = "TXE_ADD";
@@ -854,8 +916,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_test;
           else {
-              //kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host;
-              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host_new;
+              #ifdef GGML_TARGET_POSIX
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host;
+              #else
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host_new;
+              #endif /* GGML_TARGET_POSIX */
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_mult_16_host;
 	  }
           kernel_pipeline->kernel_name = "TXE_MULT";
@@ -910,8 +975,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM:
-          //kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host;
-          kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host_new;
+          #ifdef GGML_TARGET_POSIX
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host;
+          #else
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host_new;
+          #endif /* GGML_TARGET_POSIX */
           kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_rms_norm_16_host;
           kernel_pipeline->kernel_name = "TXE_RMS_NORM";
           flag = true;
@@ -1142,7 +1210,9 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   if (runtime_initialized == true) {
       sleep(2);
       runtime_initialized = false;
-      tsi_unload_all_blobs();
+      #ifndef GGML_TARGET_POSIX
+         tsi_unload_all_blobs();
+      #endif /* !GGML_TARGET_POSIX */
       tsi_finalize();
       tsirt::utils::TSIProfiler::finalize();
       sleep(2);
@@ -1160,7 +1230,9 @@ tsi_cleanup() {
     if (runtime_initialized != true)
         return;
     runtime_initialized = false;
-    tsi_unload_all_blobs();
+    #ifndef GGML_TARGET_POSIX
+       tsi_unload_all_blobs();
+    #endif /* !GGML_TARGET_POSIX */
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
@@ -2042,20 +2114,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
   tensor_log log_data;
 
 
-multi_thread_enable = false;
-if (cgraph->n_nodes == 2) {
-             node = cgraph->nodes[0];
-             if (node->op == GGML_OP_MUL)  {
-                 multi_thread_enable = true;
-                 printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn going to start");
-             }
-             node = cgraph->nodes[1];
-             if (node->op == GGML_OP_MUL)  {
-                 multi_thread_enable = true;
-                 printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn going to start");
-             }
-}
-
   for (int i = 0; i < cgraph->n_nodes; i++) {
      int32_t kernel_sub_type=-1;
 #if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
@@ -2533,13 +2591,11 @@ if (cgraph->n_nodes == 2) {
         node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
     }
 #endif /* GGML_PERF-related flags */
+    if (multi_thread_enable) {
+      join_all_workers();
+     }
   } /* this is main for loop */
 
-  if (multi_thread_enable) {
-    printf("\n ANOOP Multi-thread-enable for MUL GRAPH EXECUTIOn Completed");
-    join_all_workers();
-   }
-  anoop_test();
 
 
   // This this need to implement correctly when we have mixture of CPU and accelerator operation
