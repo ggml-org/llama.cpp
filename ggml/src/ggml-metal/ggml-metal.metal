@@ -3477,14 +3477,12 @@ void kernel_mul_mv_q1_0_f32_impl(
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/8) {
         float sumy = 0.f;
 
-#pragma unroll
-        for (short i = 0; i < 16; i++) {
+        FOR_UNROLL (short i = 0; i < 16; i++) {
             yl[i] = yb[i];
             sumy += yb[i];
         }
 
-#pragma unroll
-        for (short row = 0; row < nr0; row++) {
+        FOR_UNROLL (short row = 0; row < nr0; row++) {
             sumf[row] += block_q_n_dot_y(ax[row] + ib, sumy, yl, il);
         }
 
