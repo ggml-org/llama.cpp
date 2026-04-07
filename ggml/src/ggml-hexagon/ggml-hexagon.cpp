@@ -2408,6 +2408,23 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
         }
     }
 
+    // Reject non-HVX-aligned sizes when ne[0] > HVX_F32_LANES
+    // The HVX softmax implementation has issues with tail handling for larger non-aligned sizes
+    // Small sizes (ne[0] <= 32) work correctly with tail-only processing
+    const int64_t ne0 = src0->ne[0];
+    if (ne0 > 32 && (ne0 & (32 - 1)) != 0) {
+        return false;
+    }
+
+    // HVX vector size constraints for softmax
+    #define SOFTMAX_MAX_ROW_SIZE 131072  // 128K elements max for numerical precision
+
+    // Reject very large row sizes to avoid numerical precision issues
+    // Softmax accumulation over many elements can lead to precision loss
+    if (ne0 > SOFTMAX_MAX_ROW_SIZE) {
+        return false;
+    }
+
     return true;
 }
 
