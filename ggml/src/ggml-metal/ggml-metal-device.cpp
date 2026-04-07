@@ -1462,11 +1462,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin(ggml_metal_l
     int op_num = -1;
 
     switch (op->op) {
-        case GGML_OP_ADD:
-        case GGML_OP_ADD1: op_num = 0; break;
-        case GGML_OP_SUB:  op_num = 1; break;
-        case GGML_OP_MUL:  op_num = 2; break;
-        case GGML_OP_DIV:  op_num = 3; break;
+        case GGML_OP_ADD: op_num = 0; break;
+        case GGML_OP_SUB: op_num = 1; break;
+        case GGML_OP_MUL: op_num = 2; break;
+        case GGML_OP_DIV: op_num = 3; break;
         default: GGML_ABORT("fatal error");
     };
 
