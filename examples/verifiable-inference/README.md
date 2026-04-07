@@ -23,12 +23,12 @@ cmake --build build -j
 
 ```sh
 ./build/bin/llama-verifiable-inference \
-  --hf-repo ggml-org/models \
-  --hf-file tinyllamas/stories15M-q4_0.gguf \
-  -p "hello" \
-  --vi-out vi-out \
+  --hf-repo ddh0/GPT-2-GGUF \
+  --hf-file GPT-2-q4_K_S.gguf \
+  -ngl 0 \
+  -p "Once upon a time" \
   --vi-samples 16 \
-  --vi-seed 123
+  --vi-out vi-out
 ```
 
 Outputs:
