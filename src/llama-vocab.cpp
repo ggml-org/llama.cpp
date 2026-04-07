@@ -561,10 +561,25 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+
+        std::vector<std::string> word_collection;
+        auto tok_pre = vocab.get_pre_type();
+        if (tok_pre == LLAMA_VOCAB_PRE_TYPE_GEMMA4) {
+            size_t start = 0;
+            while (start < text.size()) {
+                const bool is_newline = text[start] == 0x0A;
+                size_t end = start + 1;
+                while (end < text.size() && (text[end] == 0x0A) == is_newline) {
+                    ++end;
+                }
+                word_collection.emplace_back(text.substr(start, end - start));
+                start = end;
+            }
+        } else {
+            word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        }
 
         symbols_final.clear();
-        auto tok_pre = vocab.get_pre_type();
 
         for (const auto & word : word_collection) {
             work_queue = llm_bigram_bpe::queue();
