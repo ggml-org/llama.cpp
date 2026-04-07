@@ -19,8 +19,8 @@ void mtmd_audio_cache::fill_sin_cos_table(uint32_t n) {
     cos_vals.resize(n);
     for (uint32_t i = 0; i < n; i++) {
         double theta = (2 * M_PI * i) / n;
-        sin_vals[i]  = sin(theta);
-        cos_vals[i]  = cos(theta);
+        sin_vals[i]  = sinf(theta);
+        cos_vals[i]  = cosf(theta);
     }
 }
 
@@ -28,7 +28,7 @@ void mtmd_audio_cache::fill_hann_window(uint32_t length, bool periodic) {
     hann_window.resize(length);
     int offset = periodic ? 0 : -1;
     for (uint32_t i = 0; i < length; i++) {
-        hann_window[i] = 0.5 * (1.0 - cos((2.0 * M_PI * i) / (length + offset)));
+        hann_window[i] = 0.5 * (1.0 - cosf((2.0 * M_PI * i) / (length + offset)));
     }
 }
 
