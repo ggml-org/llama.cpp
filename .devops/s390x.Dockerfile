@@ -9,10 +9,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt update -y && \
     apt upgrade -y && \
     apt install -y --no-install-recommends \
-        git cmake ccache ninja-build \
+        git \
+        cmake \
+        ccache \
+        ninja-build \
         # WARNING: Do not use libopenblas-openmp-dev. libopenblas-dev is faster.
-        libopenblas-dev libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
+        libopenblas-dev \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
@@ -28,9 +32,9 @@ RUN --mount=type=cache,target=/root/.ccache \
         -DGGML_BACKEND_DL=ON \
         -DGGML_CPU_ALL_VARIANTS=ON \
         -DGGML_BLAS=ON \
-        -DGGML_BLAS_VENDOR=OpenBLAS && \
-    cmake --build build --config Release -j $(nproc) && \
-    cmake --install build --prefix /opt/llama.cpp
+        -DGGML_BLAS_VENDOR=OpenBLAS \
+    && cmake --build build --config Release -j $(nproc) \
+    && cmake --install build --prefix /opt/llama.cpp
 
 COPY *.py             /opt/llama.cpp/bin
 COPY .devops/tools.sh /opt/llama.cpp/bin
