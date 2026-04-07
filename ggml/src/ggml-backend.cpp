@@ -682,6 +682,8 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+struct ggml_backend_sched_expert_cache;
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -768,10 +770,8 @@ struct ggml_backend_sched_expert_cache {
 static struct ggml_expert_cache_entry * expert_cache_find_or_create(
         struct ggml_backend_sched_expert_cache * cache,
         struct ggml_tensor * cpu_tensor,
-        struct ggml_tensor * input_cpy,
         int64_t n_expert,
         size_t expert_size) {
-    GGML_UNUSED(input_cpy);
     for (int i = 0; i < cache->n_entries; i++) {
         if (cache->entries[i].cpu_tensor == cpu_tensor) {
             return &cache->entries[i];
@@ -783,16 +783,26 @@ static struct ggml_expert_cache_entry * expert_cache_find_or_create(
             cache->entries, cache->max_entries * sizeof(struct ggml_expert_cache_entry));
         GGML_ASSERT(cache->entries && "expert cache: allocation failed");
     }
-    struct ggml_expert_cache_entry * entry = &cache->entries[cache->n_entries++];
+    struct ggml_expert_cache_entry * entry = &cache->entries[cache->n_entries];
     memset(entry, 0, sizeof(*entry));
+
+    ggml_bitset_t * populated = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
+    int32_t       * fate_ids  = (int32_t *)calloc(n_expert, sizeof(int32_t));
+
+    if (!populated || !fate_ids) {
+        free(populated);
+        free(fate_ids);
+        GGML_ABORT("expert cache: allocation failed");
+    }
+
     entry->cpu_tensor  = cpu_tensor;
     entry->gpu_data    = nullptr;
     entry->n_expert    = n_expert;
     entry->expert_size = expert_size;
-    entry->populated   = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
-    entry->fate_ids    = (int32_t *)calloc(n_expert, sizeof(int32_t));
+    entry->populated   = populated;
+    entry->fate_ids    = fate_ids;
     entry->n_fate_ids  = 0;
-    GGML_ASSERT(entry->populated && entry->fate_ids && "expert cache: allocation failed");
+    cache->n_entries++;
     return entry;
 }
 
@@ -1783,7 +1793,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
             free(sched->expert_cache->entries[i].fate_ids);
         }
         free(sched->expert_cache->entries);
-        delete sched->expert_cache;
+        free(sched->expert_cache);
     }
     free(sched);
 }
@@ -1798,6 +1808,8 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         sched->is_reset = true;
     }
     sched->is_alloc = false;
+    // Invalidate expert cache populated state: GPU buffer data may be stale after reset.
+    // Entries (cpu_tensor keys) are preserved to avoid re-discovering tensors next graph.
     if (sched->expert_cache) {
         for (int i = 0; i < sched->expert_cache->n_entries; i++) {
             struct ggml_expert_cache_entry * e = &sched->expert_cache->entries[i];
@@ -1900,7 +1912,8 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
 void ggml_backend_sched_set_expert_cache(ggml_backend_sched_t sched, bool enabled) {
     GGML_ASSERT(sched);
     if (enabled && !sched->expert_cache) {
-        sched->expert_cache = new ggml_backend_sched_expert_cache{};
+        sched->expert_cache = (struct ggml_backend_sched_expert_cache *)calloc(1, sizeof(struct ggml_backend_sched_expert_cache));
+        GGML_ASSERT(sched->expert_cache && "expert cache: allocation failed");
     }
     if (sched->expert_cache) {
         sched->expert_cache->enabled = enabled;
