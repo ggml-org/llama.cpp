@@ -78,19 +78,6 @@ mem_handle mem_handle::from_arena_zone(int zone_id, size_t offset, size_t size,
     return h;
 }
 
-mem_handle mem_handle::from_host_pool(size_t offset, size_t size, int device_id, uint64_t generation) {
-    mem_handle h;
-    h.kind_      = mem_handle_kind::ARENA_HOST;
-    h.device_    = device_id;
-    h.zone_id_   = -1;
-    h.offset_    = offset;
-    h.size_      = size;
-    h.arena_gen_ = generation;
-    h.gen_       = 0;
-    h.cached_    = {};
-    return h;
-}
-
 // === resolve ===
 
 resolved_ptr mem_handle::resolve() const {
@@ -101,7 +88,7 @@ resolved_ptr mem_handle::resolve() const {
 
     // Arena handles: check arena generation, then resolve base + offset.
     if (kind_ >= mem_handle_kind::ARENA_RUNTIME &&
-        kind_ <= mem_handle_kind::ARENA_HOST) {
+        kind_ <= mem_handle_kind::ARENA_ONEDNN) {
         // If we have a cached pointer and the generation hasn't changed,
         // return immediately.
         if (cached_.ptr != nullptr && gen_ == arena_gen_) {
@@ -147,16 +134,6 @@ resolved_ptr mem_handle::resolve_slow() const {
 // recreated (generation mismatch).
 
 resolved_ptr mem_handle::resolve_arena() const {
-    if (kind_ == mem_handle_kind::ARENA_HOST) {
-        unified_cache * cache = get_unified_cache_for_device(device_);
-        if (!cache || !cache->host_pool_base()) {
-            return {};
-        }
-        cached_ = { static_cast<uint8_t *>(cache->host_pool_base()) + offset_, GGML_LAYOUT_AOS, false };
-        gen_    = arena_gen_;
-        return cached_;
-    }
-
     // Device arena: query unified_cache for arena methods.
     unified_cache * cache = get_unified_cache_for_device(device_);
     if (!cache) {

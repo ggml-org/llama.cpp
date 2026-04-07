@@ -54,7 +54,6 @@ enum class mem_handle_kind : uint8_t {
     ARENA_RUNTIME  = 2,  // Handle into RUNTIME zone (ggml compute buffers)
     ARENA_SCRATCH  = 3,  // Handle into SCRATCH zone (pool_leg per-op scratch)
     ARENA_ONEDNN   = 4,  // Handle into ONEDNN zone (oneDNN scratchpad)
-    ARENA_HOST     = 5,  // Handle into host-pinned pool
 };
 
 class mem_handle {
@@ -83,9 +82,6 @@ public:
     static mem_handle from_arena_zone(int zone_id, size_t offset, size_t size,
                                       int device_id, uint64_t generation);
 
-    // Create a host-pinned pool handle.
-    static mem_handle from_host_pool(size_t offset, size_t size, int device_id, uint64_t generation);
-
     // Resolve the current pointer.  Hot path (~3 ns):
     //   if (kind == DIRECT || gen_ == cache_generation())
     //       return cached resolved_ptr
@@ -111,7 +107,7 @@ public:
     // True if this is any arena-backed handle.
     bool is_arena() const {
         return kind_ >= mem_handle_kind::ARENA_RUNTIME &&
-               kind_ <= mem_handle_kind::ARENA_HOST;
+               kind_ <= mem_handle_kind::ARENA_ONEDNN;
     }
 
     // Arena-specific accessors (meaningful only for arena handles).
