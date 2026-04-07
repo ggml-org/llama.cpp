@@ -585,8 +585,6 @@ struct LLM_TN_IMPL {
     const int bid;
     const int xid;
 
-    const std::set<llm_tensor> model_tensors;
-
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
     std::string str() const;
