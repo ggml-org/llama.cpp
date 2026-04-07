@@ -37,3 +37,14 @@ export const MODEL_ACTIVATED_PARAMS_RE = /^[Aa]\d+(\.\d+)?[BbMmKkTt]$/;
  * Container format segments to exclude from tags (every model uses these).
  */
 export const MODEL_IGNORED_SEGMENTS = new Set(['GGUF', 'GGML']);
+
+/**
+ * CLI flags that indicate a model is configured for embedding-only use.
+ */
+export const MODEL_EMBEDDING_CLI_FLAGS: readonly string[] = ['--embedding', '--embeddings'];
+
+/**
+ * Regex matching embedding model names by common naming patterns.
+ * Matches segments like "Embedding", "embed", "embeddings" separated by `-`, `_`, `/`, or `:`.
+ */
+export const MODEL_EMBEDDING_NAME_RE = /[-_/]embed(ding)?s?[-_/:-]/i;

@@ -46,7 +46,10 @@
 		modelOptions().filter((option) => {
 			const modelProps = modelsStore.getModelProps(option.model);
 
-			return modelProps?.webui !== false;
+			if (modelProps?.webui === false) return false;
+			if (modelsStore.isEmbeddingModel(option.id)) return false;
+
+			return true;
 		})
 	);
 	let loading = $derived(modelsLoading());

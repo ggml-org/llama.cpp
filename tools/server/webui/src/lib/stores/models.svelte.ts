@@ -7,7 +7,9 @@ import { TTLCache } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	FAVORITE_MODELS_LOCALSTORAGE_KEY
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	MODEL_EMBEDDING_CLI_FLAGS,
+	MODEL_EMBEDDING_NAME_RE
 } from '$lib/constants';
 
 /**
@@ -244,6 +246,20 @@ class ModelsStore {
 		return usage !== undefined && usage.size > 0;
 	}
 
+	isEmbeddingModel(modelId: string): boolean {
+		const routerModel = this.routerModels.find((m) => m.id === modelId);
+
+		if (routerModel?.status.args?.some((arg: string) => MODEL_EMBEDDING_CLI_FLAGS.includes(arg))) {
+			return true;
+		}
+
+		if (MODEL_EMBEDDING_NAME_RE.test(`-${modelId}-`)) {
+			return true;
+		}
+
+		return false;
+	}
+
 	/**
 	 *
 	 *
@@ -328,8 +344,10 @@ class ModelsStore {
 
 			const o = this.models.filter((option) => {
 				const modelProps = this.getModelProps(option.model);
+				if (modelProps?.webui === false) return false;
+				if (this.isEmbeddingModel(option.id)) return false;
 
-				return modelProps?.webui !== false;
+				return true;
 			});
 
 			if (o.length === 1 && this.isModelLoaded(o[0].model)) {
