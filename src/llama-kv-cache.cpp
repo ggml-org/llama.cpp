@@ -225,9 +225,6 @@ llama_kv_cache::llama_kv_cache(
         layers.push_back({ il, k, v, k_stream, v_stream, });
     }
 
-    GGML_ASSERT(n_embd_head_k_all == -1 || n_embd_head_k_all > 0);
-    GGML_ASSERT(n_embd_head_v_all == -1 || n_embd_head_v_all > 0);
-
     if (reuse) {
         LLAMA_LOG_DEBUG("%s: reusing layers:\n", __func__);
 
