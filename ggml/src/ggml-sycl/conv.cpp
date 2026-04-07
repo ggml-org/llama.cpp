@@ -71,31 +71,30 @@ static void conv_transpose_1d_f32_f32_sycl(
         });
 }
 
-void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
-    const ggml_tensor *src0 = dst->src[0];
-    const ggml_tensor *src1 = dst->src[1];
-    const float * src0_d = (const float *)src0->data;
-    const float * src1_d = (const float *)src1->data;
+void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
+    const float * src0_d = src0.resolve_as<const float>();
+    const float * src1_d = src1.resolve_as<const float>();
 
-    float * dst_d = (float *)dst->data;
+    float * dst_d = dst.resolve_as<float>();
     dpct::queue_ptr stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(src0.is_contiguous());
+    GGML_ASSERT(src1.is_contiguous());
 
-    const int32_t * opts = (const int32_t *)dst->op_params;
+    const int32_t * opts = static_cast<const int32_t *>(dst.op_params());
 
     const int s0 = opts[0];
 
-    const int64_t output_size = ggml_nelements(dst);
+    const int64_t output_size = dst.nelements();
 
     conv_transpose_1d_f32_f32_sycl(s0, output_size,
-        src0->ne[0], src0->ne[1], src0->ne[2],
-        src1->ne[0], dst->ne[0],
+        src0.ne(0), src0.ne(1), src0.ne(2),
+        src1.ne(0), dst.ne(0),
         src0_d, src1_d, dst_d, stream);
 }
-

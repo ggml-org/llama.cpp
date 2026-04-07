@@ -456,6 +456,7 @@ static void init_fa_safe_decode_config() {
 //
 static bool detect_sequence_boundaries_from_mask(
     const ggml_tensor *    mask_f16,        // The F16 mask tensor (may be a cast of F32)
+    int                    device,
     int                    n_queries,       // Number of query tokens
     int                    n_kv,            // Number of KV positions
     std::vector<int32_t> & seq_q_offsets,   // Output: [n_seqs + 1]
@@ -477,14 +478,20 @@ static bool detect_sequence_boundaries_from_mask(
     // NOTE: In SYCL backend, even input tensors are typically in GPU buffers
     // by the time we reach here. Future work: scan mask in kernel using
     // a dedicated work-group, or pass sequence info through ggml graph.
-    if (!mask_f32 || !mask_f32->data) {
+    if (!mask_f32) {
         return false;
     }
     if (!ggml_backend_buffer_is_host(mask_f32->buffer)) {
         return false;
     }
 
-    const float * mask_data   = (const float *) mask_f32->data;
+    const float * mask_data = static_cast<const float *>(ggml_sycl_resolve_tensor_ptr(mask_f32, device));
+    if (!mask_data) {
+        mask_data = static_cast<const float *>(ggml_sycl_host_data(mask_f32));
+    }
+    if (!mask_data) {
+        return false;
+    }
     const int64_t mask_stride = mask_f32->nb[1] / sizeof(float);  // Stride between query rows
 
     // Scan the mask to find sequence boundaries
@@ -823,7 +830,7 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(ggml_backend_sycl_context & 
 }
 
 // Main flash attention entry point
-void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor safe_dst) {
     GGML_SYCL_PROFILE_SCOPE_FA("flash_attn");
     // Initialize configuration on first call
 #if GGML_SYCL_FA_V2_ENABLED
@@ -833,9 +840,13 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     init_fa_esimd_config();
     init_fa_safe_decode_config();
 
-    const ggml_tensor * Q = dst->src[0];
-    const ggml_tensor * K = dst->src[1];
-    const ggml_tensor * V = dst->src[2];
+    const ggml_tensor * dst = safe_dst.raw();
+    auto                Q_t = safe_dst.src(0);
+    auto                K_t = safe_dst.src(1);
+    auto                V_t = safe_dst.src(2);
+    const ggml_tensor * Q   = Q_t.raw();
+    const ggml_tensor * K   = K_t.raw();
+    const ggml_tensor * V   = V_t.raw();
     // Flash attention uses activation tensors (Q/K/V + KV cache). No weight tensors
     // are expected here, so unified-cache streaming is intentionally skipped.
     GGML_ASSERT(!ggml_sycl_tensor_is_weight(Q));
@@ -914,12 +925,12 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     // Use device-specific pointers for TP mode (KV cache is allocated per-device)
     const int device = ctx.device;
-    params.Q         = (const char *) ggml_sycl_get_data_ptr(Q, device);
-    params.K         = (const char *) ggml_sycl_get_data_ptr(K, device);
-    params.V         = (const char *) ggml_sycl_get_data_ptr(V, device);
-    params.mask      = mask ? (const char *) ggml_sycl_get_data_ptr(mask, device) : nullptr;
-    params.sinks     = sinks ? (const char *) ggml_sycl_get_data_ptr(sinks, device) : nullptr;
-    params.dst       = (float *) ggml_sycl_get_data_ptr(dst, device);
+    params.Q         = static_cast<const char *>(Q_t.resolve_ptr());
+    params.K         = static_cast<const char *>(K_t.resolve_ptr());
+    params.V         = static_cast<const char *>(V_t.resolve_ptr());
+    params.mask      = mask ? static_cast<const char *>(ggml_sycl_resolve_tensor_ptr(mask, device)) : nullptr;
+    params.sinks     = sinks ? static_cast<const char *>(ggml_sycl_resolve_tensor_ptr(sinks, device)) : nullptr;
+    params.dst       = safe_dst.resolve_as<float>();
 
 
     params.scale         = scale;
@@ -1000,13 +1011,25 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     // Skip during SYCL graph recording - this optimization requires wait() calls
     // which are not allowed during graph recording
     if (!g_ggml_sycl_graph_recording && q_seq_ids && kv_seq_ids && q_seq_ids->type == GGML_TYPE_I32 &&
-        kv_seq_ids->type == GGML_TYPE_I32 && q_seq_ids->data && kv_seq_ids->data) {
+        kv_seq_ids->type == GGML_TYPE_I32) {
         const size_t q_size  = q_seq_ids->ne[0] * sizeof(int32_t);
         const size_t kv_size = kv_seq_ids->ne[0] * sizeof(int32_t);
 
         // Check if tensors are on host buffers (need to copy to device)
         bool q_on_host  = q_seq_ids->buffer ? ggml_backend_buffer_is_host(q_seq_ids->buffer) : true;
         bool kv_on_host = kv_seq_ids->buffer ? ggml_backend_buffer_is_host(kv_seq_ids->buffer) : true;
+
+        auto resolve_host_seq_ids = [&](const ggml_tensor * tensor) -> const int32_t * {
+            void * ptr = ggml_sycl_resolve_tensor_ptr(tensor, device);
+            if (ptr) {
+                try {
+                    if (ggml_sycl_get_alloc_type(ptr) != sycl::usm::alloc::device) {
+                        return static_cast<const int32_t *>(ptr);
+                    }
+                } catch (...) {}
+            }
+            return static_cast<const int32_t *>(ggml_sycl_host_data(tensor));
+        };
 
         // Get the host pointers from thread-local cache (set by llama-kv-cache.cpp)
         // These are USM host pointers that are accessible from both CPU and GPU
@@ -1017,8 +1040,8 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         // If tensors are on device (not host), use the cached host pointers instead
         // The scheduler creates device tensors but doesn't copy INPUT data, so tensor->data is invalid
         // However, the llama layer has set the USM host pointers via ggml_backend_sycl_set_seq_ids_host()
-        const int32_t * host_q_ptr  = q_on_host ? (const int32_t *) q_seq_ids->data : cached_q_seq_ids;
-        const int32_t * host_kv_ptr = kv_on_host ? (const int32_t *) kv_seq_ids->data : cached_kv_seq_ids;
+        const int32_t * host_q_ptr  = q_on_host ? resolve_host_seq_ids(q_seq_ids) : cached_q_seq_ids;
+        const int32_t * host_kv_ptr = kv_on_host ? resolve_host_seq_ids(kv_seq_ids) : cached_kv_seq_ids;
 
         if (!host_q_ptr || !host_kv_ptr) {
             // No valid host pointers available - skip optimization

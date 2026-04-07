@@ -286,49 +286,48 @@ static void soft_max_back_f32_sycl(const float *   grad,
                          });
 }
 
-void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
 
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
-    const ggml_tensor * src2 = dst->src[2];
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
+    auto src2 = dst.src(2);
 
-    // Use device-specific data pointers for TP support
-    const int device = ctx.device;
-    const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
-    const void  * src1_d = src1 ? (const void *) ggml_sycl_get_data_ptr(src1, device) : nullptr;
-    const void  * src2_d = src2 ? (const void *) ggml_sycl_get_data_ptr(src2, device) : nullptr;
-    float       *  dst_d = (float *) ggml_sycl_get_data_ptr(dst, device);
+    const float * src0_d = src0.resolve_as<const float>();
+    const void  * src1_d = src1 ? src1.resolve_ptr() : nullptr;
+    const void  * src2_d = src2 ? src2.resolve_ptr() : nullptr;
+    float       * dst_d  = dst.resolve_as<float>();
 
     dpct::queue_ptr stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
     // src1 contains mask and it is optional
-    GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(!src1 || src1.type() == GGML_TYPE_F16 || src1.type() == GGML_TYPE_F32);
 
-    const int64_t nrows_x = ggml_nrows(src0);
-    const int64_t nrows_y = src0->ne[1];
+    const int64_t nrows_x = ggml_nrows(src0.raw());
+    const int64_t nrows_y = src0.ne(1);
 
-    const int64_t ne00 = src0->ne[0];
+    const int64_t ne00 = src0.ne(0);
 
     float scale    = 1.0f;
     float max_bias = 0.0f;
 
-    memcpy(&scale,    (const float *) dst->op_params + 0, sizeof(float));
-    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+    const float * op_params = static_cast<const float *>(dst.op_params());
+    memcpy(&scale,    op_params + 0, sizeof(float));
+    memcpy(&max_bias, op_params + 1, sizeof(float));
 
-    const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
+    const bool use_f16 = (src1 && src1.type() == GGML_TYPE_F16);
 
-    const int64_t nb11 = src1 ? src1->nb[1] : 1;
-    const int64_t nb12 = src1 ? src1->nb[2] : 1;
-    const int64_t nb13 = src1 ? src1->nb[3] : 1;
+    const int64_t nb11 = src1 ? src1.nb(1) : 1;
+    const int64_t nb12 = src1 ? src1.nb(2) : 1;
+    const int64_t nb13 = src1 ? src1.nb(3) : 1;
 
-    const int64_t ne12 = src1 ? src1->ne[2] : 1;
-    const int64_t ne13 = src1 ? src1->ne[3] : 1;
+    const int64_t ne12 = src1 ? src1.ne(2) : 1;
+    const int64_t ne13 = src1 ? src1.ne(3) : 1;
 
-    const uint32_t n_head      = src0->ne[2];
+    const uint32_t n_head      = src0.ne(2);
     const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
 
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
@@ -336,15 +335,15 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
 
     soft_max_params params = {};
-    params.nheads = src0->ne[2];
+    params.nheads = src0.ne(2);
     params.n_head_log2 = n_head_log2;
     params.ncols = ne00;
     params.nrows_x = nrows_x;
     params.nrows_y = nrows_y;
-    params.ne00 = src0->ne[0];
-    params.ne01 = src0->ne[1];
-    params.ne02 = src0->ne[2];
-    params.ne03 = src0->ne[3];
+    params.ne00 = src0.ne(0);
+    params.ne01 = src0.ne(1);
+    params.ne02 = src0.ne(2);
+    params.ne03 = src0.ne(3);
     params.nb11 = nb11;
     params.nb12 = nb12;
     params.nb13 = nb13;
@@ -365,31 +364,30 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 }
 
-void ggml_sycl_op_soft_max_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
-    const ggml_tensor * src0 = dst->src[0]; // grad
-    const ggml_tensor * src1 = dst->src[1]; // forward pass output
+void ggml_sycl_op_soft_max_back(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
 
-    // Use device-specific data pointers for TP support
-    const int device = ctx.device;
-    const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
-    const float * src1_d = (const float *) ggml_sycl_get_data_ptr(src1, device);
-    float       * dst_d  = (float       *) ggml_sycl_get_data_ptr(dst, device);
+    const float * src0_d = src0.resolve_as<const float>();
+    const float * src1_d = src1.resolve_as<const float>();
+    float       * dst_d  = dst.resolve_as<float>();
 
     dpct::queue_ptr stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(src1.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    const int64_t ncols = src0->ne[0];
-    const int64_t nrows = ggml_nrows(src0);
+    const int64_t ncols = src0.ne(0);
+    const int64_t nrows = ggml_nrows(src0.raw());
 
     float scale    = 1.0f;
     float max_bias = 0.0f;
 
-    memcpy(&scale,    (const float *) dst->op_params + 0, sizeof(float));
-    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+    const float * op_params = static_cast<const float *>(dst.op_params());
+    memcpy(&scale,    op_params + 0, sizeof(float));
+    memcpy(&max_bias, op_params + 1, sizeof(float));
 
     GGML_ASSERT(max_bias == 0.0f);
 

@@ -75,28 +75,34 @@ static void gated_linear_attn_f32_kernel(const dpct::queue_ptr stream, u_int B, 
     });
 }
 
-void ggml_sycl_op_gated_linear_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/5);
-    const float * k_d  = static_cast<const float *>(dst->src[0]->data);
-    const float * v_d  = static_cast<const float *>(dst->src[1]->data);
-    const float * r_d  = static_cast<const float *>(dst->src[2]->data);
-    const float * td_d = static_cast<const float *>(dst->src[3]->data);
-    const float * s_d  = static_cast<const float *>(dst->src[4]->data);
+void ggml_sycl_op_gated_linear_attn(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/5);
+    auto k  = dst.src(0);
+    auto v  = dst.src(1);
+    auto r  = dst.src(2);
+    auto td = dst.src(3);
+    auto s  = dst.src(4);
 
-    const int64_t B = dst->src[4]->ne[1];
-    const int64_t T = dst->src[0]->ne[2];
-    const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[1];
+    const float * k_d  = k.resolve_as<const float>();
+    const float * v_d  = v.resolve_as<const float>();
+    const float * r_d  = r.resolve_as<const float>();
+    const float * td_d = td.resolve_as<const float>();
+    const float * s_d  = s.resolve_as<const float>();
+
+    const int64_t B = s.ne(1);
+    const int64_t T = k.ne(2);
+    const int64_t C = dst.ne(0);
+    const int64_t H = k.ne(1);
 
     dpct::queue_ptr stream = ctx.stream();
-    GGML_ASSERT(dst->src[4]->type == GGML_TYPE_F32);
+    GGML_ASSERT(s.type() == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == 64 || C / H == 128);
 
     float scale;
-    memcpy(&scale, dst->op_params, sizeof(float));
+    memcpy(&scale, dst.op_params(), sizeof(float));
 
-    float * dst_d = (float *) dst->data;
+    float * dst_d = dst.resolve_as<float>();
 
     if (C / H == 64) {
         gated_linear_attn_f32_kernel<64>(stream, B, T, C, H, scale, k_d, v_d, r_d, td_d, s_d, dst_d);

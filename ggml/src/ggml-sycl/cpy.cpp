@@ -658,8 +658,10 @@ static void ggml_cpy_q4_1_q4_1(const char * cx, char * cdst, const int ne, const
         });
 }
 
-void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1) try {
-    // Unlike other operators ggml_sycl_cpy takes 2 distinct tensors instead of a dst ggml_tensor and rely on its src field
+void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) try {
+    const ggml_tensor * src0 = dst.src(0).raw();
+    const ggml_tensor * src1 = dst.raw();
+
     scope_op_debug_print scope_dbg_print(__func__, src1, /*num_src=*/0, debug_get_tensor_str("\tsrc0", src0));
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -703,10 +705,11 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 
     // Handle non-USM source memory (regular CPU memory that device can't access directly)
     // This can happen with graph input tensors in TP mode
-    // In TP mode with shared-context queues, tensors using tensor->data directly
-    // (mmap'd/CPU memory) can't be accessed - they need staging through USM memory.
+    // In TP mode with shared-context queues, tensors still pointing at the raw
+    // host storage field (mmap'd/CPU memory) can't be accessed and need staging.
     // The pointer type check is unreliable because Level Zero may report mmap'd memory
-    // as "host" type. Instead, check if the source came from tensor->data (not extra->data_device).
+    // as "host" type. Instead, check if the source came from the raw host field
+    // rather than a GPU-specific device pointer.
     char * staged_src = nullptr;
     bool   staged_is_host = false;
     bool   staged_is_shared = false;
@@ -714,9 +717,9 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 
     // Source needs staging if:
     // 1. We're in TP mode with shared-context queues
-    // 2. Source is using tensor->data (not GPU-specific extra->data_device)
+    // 2. Source is using the raw host field (not GPU-specific extra->data_device)
     // 3. Destination is device memory
-    bool src_is_from_tensor_data = (src0_ddc == (char*)src0->data);
+    bool src_is_from_tensor_data = (src0_ddc == static_cast<const char *>(ggml_sycl_host_data(src0)));
     bool needs_staging = (src_is_from_tensor_data && dst_is_device &&
                           g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
     GGML_SYCL_DEBUG("[CPY STAGING CHECK] device=%d needs_staging=%d src0_type=%d dst_is_device=%d\n",
@@ -865,5 +868,5 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 
 void ggml_sycl_dup(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
-    ggml_sycl_cpy(ctx, dst->src[0], dst);
+    ggml_sycl_cpy(ctx, ggml_sycl::sycl_tensor(dst, ctx.device));
 }

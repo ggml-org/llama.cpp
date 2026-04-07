@@ -57,18 +57,19 @@ static void timestep_embedding_f32_sycl(
         });
 }
 
-void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
-    const ggml_tensor *  src0   = dst->src[0];
-    const float * src0_d = (const float *)src0->data;
-    float * dst_d = (float *)dst->data;
+void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/1);
+    auto src0 = dst.src(0);
+    const float * src0_d = src0.resolve_as<const float>();
+    float * dst_d = dst.resolve_as<float>();
     dpct::queue_ptr stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    const int dim = dst->op_params[0];
-    const int max_period = dst->op_params[1];
+    const int32_t * op_params = static_cast<const int32_t *>(dst.op_params());
+    const int dim = op_params[0];
+    const int max_period = op_params[1];
 
-    timestep_embedding_f32_sycl(src0_d, dst_d, src0->ne[0], dst->nb[1], dim, max_period, stream);
+    timestep_embedding_f32_sycl(src0_d, dst_d, src0.ne(0), dst.nb(1), dim, max_period, stream);
 }

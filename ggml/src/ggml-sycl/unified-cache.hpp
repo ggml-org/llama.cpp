@@ -1464,6 +1464,7 @@ class unified_cache {
     // Zone capacity and usage.
     size_t zone_capacity(vram_zone_id zone) const;
     size_t zone_used(vram_zone_id zone) const;
+    size_t zone_available(vram_zone_id zone) const;
 
     const vram_zone & get_zone(vram_zone_id zone) const { return arena_zones_[static_cast<int>(zone)]; }
 

@@ -46,26 +46,26 @@ static void pad_reflect_1d_kernel_f32(
     GGML_UNUSED(p1);
 }
 
-void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context &ctx,
-                                 ggml_tensor *dst) {
+void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    const ggml_tensor * dst_raw = dst.raw();
+    auto src0 = dst.src(0);
 
-    const ggml_tensor *src0 = dst->src[0];
     dpct::queue_ptr stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    const int32_t *opts = (const int32_t *)dst->op_params;
+    const int32_t * opts = static_cast<const int32_t *>(dst.op_params());
     const int p0 = opts[0];
     const int p1 = opts[1];
 
-    const int64_t ne00 = src0->ne[0];
-    const int64_t ne01 = src0->ne[1];
+    const int64_t ne00 = src0.ne(0);
+    const int64_t ne01 = src0.ne(1);
     const sycl::uint3 ne01_packed = init_fastdiv_values(ne01);
-    const int64_t ne02 = src0->ne[2];
-    const int64_t ne03 = src0->ne[3];
+    const int64_t ne02 = src0.ne(2);
+    const int64_t ne03 = src0.ne(3);
 
-    const int64_t ne0 = dst->ne[0];
+    const int64_t ne0 = dst.ne(0);
 
     GGML_ASSERT(ne0 == ne00 + p0 + p1);
 
@@ -76,16 +76,16 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context &ctx,
     const dpct::dim3 block_dims((unsigned)bx, 1, 1);
 
     stream->submit([&](sycl::handler &cgh) {
-        auto src0_data_ct0 = src0->data;
-        auto dst_data_ct1 = dst->data;
-        auto src0_nb_ct7 = src0->nb[0];
-        auto src0_nb_ct8 = src0->nb[1];
-        auto src0_nb_ct9 = src0->nb[2];
-        auto src0_nb_ct10 = src0->nb[3];
-        auto dst_nb_ct11 = dst->nb[0];
-        auto dst_nb_ct12 = dst->nb[1];
-        auto dst_nb_ct13 = dst->nb[2];
-        auto dst_nb_ct14 = dst->nb[3];
+        auto src0_data_ct0 = src0.resolve_ptr();
+        auto dst_data_ct1  = dst.resolve_ptr();
+        auto src0_nb_ct7   = src0.nb(0);
+        auto src0_nb_ct8   = src0.nb(1);
+        auto src0_nb_ct9   = src0.nb(2);
+        auto src0_nb_ct10  = src0.nb(3);
+        auto dst_nb_ct11   = dst.nb(0);
+        auto dst_nb_ct12   = dst.nb(1);
+        auto dst_nb_ct13   = dst.nb(2);
+        auto dst_nb_ct14   = dst.nb(3);
 
         cgh.parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) {
@@ -97,4 +97,6 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context &ctx,
                                  dst_nb_ct14, p0, p1, item_ct1);
                          });
     });
+
+    GGML_UNUSED(dst_raw);
 }

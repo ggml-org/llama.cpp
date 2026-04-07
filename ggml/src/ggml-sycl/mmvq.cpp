@@ -20,9 +20,9 @@ static bool ggml_sycl_is_host_resident_weight(const ggml_tensor * src0, sycl::qu
         return true;
     }
     // Check 2: USM pointer type query (may return unknown on multi-device L0)
-    if (src0->data && stream) {
+    if (ggml_sycl_host_data(src0) && stream) {
         try {
-            const auto alloc = ggml_sycl_get_alloc_type(src0->data);
+            const auto alloc = ggml_sycl_get_alloc_type(const_cast<void *>(ggml_sycl_host_data(src0)));
             return alloc != sycl::usm::alloc::device;
         } catch (...) {
             return true;  // Assume host for safety
@@ -1550,6 +1550,14 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
 
     const int64_t ncols = tensor->ne[0];
     const int64_t nrows = ggml_nrows(tensor);
+    int           device_id = -1;
+    SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+    void * tensor_ptr = ggml_sycl_resolve_tensor_ptr(tensor, device_id);
+    if (!tensor_ptr) {
+        fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor '%s' has no resolved device pointer\n",
+                tensor->name ? tensor->name : "?");
+        return false;
+    }
 
     // Type-specific transform and tile alignment check
     int block_size = 0;
@@ -1560,9 +1568,9 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
                 return false;  // Not tile-aligned
             }
             if (current_mode == reorder_mode::SOA) {
-                convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+                convert_q4_0_to_coalesced_sycl(tensor_ptr, ncols, nrows, stream);
             } else if (current_mode == reorder_mode::NONE) {
-                reorder_q4_0_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+                reorder_q4_0_aos_to_coalesced_sycl(tensor_ptr, tensor_ptr, ncols, nrows, stream);
             } else {
                 return false;
             }
@@ -1574,9 +1582,9 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
                 return false;  // Not tile-aligned
             }
             if (current_mode == reorder_mode::SOA) {
-                convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+                convert_q8_0_to_coalesced_sycl(tensor_ptr, ncols, nrows, stream);
             } else if (current_mode == reorder_mode::NONE) {
-                reorder_q8_0_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+                reorder_q8_0_aos_to_coalesced_sycl(tensor_ptr, tensor_ptr, ncols, nrows, stream);
             } else {
                 return false;
             }
@@ -1588,9 +1596,9 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
                 return false;  // Not tile-aligned
             }
             if (current_mode == reorder_mode::SOA) {
-                convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+                convert_mxfp4_to_coalesced_sycl(tensor_ptr, ncols, nrows, stream);
             } else if (current_mode == reorder_mode::NONE) {
-                reorder_mxfp4_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+                reorder_mxfp4_aos_to_coalesced_sycl(tensor_ptr, tensor_ptr, ncols, nrows, stream);
             } else {
                 return false;
             }
@@ -1602,9 +1610,9 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
                 return false;  // Not tile-aligned
             }
             if (current_mode == reorder_mode::SOA) {
-                convert_q6_k_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+                convert_q6_k_to_coalesced_sycl(tensor_ptr, ncols, nrows, stream);
             } else if (current_mode == reorder_mode::NONE) {
-                reorder_q6_k_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+                reorder_q6_k_aos_to_coalesced_sycl(tensor_ptr, tensor_ptr, ncols, nrows, stream);
             } else {
                 return false;
             }
@@ -1621,12 +1629,10 @@ bool convert_tensor_to_coalesced(const ggml_tensor * tensor, dpct::queue_ptr str
 
     // Keep unified layout descriptor in sync
     extra->layout.mode        = GGML_LAYOUT_COALESCED;
-    extra->layout.data_ptr    = const_cast<void *>(tensor->data);
+    extra->layout.data_ptr    = tensor_ptr;
     extra->layout.size        = ggml_nbytes(tensor);
     extra->layout.owns_memory = false;
     if (extra->layout.device_id < 0) {
-        int device_id = -1;
-        SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
         extra->layout.device_id = device_id;
     }
     extra->layout.qtype      = tensor->type;
@@ -3622,8 +3628,13 @@ bool mmvq_moe_batched_dispatch(
     const int64_t total_src1_rows = ne11 * ne12;
     const size_t  required_size   = total_src1_rows * q8_1_row_size;
 
-    const float * src1_d = (const float *) src1->data;
-    float *       dst_d  = (float *) dst->data;
+    const float * src1_d = static_cast<const float *>(ggml_sycl_resolve_tensor_ptr(src1, ctx.device));
+    float *       dst_d  = static_cast<float *>(ggml_sycl_resolve_tensor_ptr(dst, ctx.device));
+    if (!src1_d || !dst_d) {
+        GGML_SYCL_DEBUG("[MMVQ] Missing resolved ptrs for batched MoE dispatch (%s)\n",
+                        src0->name ? src0->name : "?");
+        return false;
+    }
 
     ggml_sycl_pool_alloc<int8_t> src1_q8_1_pool(ctx.pool());
     src1_q8_1_pool.alloc(required_size);
@@ -3938,7 +3949,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     const int64_t total_src1_rows = ne11 * ne12;
     const size_t  required_size   = total_src1_rows * q8_1_row_size;
 
-    const float *   src1_d = (const float *) src1->data;
+    const float *   src1_d = static_cast<const float *>(ggml_sycl_resolve_tensor_ptr(src1, ctx.device));
     sycl::event     ids_copy_event;
     int64_t         ids_nb0 = ids->nb[0];
     int64_t         ids_nb1 = ids->nb[1];
@@ -3947,7 +3958,11 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MMVQ] Missing ids device pointer for %s\n", src0->name);
         return false;
     }
-    float * dst_d = (float *) dst->data;
+    float * dst_d = static_cast<float *>(ggml_sycl_resolve_tensor_ptr(dst, ctx.device));
+    if (!src1_d || !dst_d) {
+        GGML_SYCL_DEBUG("[MMVQ] Missing resolved ptrs for MoE _id dispatch (%s)\n", src0->name);
+        return false;
+    }
 
     const void * const * expert_ptrs = nullptr;
     sycl::event          table_event;

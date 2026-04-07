@@ -106,59 +106,63 @@ static void set_rows_paged_sycl(
 }
 
 // Main dispatch function that handles type dispatch
-static void ggml_sycl_op_set_rows_paged(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->op == GGML_OP_SET_ROWS_PAGED);
+static void ggml_sycl_op_set_rows_paged(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    const ggml_tensor * dst_view = dst.raw();
+    GGML_ASSERT(dst_view->op == GGML_OP_SET_ROWS_PAGED);
 
-    const ggml_tensor * src = dst->src[0];         // Source data [D * n_heads, n_tokens]
-    const ggml_tensor * indices = dst->src[1];     // Indices [n_tokens]
-    const ggml_tensor * block_table = dst->src[2]; // Block table [max_blocks, n_seqs]
-    const ggml_tensor * dst_orig = dst->src[3];    // Original destination tensor
+    auto src         = dst.src(0);  // Source data [D * n_heads, n_tokens]
+    auto indices     = dst.src(1);  // Indices [n_tokens]
+    auto block_table = dst.src(2);  // Block table [max_blocks, n_seqs]
+    auto dst_orig    = dst.src(3);  // Original destination tensor
 
-    const int32_t block_size = ((const int32_t *) dst->op_params)[0];
-    const int32_t seq_idx = ((const int32_t *) dst->op_params)[1];
-    const int32_t use_identity = ((const int32_t *) dst->op_params)[2];
+    const int32_t * op_params    = static_cast<const int32_t *>(dst.op_params());
+    const int32_t   block_size   = op_params[0];
+    const int32_t   seq_idx      = op_params[1];
+    const int32_t   use_identity = op_params[2];
 
     // Get tensor dimensions
     // dst (the view) is [D, block_size, n_heads, num_blocks]
-    const int64_t D = dst->ne[0];
-    const int64_t n_heads = dst->ne[2];
+    const int64_t D = dst.ne(0);
+    const int64_t n_heads = dst.ne(2);
 
     // src is [D * n_heads, n_tokens]
-    const int64_t n_tokens = src->ne[1];
+    const int64_t n_tokens = src.ne(1);
 
     // block_table is [max_blocks, n_seqs]
-    const int64_t max_blocks_per_seq = block_table->ne[0];
+    const int64_t max_blocks_per_seq = block_table.ne(0);
 
     GGML_SYCL_DEBUG("%s: src_type=%s dst_type=%s D=%lld n_heads=%lld n_tokens=%lld block_size=%d seq_idx=%d max_blocks=%lld idx_type=%s\n",
-                    __func__, ggml_type_name(src->type), ggml_type_name(dst_orig->type),
+                    __func__, ggml_type_name(src.type()), ggml_type_name(dst_orig.type()),
                     (long long)D, (long long)n_heads, (long long)n_tokens,
-                    block_size, seq_idx, (long long)max_blocks_per_seq, ggml_type_name(indices->type));
+                    block_size, seq_idx, (long long)max_blocks_per_seq, ggml_type_name(indices.type()));
 
     // Get SYCL stream
     queue_ptr stream = ctx.stream();
 
     // Get data pointers (using dst_orig for the actual destination)
-    const void * src_d = src->data;
-    void * dst_d = dst_orig->data;
+    const void * src_d = src.resolve_ptr();
+    void * dst_d = dst_orig.resolve_ptr();
     // Use nullptr for block_table when use_identity flag is set (identity mapping: physical = logical)
-    const int32_t * block_table_d = use_identity ? nullptr : (const int32_t *) block_table->data;
+    const int32_t * block_table_d = use_identity ? nullptr : block_table.resolve_as<const int32_t>();
+    const int64_t * indices_i64_d = indices.resolve_as<const int64_t>();
+    const int32_t * indices_i32_d = indices.resolve_as<const int32_t>();
 
     // Dispatch based on source and destination types
-    const bool use_i64 = (indices->type == GGML_TYPE_I64);
-    const ggml_type src_type = src->type;
-    const ggml_type dst_type = dst_orig->type;
+    const bool use_i64 = (indices.type() == GGML_TYPE_I64);
+    const ggml_type src_type = src.type();
+    const ggml_type dst_type = dst_orig.type();
 
     // Dispatch: (src_type, dst_type, idx_type) -> kernel instantiation
     if (src_type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32) {
         if (use_i64) {
             set_rows_paged_sycl<float, float, int64_t>(
                 (const float *) src_d, (float *) dst_d,
-                (const int64_t *) indices->data, block_table_d,
+                indices_i64_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         } else {
             set_rows_paged_sycl<float, float, int32_t>(
                 (const float *) src_d, (float *) dst_d,
-                (const int32_t *) indices->data, block_table_d,
+                indices_i32_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         }
     } else if (src_type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F16) {
@@ -166,36 +170,36 @@ static void ggml_sycl_op_set_rows_paged(ggml_backend_sycl_context & ctx, ggml_te
         if (use_i64) {
             set_rows_paged_sycl<float, sycl::half, int64_t>(
                 (const float *) src_d, (sycl::half *) dst_d,
-                (const int64_t *) indices->data, block_table_d,
+                indices_i64_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         } else {
             set_rows_paged_sycl<float, sycl::half, int32_t>(
                 (const float *) src_d, (sycl::half *) dst_d,
-                (const int32_t *) indices->data, block_table_d,
+                indices_i32_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         }
     } else if (src_type == GGML_TYPE_F16 && dst_type == GGML_TYPE_F16) {
         if (use_i64) {
             set_rows_paged_sycl<sycl::half, sycl::half, int64_t>(
                 (const sycl::half *) src_d, (sycl::half *) dst_d,
-                (const int64_t *) indices->data, block_table_d,
+                indices_i64_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         } else {
             set_rows_paged_sycl<sycl::half, sycl::half, int32_t>(
                 (const sycl::half *) src_d, (sycl::half *) dst_d,
-                (const int32_t *) indices->data, block_table_d,
+                indices_i32_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         }
     } else if (src_type == GGML_TYPE_F16 && dst_type == GGML_TYPE_F32) {
         if (use_i64) {
             set_rows_paged_sycl<sycl::half, float, int64_t>(
                 (const sycl::half *) src_d, (float *) dst_d,
-                (const int64_t *) indices->data, block_table_d,
+                indices_i64_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         } else {
             set_rows_paged_sycl<sycl::half, float, int32_t>(
                 (const sycl::half *) src_d, (float *) dst_d,
-                (const int32_t *) indices->data, block_table_d,
+                indices_i32_d, block_table_d,
                 D, n_heads, n_tokens, block_size, seq_idx, max_blocks_per_seq, stream);
         }
     } else {

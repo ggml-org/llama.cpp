@@ -272,28 +272,36 @@ static sycl::event set_rows_sycl_fp8(
 }
 
 template<typename TIn, typename TIdx>
-static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx,
+                                 const ggml_tensor *         src0,
+                                 const ggml_tensor *         src1,
+                                 ggml_sycl::sycl_tensor      safe_dst) {
+    const ggml_tensor * dst_raw = safe_dst.raw();
+    const ggml_tensor * dst     = dst_raw;
     // Use device-specific pointers for TP mode (KV cache is allocated per-device)
     const int device = ctx.device;
     const char * src0_d = (const char *)ggml_sycl_get_data_ptr(src0, device);
     const TIdx * src1_d = (const TIdx *)ggml_sycl_get_data_ptr(src1, device);
-    char * dst_d = (char *)ggml_sycl_get_data_ptr(dst, device);
+    char * dst_d = safe_dst.resolve_as<char>();
 
     // Debug: Check set_rows in TP mode
     static int set_rows_debug = 0;
     if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && set_rows_debug < 6) {
         fprintf(stderr, "SYCL TP SET_ROWS[%d] dev=%d dst=%s type=%d\n",
-                set_rows_debug, device, dst->name ? dst->name : "(null)", (int)dst->type);
+                set_rows_debug, device, dst_raw->name ? dst_raw->name : "(null)", (int)dst_raw->type);
         fprintf(stderr, "  src0=%p->%p (ne=[%ld,%ld,%ld,%ld])\n",
-                (void*)src0->data, (void*)src0_d, (long)src0->ne[0], (long)src0->ne[1], (long)src0->ne[2], (long)src0->ne[3]);
+                const_cast<void *>(ggml_sycl_host_data(src0)), (void*)src0_d,
+                (long)src0->ne[0], (long)src0->ne[1], (long)src0->ne[2], (long)src0->ne[3]);
         fprintf(stderr, "  dst=%p->%p (ne=[%ld,%ld,%ld,%ld])\n",
-                (void*)dst->data, (void*)dst_d, (long)dst->ne[0], (long)dst->ne[1], (long)dst->ne[2], (long)dst->ne[3]);
+                const_cast<void *>(ggml_sycl_host_data(dst_raw)), (void*)dst_d,
+                (long)dst_raw->ne[0], (long)dst_raw->ne[1], (long)dst_raw->ne[2], (long)dst_raw->ne[3]);
 
         // Check if dst is a view and trace to parent
-        if (dst->view_src != nullptr) {
-            fprintf(stderr, "  dst is VIEW of parent=%s data=%p\n", dst->view_src->name, dst->view_src->data);
-            if (dst->view_src->extra) {
-                const auto * parent_extra = static_cast<const ggml_tensor_extra_gpu *>(dst->view_src->extra);
+        if (dst_raw->view_src != nullptr) {
+            fprintf(stderr, "  dst is VIEW of parent=%s data=%p\n", dst_raw->view_src->name,
+                    const_cast<void *>(ggml_sycl_host_data(dst_raw->view_src)));
+            if (dst_raw->view_src->extra) {
+                const auto * parent_extra = static_cast<const ggml_tensor_extra_gpu *>(dst_raw->view_src->extra);
                 fprintf(stderr, "  parent extra: data_device[0]=%p data_device[1]=%p\n",
                         parent_extra->data_device[0], parent_extra->data_device[1]);
             } else {
@@ -302,8 +310,8 @@ static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_ten
         } else {
             fprintf(stderr, "  dst is NOT a view (view_src=NULL)\n");
         }
-        if (dst->extra) {
-            const auto * dst_extra = static_cast<const ggml_tensor_extra_gpu *>(dst->extra);
+        if (dst_raw->extra) {
+            const auto * dst_extra = static_cast<const ggml_tensor_extra_gpu *>(dst_raw->extra);
             fprintf(stderr, "  dst extra: data_device[0]=%p data_device[1]=%p\n",
                     dst_extra->data_device[0], dst_extra->data_device[1]);
         } else {
@@ -327,7 +335,7 @@ static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_ten
     dpct::queue_ptr stream = ctx.stream();
     sycl::event evt;
 
-    switch (dst->type) {
+    switch (dst_raw->type) {
         case GGML_TYPE_F32:
             evt = set_rows_sycl<TIn, TIdx, float>(
                 src0_d, src1_d, dst_d,
@@ -403,13 +411,13 @@ static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_ten
     return evt;
 }
 
-void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
+void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
+    const ggml_tensor * src0 = dst.src(0).raw();
+    const ggml_tensor * src1 = dst.src(1).raw();
 
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->src[1]->type == GGML_TYPE_I64 || dst->src[1]->type == GGML_TYPE_I32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32);
 
     sycl::event evt;
     if (src1->type == GGML_TYPE_I64) {

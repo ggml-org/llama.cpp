@@ -32,32 +32,32 @@ inline void set_f32(const float* src, float* dst,
 }
 
 // Main function: prepare GPU queue and launch parallel_for
-void ggml_sycl_op_set(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
-    const ggml_tensor* src0 = dst->src[0];
-    const ggml_tensor* src1 = dst->src[1];
+void ggml_sycl_op_set(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
 
     // Ensure shapes and types are compatible
-    GGML_ASSERT(ggml_are_same_shape(src0, dst));
-    GGML_ASSERT(ggml_is_contiguous(dst) && ggml_is_contiguous(src0));
-    GGML_ASSERT(dst->type == src0->type && src0->type == src1->type && dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src0.raw(), dst.raw()));
+    GGML_ASSERT(dst.is_contiguous() && src0.is_contiguous());
+    GGML_ASSERT(dst.type() == src0.type() && src0.type() == src1.type() && dst.type() == GGML_TYPE_F32);
 
-    const int32_t* opts = (const int32_t*) dst->op_params;
+    const int32_t* opts = static_cast<const int32_t *>(dst.op_params());
     const int64_t nb[3]     = {opts[0]/sizeof(float), opts[1]/sizeof(float), opts[2]/sizeof(float)};
     const int64_t offset_elem = opts[3] / sizeof(float);
     const bool inplace = opts[4];
 
-    float* dst_ptr = (float*) dst->data;
-    const float* src0_ptr = (const float*) src0->data;
-    const float* src1_ptr = (const float*) src1->data;
+    float* dst_ptr = dst.resolve_as<float>();
+    const float* src0_ptr = src0.resolve_as<const float>();
+    const float* src1_ptr = src1.resolve_as<const float>();
 
     queue_ptr stream = ctx.stream();
 
     // Copy src0 to dst if not inplace
     if (!inplace)
-        stream->memcpy(dst_ptr, src0_ptr, ggml_nbytes(dst));
+        stream->memcpy(dst_ptr, src0_ptr, dst.nbytes());
 
-    const int64_t ne[4] = {src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]};
-    const int64_t src_nb[3] = {src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float), src1->nb[3]/sizeof(float)};
+    const int64_t ne[4] = {src1.ne(0), src1.ne(1), src1.ne(2), src1.ne(3)};
+    const int64_t src_nb[3] = {src1.nb(1)/sizeof(float), src1.nb(2)/sizeof(float), src1.nb(3)/sizeof(float)};
 
     const size_t total_threads = ne[0]*ne[1]*ne[2]*ne[3];
     const size_t grid_size = ((total_threads + SYCL_SET_BLOCK_SIZE - 1) / SYCL_SET_BLOCK_SIZE) * SYCL_SET_BLOCK_SIZE;

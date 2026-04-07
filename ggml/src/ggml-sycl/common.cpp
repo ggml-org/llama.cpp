@@ -2190,8 +2190,12 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             return;
         }
 
-        float * src_data = static_cast<float *>(src->data);
-        float * dst_data = static_cast<float *>(dst->data);
+        float * src_data = static_cast<float *>(ggml_sycl_resolve_or_host_tensor_ptr(src, ctx.device));
+        float * dst_data = static_cast<float *>(ggml_sycl_resolve_or_host_tensor_ptr(dst, ctx.device));
+        if (!src_data || !dst_data) {
+            GGML_LOG_ERROR("SYCL CCL ALL_REDUCE: failed to resolve src/dst pointers\n");
+            return;
+        }
         size_t  count    = ggml_nelements(dst);
 
         // CCL allreduce: src_data -> dst_data with sum

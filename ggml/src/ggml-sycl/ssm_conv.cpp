@@ -63,32 +63,32 @@ static void kernel_ssm_conv(
     });
 }
 
-void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_tensor * src0 = dst->src[0];
-    ggml_tensor * src1 = dst->src[1];
+void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(src1.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type()  == GGML_TYPE_F32);
 
-    const int d_conv   = src1->ne[0];
-    const int ncs      = src0->ne[0];
-    const int d_inner  = src0->ne[1];
-    const int n_t      = dst->ne[1];
-    const int n_s      = dst->ne[2];
+    const int d_conv   = src1.ne(0);
+    const int ncs      = src0.ne(0);
+    const int d_inner  = src0.ne(1);
+    const int n_t      = dst.ne(1);
+    const int n_s      = dst.ne(2);
 
-    GGML_ASSERT(src0->ne[0] == d_conv - 1 + n_t);
-    GGML_ASSERT(src0->ne[1] == d_inner);
-    GGML_ASSERT(src1->ne[1] == d_inner);
+    GGML_ASSERT(src0.ne(0) == d_conv - 1 + n_t);
+    GGML_ASSERT(src0.ne(1) == d_inner);
+    GGML_ASSERT(src1.ne(1) == d_inner);
 
-    GGML_ASSERT(dst->ne[0] == d_inner);
-    GGML_ASSERT(dst->ne[1] == n_t);
-    GGML_ASSERT(dst->ne[2] == n_s);
+    GGML_ASSERT(dst.ne(0) == d_inner);
+    GGML_ASSERT(dst.ne(1) == n_t);
+    GGML_ASSERT(dst.ne(2) == n_s);
 
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
-    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src0.nb(0) == sizeof(float));
+    GGML_ASSERT(src1.nb(0) == sizeof(float));
 
-    GGML_ASSERT(src0->nb[1] == src0->ne[0] * sizeof(float));
+    GGML_ASSERT(src0.nb(1) == src0.ne(0) * sizeof(float));
 
     const int src_stride_inner = ncs;
     const int src_stride_seq   = ncs * d_inner;
@@ -98,9 +98,9 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     try {
         queue *q = ctx.stream();
 
-        const float *src_data = static_cast<const float *>(src0->data);
-        const float *weights  = static_cast<const float *>(src1->data);
-        float *dst_data       = static_cast<float *>(dst->data);
+        const float *src_data = src0.resolve_as<const float>();
+        const float *weights  = src1.resolve_as<const float>();
+        float *dst_data       = dst.resolve_as<float>();
 
         GGML_ASSERT(src_data && weights && dst_data);
 

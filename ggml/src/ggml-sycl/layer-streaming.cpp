@@ -188,7 +188,7 @@ bool layer_stream_manager::load_layer_sync(int layer_id, int buffer_idx, sycl::q
     if (buffer_idx < 0 || buffer_idx > 1) return false;
     if (!buffers_[buffer_idx]) return false;
 
-    const auto & layer = layers_[layer_id];
+    auto & layer = layers_[layer_id];
     if (layer.weights.empty()) return false;
 
     char *      dst_base = static_cast<char *>(buffers_[buffer_idx]);
@@ -196,7 +196,10 @@ bool layer_stream_manager::load_layer_sync(int layer_id, int buffer_idx, sycl::q
     int         skipped  = 0;
     sycl::event last_event;
 
-    for (const auto & w : layer.weights) {
+    for (auto & w : layer.weights) {
+        if (!w.host_ptr) {
+            w.host_ptr = ggml_sycl_lookup_host_weight_ptr_by_name(w.name.c_str());
+        }
         if (!w.host_ptr) {
             GGML_LOG_WARN("[LAYER-STREAM] No host pointer for %s (layer %d), skipping\n",
                           w.name.c_str(), layer_id);

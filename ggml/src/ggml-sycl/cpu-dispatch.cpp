@@ -2111,11 +2111,17 @@ static struct {
     ggml_sycl::offload_buffer_lease lease{};
 } g_cpu_staging[STAGING_BANKS][STAGING_SLOTS_PER_BANK];
 
+struct leaf_cache_entry {
+    void *  host_ptr = nullptr;
+    int64_t ne[GGML_MAX_DIMS] = {};
+    size_t  nbytes = 0;
+};
+
 // Persistent staging cache for leaf tensors (RoPE freqs, masks, constants).
-// Key: tensor data pointer (stable across tokens for leaf tensors).
-// Value: host-accessible pointer (either direct host ptr or cached staging copy).
+// Key: tensor struct pointer (stable within a ggml graph context).
+// Value: host staging buffer + shape validation guard to catch stale reuse.
 // Cleared on graph shape change (new token count changes masks).
-static std::unordered_map<const void *, void *> g_leaf_staging_cache;
+static std::unordered_map<const ggml_tensor *, leaf_cache_entry> g_leaf_staging_cache;
 
 void ggml_sycl_cpu_staging_cache_clear() {
     g_leaf_staging_cache.clear();
@@ -2350,9 +2356,14 @@ static void * get_host_ptr(const ggml_tensor * t,
         }
     }
 
-    // Host-accessible buffers (weight mmap, host-pinned) → use tensor->data directly
+    // Host-accessible buffers (weight mmap, host-pinned) → use resolved host
+    // storage when available so CPU and GPU share the same pinned copies.
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return t->data;
+        void * resolved = ggml_sycl_resolve_tensor_ptr(t, device);
+        if (resolved && is_host_accessible_usm(resolved, device)) {
+            return resolved;
+        }
+        return const_cast<void *>(ggml_sycl_host_data(t));
     }
 
     // For weight tensors: look up host-accessible data from cache or mmap.
@@ -2398,13 +2409,15 @@ static void * get_host_ptr(const ggml_tensor * t,
     // Non-weight tensors (activations, compute buffers).
     // Check persistent staging cache for leaf tensors.
     // Leaf tensors (RoPE freqs, masks) have stable data between tokens.
-    if (t->data) {
-        auto it = g_leaf_staging_cache.find(t->data);
-        if (it != g_leaf_staging_cache.end()) {
+    {
+        auto it = g_leaf_staging_cache.find(t);
+        if (it != g_leaf_staging_cache.end() &&
+            it->second.nbytes == ggml_nbytes(t) &&
+            std::memcmp(it->second.ne, t->ne, sizeof(t->ne)) == 0) {
             if (out_event) {
                 *out_event = sycl::event{};
             }
-            return it->second;
+            return it->second.host_ptr;
         }
     }
 
@@ -2424,14 +2437,26 @@ static void * get_host_ptr(const ggml_tensor * t,
         while (base->view_src) {
             base = base->view_src;
         }
-        void * base_data = base->data;
+        void * base_data = ggml_sycl_resolve_tensor_ptr(base, device);
+        if (!base_data) {
+            base_data = const_cast<void *>(ggml_sycl_host_data(base));
+        }
         if (base_data && is_host_accessible_usm(base_data, device)) {
             if (out_event) {
                 *out_event = sycl::event{};
             }
             GGML_SYCL_DEBUG("[CPU-STAGE] Host-accessible %s (base=%p) — no staging\n", t->name ? t->name : "(null)",
                             base_data);
-            return t->data;
+            const void * tensor_host = ggml_sycl_host_data(t);
+            const void * base_host   = ggml_sycl_host_data(base);
+            if (tensor_host && base_host) {
+                ptrdiff_t offset = static_cast<const char *>(tensor_host) - static_cast<const char *>(base_host);
+                return static_cast<char *>(base_data) + offset;
+            }
+            if (t != base) {
+                return static_cast<char *>(base_data) + t->view_offs;
+            }
+            return base_data;
         }
     }
 
@@ -2464,8 +2489,11 @@ static void * get_host_ptr(const ggml_tensor * t,
             }
             if (base->extra) {
                 void * base_dev = static_cast<ggml_tensor_extra_gpu *>(base->extra)->data_device_ptr(device);
-                if (base_dev && base->data) {
-                    ptrdiff_t offset = static_cast<char *>(t->data) - static_cast<char *>(base->data);
+                const void * tensor_host = ggml_sycl_host_data(t);
+                const void * base_host   = ggml_sycl_host_data(base);
+                if (base_dev && tensor_host && base_host) {
+                    ptrdiff_t offset =
+                        static_cast<const char *>(tensor_host) - static_cast<const char *>(base_host);
                     dev_ptr          = static_cast<char *>(base_dev) + offset;
                 }
             }
@@ -2499,8 +2527,12 @@ static void * get_host_ptr(const ggml_tensor * t,
     // Cache for leaf tensors (stable data pointers between tokens).
     // Only cache non-weight tensors that aren't activations (no src[0]).
     // Leaf tensors in ggml have no source tensors.
-    if (t->data && !t->src[0]) {
-        g_leaf_staging_cache[t->data] = host;
+    if (!t->src[0]) {
+        leaf_cache_entry entry;
+        entry.host_ptr = host;
+        std::memcpy(entry.ne, t->ne, sizeof(entry.ne));
+        entry.nbytes = ggml_nbytes(t);
+        g_leaf_staging_cache[t] = entry;
     }
     return host;
 }
@@ -2521,7 +2553,8 @@ static void flush_output(ggml_tensor *       t,
         return;
     }
     // HOST_COMPUTE: host-pinned buffers don't need staging flush.
-    if (t->data && is_host_accessible_usm(t->data, device)) {
+    void * resolved_ptr = ggml_sycl_resolve_tensor_ptr(t, device);
+    if (resolved_ptr && is_host_accessible_usm(resolved_ptr, device)) {
         return;
     }
     // When retained mode is active, outputs stay in host scratch.
@@ -2562,15 +2595,20 @@ static void flush_output(ggml_tensor *       t,
 // Get host pointer for output tensor.
 // Uses staging slot 2 of the current bank.
 static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu_q) {
-    // Host-accessible buffer → use tensor->data directly
+    // Host-accessible buffer → use resolved host-visible storage.
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return t->data;
+        void * resolved = ggml_sycl_resolve_tensor_ptr(t, device);
+        if (resolved && is_host_accessible_usm(resolved, device)) {
+            return resolved;
+        }
+        return const_cast<void *>(ggml_sycl_host_data(t));
     }
     // HOST_COMPUTE: SYCL-allocated host-pinned USM buffers are host-accessible
     // but ggml_backend_buffer_is_host() returns false for SYCL buffer types.
     // Check USM pointer type to detect host-accessible compute buffers.
-    if (t->data && is_host_accessible_usm(t->data, device)) {
-        return t->data;
+    void * resolved = ggml_sycl_resolve_tensor_ptr(t, device);
+    if (resolved && is_host_accessible_usm(resolved, device)) {
+        return resolved;
     }
     // Device-resident: allocate staging but don't copy (will be written by kernel)
     size_t nbytes = ggml_nbytes(t);
@@ -2580,10 +2618,16 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
 // Helper: get output pointer from retained scratch or staging fallback.
 // Sets *retained to true if output goes to scratch, false for staging.
 static void * get_retained_or_staging_output(ggml_tensor * dst, int device, sycl::queue * gpu_q, bool * retained) {
-    // Batched mode: output directly to host-pinned t->data
-    if (g_batched_mode && dst->data && is_host_accessible_usm(dst->data, device)) {
-        *retained = false;
-        return dst->data;
+    // Batched mode: output directly to host-pinned resolved storage.
+    if (g_batched_mode) {
+        void * dst_ptr = ggml_sycl_resolve_tensor_ptr(dst, device);
+        if (!dst_ptr) {
+            dst_ptr = const_cast<void *>(ggml_sycl_host_data(dst));
+        }
+        if (dst_ptr && is_host_accessible_usm(dst_ptr, device)) {
+            *retained = false;
+            return dst_ptr;
+        }
     }
     void * scratch_ptr = ggml_sycl_cpu_retained_alloc_output(dst);
     if (scratch_ptr) {
@@ -5516,8 +5560,12 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
     // The batched path returns early before flush logic, so staging would
     // leave rms_dst->data stale — subsequent ops in the batch would read
     // wrong values.
-    if (g_batched_mode && rms_dst->data && is_host_accessible_usm(rms_dst->data, device)) {
-        rms_out = static_cast<float *>(rms_dst->data);
+    void * rms_ptr = ggml_sycl_resolve_tensor_ptr(rms_dst, device);
+    if (!rms_ptr) {
+        rms_ptr = const_cast<void *>(ggml_sycl_host_data(rms_dst));
+    }
+    if (g_batched_mode && rms_ptr && is_host_accessible_usm(rms_ptr, device)) {
+        rms_out = static_cast<float *>(rms_ptr);
     } else if (g_retained_active) {
         rms_out      = static_cast<float *>(ggml_sycl_cpu_retained_alloc_output(rms_dst));
         retained_rms = (rms_out != nullptr);
@@ -5596,7 +5644,11 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
             if (has_cpu_evt) {
                 offload_wait_event(cpu_evt, offload_wait_reason::FALLBACK);
             }
-            memcpy(rms_dst->data, rms_out, rms_nbytes);
+            void * host_dst = rms_ptr ? rms_ptr : const_cast<void *>(ggml_sycl_host_data(rms_dst));
+            if (!host_dst) {
+                return false;
+            }
+            memcpy(host_dst, rms_out, rms_nbytes);
         } else {
             void * rms_dev_ptr = ggml_sycl_get_data_ptr(rms_dst, device);
             if (rms_dev_ptr) {

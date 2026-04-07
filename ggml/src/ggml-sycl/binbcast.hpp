@@ -24,18 +24,18 @@ static __dpct_inline__ float op_div(const float a, const float b) {
     return a / b;
 }
 
-void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
 // Specialized ADD1: add single scalar to all elements (more efficient than broadcast)
-void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
-void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
-void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
-void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
-void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
 // Fused MUL + ADD: dst = x * scale + bias
 // Eliminates intermediate tensor for scale+bias pattern
@@ -45,4 +45,3 @@ void ggml_sycl_op_mul_add_fused(ggml_backend_sycl_context & ctx,
 
 
 #endif //GGML_SYCL_BINBCAST_HPP
-

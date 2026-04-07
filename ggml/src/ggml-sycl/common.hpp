@@ -2107,6 +2107,45 @@ inline void * ggml_sycl_resolve_tensor_ptr(const ggml_tensor * tensor, int devic
     return ggml_sycl_get_layout_ptr_impl(tensor, device);
 }
 
+// raw-ok: centralized host-side access to the ggml_tensor storage field for
+// CPU fallbacks, debug traces, and buffer-management code that must reason
+// about original host storage rather than resolved device pointers.
+inline const void * ggml_sycl_host_data(const ggml_tensor * tensor) {
+    return tensor ? tensor->data : nullptr;
+}
+
+inline void * ggml_sycl_resolve_or_host_tensor_ptr(const ggml_tensor * tensor, int device) {
+    void * resolved = ggml_sycl_resolve_tensor_ptr(tensor, device);
+    if (resolved != nullptr) {
+        return resolved;
+    }
+    return const_cast<void *>(ggml_sycl_host_data(tensor));
+}
+
+// raw-ok: CPU fallback and staging infrastructure intentionally swap the
+// ggml tensor storage field while preserving the original pointer elsewhere.
+inline void ggml_sycl_assign_tensor_storage(ggml_tensor * tensor, void * data) {
+    if (tensor != nullptr) {
+        tensor->data = data;
+    }
+}
+
+// raw-ok: mutable variant for host-side fallback code that temporarily swaps
+// tensor storage while invoking ggml CPU kernels.
+inline void * ggml_sycl_host_data(ggml_tensor * tensor) {
+    return tensor ? tensor->data : nullptr;
+}
+
+const void * ggml_sycl_lookup_host_weight_ptr_by_name(const char * name);
+
+// raw-ok: centralized setter for host-side fallback code that needs to
+// redirect tensor storage temporarily.
+inline void ggml_sycl_set_host_data(ggml_tensor * tensor, void * ptr) {
+    if (tensor) {
+        tensor->data = ptr;
+    }
+}
+
 // Internal: layout resolution for weight tensors.  Use ggml_sycl_resolve_tensor_ptr
 // instead of calling this directly.
 inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int device) {
@@ -2215,6 +2254,8 @@ inline void * ggml_sycl_get_layout_ptr_impl(const ggml_tensor * tensor, int devi
 
     return ggml_sycl_get_data_ptr(tensor, device);
 }
+
+#include "sycl-tensor.hpp"
 
 // Resolve a weight layout pointer for a specific target layout.
 // Returns nullptr if the requested layout cannot be satisfied.

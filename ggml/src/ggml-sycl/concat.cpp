@@ -151,44 +151,45 @@ static void concat_T_sycl_non_cont(
 }
 
 template <typename T>
-void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
-    const ggml_tensor *  src0   = dst->src[0];
-    const ggml_tensor *  src1   = dst->src[1];
+void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
+    auto                 src0   = dst.src(0);
+    auto                 src1   = dst.src(1);
     queue_ptr            stream = ctx.stream();
 
-    const int32_t dim = ((int32_t *) dst->op_params)[0];
+    const int32_t dim = static_cast<const int32_t *>(dst.op_params())[0];
 
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-        const T * src0_d = (const T *) src0->data;
-        const T * src1_d = (const T *) src1->data;
-        T * dst_d = (T *) dst->data;
-        size_t type_size = elem_size(dst->type);
+    if (src0.is_contiguous() && src1.is_contiguous()) {
+        const T * src0_d = src0.resolve_as<const T>();
+        const T * src1_d = src1.resolve_as<const T>();
+        T * dst_d = dst.resolve_as<T>();
+        size_t type_size = elem_size(dst.type());
         if (dim != 3) {
-            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
-                concat_T_sycl<T>(src0_d + i3 * (src0->nb[3] / type_size), src1_d + i3 * (src1->nb[3] / type_size),
-                                dst_d + i3 * (dst->nb[3] / type_size), src0->ne[0], src0->ne[1], src0->ne[2], dst->ne[0],
-                                dst->ne[1], dst->ne[2], dim, stream);
+            for (int i3 = 0; i3 < dst.ne(3); i3++) {
+                concat_T_sycl<T>(src0_d + i3 * (src0.nb(3) / type_size), src1_d + i3 * (src1.nb(3) / type_size),
+                                dst_d + i3 * (dst.nb(3) / type_size), src0.ne(0), src0.ne(1), src0.ne(2), dst.ne(0),
+                                dst.ne(1), dst.ne(2), dim, stream);
             }
         } else {
-            const size_t size0 = ggml_nbytes(src0);
-            const size_t size1 = ggml_nbytes(src1);
+            const size_t size0 = src0.nbytes();
+            const size_t size1 = src1.nbytes();
 
             SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0).wait()));
             SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d + size0 / type_size, src1_d, size1).wait()));
         }
     } else {
-        concat_T_sycl_non_cont<T>(stream, (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
-                                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0->nb[0], src0->nb[1],
-                                 src0->nb[2], src0->nb[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
-                                 src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3], dst->ne[0], dst->ne[1], dst->ne[2],
-                                 dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+        concat_T_sycl_non_cont<T>(stream, static_cast<const char *>(src0.resolve_ptr()),
+                                 static_cast<const char *>(src1.resolve_ptr()), static_cast<char *>(dst.resolve_ptr()),
+                                 src0.ne(0), src0.ne(1), src0.ne(2), src0.ne(3), src0.nb(0), src0.nb(1),
+                                 src0.nb(2), src0.nb(3), src1.ne(0), src1.ne(1), src1.ne(2), src1.ne(3),
+                                 src1.nb(0), src1.nb(1), src1.nb(2), src1.nb(3), dst.ne(0), dst.ne(1), dst.ne(2),
+                                 dst.ne(3), dst.nb(0), dst.nb(1), dst.nb(2), dst.nb(3), dim);
     }
 }
 
-void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
 
-    switch (dst->type) {
+    switch (dst.type()) {
     case GGML_TYPE_F32:
         concat_impl_sycl<float>(ctx, dst);
         break;

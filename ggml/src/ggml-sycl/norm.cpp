@@ -1101,56 +1101,56 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
     }
 }
 
-void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
-    const ggml_tensor * src0 = dst->src[0];
+void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
 
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    GGML_TENSOR_UNARY_OP_LOCALS
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    // Use device-specific data pointers for TP support
-    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
-    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+    const float * src0_dd = src0.resolve_as<const float>();
+    float *       dst_dd  = dst.resolve_as<float>();
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
+    memcpy(&eps, dst.op_params(), sizeof(float));
     GGML_ASSERT(eps >= 0.0f);
-    const size_t ts0 = ggml_type_size(src0->type);
-    GGML_ASSERT(nb00 == ts0);
-    const int64_t s01 = nb01 / ts0;
-    const int64_t s02 = nb02 / ts0;
-    const int64_t s03 = nb03 / ts0;
+    const size_t ts0 = ggml_type_size(src0.type());
+    GGML_ASSERT(src0.nb(0) == ts0);
+    const int64_t s01 = src0.nb(1) / ts0;
+    const int64_t s02 = src0.nb(2) / ts0;
+    const int64_t s03 = src0.nb(3) / ts0;
 
-    norm_f32_sycl(src0_dd, dst_dd, ne00, ne01, ne02, ne03, s01, s02, s03, eps, main_stream, ctx.device);
+    norm_f32_sycl(src0_dd, dst_dd, src0.ne(0), src0.ne(1), src0.ne(2), src0.ne(3), s01, s02, s03, eps, main_stream,
+                  ctx.device);
 }
 
-void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
+void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
 
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    int num_groups = dst->op_params[0];
+    const auto * params = static_cast<const int32_t *>(dst.op_params());
+    int          num_groups = params[0];
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    // Use device-specific data pointers for TP support
-    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
-    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+    const float * src0_dd = src0.resolve_as<const float>();
+    float *       dst_dd  = dst.resolve_as<float>();
 
     float eps;
-    memcpy(&eps, dst->op_params + 1, sizeof(float));
+    memcpy(&eps, params + 1, sizeof(float));
 
-    int group_size = dst->src[0]->ne[0] * dst->src[0]->ne[1] * ((dst->src[0]->ne[2] + num_groups - 1) / num_groups);
-    group_norm_f32_sycl(src0_dd, dst_dd, num_groups, eps, group_size, dst->src[0]->ne[0] * dst->src[0]->ne[1] * dst->src[0]->ne[2], main_stream, ctx.device);
+    int group_size = src0.ne(0) * src0.ne(1) * ((src0.ne(2) + num_groups - 1) / num_groups);
+    group_norm_f32_sycl(src0_dd, dst_dd, num_groups, eps, group_size, src0.ne(0) * src0.ne(1) * src0.ne(2), main_stream,
+                        ctx.device);
 }
 
-void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-
-    const ggml_tensor * src0 = dst->src[0];
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
@@ -1160,21 +1160,20 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                     ctx.device, (void*)main_stream,
                     main_stream->get_device().get_info<sycl::info::device::name>().c_str());
 
-    // Use device-specific data pointers for TP support
-    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
-    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+    const float * src0_dd = src0.resolve_as<const float>();
+    float *       dst_dd  = dst.resolve_as<float>();
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
+    memcpy(&eps, dst.op_params(), sizeof(float));
 
-    GGML_TENSOR_UNARY_OP_LOCALS
-    const size_t ts0 = ggml_type_size(src0->type);
-    GGML_ASSERT(nb00 == ts0);
-    const int64_t s01 = nb01 / ts0;
-    const int64_t s02 = nb02 / ts0;
-    const int64_t s03 = nb03 / ts0;
+    const size_t ts0 = ggml_type_size(src0.type());
+    GGML_ASSERT(src0.nb(0) == ts0);
+    const int64_t s01 = src0.nb(1) / ts0;
+    const int64_t s02 = src0.nb(2) / ts0;
+    const int64_t s03 = src0.nb(3) / ts0;
 
-    rms_norm_f32_sycl(src0_dd, dst_dd, ne00, ne01, ne02, ne03, s01, s02, s03, eps, main_stream, ctx.device);
+    rms_norm_f32_sycl(src0_dd, dst_dd, src0.ne(0), src0.ne(1), src0.ne(2), src0.ne(3), s01, s02, s03, eps,
+                      main_stream, ctx.device);
 
     // Debug: check RMS_NORM output for zeros (buffer aliasing investigation)
     static bool rms_debug_enabled = getenv("GGML_SYCL_RMS_DEBUG") != nullptr;
@@ -1184,7 +1183,7 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         main_stream->memcpy(sample, dst_dd, 4 * sizeof(float)).wait();
         bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
         fprintf(stderr, "[RMS_NORM_OUT] dst=%s dst_dd=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
-                dst->name, (void*)dst_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
+                dst.name(), (void*)dst_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
     }
 }
 
@@ -1378,36 +1377,37 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
                               eps, main_stream, ctx.device);
 }
 
-void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
 
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32); // dz
-    GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32); // x
-    GGML_ASSERT(dst->type         == GGML_TYPE_F32);
+    auto g = dst.src(0);
+    auto x = dst.src(1);
+
+    GGML_ASSERT(g.type() == GGML_TYPE_F32); // dz
+    GGML_ASSERT(x.type() == GGML_TYPE_F32); // x
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
     float eps = 1e-5f;
-    std::memcpy(&eps, dst->op_params, sizeof(float));
+    std::memcpy(&eps, dst.op_params(), sizeof(float));
     if (!(eps > 0.0f) || !std::isfinite(eps)) eps = 1e-5f;
 
-    const float * g_base  = static_cast<const float *>(dst->src[0]->data); // dz
-    const float * x_base  = static_cast<const float *>(dst->src[1]->data); // x
-          float * dx_base = static_cast<      float *>(dst->data);
+    const float * g_base  = g.resolve_as<const float>(); // dz
+    const float * x_base  = x.resolve_as<const float>(); // x
+          float * dx_base = dst.resolve_as<float>();
 
-    const int64_t D  = dst->ne[0];
-    const int64_t n1 = dst->ne[1], n2 = dst->ne[2], n3 = dst->ne[3]; (void) n3;
-    const int64_t N  = ggml_nrows(dst);
+    const int64_t D  = dst.ne(0);
+    const int64_t n1 = dst.ne(1), n2 = dst.ne(2), n3 = dst.ne(3); (void) n3;
+    const int64_t N  = ggml_nrows(dst.raw());
     if (D == 0 || N == 0) return;
 
-    const ggml_tensor *G = dst->src[0];
-    const ggml_tensor *X = dst->src[1];
-    const int ts = (int) ggml_type_size(X->type);
-    GGML_ASSERT((size_t) X->nb[0]   == (size_t) ts);
-    GGML_ASSERT((size_t) G->nb[0]   == (size_t) ts);
-    GGML_ASSERT((size_t) dst->nb[0] == (size_t) ts);
+    const int ts = (int) ggml_type_size(x.type());
+    GGML_ASSERT((size_t) x.nb(0)   == (size_t) ts);
+    GGML_ASSERT((size_t) g.nb(0)   == (size_t) ts);
+    GGML_ASSERT((size_t) dst.nb(0) == (size_t) ts);
 
-    const int64_t xs1 = X->nb[1] / ts, xs2 = X->nb[2] / ts, xs3 = X->nb[3] / ts;
-    const int64_t gs1 = G->nb[1] / ts, gs2 = G->nb[2] / ts, gs3 = G->nb[3] / ts;
-    const int64_t ds1 = dst->nb[1] / ts, ds2 = dst->nb[2] / ts, ds3 = dst->nb[3] / ts;
+    const int64_t xs1 = x.nb(1) / ts, xs2 = x.nb(2) / ts, xs3 = x.nb(3) / ts;
+    const int64_t gs1 = g.nb(1) / ts, gs2 = g.nb(2) / ts, gs3 = g.nb(3) / ts;
+    const int64_t ds1 = dst.nb(1) / ts, ds2 = dst.nb(2) / ts, ds3 = dst.nb(3) / ts;
 
     dpct::queue_ptr q = ctx.stream();
 
@@ -1534,22 +1534,22 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
 
 }
 
-void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
+void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
 
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const int64_t ne00 = dst->src[0]->ne[0];
-    const int64_t nrows = ggml_nrows(dst->src[0]);
-    // Use device-specific data pointers for TP support
-    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
-    float * dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+    const int64_t ne00 = src0.ne(0);
+    const int64_t nrows = ggml_nrows(src0.raw());
+    const float * src0_dd = src0.resolve_as<const float>();
+    float * dst_dd = dst.resolve_as<float>();
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
+    memcpy(&eps, dst.op_params(), sizeof(float));
 
     l2_norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
 

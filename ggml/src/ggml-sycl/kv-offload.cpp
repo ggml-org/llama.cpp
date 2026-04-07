@@ -68,8 +68,9 @@ void kv_offload_manager::register_layer(int layer_id, ggml_tensor* k_cache, ggml
 
     info.k_size_per_token = k_total / max_tokens;
     info.v_size_per_token = v_total / max_tokens;
-    info.k_base_gpu = k_cache->data;
-    info.v_base_gpu = v_cache->data;
+    const int device = ggml_sycl_get_device_id_from_queue(queue_);
+    info.k_base_gpu = ggml_sycl_resolve_tensor_ptr(k_cache, device);
+    info.v_base_gpu = ggml_sycl_resolve_tensor_ptr(v_cache, device);
     info.max_tokens = max_tokens;
 
     layers_[layer_id] = info;

@@ -1,5 +1,4 @@
 #include <sycl/sycl.hpp>
-#include <cstring>  // for std::memcpy
 #include "common.hpp"
 #include "add-id.hpp"
 
@@ -35,17 +34,26 @@ static void add_id_kernel(
   }
 }
 
-void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
-  const ggml_tensor* src0 = dst->src[0];
-  const ggml_tensor* src1 = dst->src[1];
-  const ggml_tensor* src2 = dst->src[2];
+void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+  auto src0 = dst.src(0);
+  auto src1 = dst.src(1);
+  auto src2 = dst.src(2);
 
-  GGML_TENSOR_TERNARY_OP_LOCALS
+  const int64_t ne0 = dst.ne(0);
+  const int64_t ne1 = dst.ne(1);
+  const int64_t ne2 = dst.ne(2);
+  const size_t nb00 = src0.nb(0);
+  const size_t nb01 = src0.nb(1);
+  const size_t nb02 = src0.nb(2);
+  const size_t nb10 = src1.nb(0);
+  const size_t nb11 = src1.nb(1);
+  const size_t nb20 = src2.nb(0);
+  const size_t nb21 = src2.nb(1);
 
-  GGML_ASSERT(dst->type == GGML_TYPE_F32);
-  GGML_ASSERT(src0->type == GGML_TYPE_F32);
-  GGML_ASSERT(src1->type == GGML_TYPE_F32);
-  GGML_ASSERT(src2->type == GGML_TYPE_I32);
+  GGML_ASSERT(dst.type() == GGML_TYPE_F32);
+  GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+  GGML_ASSERT(src1.type() == GGML_TYPE_F32);
+  GGML_ASSERT(src2.type() == GGML_TYPE_I32);
 
   GGML_ASSERT(nb00 == sizeof(float));
   GGML_ASSERT(nb10 == sizeof(float));
@@ -53,88 +61,16 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
   sycl::queue& q = *ctx.stream();
 
-  const float* src0_d = (const float*)src0->data;
-  const int32_t* src2_d = (const int32_t*)src2->data;
-  float* dst_d = (float*)dst->data;
+  const float* src0_d = src0.resolve_as<const float>();
+  const float* src1_d = src1.resolve_as<const float>();
+  const int32_t* src2_d = src2.resolve_as<const int32_t>();
+  float* dst_d = dst.resolve_as<float>();
 
-  // Check if src1 needs staging - GPU can only directly access device memory
-  // CRITICAL: Stage ALL non-device pointers due to Level Zero driver bug that reports
-  // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
-  const sycl::usm::alloc src1_type          = ggml_sycl_get_alloc_type(src1->data);
-  const bool src1_needs_staging = (src1_type != sycl::usm::alloc::device);
+  int threads = std::min((int)ne0, 768);  // cols
 
-  const float* src1_d = nullptr;
-  void* src1_staging = nullptr;
-  void* host_staging = nullptr;
-  size_t src1_bytes = 0;
-  const int runtime_device = ggml_sycl_get_device_id_from_queue(q);
-  sycl::event copy_event;
-
-  if (src1_needs_staging) {
-    // Non-device source - stage to device memory via pinned host buffer
-    // Calculate total size of src1 tensor
-    src1_bytes = ggml_nbytes(src1);
-
-    // Allocate pinned host staging buffer
-    host_staging = ggml_sycl_malloc_host_tracked_bytes(src1_bytes, q, "add_id:host_staging");
-    if (!host_staging) {
-      GGML_LOG_ERROR("[ADD_ID] Failed to allocate host staging for mmap src1 (%zu bytes)\n", src1_bytes);
-      return;
-    }
-
-    // CPU memcpy from mmap to pinned host
-    std::memcpy(host_staging, src1->data, src1_bytes);
-
-    // Allocate device staging buffer
-    src1_staging = ggml_sycl_malloc_device(src1_bytes, q, "add_id:device_staging");
-    if (!src1_staging) {
-      GGML_LOG_ERROR("[ADD_ID] Failed to allocate device staging for mmap src1 (%zu bytes)\n", src1_bytes);
-      ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
-      return;
-    }
-
-    // DMA from pinned host to device - NO .wait()! Use event chaining instead
-    copy_event = q.memcpy(src1_staging, host_staging, src1_bytes);
-
-    src1_d = (const float*)src1_staging;
-    GGML_SYCL_DEBUG("[ADD_ID] Staged non-device src1 to device (%zu bytes, type=%d)\n", src1_bytes, (int)src1_type);
-  } else {
-    // Device memory - use directly
-    src1_d = (const float*)src1->data;
-  }
-
-  int threads = std::min((int)ne00, 768);  // cols
-
-  // Submit kernel with dependency on copy event if staging was needed
-  sycl::event kernel_event;
-  if (src1_needs_staging) {
-    // Kernel depends on copy completing
-    kernel_event = q.submit([&](sycl::handler& cgh) {
-      cgh.depends_on(copy_event);
-      cgh.parallel_for(
-          sycl::nd_range<3>(
-              sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
-              sycl::range<3>(1, 1, threads)),
-          [=](sycl::nd_item<3> item_ct1) {
-            add_id_kernel(
-                src0_d,
-                src1_d,
-                src2_d,
-                dst_d,
-                ne0,
-                ne1,
-                nb01,
-                nb02,
-                nb11,
-                nb21,
-                item_ct1);
-          });
-    });
-  } else {
-    // No staging needed, submit kernel directly
-    kernel_event = q.parallel_for(
+  q.parallel_for(
         sycl::nd_range<3>(
-            sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
+            sycl::range<3>(1, ne2, ne1) * sycl::range<3>(1, 1, threads),
             sycl::range<3>(1, 1, threads)),
         [=](sycl::nd_item<3> item_ct1) {
           add_id_kernel(
@@ -150,25 +86,4 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
               nb21,
               item_ct1);
         });
-  }
-
-  if (src1_staging) {
-    if (ggml_sycl_host_task_stable_for_queue(q)) {
-      // Async cleanup via host_task.
-      q.submit([&](sycl::handler& cgh) {
-        cgh.depends_on(kernel_event);
-        cgh.host_task([src1_staging, host_staging, runtime_device, src1_bytes, &q]() {
-          ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
-          sycl::free(src1_staging, q);
-          ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
-        });
-      });
-    } else {
-      // Mixed backend fallback: avoid host_task runtime crashes.
-      kernel_event.wait();
-      ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
-      sycl::free(src1_staging, q);
-      ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
-    }
-  }
 }

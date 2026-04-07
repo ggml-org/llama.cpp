@@ -67,18 +67,18 @@ static void kernel_roll_fused_i0_i1(
     });
 }
 
-void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
 
-    const ggml_tensor *src = dst->src[0];
-    GGML_ASSERT(src && src->type == GGML_TYPE_F32);
+    auto src = dst.src(0);
+    GGML_ASSERT(src && src.type() == GGML_TYPE_F32);
 
-    const int ne0 = (int) dst->ne[0];
-    const int ne1 = (int) dst->ne[1];
-    const int ne2 = (int) dst->ne[2];
-    const int ne3 = (int) dst->ne[3];
+    const int ne0 = (int) dst.ne(0);
+    const int ne1 = (int) dst.ne(1);
+    const int ne2 = (int) dst.ne(2);
+    const int ne3 = (int) dst.ne(3);
 
-    const int32_t *params = (const int32_t *) dst->op_params;
+    const int32_t *params = static_cast<const int32_t *>(dst.op_params());
     int shift0 = params[0];
     int shift1 = params[1];
     int shift2 = params[2];
@@ -86,9 +86,9 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
 
     if ((shift0 | shift1 | shift2 | shift3) == 0) {
-        const size_t nb = ggml_nbytes(src);
+        const size_t nb = src.nbytes();
         queue *q = ctx.stream();
-        SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(dst->data, src->data, nb)));
+        SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(dst.resolve_ptr(), src.resolve_ptr(), nb)));
         return;
     }
 
@@ -106,8 +106,8 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     try {
         queue *q = ctx.stream();
 
-        const float *src_d = (const float *) src->data;
-        float *dst_d = (float *) dst->data;
+        const float *src_d = src.resolve_as<const float>();
+        float *dst_d = dst.resolve_as<float>();
         GGML_ASSERT(src_d && dst_d);
 
         kernel_roll_fused_i0_i1(

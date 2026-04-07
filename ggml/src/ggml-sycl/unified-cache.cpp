@@ -5905,15 +5905,19 @@ static unified_cache * create_cache_for_device(int                     device_id
                 compute_scratch_headroom / (1024.0 * 1024.0), budget / (1024.0 * 1024.0));
         }
 
-        // Leave additional headroom for KV cache and ggml compute buffers
-        // that allocate outside the arena via sycl::malloc_device.
-        // Default context (32K tokens) needs ~4 GB KV; -c 512 needs ~64 MB.
-        // Use 2 GB as a conservative default for typical inference contexts.
-        constexpr size_t kv_compute_headroom = 2048ull * 1024ull * 1024ull;
-        if (budget > kv_compute_headroom + compute_scratch_headroom) {
-            budget -= kv_compute_headroom;
-            GGML_LOG_INFO("[UNIFIED-CACHE] KV+compute headroom: %.0f MB reserved\n",
-                          kv_compute_headroom / (1024.0 * 1024.0));
+        // Leave additional headroom for KV cache and ggml compute buffers.
+        // When the VRAM arena is active, KV allocates from the shared KV+weight
+        // zone inside the arena, so no external headroom is needed — the planner
+        // charges KV alongside weights in the shared budget.
+        // When arena is NOT active, KV allocates via sycl::malloc_device outside
+        // the cache, so we must reserve headroom.
+        if (!vram_arena_enabled()) {
+            constexpr size_t kv_compute_headroom = 2048ull * 1024ull * 1024ull;
+            if (budget > kv_compute_headroom + compute_scratch_headroom) {
+                budget -= kv_compute_headroom;
+                GGML_LOG_INFO("[UNIFIED-CACHE] KV+compute headroom: %.0f MB reserved\n",
+                              kv_compute_headroom / (1024.0 * 1024.0));
+            }
         }
 
         char desc[256] = { 0 };
@@ -6323,9 +6327,10 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     bool         reserve_device = (tier == alloc_tier::DEVICE_VRAM);
     bool         reserve_host   = (tier == alloc_tier::HOST_PINNED);
 
-    bool   uses_pinned_pool = false;
-    bool   from_arena       = false;
-    void * ptr              = nullptr;
+    bool   uses_pinned_pool  = false;
+    bool   from_arena        = false;
+    bool   kv_spill_to_host  = false;
+    void * ptr               = nullptr;
     if (tier == alloc_tier::DEVICE_VRAM) {
         // Guard against Level Zero overcommit: if this allocation would exceed
         // the device's total VRAM, fail early so the caller can retry with
@@ -6389,27 +6394,37 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                     from_arena = true;
                     GGML_SYCL_DEBUG("[UNIFIED-ALLOC] KV arena alloc: dev=%d size=%.1f MB ptr=%p\n", req.device,
                                     alloc_size / (1024.0 * 1024.0), ptr);
+                } else {
+                    // Shared zone full (weights consumed most of it).
+                    // Fall back to host-pinned KV instead of raw device alloc
+                    // to avoid VRAM overcommit → DEVICE_LOST.
+                    GGML_LOG_WARN("[UNIFIED-ALLOC] KV arena zone full (need %.1f MB, avail %.1f MB), "
+                                 "falling back to host-pinned KV\n",
+                                 alloc_size / (1024.0 * 1024.0),
+                                 cache->zone_available(vram_zone_id::KV) / (1024.0 * 1024.0));
+                    kv_spill_to_host = true;
                 }
             }
         }
-        if (!ptr) {
+        if (!ptr && !kv_spill_to_host) {
             ptr = ggml_sycl_malloc_device_raw(alloc_size, *req.queue, "unified_alloc:device");
         }
-    } else {
+        // KV arena spill: redirect to host-pinned path.
+        if (!ptr && kv_spill_to_host) {
+            reserve_device = false;
+            reserve_host   = true;
+        }
+    }
+    if (!ptr && (tier == alloc_tier::HOST_PINNED || kv_spill_to_host)) {
         // Always try the pre-allocated pinned chunk pool first (lock-free path).
-        // Uses try_get_host_cache() to avoid g_cache_rw_mutex which would deadlock
-        // during S1-PRELOAD when the caller already holds the cache lock.
         if (auto * hcache = try_get_host_cache()) {
             ptr              = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
             uses_pinned_pool = (ptr != nullptr);
         }
         if (!ptr) {
-            // Pinned pool exhausted — fall back to raw malloc_host.
-            // After pre_allocate_all this should not happen during inference;
-            // log a warning so we can identify any remaining leak paths.
             GGML_LOG_WARN(
                 "[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes, "
-                "falling back to malloc_host (should not happen during inference)\n",
+                "falling back to malloc_host\n",
                 alloc_size);
             ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:host");
         }
@@ -8965,7 +8980,7 @@ size_t unified_cache_kv_arena_capacity(int device_id) {
     if (!cache || !cache->arena_active()) {
         return 0;
     }
-    return cache->zone_capacity(vram_zone_id::KV);
+    return cache->zone_available(vram_zone_id::KV);
 }
 
 size_t unified_cache_kv_arena_used(int device_id) {
@@ -9727,6 +9742,19 @@ size_t unified_cache::zone_used(vram_zone_id zone) const {
     return arena_zones_[static_cast<int>(zone)].used.load(std::memory_order_relaxed);
 }
 
+size_t unified_cache::zone_available(vram_zone_id zone) const {
+    const auto & z    = arena_zones_[static_cast<int>(zone)];
+    size_t       used = z.used.load(std::memory_order_relaxed);
+    // In single-chunk mode, KV and WEIGHT share the same region.
+    // Available KV space = total - kv_used - weight_used.
+    if (zone == vram_zone_id::KV && arena_n_chunks_ == 1) {
+        size_t weight_used = arena_zones_[static_cast<int>(vram_zone_id::WEIGHT)]
+                                 .used.load(std::memory_order_relaxed);
+        return z.size > (used + weight_used) ? z.size - used - weight_used : 0;
+    }
+    return z.size > used ? z.size - used : 0;
+}
+
 void unified_cache::arena_destroy() {
     if (!arena_queue_) {
         return;
@@ -9974,12 +10002,13 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
 
     for (const auto & [layer_id, indices] : dense_layer_indices) {
         const size_t weight_bytes = layer_weight_bytes[layer_id];
-        // Charge heterogeneous KV cost: SWA layers use min(n_ctx, n_swa) context,
-        // full-attention layers use the full n_ctx context.
-        const size_t kv_cost = layer_has_attention[layer_id]
-                                   ? (kv_info.is_swa_layer(layer_id) ? kv_info.kv_bytes_per_swa_layer()
-                                                                     : plan.kv_per_layer)
-                                   : 0;
+        // Charge uniform KV cost for all attention layers.  Although SWA layers
+        // theoretically need less context, the KV allocator creates per-layer
+        // slots of equal size (total_bytes / n_layers) and the tier manager's
+        // configure_from_plan uses plan.kv_per_layer uniformly.  Charging SWA
+        // layers at a lower rate causes the plan to overcommit VRAM, leading to
+        // divergences where layers planned for device end up on host.
+        const size_t kv_cost = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
         const size_t total_cost = weight_bytes + kv_cost;
         const bool   on_device  = total_cost <= remaining;
         const int    target     = on_device ? device_id : -1;
@@ -10071,7 +10100,7 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
             const size_t weight_bytes = layer_weight_bytes[layer_id];
             const bool   has_attn     = layer_has_attention[layer_id];
             const bool   is_swa       = has_attn && kv_info.is_swa_layer(layer_id);
-            const size_t kv_bytes     = has_attn ? (is_swa ? kv_info.kv_bytes_per_swa_layer() : plan.kv_per_layer) : 0;
+            const size_t kv_bytes     = has_attn ? plan.kv_per_layer : 0;
             const char * kv_label     = has_attn ? (is_swa ? "swa" : "full") : "none";
             const int    dense_target = plan.get_layer_device(layer_id);
             const int    kv_target    = plan.get_kv_device(layer_id);
@@ -10087,8 +10116,10 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
     // KV breakdown summary for heterogeneous attention
     if (kv_info.n_swa_layers > 0) {
         GGML_LOG_INFO(
-            "[PLACEMENT] KV breakdown: full_attn=%u layers (%.1f MB/layer), swa=%u layers (%.1f MB/layer)\n",
-            kv_info.n_full_attn_layers(), plan.kv_per_layer / (1024.0 * 1024.0), kv_info.n_swa_layers,
+            "[PLACEMENT] KV breakdown: full_attn=%u layers, swa=%u layers "
+            "(charged uniformly at %.1f MB/layer, theoretical swa=%.1f MB/layer)\n",
+            kv_info.n_full_attn_layers(), kv_info.n_swa_layers,
+            plan.kv_per_layer / (1024.0 * 1024.0),
             kv_info.kv_bytes_per_swa_layer() / (1024.0 * 1024.0));
     }
     // Log MoE expert placement breakdown if per-expert entries exist
@@ -10370,12 +10401,9 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
         }
 
         const size_t weight_bytes = layer_weight_bytes[layer_id];
-        // Charge heterogeneous KV cost: SWA layers use min(n_ctx, n_swa) context,
-        // full-attention layers use the full n_ctx context.
-        const size_t kv_cost = layer_has_attention[layer_id]
-                                   ? (kv_info.is_swa_layer(layer_id) ? kv_info.kv_bytes_per_swa_layer()
-                                                                     : plan.kv_per_layer)
-                                   : 0;
+        // Charge uniform KV cost for all attention layers (see single-device
+        // comment above — the allocator sizes slots uniformly).
+        const size_t kv_cost = layer_has_attention[layer_id] ? plan.kv_per_layer : 0;
         const size_t total_cost = weight_bytes + kv_cost;
         if (target_dev_idx >= 0 && static_cast<size_t>(target_dev_idx) < n_devs &&
             remaining[target_dev_idx] < total_cost) {
@@ -10512,8 +10540,10 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
     // KV breakdown summary for heterogeneous attention
     if (kv_info.n_swa_layers > 0) {
         GGML_LOG_INFO(
-            "[PLACEMENT-MULTI] KV breakdown: full_attn=%u layers (%.1f MB/layer), swa=%u layers (%.1f MB/layer)\n",
-            kv_info.n_full_attn_layers(), plan.kv_per_layer / (1024.0 * 1024.0), kv_info.n_swa_layers,
+            "[PLACEMENT-MULTI] KV breakdown: full_attn=%u layers, swa=%u layers "
+            "(charged uniformly at %.1f MB/layer, theoretical swa=%.1f MB/layer)\n",
+            kv_info.n_full_attn_layers(), kv_info.n_swa_layers,
+            plan.kv_per_layer / (1024.0 * 1024.0),
             kv_info.kv_bytes_per_swa_layer() / (1024.0 * 1024.0));
     }
     GGML_LOG_INFO(

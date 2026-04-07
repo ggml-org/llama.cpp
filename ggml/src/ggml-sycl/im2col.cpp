@@ -94,43 +94,44 @@ static void im2col_sycl_f32(const float * x, float * dst, int64_t IW, int64_t IH
                                 d0, d1, stream);
 }
 
-void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
+void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
+    auto src1 = dst.src(1);
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F16 || dst.type() == GGML_TYPE_F32);
 
-    const int32_t s0 = ((const int32_t *) (dst->op_params))[0];
-    const int32_t s1 = ((const int32_t *) (dst->op_params))[1];
-    const int32_t p0 = ((const int32_t *) (dst->op_params))[2];
-    const int32_t p1 = ((const int32_t *) (dst->op_params))[3];
-    const int32_t d0 = ((const int32_t *) (dst->op_params))[4];
-    const int32_t d1 = ((const int32_t *) (dst->op_params))[5];
+    const int32_t * op_params = static_cast<const int32_t *>(dst.op_params());
+    const int32_t s0 = op_params[0];
+    const int32_t s1 = op_params[1];
+    const int32_t p0 = op_params[2];
+    const int32_t p1 = op_params[3];
+    const int32_t d0 = op_params[4];
+    const int32_t d1 = op_params[5];
 
-    const bool is_2D = ((const int32_t *) (dst->op_params))[6] == 1;
+    const bool is_2D = op_params[6] == 1;
 
-    const int64_t IC = src1->ne[is_2D ? 2 : 1];
-    const int64_t IH = is_2D ? src1->ne[1] : 1;
-    const int64_t IW = src1->ne[0];
+    const int64_t IC = src1.ne(is_2D ? 2 : 1);
+    const int64_t IH = is_2D ? src1.ne(1) : 1;
+    const int64_t IW = src1.ne(0);
 
-    const int64_t KH = is_2D ? src0->ne[1] : 1;
-    const int64_t KW = src0->ne[0];
+    const int64_t KH = is_2D ? src0.ne(1) : 1;
+    const int64_t KW = src0.ne(0);
 
-    const int64_t OH = is_2D ? dst->ne[2] : 1;
-    const int64_t OW = dst->ne[1];
+    const int64_t OH = is_2D ? dst.ne(2) : 1;
+    const int64_t OW = dst.ne(1);
 
-    const size_t  delta_offset = src1->nb[is_2D ? 2 : 1] / sizeof(float);
-    const int64_t batch        = src1->ne[is_2D ? 3 : 2];
-    const size_t  batch_offset = src1->nb[is_2D ? 3 : 2] / sizeof(float);
+    const size_t  delta_offset = src1.nb(is_2D ? 2 : 1) / sizeof(float);
+    const int64_t batch        = src1.ne(is_2D ? 3 : 2);
+    const size_t  batch_offset = src1.nb(is_2D ? 3 : 2) / sizeof(float);
 
     queue_ptr stream = ctx.stream();
 
-    if (dst->type == GGML_TYPE_F16) {
-        im2col_sycl_f16((const float *) src1->data, (sycl::half *) dst->data, IW, IH, OW, OH, KW, KH, IC, batch,
+    if (dst.type() == GGML_TYPE_F16) {
+        im2col_sycl_f16(src1.resolve_as<const float>(), dst.resolve_as<sycl::half>(), IW, IH, OW, OH, KW, KH, IC, batch,
                         batch_offset, delta_offset, s0, s1, p0, p1, d0, d1, stream);
     } else {
-        im2col_sycl_f32((const float *) src1->data, (float *) dst->data, IW, IH, OW, OH, KW, KH, IC, batch,
+        im2col_sycl_f32(src1.resolve_as<const float>(), dst.resolve_as<float>(), IW, IH, OW, OH, KW, KH, IC, batch,
                         batch_offset, delta_offset, s0, s1, p0, p1, d0, d1, stream);
     }
 }

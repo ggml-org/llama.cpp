@@ -3,31 +3,32 @@
 #include "common.hpp"
 
 #define GGML_ASSERT_TENSOR_FITS_INT(t) \
-    GGML_ASSERT((t)->ne[0] < INT_MAX && (t)->ne[1] < INT_MAX && (t)->ne[2] < INT_MAX && (t)->ne[3] < INT_MAX)
+    GGML_ASSERT((t).ne(0) < INT_MAX && (t).ne(1) < INT_MAX && (t).ne(2) < INT_MAX && (t).ne(3) < INT_MAX)
 
-void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    auto src0 = dst.src(0);
 
-    const float * src0_dd = (const float *) dst->src[0]->data;
-    float *       dst_dd  = (float *) dst->data;
+    GGML_ASSERT(src0.type() == GGML_TYPE_F32);
+    GGML_ASSERT(dst.type() == GGML_TYPE_F32);
+
+    const float * src0_dd = src0.resolve_as<const float>();
+    float *       dst_dd  = dst.resolve_as<float>();
 
     GGML_ASSERT_TENSOR_FITS_INT(dst);
-    GGML_ASSERT_TENSOR_FITS_INT(dst->src[0]);
+    GGML_ASSERT_TENSOR_FITS_INT(src0);
 
-    const int ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
-    const int ne00 = dst->src[0]->ne[0], ne01 = dst->src[0]->ne[1], ne02 = dst->src[0]->ne[2],
-              ne03 = dst->src[0]->ne[3];
+    const int ne0 = dst.ne(0), ne1 = dst.ne(1), ne2 = dst.ne(2), ne3 = dst.ne(3);
+    const int ne00 = src0.ne(0), ne01 = src0.ne(1), ne02 = src0.ne(2), ne03 = src0.ne(3);
 
     const int nr0 = ne00 / ne0;
     const int nr1 = ne01 / ne1;
     const int nr2 = ne02 / ne2;
     const int nr3 = ne03 / ne3;
 
-    const int nb0 = dst->src[0]->nb[0];
-    const int nb1 = dst->src[0]->nb[1];
-    const int nb2 = dst->src[0]->nb[2];
-    const int nb3 = dst->src[0]->nb[3];
+    const int nb0 = src0.nb(0);
+    const int nb1 = src0.nb(1);
+    const int nb2 = src0.nb(2);
+    const int nb3 = src0.nb(3);
 
     const char * base = (const char *) src0_dd;
 

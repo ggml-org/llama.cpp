@@ -179,22 +179,29 @@ static void rwkv_wkv7_f32_kernel(
     }
 }
 
-void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/6);
-    const float* k_d = (const float*)dst->src[0]->data;
-    const float* v_d = (const float*)dst->src[1]->data;
-    const float* r_d = (const float*)dst->src[2]->data;
-    const float* tf_d = (const float*)dst->src[3]->data;
-    const float* td_d = (const float*)dst->src[4]->data;
-    const float* s_d = (const float*)dst->src[5]->data;
-    float* dst_d = (float*)dst->data;
+void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/6);
+    auto k  = dst.src(0);
+    auto v  = dst.src(1);
+    auto r  = dst.src(2);
+    auto tf = dst.src(3);
+    auto td = dst.src(4);
+    auto s  = dst.src(5);
 
-    const int64_t B = dst->src[5]->ne[1];
-    const int64_t T = dst->src[0]->ne[2];
-    const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[1];
+    const float* k_d  = k.resolve_as<const float>();
+    const float* v_d  = v.resolve_as<const float>();
+    const float* r_d  = r.resolve_as<const float>();
+    const float* tf_d = tf.resolve_as<const float>();
+    const float* td_d = td.resolve_as<const float>();
+    const float* s_d  = s.resolve_as<const float>();
+    float* dst_d = dst.resolve_as<float>();
 
-    GGML_ASSERT(dst->src[5]->type == GGML_TYPE_F32);
+    const int64_t B = s.ne(1);
+    const int64_t T = k.ne(2);
+    const int64_t C = dst.ne(0);
+    const int64_t H = k.ne(1);
+
+    GGML_ASSERT(s.type() == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == WKV_BLOCK_SIZE || C / H == WKV_BLOCK_SIZE * 2); // The current sycl kernel is designed for RWKV6, HEAD_SIZE == 64
 
@@ -235,23 +242,31 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     }
 }
 
-void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/7);
-    const float* r_d = (const float*)dst->src[0]->data;
-    const float* w_d = (const float*)dst->src[1]->data;
-    const float* k_d = (const float*)dst->src[2]->data;
-    const float* v_d = (const float*)dst->src[3]->data;
-    const float* a_d = (const float*)dst->src[4]->data;
-    const float* b_d = (const float*)dst->src[5]->data;
-    const float* s_d = (const float*)dst->src[6]->data;
-    float* dst_d = (float*)dst->data;
+void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/7);
+    auto r = dst.src(0);
+    auto w = dst.src(1);
+    auto k = dst.src(2);
+    auto v = dst.src(3);
+    auto a = dst.src(4);
+    auto b = dst.src(5);
+    auto s = dst.src(6);
 
-    const int64_t B = dst->src[6]->ne[1];
-    const int64_t T = dst->src[0]->ne[2];
-    const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[1];
+    const float* r_d = r.resolve_as<const float>();
+    const float* w_d = w.resolve_as<const float>();
+    const float* k_d = k.resolve_as<const float>();
+    const float* v_d = v.resolve_as<const float>();
+    const float* a_d = a.resolve_as<const float>();
+    const float* b_d = b.resolve_as<const float>();
+    const float* s_d = s.resolve_as<const float>();
+    float* dst_d = dst.resolve_as<float>();
 
-    GGML_ASSERT(dst->src[6]->type == GGML_TYPE_F32);
+    const int64_t B = s.ne(1);
+    const int64_t T = r.ne(2);
+    const int64_t C = dst.ne(0);
+    const int64_t H = r.ne(1);
+
+    GGML_ASSERT(s.type() == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == WKV_BLOCK_SIZE || C / H == WKV_BLOCK_SIZE * 2);
 

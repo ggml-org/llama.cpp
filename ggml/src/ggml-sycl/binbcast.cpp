@@ -94,9 +94,11 @@ static inline size_t ggml_sycl_available_bytes(const ggml_tensor * t) {
     if (t == nullptr) {
         return 0;
     }
-    if (t->view_src && t->view_src->data && t->data) {
-        const uintptr_t base = reinterpret_cast<uintptr_t>(t->view_src->data);
-        const uintptr_t cur  = reinterpret_cast<uintptr_t>(t->data);
+    const void * tensor_data = ggml_sycl_host_data(t);
+    const void * base_data   = (t->view_src != nullptr) ? ggml_sycl_host_data(t->view_src) : nullptr;
+    if (t->view_src && base_data && tensor_data) {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(base_data);
+        const uintptr_t cur  = reinterpret_cast<uintptr_t>(tensor_data);
         if (cur < base) {
             return 0;
         }
@@ -127,12 +129,14 @@ static void ggml_sycl_debug_dump_tensor(const char * tag, const ggml_tensor * t)
             "[SYCL-ADD-DBG] %s: name=%s type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] contig=%d "
             "data=%p view_src=%s view_offs=%zu layout_mode=%s layout_ptr=%p layout_size=%zu\n",
             tag, t->name, ggml_type_name(t->type), (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2],
-            (long long) t->ne[3], t->nb[0], t->nb[1], t->nb[2], t->nb[3], ggml_is_contiguous(t), t->data,
+            (long long) t->ne[3], t->nb[0], t->nb[1], t->nb[2], t->nb[3], ggml_is_contiguous(t),
+            const_cast<void *>(ggml_sycl_host_data(t)),
             t->view_src ? t->view_src->name : "none", t->view_offs, layout_mode, layout_ptr, layout_size);
 }
 
 static void ggml_sycl_debug_check_tensor_ptr(const char * tag, const ggml_tensor * t) {
-    if (!t || !t->buffer || !t->data) {
+    const void * tensor_data = t ? ggml_sycl_host_data(t) : nullptr;
+    if (!t || !t->buffer || !tensor_data) {
         return;
     }
     void * base = ggml_backend_buffer_get_base(t->buffer);
@@ -141,14 +145,14 @@ static void ggml_sycl_debug_check_tensor_ptr(const char * tag, const ggml_tensor
         return;
     }
     const uintptr_t base_u = reinterpret_cast<uintptr_t>(base);
-    const uintptr_t data_u = reinterpret_cast<uintptr_t>(t->data);
+    const uintptr_t data_u = reinterpret_cast<uintptr_t>(tensor_data);
     const size_t    need   = ggml_nbytes(t);
     const bool      in_range = data_u >= base_u && (data_u + need) <= (base_u + size);
     if (!in_range) {
         const char * buft = ggml_backend_buft_name(ggml_backend_buffer_get_type(t->buffer));
         fprintf(stderr,
                 "[SYCL-ADD-DBG] %s pointer out of range: data=%p need=%zu base=%p size=%zu buft=%s\n",
-                tag, t->data, need, base, size, buft ? buft : "(null)");
+                tag, tensor_data, need, base, size, buft ? buft : "(null)");
     }
 }
 
@@ -472,13 +476,13 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
 
     // Use device-specific data pointers for TP support
     const int device = ctx.device;
-    void *    src0_d = ggml_sycl_get_layout_ptr(src0, device);
-    void *    src1_d = ggml_sycl_get_layout_ptr(src1, device);
-    void *    dst_d  = ggml_sycl_get_data_ptr(dst, device);
-    GGML_SYCL_DEBUG("[BINBCAST-PTR] src0=%s src0->data=%p src0_d=%p\n",
-                    src0 ? src0->name : "(null)", src0 ? src0->data : nullptr, src0_d);
-    GGML_SYCL_DEBUG("[BINBCAST-PTR] src1=%s src1->data=%p src1_d=%p\n",
-                    src1 ? src1->name : "(null)", src1 ? src1->data : nullptr, src1_d);
+    void *    src0_d = ggml_sycl_resolve_tensor_ptr(src0, device);
+    void *    src1_d = ggml_sycl_resolve_tensor_ptr(src1, device);
+    void *    dst_d  = ggml_sycl_resolve_tensor_ptr(dst, device);
+    GGML_SYCL_DEBUG("[BINBCAST-PTR] src0=%s src0_host=%p src0_d=%p\n",
+                    src0 ? src0->name : "(null)", src0 ? const_cast<void *>(ggml_sycl_host_data(src0)) : nullptr, src0_d);
+    GGML_SYCL_DEBUG("[BINBCAST-PTR] src1=%s src1_host=%p src1_d=%p\n",
+                    src1 ? src1->name : "(null)", src1 ? const_cast<void *>(ggml_sycl_host_data(src1)) : nullptr, src1_d);
 
     ggml_sycl::unified_cache * cache = nullptr;
     struct inflight_pin {
@@ -582,81 +586,90 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
     }
 }
 
-inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
     if (g_ggml_sycl_debug) {
-        const ggml_tensor * src0 = dst->src[0];
-        const ggml_tensor * src1 = dst->src[1];
+        const ggml_tensor * src0 = dst.src(0).raw();
+        const ggml_tensor * src1 = dst.src(1).raw();
+        const ggml_tensor * raw_dst = dst.raw();
+        const ggml_tensor * dst = raw_dst;
         GGML_TENSOR_BINARY_OP_LOCALS
         ggml_sycl_debug_dump_tensor("ADD src0", src0);
         ggml_sycl_debug_dump_tensor("ADD src1", src1);
-        ggml_sycl_debug_dump_tensor("ADD dst", dst);
+        ggml_sycl_debug_dump_tensor("ADD dst", raw_dst);
         ggml_sycl_debug_check_tensor_ptr("ADD src0", src0);
         ggml_sycl_debug_check_tensor_ptr("ADD src1", src1);
-        ggml_sycl_debug_check_tensor_ptr("ADD dst", dst);
+        ggml_sycl_debug_check_tensor_ptr("ADD dst", raw_dst);
         const size_t src0_need  = ggml_sycl_max_end_bytes(ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03);
         const size_t src1_need  = ggml_sycl_max_end_bytes(ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13);
         const size_t dst_need   = ggml_sycl_max_end_bytes(ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3);
         const size_t src0_avail = ggml_sycl_available_bytes(src0);
         const size_t src1_avail = ggml_sycl_available_bytes(src1);
-        const size_t dst_avail  = ggml_sycl_available_bytes(dst);
+        const size_t dst_avail  = ggml_sycl_available_bytes(raw_dst);
         if (src0_need > src0_avail || src1_need > src1_avail || dst_need > dst_avail) {
             GGML_LOG_ERROR(
                 "[SYCL-ADD-DBG] OOB access detected: src0=%s need=%zu avail=%zu, src1=%s need=%zu avail=%zu, "
                 "dst=%s need=%zu avail=%zu\n",
-                src0->name, src0_need, src0_avail, src1->name, src1_need, src1_avail, dst->name, dst_need, dst_avail);
+                src0->name, src0_need, src0_avail, src1->name, src1_need, src1_avail, raw_dst->name, dst_need, dst_avail);
             GGML_ABORT("SYCL ADD OOB bounds");
         }
     }
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, dst->src[0], dst->src[1], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(
+        ctx, dst.src(0).raw(), dst.src(1).raw(), const_cast<ggml_tensor *>(dst.raw()));
 }
 
-inline void ggml_sycl_op_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_sub>>(ctx, dst->src[0], dst->src[1], dst);
+inline void ggml_sycl_op_sub(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_sub>>(
+        ctx, dst.src(0).raw(), dst.src(1).raw(), const_cast<ggml_tensor *>(dst.raw()));
 }
 
-inline void ggml_sycl_op_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_mul>>(ctx, dst->src[0], dst->src[1], dst);
+inline void ggml_sycl_op_mul(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_mul>>(
+        ctx, dst.src(0).raw(), dst.src(1).raw(), const_cast<ggml_tensor *>(dst.raw()));
 }
 
-inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_div>>(ctx, dst->src[0], dst->src[1], dst);
+inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_div>>(
+        ctx, dst.src(0).raw(), dst.src(1).raw(), const_cast<ggml_tensor *>(dst.raw()));
 }
 
-inline void ggml_sycl_op_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_repeat>>(ctx, dst, dst->src[0], dst);
+inline void ggml_sycl_op_repeat(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_repeat>>(
+        ctx, dst.raw(), dst.src(0).raw(), const_cast<ggml_tensor *>(dst.raw()));
 }
 
-void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
     ggml_sycl_op_add(ctx, dst);
 }
 
-void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
     ggml_sycl_op_sub(ctx, dst);
 }
 
-void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
+    const ggml_tensor * raw_dst = dst.raw();
 
     if (g_ggml_sycl_debug) {
-        const ggml_tensor * src0 = dst ? dst->src[0] : nullptr;
-        const ggml_tensor * src1 = dst ? dst->src[1] : nullptr;
-        const bool is_result_norm = dst && strcmp(dst->name, "result_norm") == 0;
+        const ggml_tensor * src0 = raw_dst ? raw_dst->src[0] : nullptr;
+        const ggml_tensor * src1 = raw_dst ? raw_dst->src[1] : nullptr;
+        const bool is_result_norm = raw_dst && strcmp(raw_dst->name, "result_norm") == 0;
         const bool is_output_norm = src1 && strcmp(src1->name, "output_norm.weight") == 0;
 
         if (is_result_norm || is_output_norm) {
             const int   device   = ctx.device;
             void *      src0_ptr = src0 ? ggml_sycl_get_layout_ptr(src0, device) : nullptr;
             void *      src1_ptr = src1 ? ggml_sycl_get_layout_ptr(src1, device) : nullptr;
-            void *      dst_ptr  = dst ? ggml_sycl_get_data_ptr(dst, device) : nullptr;
+            void *      dst_ptr  = raw_dst ? ggml_sycl_get_data_ptr(raw_dst, device) : nullptr;
             const char * src0_layout = (src0 && src0->layout) ? ggml_sycl_layout_mode_name(src0->layout->mode) : "none";
             const char * src1_layout = (src1 && src1->layout) ? ggml_sycl_layout_mode_name(src1->layout->mode) : "none";
 
             fprintf(stderr,
                     "[SYCL-MUL-DBG] device=%d graph_recording=%d dst=%s src0=%s src1=%s src0_ptr=%p src1_ptr=%p "
                     "dst_ptr=%p src0_layout=%s src1_layout=%s last_graph_event=%d has_barrier=%d",
-                    device, g_ggml_sycl_graph_recording ? 1 : 0, dst ? dst->name : "null", src0 ? src0->name : "null",
+                    device, g_ggml_sycl_graph_recording ? 1 : 0, raw_dst ? raw_dst->name : "null",
+                    src0 ? src0->name : "null",
                     src1 ? src1->name : "null", src0_ptr, src1_ptr, dst_ptr, src0_layout, src1_layout,
                     ctx.last_graph_event.has_value() ? 1 : 0,
                     (ctx.has_pending_barrier && ctx.barrier_event.has_value()) ? 1 : 0);
@@ -673,31 +686,31 @@ void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     // Cache FFN norm output for TP: the GGML scheduler may reuse this buffer
     // before device 1 can access it. Cache immediately after MUL completes.
-    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && strncmp(dst->name, "ffn_norm-", 9) == 0) {
-        int        layer      = atoi(dst->name + 9);
-        size_t     size       = ggml_nbytes(dst);
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && strncmp(raw_dst->name, "ffn_norm-", 9) == 0) {
+        int        layer      = atoi(raw_dst->name + 9);
+        size_t     size       = ggml_nbytes(raw_dst);
         // IMPORTANT: Use device-specific pointer for TP mode!
-        void *     dst_ptr    = ggml_sycl_get_data_ptr(dst, ctx.device);
+        void *     dst_ptr    = ggml_sycl_get_data_ptr(raw_dst, ctx.device);
         // DEBUG: Check if MUL runs for batch=1
         static int mul_b1_dbg = 0;
-        if (g_ggml_sycl_tp_debug && dst->ne[1] == 1 && layer == 0 && mul_b1_dbg++ < 5) {
+        if (g_ggml_sycl_tp_debug && raw_dst->ne[1] == 1 && layer == 0 && mul_b1_dbg++ < 5) {
             ctx.stream()->wait();
             float check[4];
             ctx.stream()->memcpy(check, dst_ptr, 4 * sizeof(float)).wait();
             fprintf(stderr, "TP DEBUG MUL ffn_norm-0 batch=1: caching dst_ptr=%p dst[0..3]=[%f,%f,%f,%f]\n", dst_ptr,
                     check[0], check[1], check[2], check[3]);
         }
-        ggml_sycl_tp_cache_ffn_norm(layer, dst_ptr, dst->ne[0], dst->ne[1], size, ctx.stream());
+        ggml_sycl_tp_cache_ffn_norm(layer, dst_ptr, raw_dst->ne[0], raw_dst->ne[1], size, ctx.stream());
     }
 }
 
-void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
     ggml_sycl_op_div(ctx, dst);
 }
 
-void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/1);
     ggml_sycl_op_repeat(ctx, dst);
 }
 
@@ -719,11 +732,12 @@ static void k_add1(const T * __restrict__ src0,
 
 // ADD1 operation: add a single scalar to all elements
 // Optimized path when src1 has exactly 1 element
-void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst.raw(), /*num_src=*/2);
 
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src0 = dst.src(0).raw();
+    const ggml_tensor * src1 = dst.src(1).raw();
+    const ggml_tensor * raw_dst = dst.raw();
 
     GGML_ASSERT(ggml_nelements(src1) == 1);
 
@@ -732,9 +746,9 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int64_t n = ggml_nelements(src0);
 
-    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && raw_dst->type == GGML_TYPE_F32) {
         const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
-        float *       dst_d  = (float *) ggml_sycl_get_data_ptr(dst, device);
+        float *       dst_d  = (float *) ggml_sycl_get_data_ptr(raw_dst, device);
 
         // Category C: synchronous wait required — CPU reads scalar from device
         // to pass as a captured kernel argument in the parallel_for below.
@@ -747,9 +761,9 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         stream->parallel_for(
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
             [=](sycl::nd_item<3> item) { k_add1(src0_d, scalar, dst_d, n, item); });
-    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && raw_dst->type == GGML_TYPE_F16) {
         const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
-        sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
+        sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(raw_dst, device);
 
         // Category C: synchronous wait required — CPU reads scalar from device
         // to pass as a captured kernel argument in the parallel_for below.
@@ -763,9 +777,9 @@ void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         stream->parallel_for(
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
             [=](sycl::nd_item<3> item) { k_add1(src0_d, scalar, dst_d, n, item); });
-    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && raw_dst->type == GGML_TYPE_F16) {
         const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
-        sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
+        sycl::half *       dst_d  = (sycl::half *) ggml_sycl_get_data_ptr(raw_dst, device);
 
         // Category C: synchronous wait required — CPU reads scalar from device
         // to pass as a captured kernel argument in the parallel_for below.

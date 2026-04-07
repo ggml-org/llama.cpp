@@ -13,7 +13,7 @@
 bool ggml_sycl_flash_attn_ext_supported(const ggml_tensor * dst);
 
 // Execute flash attention operation
-void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_sycl::sycl_tensor dst);
 
 // Pre-allocate V2 partition buffers before SYCL graph recording.
 // This ensures V2 dispatch works during graph recording (malloc/free forbidden during recording).
