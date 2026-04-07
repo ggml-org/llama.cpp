@@ -5,7 +5,20 @@ FROM ubuntu:$UBUNTU_VERSION AS build
 ARG TARGETARCH
 
 RUN apt-get update && \
-    apt-get install -y gcc-14 g++-14 build-essential git cmake libssl-dev
+    apt-get install -y \
+        gcc-14 \
+        g++-14 \
+        build-essential \
+        git \
+        cmake \
+        libssl-dev
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache; \
+    fi
 
 ENV CC=gcc-14 CXX=g++-14
 
@@ -13,13 +26,19 @@ WORKDIR /app
 
 COPY . .
 
-RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON; \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
+      cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_NATIVE=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON; \
     else \
         echo "Unsupported architecture"; \
         exit 1; \
-    fi && \
-    cmake --build build -j $(nproc)
+    fi \
+    && cmake --build build -j $(nproc)
 
 RUN mkdir -p /app/lib && \
     find build -name "*.so*" -exec cp -P {} /app/lib \;
