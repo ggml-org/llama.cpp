@@ -11699,9 +11699,20 @@ class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
 
 
-@ModelBase.register("GptOssForCausalLM")
+@ModelBase.register("GptOssForCausalLM", "GptOssPuzzleForCausalLM")
 class GptOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT_OSS
+
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        self.is_puzzle = bool(hparams.get("block_configs"))
+        if self.is_puzzle:
+            self.model_arch = gguf.MODEL_ARCH.GPT_OSS_PUZZLE
+
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
 
     # TODO: remove once MXFP4 is supported more generally
     def dequant_model(self):
@@ -11750,26 +11761,43 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        blocks0: Tensor = torch.zeros(1)
-        blocks1: Tensor = torch.zeros(1)
-        # we assume that tensors are loaded in the correct order
+        import re
+
+        # Key blocks by layer ID for shard-safe matching (blocks and scales
+        # for the same layer may end up in different safetensor files)
+        down_blocks: dict[int, Tensor] = {}
+        gate_up_blocks: dict[int, Tensor] = {}
+
         for name, data_torch in self.get_tensors():
+            bid_match = re.search(r'\.layers\.(\d+)\.', name)
+            if not bid_match:
+                continue
+            bid = int(bid_match.group(1))
+
             if "mlp.experts.down_proj_blocks" in name:
-                blocks0 = data_torch
+                down_blocks[bid] = data_torch
             elif "mlp.experts.down_proj_scales" in name:
-                new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
-                self.repack_mxfp4(new_name, blocks0, data_torch)
+                if bid in down_blocks:
+                    new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
+                    self.repack_mxfp4(new_name, down_blocks.pop(bid), data_torch)
             elif "mlp.experts.gate_up_proj_blocks" in name:
-                blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
+                gate_up_blocks[bid] = data_torch
             elif "mlp.experts.gate_up_proj_scales" in name:
-                scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
-                new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
-                new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
-                self.repack_mxfp4(new_name_gate, blocks0, scales0)
-                self.repack_mxfp4(new_name_up, blocks1, scales1)
+                if bid in gate_up_blocks:
+                    blocks = gate_up_blocks.pop(bid)
+                    blocks0, blocks1 = blocks[:, ::2, :, :], blocks[:, 1::2, :, :]
+                    scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
+                    new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
+                    new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
+                    self.repack_mxfp4(new_name_gate, blocks0, scales0)
+                    self.repack_mxfp4(new_name_up, blocks1, scales1)
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip FP8 quantization scales (scalar tensors, not needed for inference)
+        if name.endswith((".k_scale", ".v_scale")):
+            return
+
         if "sinks" in name:
             name += ".weight"
 
@@ -11809,7 +11837,19 @@ class GptOssModel(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+
+        block_configs = self.hparams.get("block_configs", [])
+        if block_configs:
+            # Per-layer expert counts
+            expert_counts = [b["num_local_experts"] for b in block_configs]
+            self.gguf_writer.add_expert_count(expert_counts)
+
+            # Per-layer sliding window (0 = full attention)
+            sliding_windows = [b.get("sliding_window") or 0 for b in block_configs]
+            self.gguf_writer.add_sliding_window(sliding_windows)
+        else:
+            self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size"])
 
 

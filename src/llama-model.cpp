@@ -373,7 +373,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer);
-    ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
+    // Handle expert_count as either scalar or per-layer array
+    if (!ml.get_key_or_arr(LLM_KV_EXPERT_COUNT, hparams.n_expert, false)) {
+        // Scalar load failed (may be stored as array for per-layer expert counts)
+        if (ml.get_key_or_arr(LLM_KV_EXPERT_COUNT, hparams.n_expert_arr, hparams.n_layer, false)) {
+            hparams.n_expert = *std::max_element(
+                hparams.n_expert_arr.begin(),
+                hparams.n_expert_arr.begin() + hparams.n_layer);
+        }
+    }
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
@@ -2273,6 +2281,41 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_20B; break;
                     case 36: type = LLM_TYPE_120B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_OPENAI_MOE_PUZZLE:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+
+                // Per-layer expert counts
+                ml.get_key_or_arr(LLM_KV_EXPERT_COUNT, hparams.n_expert_arr, hparams.n_layer, false);
+                // Set global n_expert to max for validation and fallback
+                hparams.n_expert = *std::max_element(
+                    hparams.n_expert_arr.begin(),
+                    hparams.n_expert_arr.begin() + hparams.n_layer);
+
+                // Per-layer sliding window
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa_arr, hparams.n_layer, false);
+                // Set global n_swa to max for KV cache sizing
+                hparams.n_swa = *std::max_element(
+                    hparams.n_swa_arr.begin(),
+                    hparams.n_swa_arr.begin() + hparams.n_layer);
+
+                // Set SWA type and per-layer pattern
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.swa_layers[il] = hparams.n_swa_arr[il] > 0 ? 1 : 0;
+                }
+
+                // RoPE params for SWA
+                hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+                hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+
+                switch (hparams.n_layer) {
+                    case 36: type = LLM_TYPE_UNKNOWN; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -6867,6 +6910,49 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_exps_b   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0);
                     }
                 } break;
+            case LLM_ARCH_OPENAI_MOE_PUZZLE:
+                {
+                    const int64_t n_ff_exp = hparams.n_ff_exp;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        // Per-layer expert count
+                        const int64_t n_expert_i = hparams.n_expert_layer(i);
+
+                        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+                        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_head * n_rot}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_head_kv * n_rot}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_head_kv * n_rot}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_rot, n_embd}, 0);
+
+                        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
+
+                        layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert_i}, 0);
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert_i}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert_i}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert_i}, 0);
+
+                        // bias
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_head * n_rot}, 0);
+                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_head_kv * n_rot}, 0);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_head_kv * n_rot}, 0);
+                        layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp_b  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert_i}, 0);
+                        layer.ffn_gate_exps_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert_i}, 0);
+                        layer.ffn_down_exps_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert_i}, 0);
+                        layer.ffn_up_exps_b   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert_i}, 0);
+                    }
+                } break;
             case LLM_ARCH_LFM2:
             case LLM_ARCH_LFM2MOE:
                 {
@@ -8113,7 +8199,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
-    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
+    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_OPENAI_MOE_PUZZLE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
     }
 
@@ -8840,6 +8926,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_openai_moe_iswa>(*this, params);
             } break;
+        case LLM_ARCH_OPENAI_MOE_PUZZLE:
+            {
+                llm = std::make_unique<llm_build_openai_moe_puzzle_iswa>(*this, params);
+            } break;
         case LLM_ARCH_FALCON_H1:
             {
                 llm = std::make_unique<llm_build_falcon_h1>(*this, params);
@@ -9147,6 +9237,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_JAIS2:
         case LLM_ARCH_OPENAI_MOE:
+        case LLM_ARCH_OPENAI_MOE_PUZZLE:
         case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
