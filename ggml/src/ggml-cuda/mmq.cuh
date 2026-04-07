@@ -132,7 +132,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
     return 48;
 #else
     return 128;
-#endif
+#endif // defined(RDNA3_5)
 #else // defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
 #if defined(GGML_USE_HIP)
@@ -154,7 +154,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
 }
 
 static int get_mmq_y_host(const int cc) {
-    if (GGML_CUDA_CC_IS_AMD(cc))    {
+    if (GGML_CUDA_CC_IS_AMD(cc)) {
         if (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc)) {
             return 64;
         }
@@ -177,9 +177,7 @@ if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
 
 static constexpr __device__ int get_mmq_y_device() {
 #if defined(GGML_USE_HIP)
-#if defined(RDNA3_5)
-    return 64;
-#elif defined(RDNA1)
+#if defined(RDNA1) || defined(RDNA3_5)
     return 64;
 #else
     return 128;
@@ -337,7 +335,7 @@ static constexpr __device__ int mmq_get_nwarps_device() {
     return 4;
 #else
     return 8;
-#endif
+#endif // defined(RDNA3_5)
 #else
     return 256/ggml_cuda_get_physical_warp_size();
 #endif // AMD_MFMA_AVAILABLE
