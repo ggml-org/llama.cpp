@@ -25724,6 +25724,17 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             }
             // Cache miss: leave pointer as nullptr so hybrid dispatch routes to CPU.
             GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld cache MISS layout=%d (host fallback)\n", (long) e, (int) layout);
+            // Check direct_expert_entries_ for host-pinned arena entry.
+            {
+                const ggml_sycl::weight_entry * he = cache->lookup_expert(expert_cache_key);
+                if (he && he->ptr && he->location == ggml_sycl::cache_location::HOST_PINNED) {
+                    extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = he->ptr;
+                    stats_host_ready++;
+                    GGML_SYCL_DEBUG("[MOE-LOOKUP] Expert %ld host-arena ptr=%p (HOST_PINNED)\n",
+                                    (long) e, he->ptr);
+                    continue;
+                }
+            }
             stats_miss++;
         }
     }
