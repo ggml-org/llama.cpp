@@ -1,6 +1,7 @@
 #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
 #include <HAP_farf.h>
 #include <HAP_perf.h>
@@ -511,7 +512,7 @@ static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
 }
 
 static inline void mmap_buf(struct htp_context *ctx, struct htp_op_buf *b) {
-    if (b->base) return;
+    if (b->base) return; // already mapped
 
     // find unused mapping
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
@@ -535,29 +536,39 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_op_buf *b) {
 }
 
 static void prep_op_bufs(struct htp_context *ctx, struct htp_op_buf *bufs, uint32_t n_bufs) {
-    uint32_t m_reuse = 0;
-    uint32_t n_reuse = 0;
+    uint32_t m_reuse = 0; // mmap reuse mask (index from ctx->mmap array)
+    uint32_t b_reuse = 0; // buf reuse count
+
+    size_t   m_vmem  = 0; // mapped vmem
+    size_t   e_vmem  = 0; // extra  vmem
 
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_op_buf *b = bufs + i;
-        if (reuse_buf(ctx, &m_reuse, b)) { n_reuse++; }
-        FARF(HIGH, "prep-buf #%u : fd %u base %p size %u flags 0x%x (pass0)", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        if (reuse_buf(ctx, &m_reuse, b)) { b_reuse++; } else { e_vmem += b->size; }
+        FARF(HIGH, "prep-buf #%u : pass0 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
     }
 
-    if (n_reuse == n_bufs) return;
+    if (b_reuse == n_bufs) return; // all bufs reuse existing mappings
 
-    // Drop unused mappings
-    for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
-        bool used = m_reuse & (1<<i);
-        if (!used) { drop_mmap(ctx, ctx->mmap + i); }
+    // See how much vmem we have mmaped right now
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) { m_vmem += ctx->mmap[i].size; }
+
+    FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu n-bufs %u b-reuse %u", m_vmem, e_vmem, n_bufs, b_reuse);
+
+    if ((m_vmem + e_vmem) > HTP_OP_MAX_VMEM) {  
+        // Drop unused mappings
+        for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
+            bool used = m_reuse & (1<<i);
+            if (!used) { drop_mmap(ctx, ctx->mmap + i); }
+        }
     }
 
     // Create missing mappings
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_op_buf *b = bufs + i;
         mmap_buf(ctx, b);
-        FARF(HIGH, "prep-buf #%u : fd %u base %p size %u flags 0x%x (pass1)", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        FARF(HIGH, "prep-buf #%u : pass1 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
     }
 }
 

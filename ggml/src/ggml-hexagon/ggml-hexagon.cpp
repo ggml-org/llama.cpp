@@ -1486,7 +1486,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buffer_type) {
-    return 1 * 1024 * 1024 * 1024;  // 1GB per buffer
+    return 1UL * 1024 * 1024 * 1024;  // 1GB per buffer
     GGML_UNUSED(buffer_type);
 }
 
