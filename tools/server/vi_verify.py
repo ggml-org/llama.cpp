@@ -4,9 +4,6 @@ import base64
 import hashlib
 import json
 import sys
-import urllib.request
-import urllib.parse
-from typing import Optional
 
 
 def _sha256(b: bytes) -> bytes:
@@ -42,39 +39,22 @@ def _merkle_recompute_root(leaf_index: int, leaf: bytes, siblings_hex: list[str]
             cur = _sha256(sib + cur)
         idx //= 2
     return cur
-def _fetch_bytes(url: str, server_base: Optional[str], api_key: Optional[str]) -> bytes:
-    if server_base and url.startswith("/"):
-        url = urllib.parse.urljoin(server_base.rstrip("/") + "/", url.lstrip("/"))
-
-    req = urllib.request.Request(url)
-    if api_key:
-        req.add_header("Authorization", f"Bearer {api_key}")
-
-    with urllib.request.urlopen(req) as resp:
-        return resp.read()
 
 
-def verify_response(obj: dict, *, server_base: Optional[str] = None, api_key: Optional[str] = None) -> None:
-    if "verifiable_inference" not in obj:
-        raise SystemExit("missing verifiable_inference in response")
-    vi = obj["verifiable_inference"]
+def verify_response(obj: dict) -> None:
+    if "proof" not in obj:
+        raise SystemExit("missing proof in response")
+    vi = obj["proof"]
     root = bytes.fromhex(vi["merkle_root_sha256"])
 
     openings = vi.get("openings", [])
     if not isinstance(openings, list) or len(openings) == 0:
-        raise SystemExit("verifiable_inference.openings missing/empty")
+        raise SystemExit("proof.openings missing/empty")
 
     for i, o in enumerate(openings):
         tensor = o["tensor"]
-        if "opened_bytes_b64" in o:
-            opened = base64.b64decode(o["opened_bytes_b64"])
-        else:
-            url = o.get("opened_bytes_url")
-            if not url:
-                raise SystemExit(f"opening[{i}]: missing opened_bytes_url (and no opened_bytes_b64)")
-            if url.startswith("/") and not server_base:
-                raise SystemExit(f"opening[{i}]: opened_bytes_url is relative; provide --server-base")
-            opened = _fetch_bytes(url, server_base, api_key)
+        b64 = o["opened_bytes_b64"]
+        opened = base64.b64decode(b64)
 
         # bytes hash
         bytes_hash = _sha256(opened)
@@ -95,8 +75,6 @@ def verify_response(obj: dict, *, server_base: Optional[str] = None, api_key: Op
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="response JSON file (defaults to stdin)")
-    ap.add_argument("--server-base", help="Base URL for relative opened_bytes_url, e.g. http://127.0.0.1:8080")
-    ap.add_argument("--api-key", help="API key (sent as Authorization: Bearer ...)")
     args = ap.parse_args()
 
     if args.file:
@@ -105,7 +83,7 @@ def main() -> int:
     else:
         obj = json.load(sys.stdin)
 
-    verify_response(obj, server_base=args.server_base, api_key=args.api_key)
+    verify_response(obj)
     print("verified")
     return 0
 
