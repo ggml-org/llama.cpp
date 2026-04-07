@@ -4,7 +4,8 @@ import { isAbortError } from '$lib/utils/abort';
 import {
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
-	ATTACHMENT_LABEL_MCP_RESOURCE
+	ATTACHMENT_LABEL_MCP_RESOURCE,
+	LEGACY_AGENTIC_REGEX
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -276,6 +277,29 @@ export class ChatService {
 			}
 
 			throw userFriendlyError;
+		}
+	}
+
+	/**
+	 * Checks whether all server slots are currently idle (not processing any requests).
+	 * Queries the /slots endpoint (requires --slots flag on the server).
+	 * Returns true if all slots are idle, false if any is processing.
+	 * If the endpoint is unavailable or errors out, returns true (best-effort fallback).
+	 *
+	 * @param signal - Optional AbortSignal to cancel the request if needed
+	 * @param model - Optional model name to check slots for (required in ROUTER mode)
+	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
+	 */
+	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
+		try {
+			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const res = await fetch(url, { signal });
+			if (!res.ok) return true;
+
+			const slots: { is_processing: boolean }[] = await res.json();
+			return slots.every((s) => !s.is_processing);
+		} catch {
+			return true;
 		}
 	}
 
@@ -859,6 +883,28 @@ export class ChatService {
 	 *
 	 *
 	 */
+
+	/**
+	 * Strips legacy inline reasoning content tags from message content.
+	 * Handles both plain string content and multipart content arrays.
+	 */
+	private static stripReasoningContent(
+		content: string | ApiChatMessageContentPart[]
+	): string | ApiChatMessageContentPart[] {
+		const stripFromString = (text: string): string =>
+			text.replace(LEGACY_AGENTIC_REGEX.REASONING_BLOCK, '').trim();
+
+		if (typeof content === 'string') {
+			return stripFromString(content);
+		}
+
+		return content.map((part) => {
+			if (part.type === ContentPartType.TEXT && part.text) {
+				return { ...part, text: stripFromString(part.text) };
+			}
+			return part;
+		});
+	}
 
 	/**
 	 * Parses error response and creates appropriate error with context information

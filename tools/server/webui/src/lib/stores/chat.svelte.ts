@@ -730,7 +730,7 @@ class ChatStore {
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 				// Pre-encode conversation in KV cache for faster next turn
 				if (config().preEncodeConversation) {
-					this.triggerPreEncode(allMessages, assistantMessage, combinedContent, effectiveModel);
+					this.triggerPreEncode(allMessages, assistantMessage, streamedContent, effectiveModel);
 				}
 			},
 			onError: (error: Error) => {
@@ -1634,27 +1634,32 @@ class ChatStore {
 		}
 	}
 
-	private triggerPreEncode(
+	private async triggerPreEncode(
 		allMessages: DatabaseMessage[],
 		assistantMessage: DatabaseMessage,
 		assistantContent: string,
 		model?: string | null
-	): void {
+	): Promise<void> {
 		this.cancelPreEncode();
 		this.preEncodeAbortController = new AbortController();
 
-		const messagesWithAssistant: DatabaseMessage[] = [
-			...allMessages,
-			{ ...assistantMessage, content: assistantContent }
-		];
+		const signal = this.preEncodeAbortController.signal;
 
-		ChatService.preEncode(messagesWithAssistant, model, this.preEncodeAbortController.signal).catch(
-			(err) => {
-				if (!isAbortError(err)) {
-					console.warn('[ChatStore] Pre-encode failed:', err);
-				}
+		try {
+			const allIdle = await ChatService.areAllSlotsIdle(model, signal);
+			if (!allIdle || signal.aborted) return;
+
+			const messagesWithAssistant: DatabaseMessage[] = [
+				...allMessages,
+				{ ...assistantMessage, content: assistantContent }
+			];
+
+			await ChatService.preEncode(messagesWithAssistant, model, signal);
+		} catch (err) {
+			if (!isAbortError(err)) {
+				console.warn('[ChatStore] Pre-encode failed:', err);
 			}
-		);
+		}
 	}
 }
 
