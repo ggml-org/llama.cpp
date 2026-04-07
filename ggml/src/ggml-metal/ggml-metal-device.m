@@ -1097,6 +1097,16 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GROUP_NORM:
         case GGML_OP_L2_NORM:
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+            return has_simdgroup_reduction &&
+                ggml_is_contiguous_rows(op->src[0]) &&
+                ggml_is_contiguous_rows(op->src[1]) &&
+                op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+            return has_simdgroup_reduction &&
+                ggml_is_contiguous_rows(op->src[1]) &&
+                ggml_is_contiguous_rows(op->src[2]) &&
+                op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_COUNT_EQUAL:
             return has_simdgroup_reduction &&
                 op->src[0]->type == GGML_TYPE_I32 &&

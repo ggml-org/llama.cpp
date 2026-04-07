@@ -701,6 +701,21 @@ typedef struct {
 } ggml_metal_kargs_sum;
 
 typedef struct {
+    int32_t  ne00;
+    uint64_t nb01;
+    uint64_t nb11;
+    int32_t  nrows;
+} ggml_metal_kargs_cross_entropy_loss;
+
+typedef struct {
+    int32_t  ne00;
+    uint64_t nb01;
+    uint64_t nb11;
+    uint64_t nb1;
+    int32_t  nrows;
+} ggml_metal_kargs_cross_entropy_loss_back;
+
+typedef struct {
     int64_t  ne00;
     int64_t  ne01;
     int64_t  ne02;

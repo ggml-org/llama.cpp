@@ -10299,6 +10299,9 @@ typedef decltype(kernel_memset<int64_t>) kernel_memset_t;
 
 template [[host_name("kernel_memset_i64")]] kernel kernel_memset_t kernel_memset<int64_t>;
 
+typedef decltype(kernel_memset<float>) kernel_memset_f32_t;
+template [[host_name("kernel_memset_f32")]] kernel kernel_memset_f32_t kernel_memset<float>;
+
 constant short FC_count_equal_nsg [[function_constant(FC_COUNT_EQUAL + 0)]];
 
 template<typename T>
@@ -10358,3 +10361,173 @@ kernel void kernel_count_equal(
 typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
+
+kernel void kernel_cross_entropy_loss(
+        constant ggml_metal_kargs_cross_entropy_loss & args,
+        device const char  * src0,
+        device const char  * src1,
+        device       float * dst,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint   tgpig[[threadgroup_position_in_grid]],
+        ushort tpitg[[thread_position_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort   ntg[[threads_per_threadgroup]]) {
+    const int row = tgpig;
+
+    device const float * logits = (device const float *) (src0 + row * args.nb01);
+    device const float * labels = (device const float *) (src1 + row * args.nb11);
+
+    // 1. find per-row max for numerical stability
+    float lmax = -INFINITY;
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        lmax = max(lmax, logits[i]);
+    }
+
+    float max_val = simd_max(lmax);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // 2. compute sum(exp(logit - max))
+    float lsum = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        lsum += exp(logits[i] - max_val);
+    }
+
+    float sum_exp = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum_exp;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum_exp = buf[tiisg];
+        sum_exp = simd_sum(sum_exp);
+    }
+
+    const float log_sum_exp = log(sum_exp);
+
+    // 3. compute loss = sum(labels * log_softmax)
+    float lloss = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        lloss += (logits[i] - max_val - log_sum_exp) * labels[i];
+    }
+
+    float loss = simd_sum(lloss);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = loss;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        loss = buf[tiisg];
+        loss = simd_sum(loss);
+    }
+
+    // 4. accumulate -loss / nrows into dst[0]
+    if (tpitg == 0) {
+        // NOTE: this relies on dst[0] being zeroed before kernel launch
+        atomic_fetch_add_explicit((device atomic<float> *) dst, -loss / args.nrows, memory_order_relaxed);
+    }
+}
+
+kernel void kernel_cross_entropy_loss_back(
+        constant ggml_metal_kargs_cross_entropy_loss_back & args,
+        device const char  * grad,
+        device const char  * src0,
+        device const char  * src1,
+        device       char  * dst,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint   tgpig[[threadgroup_position_in_grid]],
+        ushort tpitg[[thread_position_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort   ntg[[threads_per_threadgroup]]) {
+    const int row = tgpig;
+
+    device const float * logits = (device const float *) (src0 + row * args.nb01);
+    device const float * labels = (device const float *) (src1 + row * args.nb11);
+    device       float * dst_row = (device float *)      (dst  + row * args.nb1);
+
+    const float d_by_nrows = ((device const float *) grad)[0] / args.nrows;
+
+    // 1. find per-row max
+    float lmax = -INFINITY;
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        lmax = max(lmax, logits[i]);
+    }
+
+    float max_val = simd_max(lmax);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // 2. compute sum(exp(logit - max))
+    float lsum = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        const float e = exp(logits[i] - max_val);
+        lsum += e;
+        dst_row[i] = e;
+    }
+
+    float sum_exp = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum_exp;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum_exp = buf[tiisg];
+        sum_exp = simd_sum(sum_exp);
+    }
+
+    const float inv_sum = 1.0f / sum_exp;
+
+    // 3. dst = (softmax - labels) * grad / nrows
+    for (int i = tpitg; i < args.ne00; i += ntg) {
+        dst_row[i] = (dst_row[i] * inv_sum - labels[i]) * d_by_nrows;
+    }
+}
