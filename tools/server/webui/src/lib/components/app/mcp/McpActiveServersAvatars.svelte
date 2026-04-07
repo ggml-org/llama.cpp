@@ -40,7 +40,7 @@
 </script>
 
 {#if hasEnabledMcpServers && mcpFavicons.length > 0}
-	<button class={cn('inline-flex items-center gap-1.5', className)} onclick={onClick}>
+	<button class={cn('inline-flex items-center gap-0.75', className)} onclick={onClick}>
 		<div class="flex -space-x-1">
 			{#each mcpFavicons as favicon (favicon.id)}
 				<Tooltip.Root>

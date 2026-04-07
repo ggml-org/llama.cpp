@@ -40,7 +40,7 @@ export const MCP_RECONNECT_MAX_DELAY = 30000;
 export const MCP_RECONNECT_ATTEMPT_TIMEOUT_MS = 15_000;
 
 /** Maximum number of MCP server avatars to display in the chat form */
-export const MAX_DISPLAYED_MCP_AVATARS = 3;
+export const MAX_DISPLAYED_MCP_AVATARS = 4;
 
 /** Expected count when two theme-less icons represent a light/dark pair */
 export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
