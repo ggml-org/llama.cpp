@@ -14,6 +14,7 @@
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
+#include <regex>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -55,6 +56,7 @@ static int opt_opmask   = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
 static int opt_opsync   = 0;  // synchronous ops
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
+static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 
 #define HEX_VERBOSE(...) \
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
@@ -3028,6 +3030,11 @@ static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * se
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
+    // reject ops that match the filter
+    if (opt_opfilter && std::regex_match(ggml_op_desc(op), *opt_opfilter)) {
+        return false;
+    }
+
     // all srcs & dsts must be mapped to the same session
     if (!ggml_hexagon_supported_buffers(sess, op)) {
         ggml_hexagon_dump_op_supp(sess->name, op, false);
@@ -3302,6 +3309,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_opsync  = getenv("GGML_HEXAGON_OPSYNC");
     const char * str_opbatch = getenv("GGML_HEXAGON_OPBATCH");
     const char * str_opqueue = getenv("GGML_HEXAGON_OPQUEUE");
+    const char * str_opfilter= getenv("GGML_HEXAGON_OPFILTER");
     const char * str_profile = getenv("GGML_HEXAGON_PROFILE");
     const char * str_etm     = getenv("GGML_HEXAGON_ETM");
     const char * str_nhvx    = getenv("GGML_HEXAGON_NHVX");
@@ -3309,7 +3317,10 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_ndev    = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch    = getenv("GGML_HEXAGON_ARCH");
 
+    auto RE_ICASE = std::regex_constants::icase;
+
     opt_experimental = str_experimental ? atoi(str_experimental) : 0;
+    opt_opfilter     = str_opfilter     ? new std::regex(str_opfilter, RE_ICASE) : NULL;
     opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
     opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
     opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0)  : opt_opmask;
