@@ -78,6 +78,11 @@ add_library(${TARGET} STATIC
     ngram-map.h
     ngram-mod.cpp
     ngram-mod.h
+    vi-proof.cpp
+    vi-proof.h
+    crypto/sha256.c
+    crypto/sha256.h
+    crypto/rotate-bits.h
     peg-parser.cpp
     peg-parser.h
     preset.cpp

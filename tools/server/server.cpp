@@ -158,6 +158,7 @@ int main(int argc, char ** argv) {
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
+        routes.get_vi_opening              = models_routes->proxy_get;
 
         // custom routes for router
         routes.get_props  = models_routes->get_router_props;
@@ -202,6 +203,9 @@ int main(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+
+    // verifiable inference proof byte fetch (two-step download)
+    ctx_http.get ("/vi/proofs/:proof_id/openings/:opening_index", ex_wrapper(routes.get_vi_opening));
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.webui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");

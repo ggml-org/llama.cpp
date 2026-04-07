@@ -86,6 +86,21 @@ struct task_params {
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
+    // Verifiable inference (commit-and-open trace proof)
+    struct verifiable_inference_params {
+        bool enabled = false;
+
+        // sampling parameters for openings
+        int32_t  samples = 16;
+        uint32_t seed    = 0;
+
+        // regex filters applied to tensor names in the trace callback (can repeat)
+        std::vector<std::string> tensor_filter;
+
+        // safety valve to avoid huge responses; interpreted as a soft limit on proof payload bytes
+        int64_t max_proof_bytes = 16 * 1024 * 1024; // 16 MiB
+    } verifiable_inference;
+
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
 };
@@ -355,6 +370,9 @@ struct server_task_result_cmpl_final : server_task_result {
     std::vector<std::string>  response_fields;
 
     task_params generation_params;
+
+    // Optional verifiable inference proof transcript (attached when requested)
+    json verifiable_inference = json(nullptr);
 
     // response formatting
     bool               verbose  = false;

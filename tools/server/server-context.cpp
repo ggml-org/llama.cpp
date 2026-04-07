@@ -11,13 +11,20 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "vi-proof.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <filesystem>
+#include <mutex>
+#include <random>
+#include <regex>
+#include <unordered_map>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -31,6 +38,89 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+namespace {
+    struct vi_opening_file {
+        std::filesystem::path path;
+        int64_t nbytes = 0;
+        vi_proof::sha256_digest bytes_hash{};
+    };
+
+    struct vi_proof_artifact {
+        std::filesystem::path dir;
+        std::vector<vi_opening_file> openings;
+        int64_t total_bytes = 0;
+        std::chrono::steady_clock::time_point created_at;
+    };
+
+    struct vi_proof_store {
+        std::mutex mtx;
+        std::unordered_map<std::string, vi_proof_artifact> proofs;
+
+        std::chrono::seconds ttl{300};
+        int64_t max_total_bytes = 256LL * 1024 * 1024; // 256 MiB across all stored proofs
+        std::filesystem::path base_dir;
+
+        vi_proof_store() {
+            base_dir = std::filesystem::temp_directory_path() / "llama-server-vi-proofs";
+            std::error_code ec;
+            std::filesystem::create_directories(base_dir, ec);
+        }
+
+        void gc_locked() {
+            const auto now = std::chrono::steady_clock::now();
+            int64_t total = 0;
+            for (const auto & kv : proofs) total += kv.second.total_bytes;
+
+            std::vector<std::string> to_erase;
+            to_erase.reserve(proofs.size());
+            for (const auto & [id, art] : proofs) {
+                if (now - art.created_at > ttl) {
+                    to_erase.push_back(id);
+                }
+            }
+            for (const auto & id : to_erase) {
+                auto it = proofs.find(id);
+                if (it == proofs.end()) continue;
+                std::error_code ec;
+                std::filesystem::remove_all(it->second.dir, ec);
+                total -= it->second.total_bytes;
+                proofs.erase(it);
+            }
+
+            if (total <= max_total_bytes) return;
+            std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> order;
+            order.reserve(proofs.size());
+            for (const auto & [id, art] : proofs) order.emplace_back(id, art.created_at);
+            std::sort(order.begin(), order.end(), [](const auto & a, const auto & b) { return a.second < b.second; });
+            for (const auto & [id, _] : order) {
+                if (total <= max_total_bytes) break;
+                auto it = proofs.find(id);
+                if (it == proofs.end()) continue;
+                std::error_code ec;
+                std::filesystem::remove_all(it->second.dir, ec);
+                total -= it->second.total_bytes;
+                proofs.erase(it);
+            }
+        }
+
+        static std::string make_proof_id(const vi_proof::sha256_digest & chal_seed, const vi_proof::sha256_digest & root) {
+            uint8_t buf[2 * vi_proof::kSha256Size + sizeof(uint64_t)];
+            memcpy(buf, chal_seed.data(), vi_proof::kSha256Size);
+            memcpy(buf + vi_proof::kSha256Size, root.data(), vi_proof::kSha256Size);
+            const uint64_t t = (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            memcpy(buf + 2 * vi_proof::kSha256Size, &t, sizeof(t));
+            const auto dig = vi_proof::sha256_bytes(buf, sizeof(buf));
+            return vi_proof::hex_encode(dig.data(), 16);
+        }
+    };
+
+    static vi_proof_store & vi_store() {
+        static vi_proof_store store;
+        return store;
+    }
+} // namespace
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -3133,6 +3223,409 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             tasks.push_back(std::move(task));
         }
 
+        // Verifiable inference: synchronous isolated execution path.
+        // This is opt-in and intentionally bypasses the normal slot/batching pipeline so that
+        // a per-request ggml trace callback can be attached to an isolated llama_context.
+        if (!tasks.empty() && tasks[0].params.verifiable_inference.enabled) {
+            if (tasks.size() != 1) {
+                throw std::runtime_error("Error: verifiable_inference does not support batched prompts");
+            }
+
+            server_task & task = tasks[0];
+
+            if (task.params.stream) {
+                throw std::runtime_error("Error: verifiable_inference does not support streaming responses");
+            }
+            if (task.params.n_cmpl != 1) {
+                throw std::runtime_error("Error: verifiable_inference does not support n_cmpl > 1");
+            }
+            if (task.tokens.has_mtmd) {
+                throw std::runtime_error("Error: verifiable_inference does not support multimodal inputs yet");
+            }
+
+            // Extract plain token list (reject media placeholders).
+            std::vector<llama_token> prompt_tokens;
+            prompt_tokens.reserve(task.n_tokens());
+            for (int32_t ti = 0; ti < task.n_tokens(); ++ti) {
+                const llama_token tok = task.tokens[(size_t) ti];
+                if (tok == LLAMA_TOKEN_NULL) {
+                    throw std::runtime_error("Error: verifiable_inference does not support media chunks in prompt");
+                }
+                prompt_tokens.push_back(tok);
+            }
+
+            const auto * vocab = ctx_server.vocab;
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+
+            // Build an isolated context whose params match the server context, but with cb_eval enabled.
+            llama_context_params cparams_commit = common_context_params_to_llama(params);
+            cparams_commit.n_ctx = meta->slot_n_ctx;
+
+            struct vi_commit_collector {
+                std::vector<std::regex> filters;
+                std::vector<uint8_t> scratch;
+                std::vector<vi_proof::trace_entry_meta> meta;
+                std::vector<vi_proof::sha256_digest> leaf_hashes;
+            } commit;
+
+            // compile regex filters (anchored like the example)
+            for (const auto & pat : task.params.verifiable_inference.tensor_filter) {
+                commit.filters.emplace_back("^" + pat, std::regex::optimize);
+            }
+
+            auto cb_commit = [](ggml_tensor * t, bool ask, void * user_data) -> bool {
+                auto * st = (vi_commit_collector *) user_data;
+                if (ask) {
+                    if (st->filters.empty()) return true;
+                    for (const auto & r : st->filters) {
+                        if (std::regex_search(t->name, r)) return true;
+                    }
+                    return false;
+                }
+
+                // Only collect what we asked for
+                if (!st->filters.empty()) {
+                    bool ok = false;
+                    for (const auto & r : st->filters) {
+                        if (std::regex_search(t->name, r)) { ok = true; break; }
+                    }
+                    if (!ok) return true;
+                }
+
+                const size_t nbytes = ggml_nbytes(t);
+                const bool is_host = ggml_backend_buffer_is_host(t->buffer);
+                const uint8_t * data = nullptr;
+                if (is_host) {
+                    data = (const uint8_t *) t->data;
+                } else {
+                    st->scratch.resize(nbytes);
+                    ggml_backend_tensor_get(t, st->scratch.data(), 0, nbytes);
+                    data = st->scratch.data();
+                }
+
+                vi_proof::trace_entry_meta m;
+                m.name = t->name;
+                m.op_desc = ggml_op_desc(t);
+                m.type_name = ggml_type_name(t->type);
+                m.ne = { t->ne[0], t->ne[1], t->ne[2], t->ne[3] };
+                m.nbytes = nbytes;
+
+                st->meta.emplace_back(std::move(m));
+                st->leaf_hashes.emplace_back(vi_proof::hash_trace_leaf(st->meta.back(), data, nbytes));
+                return true;
+            };
+
+            cparams_commit.cb_eval = cb_commit;
+            cparams_commit.cb_eval_user_data = &commit;
+
+            auto run_once = [&](llama_context * ctx, std::vector<llama_token> & out_tokens) {
+                // Prompt eval
+                llama_batch batch = llama_batch_init((int32_t) prompt_tokens.size(), 0, 1);
+                for (int i = 0; i < (int) prompt_tokens.size(); ++i) {
+                    batch.token[i] = prompt_tokens[(size_t) i];
+                    batch.pos[i] = i;
+                    batch.n_seq_id[i] = 1;
+                    batch.seq_id[i][0] = 0;
+                    batch.logits[i] = (i == (int) prompt_tokens.size() - 1);
+                }
+                batch.n_tokens = (int) prompt_tokens.size();
+                if (llama_decode(ctx, batch) != 0) {
+                    llama_batch_free(batch);
+                    throw std::runtime_error("Error: llama_decode failed (prompt)");
+                }
+                llama_batch_free(batch);
+
+                out_tokens.clear();
+                out_tokens.insert(out_tokens.end(), prompt_tokens.begin(), prompt_tokens.end());
+
+                // Generate
+                int32_t n_predict = task.params.n_predict < 0 ? 0 : task.params.n_predict;
+                for (int32_t i = 0; i < n_predict; ++i) {
+                    float * logits = llama_get_logits_ith(ctx, -1);
+                    if (!logits) {
+                        throw std::runtime_error("Error: failed to get logits");
+                    }
+
+                    int best = 0;
+                    for (int v = 1; v < n_vocab; ++v) {
+                        if (logits[v] > logits[best]) best = v;
+                    }
+                    const llama_token tok = (llama_token) best;
+                    out_tokens.push_back(tok);
+
+                    if (llama_vocab_is_eog(vocab, tok)) {
+                        break;
+                    }
+
+                    llama_batch b2 = llama_batch_init(1, 0, 1);
+                    b2.token[0] = tok;
+                    b2.pos[0] = (llama_pos) (prompt_tokens.size() + (size_t) i);
+                    b2.n_seq_id[0] = 1;
+                    b2.seq_id[0][0] = 0;
+                    b2.logits[0] = true;
+                    b2.n_tokens = 1;
+                    if (llama_decode(ctx, b2) != 0) {
+                        llama_batch_free(b2);
+                        throw std::runtime_error("Error: llama_decode failed (gen)");
+                    }
+                    llama_batch_free(b2);
+                }
+            };
+
+            // Pass 1: commit
+            std::vector<llama_token> full_tokens;
+            llama_context * ctx_commit = llama_init_from_model(ctx_server.model, cparams_commit);
+            if (!ctx_commit) {
+                throw std::runtime_error("Error: failed to create isolated context for verifiable inference");
+            }
+            run_once(ctx_commit, full_tokens);
+            llama_free(ctx_commit);
+
+            if (commit.leaf_hashes.empty()) {
+                throw std::runtime_error("Error: verifiable_inference trace is empty (check tensor_filter)");
+            }
+
+            vi_proof::merkle_tree mt = vi_proof::build_merkle(commit.leaf_hashes);
+            const auto root = mt.root();
+
+            // Derive challenge seed from root + user seed
+            uint8_t seed_buf[vi_proof::kSha256Size + sizeof(uint32_t)];
+            memcpy(seed_buf, root.data(), vi_proof::kSha256Size);
+            const uint32_t user_seed = task.params.verifiable_inference.seed;
+            memcpy(seed_buf + vi_proof::kSha256Size, &user_seed, sizeof(user_seed));
+            const auto chal_seed = vi_proof::sha256_bytes(seed_buf, sizeof(seed_buf));
+
+            // sample indices (Fisher-Yates shuffle)
+            std::vector<size_t> sampled;
+            {
+                const size_t n = commit.meta.size();
+                const size_t k = (size_t) std::min<int32_t>(task.params.verifiable_inference.samples, (int32_t) n);
+                uint64_t s64 = 0;
+                memcpy(&s64, chal_seed.data(), sizeof(s64));
+                std::mt19937_64 rng(s64);
+                std::vector<size_t> idx(n);
+                for (size_t i = 0; i < n; ++i) idx[i] = i;
+                std::shuffle(idx.begin(), idx.end(), rng);
+                idx.resize(k);
+                std::sort(idx.begin(), idx.end());
+                sampled = std::move(idx);
+            }
+
+            // compute name occurrence indices for trace entries
+            std::vector<size_t> name_occ(commit.meta.size());
+            {
+                std::unordered_map<std::string, size_t> occ;
+                for (size_t i = 0; i < commit.meta.size(); ++i) {
+                    name_occ[i] = occ[commit.meta[i].name]++;
+                }
+            }
+
+            // Pass 2: openings (capture selected bytes)
+            struct vi_opening {
+                size_t leaf_index = 0;
+                size_t name_occurrence = 0;
+                vi_proof::trace_entry_meta meta;
+                vi_proof::sha256_digest leaf_hash{};
+                std::vector<vi_proof::sha256_digest> merkle_path;
+                vi_proof::sha256_digest bytes_hash{};
+                int64_t nbytes = 0;
+            };
+            std::vector<vi_opening> openings;
+            openings.resize(sampled.size());
+
+            struct vi_open_collector {
+                std::unordered_map<std::string, std::unordered_map<size_t, size_t>> want;
+                std::unordered_map<std::string, size_t> seen;
+                std::unordered_map<const ggml_tensor *, size_t> armed;
+                std::vector<uint8_t> scratch;
+                std::vector<vi_opening> * openings = nullptr;
+                std::filesystem::path proof_dir;
+                int64_t total_bytes = 0;
+                int64_t max_total_bytes = 0;
+            } open;
+            open.openings = &openings;
+
+            for (size_t j = 0; j < sampled.size(); ++j) {
+                const size_t leaf_idx = sampled[j];
+                vi_opening o;
+                o.leaf_index = leaf_idx;
+                o.name_occurrence = name_occ[leaf_idx];
+                o.meta = commit.meta[leaf_idx];
+                o.leaf_hash = commit.leaf_hashes[leaf_idx];
+                o.merkle_path = vi_proof::merkle_proof(mt, leaf_idx);
+                (*open.openings)[j] = std::move(o);
+                open.want[commit.meta[leaf_idx].name].emplace(name_occ[leaf_idx], j);
+            }
+
+            const std::string proof_id = vi_proof_store::make_proof_id(chal_seed, root);
+            open.proof_dir = vi_store().base_dir / proof_id;
+            open.max_total_bytes = task.params.verifiable_inference.max_proof_bytes;
+            {
+                std::error_code ec;
+                std::filesystem::create_directories(open.proof_dir, ec);
+                if (ec) {
+                    throw std::runtime_error("Error: failed to create proof directory");
+                }
+            }
+
+            auto cb_open = [](ggml_tensor * t, bool ask, void * user_data) -> bool {
+                auto * st = (vi_open_collector *) user_data;
+                if (ask) {
+                    const std::string name = t->name;
+                    const size_t ord = st->seen[name]++;
+                    auto it_name = st->want.find(name);
+                    if (it_name == st->want.end()) return false;
+                    auto it_ord = it_name->second.find(ord);
+                    if (it_ord == it_name->second.end()) return false;
+                    st->armed[t] = it_ord->second;
+                    return true;
+                }
+                auto it_arm = st->armed.find(t);
+                if (it_arm == st->armed.end()) return true;
+                const size_t opening_idx = it_arm->second;
+                st->armed.erase(it_arm);
+
+                const size_t nbytes = ggml_nbytes(t);
+                const bool is_host = ggml_backend_buffer_is_host(t->buffer);
+                const uint8_t * data = nullptr;
+                if (is_host) {
+                    data = (const uint8_t *) t->data;
+                } else {
+                    st->scratch.resize(nbytes);
+                    ggml_backend_tensor_get(t, st->scratch.data(), 0, nbytes);
+                    data = st->scratch.data();
+                }
+
+                auto & rec = (*st->openings)[opening_idx];
+                rec.nbytes = (int64_t) nbytes;
+                rec.bytes_hash = vi_proof::sha256_bytes(data, nbytes);
+
+                st->total_bytes += (int64_t) nbytes;
+                if (st->max_total_bytes > 0 && st->total_bytes > st->max_total_bytes) {
+                    throw std::runtime_error("Error: opened bytes exceed verifiable_inference.max_proof_bytes");
+                }
+
+                const std::filesystem::path out_path = st->proof_dir / (std::to_string(opening_idx) + ".bin");
+                std::ofstream out(out_path, std::ios::binary);
+                if (!out) {
+                    throw std::runtime_error("Error: failed to open proof blob for write");
+                }
+                out.write((const char *) data, (std::streamsize) nbytes);
+                out.close();
+                return true;
+            };
+
+            llama_context_params cparams_open = common_context_params_to_llama(params);
+            cparams_open.n_ctx = meta->slot_n_ctx;
+            cparams_open.cb_eval = cb_open;
+            cparams_open.cb_eval_user_data = &open;
+
+            llama_context * ctx_open = llama_init_from_model(ctx_server.model, cparams_open);
+            if (!ctx_open) {
+                throw std::runtime_error("Error: failed to create isolated context for openings");
+            }
+            std::vector<llama_token> full_tokens2;
+            run_once(ctx_open, full_tokens2);
+            llama_free(ctx_open);
+
+            // Build proof json and enforce size cap approximately.
+            json vi = json::object();
+            vi["scheme"] = "commit-and-open over ggml node outputs (demo)";
+            vi["proof_id"] = proof_id;
+            vi["trace_leaves"] = commit.meta.size();
+            vi["merkle_root_sha256"] = vi_proof::hex_encode(root.data(), root.size());
+            vi["challenge_seed_sha256"] = vi_proof::hex_encode(chal_seed.data(), chal_seed.size());
+            vi["indices"] = sampled;
+
+            json opens = json::array();
+            for (size_t oi = 0; oi < openings.size(); ++oi) {
+                const auto & o = openings[oi];
+                json jo = json::object();
+                jo["leaf_index"] = o.leaf_index;
+                jo["name_occurrence"] = o.name_occurrence;
+                jo["tensor"] = json{
+                    {"name", o.meta.name},
+                    {"op", o.meta.op_desc},
+                    {"type", o.meta.type_name},
+                    {"ne", json::array({o.meta.ne[0], o.meta.ne[1], o.meta.ne[2], o.meta.ne[3]})},
+                    {"nbytes", o.meta.nbytes},
+                };
+                jo["opened_bytes_sha256"] = vi_proof::hex_encode(o.bytes_hash.data(), o.bytes_hash.size());
+                jo["opened_bytes_nbytes"] = o.nbytes;
+                jo["opened_bytes_url"] = "/vi/proofs/" + proof_id + "/openings/" + std::to_string(oi);
+                jo["leaf_hash_sha256"] = vi_proof::hex_encode(o.leaf_hash.data(), o.leaf_hash.size());
+                json path = json::array();
+                for (const auto & sib : o.merkle_path) {
+                    path.push_back(vi_proof::hex_encode(sib.data(), sib.size()));
+                }
+                jo["merkle_path_siblings_sha256"] = path;
+                opens.push_back(std::move(jo));
+            }
+            vi["openings"] = opens;
+
+            // Store proof in server cache for follow-up GETs.
+            {
+                vi_proof_artifact art;
+                art.dir = open.proof_dir;
+                art.created_at = std::chrono::steady_clock::now();
+                art.total_bytes = open.total_bytes;
+                art.openings.resize(openings.size());
+                for (size_t oi = 0; oi < openings.size(); ++oi) {
+                    vi_opening_file of;
+                    of.path = open.proof_dir / (std::to_string(oi) + ".bin");
+                    of.nbytes = openings[oi].nbytes;
+                    of.bytes_hash = openings[oi].bytes_hash;
+                    art.openings[oi] = std::move(of);
+                }
+
+                auto & store = vi_store();
+                std::lock_guard<std::mutex> lock(store.mtx);
+                store.gc_locked();
+                store.proofs[proof_id] = std::move(art);
+            }
+
+            // Compose response using the existing JSON serializers.
+            server_task_result_cmpl_final result;
+            result.id_slot = -1;
+            result.index = 0;
+            result.stream = false;
+            result.include_usage = task.params.include_usage;
+            result.prompt = prompt.is_string() ? prompt.get<std::string>() : prompt.dump();
+            result.content = ""; // filled below
+            result.tokens = full_tokens;
+            result.n_prompt_tokens = (int32_t) prompt_tokens.size();
+            result.n_prompt_tokens_cache = 0;
+            result.n_tokens_cached = 0;
+            result.n_decoded = (int32_t) (full_tokens.size() - prompt_tokens.size());
+            result.has_new_line = false;
+            result.truncated = false;
+            result.stop = STOP_TYPE_LIMIT;
+            result.post_sampling_probs = false;
+            result.response_fields = task.params.response_fields;
+            result.generation_params = task.params;
+            result.verbose = task.params.verbose;
+            result.res_type = res_type;
+            result.oaicompat_model = meta->model_name;
+            result.oaicompat_cmpl_id = completion_id;
+            result.verifiable_inference = vi;
+
+            // detokenize generated content (excluding prompt)
+            {
+                std::string out;
+                for (size_t i = prompt_tokens.size(); i < full_tokens.size(); ++i) {
+                    char buf[512];
+                    const int n = llama_token_to_piece(vocab, full_tokens[i], buf, (int32_t) sizeof(buf), 0, true);
+                    if (n > 0) out.append(buf, (size_t) n);
+                }
+                result.content = out;
+            }
+
+            task_result_state state(task.params.chat_parser_params);
+            result.update(state);
+            res->ok(result.to_json());
+            return res;
+        }
+
         rd.post_tasks(std::move(tasks));
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
@@ -3423,6 +3916,106 @@ void server_routes::init_routes() {
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
         res->data = prometheus.str();
+        return res;
+    };
+
+    this->get_vi_opening = [this](const server_http_req & req) {
+        auto res = create_response(true);
+
+        const std::string proof_id = req.get_param("proof_id");
+        const std::string opening_index_s = req.get_param("opening_index");
+
+        if (proof_id.empty() || opening_index_s.empty()) {
+            res->status = 400;
+            res->data = "missing proof_id/opening_index";
+            res->content_type = "text/plain; charset=utf-8";
+            return res;
+        }
+
+        int opening_index = -1;
+        try {
+            opening_index = std::stoi(opening_index_s);
+        } catch (...) {
+            res->status = 400;
+            res->data = "invalid opening_index";
+            res->content_type = "text/plain; charset=utf-8";
+            return res;
+        }
+        if (opening_index < 0) {
+            res->status = 400;
+            res->data = "invalid opening_index";
+            res->content_type = "text/plain; charset=utf-8";
+            return res;
+        }
+
+        std::filesystem::path file_path;
+        int64_t expected_nbytes = -1;
+        vi_proof::sha256_digest expected_hash{};
+        {
+            auto & store = vi_store();
+            std::lock_guard<std::mutex> lock(store.mtx);
+            store.gc_locked();
+            auto it = store.proofs.find(proof_id);
+            if (it == store.proofs.end()) {
+                res->status = 404;
+                res->data = "proof not found";
+                res->content_type = "text/plain; charset=utf-8";
+                return res;
+            }
+            if ((size_t) opening_index >= it->second.openings.size()) {
+                res->status = 404;
+                res->data = "opening not found";
+                res->content_type = "text/plain; charset=utf-8";
+                return res;
+            }
+            const auto & of = it->second.openings[(size_t) opening_index];
+            file_path = of.path;
+            expected_nbytes = of.nbytes;
+            expected_hash = of.bytes_hash;
+        }
+
+        std::ifstream in(file_path, std::ios::binary);
+        if (!in) {
+            res->status = 404;
+            res->data = "opening bytes missing";
+            res->content_type = "text/plain; charset=utf-8";
+            return res;
+        }
+
+        if (expected_nbytes < 0) {
+            std::error_code ec;
+            expected_nbytes = (int64_t) std::filesystem::file_size(file_path, ec);
+            if (ec) {
+                res->status = 500;
+                res->data = "failed to stat opening bytes";
+                res->content_type = "text/plain; charset=utf-8";
+                return res;
+            }
+        }
+
+        std::string bytes((size_t) expected_nbytes, '\0');
+        in.read(bytes.data(), expected_nbytes);
+        if (in.gcount() != expected_nbytes) {
+            res->status = 500;
+            res->data = "short read";
+            res->content_type = "text/plain; charset=utf-8";
+            return res;
+        }
+
+        // optional integrity check vs stored sha256
+        if (bytes.size() > 0) {
+            const auto got = vi_proof::sha256_bytes((const uint8_t *) bytes.data(), bytes.size());
+            if (got != expected_hash) {
+                res->status = 500;
+                res->data = "sha256 mismatch";
+                res->content_type = "text/plain; charset=utf-8";
+                return res;
+            }
+        }
+
+        res->status = 200;
+        res->content_type = "application/octet-stream";
+        res->data = std::move(bytes);
         return res;
     };
 

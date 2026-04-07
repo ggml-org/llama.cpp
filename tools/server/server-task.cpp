@@ -85,6 +85,13 @@ json task_params::to_json(bool only_metrics) const {
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
             {"lora",                      lora},
+            {"verifiable_inference",      json{
+                {"enabled",        verifiable_inference.enabled},
+                {"samples",        verifiable_inference.samples},
+                {"seed",           verifiable_inference.seed},
+                {"tensor_filter",  verifiable_inference.tensor_filter},
+                {"max_proof_bytes", verifiable_inference.max_proof_bytes},
+            }},
         };
     }
 
@@ -148,6 +155,13 @@ json task_params::to_json(bool only_metrics) const {
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
         {"lora",                      lora},
+        {"verifiable_inference",      json{
+            {"enabled",        verifiable_inference.enabled},
+            {"samples",        verifiable_inference.samples},
+            {"seed",           verifiable_inference.seed},
+            {"tensor_filter",  verifiable_inference.tensor_filter},
+            {"max_proof_bytes", verifiable_inference.max_proof_bytes},
+        }},
     };
 }
 
@@ -273,6 +287,25 @@ task_params server_task::params_from_json_cmpl(
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
 
+    // verifiable inference (commit-and-open proof)
+    // Accept either:
+    // - "verifiable_inference": true
+    // - "verifiable_inference": { "enabled": true, ... }
+    if (data.contains("verifiable_inference")) {
+        if (data.at("verifiable_inference").is_boolean()) {
+            params.verifiable_inference.enabled = data.at("verifiable_inference").get<bool>();
+        } else if (data.at("verifiable_inference").is_object()) {
+            const auto & vi = data.at("verifiable_inference");
+            params.verifiable_inference.enabled         = json_value(vi, "enabled", false);
+            params.verifiable_inference.samples         = json_value(vi, "samples", params.verifiable_inference.samples);
+            params.verifiable_inference.seed            = json_value(vi, "seed",    params.verifiable_inference.seed);
+            params.verifiable_inference.tensor_filter   = json_value(vi, "tensor_filter", std::vector<std::string>());
+            params.verifiable_inference.max_proof_bytes = json_value(vi, "max_proof_bytes", params.verifiable_inference.max_proof_bytes);
+        } else {
+            throw std::runtime_error("Error: 'verifiable_inference' must be a boolean or an object");
+        }
+    }
+
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
     params.sampling.min_p              = json_value(data, "min_p",               defaults.sampling.min_p);
@@ -356,6 +389,15 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.sampling.dry_base < 1.0f) {
         params.sampling.dry_base = defaults.sampling.dry_base;
+    }
+
+    if (params.verifiable_inference.enabled) {
+        if (params.verifiable_inference.samples < 0) {
+            throw std::runtime_error("Error: verifiable_inference.samples must be >= 0");
+        }
+        if (params.verifiable_inference.max_proof_bytes < 0) {
+            throw std::runtime_error("Error: verifiable_inference.max_proof_bytes must be >= 0");
+        }
     }
 
     // sequence breakers for DRY
@@ -748,6 +790,9 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
         {"tokens_cached",       n_tokens_cached},
         {"timings",             timings.to_json()},
     };
+    if (!verifiable_inference.is_null()) {
+        res["verifiable_inference"] = verifiable_inference;
+    }
     if (!stream && !probs_output.empty()) {
         res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
     }
@@ -791,6 +836,10 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
+
+    if (!verifiable_inference.is_null()) {
+        res["verifiable_inference"] = verifiable_inference;
+    }
 
     // extra fields for debugging purposes
     if (verbose) {
@@ -839,6 +888,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
+
+    if (!verifiable_inference.is_null()) {
+        res["verifiable_inference"] = verifiable_inference;
+    }
 
     // extra fields for debugging purposes
     if (verbose) {
@@ -983,6 +1036,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
         }},
     };
+
+    if (!verifiable_inference.is_null()) {
+        res["verifiable_inference"] = verifiable_inference;
+    }
 
     return res;
 }
@@ -1161,6 +1218,10 @@ json server_task_result_cmpl_final::to_json_anthropic() {
             {"output_tokens", n_decoded}
         }}
     };
+
+    if (!verifiable_inference.is_null()) {
+        res["verifiable_inference"] = verifiable_inference;
+    }
 
     return res;
 }

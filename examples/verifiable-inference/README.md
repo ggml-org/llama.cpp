@@ -23,8 +23,8 @@ cmake --build build -j
 
 ```sh
 ./build/bin/llama-verifiable-inference \
-  --hf-repo ddh0/GPT-2-GGUF \
-  --hf-file GPT-2-q4_K_S.gguf \
+  --hf-repo QuantFactory/gpt2-GGUF \
+  --hf-file gpt2.Q4_0.gguf \
   -ngl 0 \
   -p "Once upon a time" \
   --vi-samples 16 \
