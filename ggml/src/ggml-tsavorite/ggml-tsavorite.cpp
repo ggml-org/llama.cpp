@@ -17,7 +17,6 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-
 #include <string.h>
 
 #include "ggml-tsavorite.h"
@@ -35,7 +34,6 @@
 #include "HostShimCAPI.h"
 #include "tsi-rt/utils/Profiler.h"
 
-
 #include <thread>
 #include <vector>
 #include  <mutex>
@@ -51,7 +49,7 @@ static std::mutex tsi_pack_mutex;
 static std::condition_variable device_cv;
 
 
-// This will also go in deployment file
+// This will  go in deployment file at next PR
 #define NUM_OF_TXES 2
 static uint32_t num_of_txes =  NUM_OF_TXES;
 
@@ -2070,9 +2068,6 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
     return GGML_STATUS_SUCCESS;
 }
 
-static void anoop_test() {
-   return;
-}
 // nodes are intermediate which has multiple src tensors & operation
 // Here we create multiple thread
 // Each Thread run the command buffer & pick Tensor and execute and get the result back base on
