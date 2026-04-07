@@ -1,7 +1,7 @@
 /**
  * Rehype plugin to provide comprehensive RTL support by adding dir="auto"
  * to all text-containing elements.
- * 
+ *
  * This operates directly on the HAST tree, ensuring that all elements
  * (including those not in a predefined list) receive the attribute.
  */
