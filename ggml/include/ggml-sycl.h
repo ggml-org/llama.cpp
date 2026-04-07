@@ -67,7 +67,7 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffe
 // CPU-offload compute buffer: host-pinned memory with SYCL interface and is_host=true.
 // Eliminates staging overhead for CPU-dispatched layers in cpu-dispatch.cpp.
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_cpu_offload_compute_buffer_type(int device);
-GGML_BACKEND_API bool ggml_backend_sycl_cpu_offload_available(void);
+GGML_BACKEND_API bool                       ggml_backend_sycl_cpu_offload_available(void);
 
 // Weight residency policy: true when dense weights should remain host-backed and streamed via unified cache.
 GGML_BACKEND_API bool ggml_backend_sycl_weights_evictable(void);
@@ -155,10 +155,15 @@ struct ggml_sycl_tensor_inventory {
     int                            n_expert;       // Total experts per layer (0 for dense models)
     int                            n_expert_used;  // Experts activated per token (0 for dense models)
     // Model hparams for KV cache size estimation (used by VRAM budget coordination)
-    uint32_t                       n_layer;        // Number of transformer layers
-    uint32_t                       n_embd_k_gqa;   // Key embedding dim (GQA-adjusted), per layer
-    uint32_t                       n_embd_v_gqa;   // Value embedding dim (GQA-adjusted), per layer
-    uint32_t                       n_ctx;           // Context size (tokens)
+    uint32_t                       n_layer;       // Number of transformer layers
+    uint32_t                       n_embd_k_gqa;  // Key embedding dim (GQA-adjusted), per layer
+    uint32_t                       n_embd_v_gqa;  // Value embedding dim (GQA-adjusted), per layer
+    uint32_t                       n_ctx;         // Context size (tokens)
+    // SWA (Sliding Window Attention) info for models with heterogeneous attention
+    uint32_t                       n_swa;              // Sliding window size (0 = no SWA)
+    uint32_t                       n_swa_layers;       // Number of SWA layers (0 = all full-attn)
+    const bool *                   swa_layer_mask;     // Per-layer SWA flag [n_layer], NULL if no SWA
+    uint32_t                       swa_layer_mask_count; // Length of swa_layer_mask (must == n_layer)
 };
 
 // Set tensor inventory for tiered memory placement.
@@ -166,6 +171,12 @@ struct ggml_sycl_tensor_inventory {
 // This enables automatic VRAM/host placement based on tensor priority.
 GGML_BACKEND_API void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t                            backend,
                                                              const struct ggml_sycl_tensor_inventory * inventory);
+
+// Update the planner metadata with the runtime context size for the current
+// inference context. This does not retroactively re-place already loaded
+// weights, but it lets KV/runtime consumers distinguish train-context sizing
+// from the active context.
+GGML_BACKEND_API void ggml_backend_sycl_set_runtime_n_ctx(ggml_backend_t backend, uint32_t n_ctx);
 
 // Check if tiered memory mode is enabled for this backend.
 // Returns true if the unified cache system is active (always true by default).

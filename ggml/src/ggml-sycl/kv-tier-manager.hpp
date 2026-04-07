@@ -11,6 +11,8 @@
 
 namespace ggml_sycl {
 
+struct placement_plan;
+
 // Per-layer region descriptor for KV cache placement.
 struct layer_region {
     uint32_t layer_id;
@@ -38,6 +40,9 @@ class kv_tier_manager {
     // Populates per-layer placement vector for non-contiguous placement.
     // Falls back to budget-based configure() when cache data is unavailable.
     void configure_with_weights(int device, uint32_t n_layers, size_t kv_vram_cap, size_t total_bytes);
+
+    // Plan-driven configuration: use authoritative planner KV residency.
+    void configure_from_plan(int device, const placement_plan & plan, uint32_t n_layers, size_t total_bytes);
 
     // Query tier state
     bool is_active() const { return active_; }
@@ -76,13 +81,16 @@ class kv_tier_manager {
     // env-var override that exceeds actual capacity).
     void set_actual_hot_layers(uint32_t n_hot);
 
+    // Replace placement with the actual per-layer allocation result.
+    void set_actual_layer_placement(int device, const std::vector<bool> & layer_on_device, size_t total_bytes);
+
   private:
-    bool                active_       = false;
-    int                 device_       = -1;
-    uint32_t            hot_layers_   = 0;
-    uint32_t            total_layers_ = 0;
-    size_t              kv_per_layer_ = 0;
-    std::vector<bool>   layer_on_device_;  // Per-layer: true = VRAM, false = host
+    bool              active_       = false;
+    int               device_       = -1;
+    uint32_t          hot_layers_   = 0;
+    uint32_t          total_layers_ = 0;
+    size_t            kv_per_layer_ = 0;
+    std::vector<bool> layer_on_device_;  // Per-layer: true = VRAM, false = host
 };
 
 // Per-device singleton accessor

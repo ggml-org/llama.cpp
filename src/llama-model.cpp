@@ -8620,6 +8620,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             inventory.n_embd_k_gqa  = hparams.n_embd_k_gqa();
             inventory.n_embd_v_gqa  = hparams.n_embd_v_gqa();
             inventory.n_ctx         = hparams.n_ctx_train;
+            inventory.n_swa         = hparams.n_swa;
+            inventory.n_swa_layers  = 0;
+            for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                if (hparams.is_swa(il)) {
+                    inventory.n_swa_layers++;
+                }
+            }
+            // Pass per-layer SWA mask so the placement planner can charge
+            // heterogeneous KV costs (SWA layers use less KV than full-attn).
+            inventory.swa_layer_mask       = hparams.swa_layers.data();
+            inventory.swa_layer_mask_count = hparams.n_layer;
 
             // Set inventory for each SYCL backend device BEFORE allocation
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {

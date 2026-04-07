@@ -1,6 +1,7 @@
 #include "kv-tier-manager.hpp"
 
 #include "ggml-impl.h"
+#include "unified-cache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +10,6 @@
 
 namespace ggml_sycl {
 
-// Forward-declare to avoid heavyweight unified-cache.hpp include
 size_t unified_cache_get_layer_vram_bytes(int device, int layer_id);
 
 static std::array<kv_tier_manager, GGML_SYCL_MAX_DEVICES> g_kv_tier_managers;
@@ -75,7 +75,9 @@ void kv_tier_manager::set_actual_hot_layers(uint32_t n_hot) {
     if (!layer_on_device_.empty()) {
         uint32_t current_on_device = 0;
         for (bool v : layer_on_device_) {
-            if (v) current_on_device++;
+            if (v) {
+                current_on_device++;
+            }
         }
         // Remove device-placed layers from the back until count matches
         for (uint32_t l = total_layers_; l > 0 && current_on_device > n_hot; l--) {
@@ -85,6 +87,22 @@ void kv_tier_manager::set_actual_hot_layers(uint32_t n_hot) {
             }
         }
     }
+}
+
+void kv_tier_manager::set_actual_layer_placement(int                       device,
+                                                 const std::vector<bool> & layer_on_device,
+                                                 size_t                    total_bytes) {
+    device_          = device;
+    total_layers_    = static_cast<uint32_t>(layer_on_device.size());
+    kv_per_layer_    = total_layers_ > 0 ? total_bytes / total_layers_ : 0;
+    layer_on_device_ = layer_on_device;
+    hot_layers_      = 0;
+    for (bool on_device : layer_on_device_) {
+        if (on_device) {
+            hot_layers_++;
+        }
+    }
+    active_ = (hot_layers_ < total_layers_);
 }
 
 void kv_tier_manager::get_region_sizes(size_t total_bytes, size_t & hot_bytes, size_t & cold_bytes) const {
@@ -97,7 +115,9 @@ void kv_tier_manager::get_region_sizes(size_t total_bytes, size_t & hot_bytes, s
     if (!layer_on_device_.empty()) {
         uint32_t device_count = 0;
         for (bool v : layer_on_device_) {
-            if (v) device_count++;
+            if (v) {
+                device_count++;
+            }
         }
         hot_bytes  = std::min(static_cast<size_t>(device_count) * kv_per_layer_, total_bytes);
         cold_bytes = total_bytes - hot_bytes;
@@ -113,8 +133,8 @@ std::vector<layer_region> kv_tier_manager::compute_region_layout(size_t total_by
     const size_t aligned_per_layer = (kv_per_layer_ + 511) & ~size_t(511);
 
     std::vector<layer_region> regions(total_layers_);
-    size_t device_offset = 0;
-    size_t host_offset   = 0;
+    size_t                    device_offset = 0;
+    size_t                    host_offset   = 0;
     for (uint32_t l = 0; l < total_layers_; l++) {
         regions[l].layer_id  = l;
         regions[l].size      = aligned_per_layer;
@@ -130,8 +150,7 @@ std::vector<layer_region> kv_tier_manager::compute_region_layout(size_t total_by
     return regions;
 }
 
-void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers,
-                                              size_t kv_vram_cap, size_t total_bytes) {
+void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers, size_t kv_vram_cap, size_t total_bytes) {
     device_       = device;
     total_layers_ = n_layers;
 
@@ -176,11 +195,11 @@ void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers,
             }
             active_ = (hot_layers_ < total_layers_);
 
-            GGML_LOG_INFO("[KV-TIER] Weight-aware (env override): %u/%u layers on device "
-                          "(%.1f MB device, %.1f MB host)\n",
-                          hot_layers_, total_layers_,
-                          (hot_layers_ * kv_per_layer_) / (1024.0 * 1024.0),
-                          ((total_layers_ - hot_layers_) * kv_per_layer_) / (1024.0 * 1024.0));
+            GGML_LOG_INFO(
+                "[KV-TIER] Weight-aware (env override): %u/%u layers on device "
+                "(%.1f MB device, %.1f MB host)\n",
+                hot_layers_, total_layers_, (hot_layers_ * kv_per_layer_) / (1024.0 * 1024.0),
+                ((total_layers_ - hot_layers_) * kv_per_layer_) / (1024.0 * 1024.0));
             return;
         }
     }
@@ -200,16 +219,83 @@ void kv_tier_manager::configure_with_weights(int device, uint32_t n_layers,
     // Update hot_layers_ for backward-compatible logging and fallback paths
     hot_layers_ = 0;
     for (bool on_dev : layer_on_device_) {
-        if (on_dev) hot_layers_++;
+        if (on_dev) {
+            hot_layers_++;
+        }
     }
 
     active_ = (hot_layers_ < total_layers_);
 
-    GGML_LOG_INFO("[KV-TIER] Weight-aware: %u/%u layers on device (%d with device weights, "
-                  "%.1f MB device, %.1f MB host)\n",
-                  hot_layers_, total_layers_, device_weight_count,
-                  (hot_layers_ * kv_per_layer_) / (1024.0 * 1024.0),
-                  ((total_layers_ - hot_layers_) * kv_per_layer_) / (1024.0 * 1024.0));
+    const size_t dev_bytes  = total_layers_ > 0 ? total_bytes * hot_layers_ / total_layers_ : 0;
+    const size_t host_bytes = total_bytes > dev_bytes ? total_bytes - dev_bytes : 0;
+    GGML_LOG_INFO(
+        "[KV-TIER] Weight-aware: %u/%u layers on device (%d with device weights, "
+        "%.1f MB device, %.1f MB host)\n",
+        hot_layers_, total_layers_, device_weight_count, dev_bytes / (1024.0 * 1024.0),
+        host_bytes / (1024.0 * 1024.0));
+}
+
+void kv_tier_manager::configure_from_plan(int                    device,
+                                          const placement_plan & plan,
+                                          uint32_t               n_layers,
+                                          size_t                 total_bytes) {
+    device_       = device;
+    total_layers_ = n_layers;
+
+    if (n_layers == 0 || total_bytes == 0) {
+        active_       = false;
+        hot_layers_   = 0;
+        kv_per_layer_ = 0;
+        layer_on_device_.clear();
+        return;
+    }
+
+    // Use the planner's authoritative KV-per-layer when available.
+    // Not all layers may have KV (e.g. alternating SWA), so total_bytes / n_layers
+    // can undercount when the denominator includes non-attention layers.
+    kv_per_layer_ = (plan.kv_per_layer > 0 && total_bytes >= plan.kv_per_layer) ? plan.kv_per_layer
+                                                                                 : total_bytes / n_layers;
+
+    // Explicit debug override remains higher priority than planned placement.
+    const char * hot_layers_env = std::getenv("GGML_SYCL_KV_HOT_LAYERS");
+    if (hot_layers_env) {
+        int val = std::atoi(hot_layers_env);
+        if (val >= 0) {
+            hot_layers_ = std::min(static_cast<uint32_t>(val), n_layers);
+            layer_on_device_.assign(n_layers, false);
+            for (uint32_t l = 0; l < hot_layers_; l++) {
+                layer_on_device_[l] = true;
+            }
+            active_ = (hot_layers_ < total_layers_);
+            const size_t dev_bytes  = total_layers_ > 0 ? total_bytes * hot_layers_ / total_layers_ : 0;
+            const size_t host_bytes = total_bytes > dev_bytes ? total_bytes - dev_bytes : 0;
+            GGML_LOG_INFO(
+                "[KV-TIER] Plan-driven (env override): %u/%u layers on device "
+                "(%.1f MB device, %.1f MB host)\n",
+                hot_layers_, total_layers_, dev_bytes / (1024.0 * 1024.0), host_bytes / (1024.0 * 1024.0));
+            return;
+        }
+    }
+
+    layer_on_device_.assign(n_layers, false);
+    hot_layers_ = 0;
+    for (uint32_t l = 0; l < n_layers; ++l) {
+        const bool on_device = plan.get_kv_device(static_cast<int>(l)) == device;
+        layer_on_device_[l]  = on_device;
+        if (on_device) {
+            hot_layers_++;
+        }
+    }
+
+    active_ = (hot_layers_ < total_layers_);
+
+    const size_t dev_bytes  = total_layers_ > 0 ? total_bytes * hot_layers_ / total_layers_ : 0;
+    const size_t host_bytes = total_bytes > dev_bytes ? total_bytes - dev_bytes : 0;
+    GGML_LOG_INFO(
+        "[KV-TIER] Plan-driven: %u/%u layers on device "
+        "(planner_n_ctx=%u, %.1f MB device, %.1f MB host)\n",
+        hot_layers_, total_layers_, plan.planner_n_ctx, dev_bytes / (1024.0 * 1024.0),
+        host_bytes / (1024.0 * 1024.0));
 }
 
 }  // namespace ggml_sycl
