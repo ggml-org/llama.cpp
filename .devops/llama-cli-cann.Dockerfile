@@ -6,7 +6,19 @@ WORKDIR /app
 
 COPY . .
 
-RUN yum install -y gcc g++ cmake make openssl-devel
+RUN yum install -y \
+      gcc \
+      g++ \
+      cmake \
+      make \
+      openssl-devel
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        yum install -y \
+            ccache; \
+    fi
+
 ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest
 ENV LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/lib64/plugin/opskernel:${ASCEND_TOOLKIT_HOME}/lib64/plugin/nnengine:${ASCEND_TOOLKIT_HOME}/opp/built-in/op_impl/ai_core/tbe/op_tiling:${LD_LIBRARY_PATH}
@@ -20,11 +32,16 @@ ENV ASCEND_HOME_PATH=${ASCEND_TOOLKIT_HOME}
 # find libascend_hal.so, because the drive hasn`t been mounted.
 ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/runtime/lib64/stub:$LD_LIBRARY_PATH
 
-RUN echo "Building with static libs" && \
-    source /usr/local/Ascend/ascend-toolkit/set_env.sh --force && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_CANN=ON -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF  && \
-    cmake --build build --config Release --target llama-cli && \
-    cmake --build build --config Release --target llama-completion
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    echo "Building with static libs" \
+    && source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
+    && cmake -B build \
+      -DGGML_NATIVE=OFF \
+      -DGGML_CANN=ON \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DLLAMA_BUILD_TESTS=OFF \
+    && cmake --build build --config Release --target llama-cli \
+    && cmake --build build --config Release --target llama-completion
 
 # TODO: use image with NNRT
 FROM ascendai/cann:$ASCEND_VERSION AS runtime
