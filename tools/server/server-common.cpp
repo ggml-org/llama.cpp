@@ -1083,23 +1083,32 @@ json oaicompat_chat_params_parse(
 
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"]      = chat_params.prompt;
-    if (!chat_params.grammar.empty()) {
-        llama_params["grammar"]      = chat_params.grammar;
-        llama_params["grammar_type"] = std::string("tool_calls");
+
+    // json_schema fallback: if the chat template did not produce a grammar, pass json_schema
+    // through to server-task.cpp and skip template grammar artifacts to avoid conflicts.
+    bool json_schema_passthrough = !json_schema.is_null() && chat_params.grammar.empty();
+
+    if (json_schema_passthrough) {
+        llama_params["json_schema"] = json_schema;
+    } else {
+        if (!chat_params.grammar.empty()) {
+            llama_params["grammar"]      = chat_params.grammar;
+            llama_params["grammar_type"] = std::string("tool_calls");
+        }
+        llama_params["grammar_lazy"] = chat_params.grammar_lazy;
+        auto grammar_triggers        = json::array();
+        for (const auto & trigger : chat_params.grammar_triggers) {
+            server_grammar_trigger ct(trigger);
+            grammar_triggers.push_back(ct.to_json());
+        }
+        llama_params["grammar_triggers"]  = grammar_triggers;
+        llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
     }
-    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
-    auto grammar_triggers        = json::array();
-    for (const auto & trigger : chat_params.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
-        grammar_triggers.push_back(ct.to_json());
-    }
-    llama_params["grammar_triggers"]  = grammar_triggers;
-    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
-    llama_params["generation_prompt"] = chat_params.generation_prompt;
+    llama_params["generation_prompt"] = json_schema_passthrough ? "" : chat_params.generation_prompt;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
-    if (!chat_params.parser.empty()) {
+    if (!chat_params.parser.empty() && !json_schema_passthrough) {
         llama_params["chat_parser"] = chat_params.parser;
     }
 
