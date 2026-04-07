@@ -108,6 +108,8 @@ struct ggml_et_glu_params {
     ggml_tensor dst;      // F32 output tensor (n/2 columns)
     int32_t glu_op_type;  // GLU operation type (REGLU=0, GEGLU=1, SWIGLU=2, etc.)
     int32_t swapped;      // Whether gate and value are swapped
+    float alpha;          // SWIGLU_OAI: sigmoid scaling factor (unused for other variants)
+    float limit;          // SWIGLU_OAI: clamp limit (unused for other variants)
 };
 
 struct ggml_et_softmax_params {

@@ -15,6 +15,8 @@ struct ggml_et_glu_params {
     struct ggml_tensor dst;      // F32 output tensor (n/2 columns)
     int32_t glu_op_type;         // GLU operation type (REGLU=0, GEGLU=1, SWIGLU=2, etc.)
     int32_t swapped;             // Whether gate and value are swapped
+    float   alpha;               // SWIGLU_OAI: sigmoid scaling factor
+    float   limit;               // SWIGLU_OAI: clamp limit
 };
 
 // SiLU activation function: silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
@@ -177,6 +179,198 @@ static inline void block_swiglu(float* dst_block, const float* x_block, const fl
     }
 }
 
+// Vectorized ReGLU block: dst = max(0, x) * g
+static inline void block_reglu(float* dst_block, const float* x_block, const float* g_block, int elements) {
+    int32_t vec_end = (elements / 8) * 8;
+
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    float zero_const = 0.0f;
+
+    for (int32_t i = 0; i < vec_end; i += 8) {
+        __asm__ volatile(
+            "flw.ps  f10, %[x_vec]\n"            // f10 = x
+            "flw.ps  f11, %[g_vec]\n"            // f11 = g
+            "fbc.ps  f20, %[zero_ptr]\n"         // f20 = 0.0
+            "fmax.ps f12, f10, f20\n"            // f12 = max(x, 0)
+            "fmul.ps f13, f12, f11\n"            // f13 = relu(x) * g
+            "fsw.ps  f13, %[dst_out]\n"
+            : [dst_out] "=m"(*(float(*)[8])&dst_block[i])
+            : [x_vec] "m"(*(const float(*)[8])&x_block[i]),
+              [g_vec] "m"(*(const float(*)[8])&g_block[i]),
+              [zero_ptr] "m"(zero_const)
+            : "f10", "f11", "f12", "f13", "f20"
+        );
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+
+    for (int32_t i = vec_end; i < elements; i++) {
+        float xv = x_block[i];
+        dst_block[i] = (xv > 0.0f) ? xv * g_block[i] : 0.0f;
+    }
+}
+
+// Vectorized GeGLU-Quick block: dst = x * sigmoid(1.702 * x) * g
+// Using gelu_quick(x) = x / (1 + exp(-1.702*x))
+static inline void block_geglu_quick(float* dst_block, const float* x_block, const float* g_block, int elements) {
+    int32_t vec_end = (elements / 8) * 8;
+
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    float zero_const = 0.0f;
+    float one_const  = 1.0f;
+    // -1.702 * log2(e), so that fexp.ps(x * neg_k_log2e) = exp(-1.702*x)
+    float neg_k_log2e_const = -1.702f * 1.4426950408889634f;
+
+    for (int32_t i = 0; i < vec_end; i += 8) {
+        __asm__ volatile(
+            "flw.ps  f10, %[x_vec]\n"            // f10 = x
+            "flw.ps  f11, %[g_vec]\n"            // f11 = g
+            "fbc.ps  f20, %[zero_ptr]\n"         // f20 = 0
+            "fbc.ps  f21, %[one_ptr]\n"          // f21 = 1
+            "fbc.ps  f22, %[k_ptr]\n"            // f22 = -1.702*log2(e)
+            "fmul.ps f13, f10, f22\n"            // f13 = -1.702*x*log2(e)
+            "fexp.ps f14, f13\n"                 // f14 = exp(-1.702*x)
+            "fadd.ps f15, f14, f21\n"            // f15 = 1 + exp(-1.702*x)
+            "frcp.ps f16, f15\n"                 // f16 = sigmoid(1.702*x)
+            "fmul.ps f17, f10, f16\n"            // f17 = gelu_quick(x)
+            "fmul.ps f18, f17, f11\n"            // f18 = gelu_quick(x) * g
+            "fsw.ps  f18, %[dst_out]\n"
+            : [dst_out] "=m"(*(float(*)[8])&dst_block[i])
+            : [x_vec] "m"(*(const float(*)[8])&x_block[i]),
+              [g_vec] "m"(*(const float(*)[8])&g_block[i]),
+              [zero_ptr] "m"(zero_const),
+              [one_ptr] "m"(one_const),
+              [k_ptr] "m"(neg_k_log2e_const)
+            : "f10", "f11", "f13", "f14", "f15", "f16", "f17", "f18", "f20", "f21", "f22"
+        );
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+
+    for (int32_t i = vec_end; i < elements; i++) {
+        float xv = x_block[i];
+        // Reuse silu reciprocal path: sigmoid(1.702*x) = 1/(1+exp(-1.702*x))
+        float e = et_expf(-1.702f * xv);
+        dst_block[i] = et_fdiv(xv, 1.0f + e) * g_block[i];
+    }
+}
+
+// Vectorized SwiGLU-OAI block (OpenAI gpt-oss variant):
+//   x_c = min(x, limit)
+//   y_c = clamp(g, -limit, limit)
+//   out = (x_c / (1 + exp(-alpha * x_c))) * (y_c + 1)
+static inline void block_swiglu_oai(float* dst_block, const float* x_block, const float* g_block,
+                                    int elements, float alpha, float limit) {
+    int32_t vec_end = (elements / 8) * 8;
+
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    float zero_const     = 0.0f;
+    float one_const      = 1.0f;
+    float limit_pos      = limit;
+    float limit_neg      = -limit;
+    // -alpha * log2(e): feed (x * neg_alpha_log2e) into fexp.ps to get exp(-alpha*x)
+    float neg_alpha_l2e  = -alpha * 1.4426950408889634f;
+
+    for (int32_t i = 0; i < vec_end; i += 8) {
+        __asm__ volatile(
+            "flw.ps  f10, %[x_vec]\n"            // f10 = x raw
+            "flw.ps  f11, %[g_vec]\n"            // f11 = g raw
+
+            "fbc.ps  f20, %[zero_ptr]\n"         // f20 = 0
+            "fbc.ps  f21, %[one_ptr]\n"          // f21 = 1
+            "fbc.ps  f23, %[lim_pos]\n"          // f23 = +limit
+            "fbc.ps  f24, %[lim_neg]\n"          // f24 = -limit
+            "fbc.ps  f25, %[k_ptr]\n"            // f25 = -alpha*log2(e)
+
+            // x_c = min(x, +limit)  (no lower bound on x per OAI spec)
+            "fmin.ps f12, f10, f23\n"            // f12 = x_c
+
+            // y_c = clamp(g, -limit, +limit) = min(max(g, -limit), +limit)
+            "fmax.ps f13, f11, f24\n"            // f13 = max(g, -limit)
+            "fmin.ps f13, f13, f23\n"            // f13 = y_c
+
+            // sigmoid(alpha * x_c) = 1 / (1 + exp(-alpha * x_c))
+            "fmul.ps f14, f12, f25\n"            // f14 = -alpha*x_c*log2(e)
+            "fexp.ps f15, f14\n"                 // f15 = exp(-alpha*x_c)
+            "fadd.ps f15, f15, f21\n"            // f15 = 1 + exp(-alpha*x_c)
+            "frcp.ps f16, f15\n"                 // f16 = sigmoid(alpha*x_c)
+
+            // out_glu = x_c * sigmoid(alpha*x_c)
+            "fmul.ps f17, f12, f16\n"            // f17 = swiglu_oai gate output
+
+            // dst = out_glu * (y_c + 1)
+            "fadd.ps f18, f13, f21\n"            // f18 = y_c + 1
+            "fmul.ps f19, f17, f18\n"            // f19 = final
+            "fsw.ps  f19, %[dst_out]\n"
+
+            : [dst_out] "=m"(*(float(*)[8])&dst_block[i])
+            : [x_vec] "m"(*(const float(*)[8])&x_block[i]),
+              [g_vec] "m"(*(const float(*)[8])&g_block[i]),
+              [zero_ptr] "m"(zero_const),
+              [one_ptr] "m"(one_const),
+              [lim_pos] "m"(limit_pos),
+              [lim_neg] "m"(limit_neg),
+              [k_ptr] "m"(neg_alpha_l2e)
+            : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19",
+              "f20", "f21", "f23", "f24", "f25"
+        );
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+
+    // Scalar tail (mirrors CPU reference exactly)
+    for (int32_t i = vec_end; i < elements; i++) {
+        float xv = x_block[i];
+        float yv = g_block[i];
+        if (xv > limit) xv = limit;
+        if (yv >  limit) yv =  limit;
+        if (yv < -limit) yv = -limit;
+        float e = et_expf(-alpha * xv);
+        float out_glu = et_fdiv(xv, 1.0f + e);
+        dst_block[i] = out_glu * (yv + 1.0f);
+    }
+}
+
+// Scalar erf approximation (Abramowitz & Stegun 7.1.26, max error ~1.5e-7)
+static inline float erf_approx(float x) {
+    const float a1 =  0.254829592f;
+    const float a2 = -0.284496736f;
+    const float a3 =  1.421413741f;
+    const float a4 = -1.453152027f;
+    const float a5 =  1.061405429f;
+    const float p  =  0.3275911f;
+
+    float sign = (x < 0.0f) ? -1.0f : 1.0f;
+    float ax   = (x < 0.0f) ? -x    : x;
+    float t    = et_fdiv(1.0f, 1.0f + p * ax);
+    float t2   = t  * t;
+    float t3   = t2 * t;
+    float t4   = t3 * t;
+    float t5   = t4 * t;
+    float poly = a1*t + a2*t2 + a3*t3 + a4*t4 + a5*t5;
+    float y    = 1.0f - poly * et_expf(-ax * ax);
+    return sign * y;
+}
+
+// GeGLU-Erf block: dst = 0.5 * x * (1 + erf(x / sqrt(2))) * g
+// Scalar implementation — variant is rarely used so we keep complexity low.
+static inline void block_geglu_erf(float* dst_block, const float* x_block, const float* g_block, int elements) {
+    const float sqrt_2_inv = 0.70710678118654752440f;
+    for (int32_t i = 0; i < elements; i++) {
+        float xv = x_block[i];
+        dst_block[i] = 0.5f * xv * (1.0f + erf_approx(xv * sqrt_2_inv)) * g_block[i];
+    }
+}
+
 // Main entry point for GLU kernel
 int entry_point(struct ggml_et_glu_params* params, void* env) {
     // Cast env to proper type
@@ -196,10 +390,17 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
         return -1; // Invalid pointer
     }
 
-    // Support SwiGLU and GeGLU
-    if (params->glu_op_type != GGML_GLU_OP_SWIGLU &&
-        params->glu_op_type != GGML_GLU_OP_GEGLU) {
-        return -1; // Unsupported GLU operation
+    // Supported variants: SwiGLU, SwiGLU-OAI, GeGLU, GeGLU-Erf, GeGLU-Quick, ReGLU
+    switch (params->glu_op_type) {
+        case GGML_GLU_OP_SWIGLU:
+        case GGML_GLU_OP_SWIGLU_OAI:
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_GEGLU_ERF:
+        case GGML_GLU_OP_GEGLU_QUICK:
+        case GGML_GLU_OP_REGLU:
+            break;
+        default:
+            return -1; // Unsupported GLU operation
     }
 
     // Extract tensor references
@@ -319,10 +520,28 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
             }
 
             // Process this segment
-            if (params->glu_op_type == GGML_GLU_OP_GEGLU) {
-                block_geglu(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
-            } else {
-                block_swiglu(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+            switch (params->glu_op_type) {
+                case GGML_GLU_OP_GEGLU:
+                    block_geglu(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+                    break;
+                case GGML_GLU_OP_SWIGLU:
+                    block_swiglu(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+                    break;
+                case GGML_GLU_OP_REGLU:
+                    block_reglu(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    block_geglu_quick(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+                    break;
+                case GGML_GLU_OP_GEGLU_ERF:
+                    block_geglu_erf(dst_ptr, x_ptr, g_ptr, (int)elements_to_process);
+                    break;
+                case GGML_GLU_OP_SWIGLU_OAI:
+                    block_swiglu_oai(dst_ptr, x_ptr, g_ptr, (int)elements_to_process,
+                                     params->alpha, params->limit);
+                    break;
+                default:
+                    return -1;
             }
 
             // Update counters

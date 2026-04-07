@@ -1016,19 +1016,29 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        (ggml_nelements(op) % 16 == 0);
             break;
         case GGML_OP_GLU:
+            // Note: we only require row-wise contiguity (ggml_is_contiguous_1) so that
+            // strided views over a packed up_proj tensor (the common split-GLU layout)
+            // are accepted. The kernel walks rows via nb[1] strides, so the inner
+            // dimension just needs to be densely packed.
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 ggml_nelements(op) % 16 == 0 &&
-                ggml_is_contiguous(op) &&
-                ggml_is_contiguous(op->src[0])) {
-                // Check GLU variant - support SWIGLU and GEGLU
+                ggml_is_contiguous_1(op) &&
+                ggml_is_contiguous_1(op->src[0])) {
+                // Check GLU variant - support SWIGLU, SWIGLU_OAI, GEGLU, GEGLU_ERF, GEGLU_QUICK, REGLU
                 ggml_glu_op glu_type = ggml_get_glu_op(op);
-                const bool supported_variant = glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_GEGLU;
+                const bool supported_variant =
+                    glu_type == GGML_GLU_OP_SWIGLU      ||
+                    glu_type == GGML_GLU_OP_SWIGLU_OAI  ||
+                    glu_type == GGML_GLU_OP_GEGLU       ||
+                    glu_type == GGML_GLU_OP_GEGLU_ERF   ||
+                    glu_type == GGML_GLU_OP_GEGLU_QUICK ||
+                    glu_type == GGML_GLU_OP_REGLU;
 
                 if (op->src[1]) {
                     supported = supported_variant &&
                         op->src[1]->type == GGML_TYPE_F32 &&
-                        ggml_is_contiguous(op->src[1]) &&
+                        ggml_is_contiguous_1(op->src[1]) &&
                         op->src[0]->ne[0] == op->ne[0] &&
                         op->src[1]->ne[0] == op->ne[0];
                 } else {
