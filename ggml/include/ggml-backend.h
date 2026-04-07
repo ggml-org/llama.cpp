@@ -340,6 +340,18 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Expert cache for MoE weight offloading: enable/disable and query stats
+    GGML_API void ggml_backend_sched_set_expert_cache(
+        ggml_backend_sched_t sched, bool enabled);
+
+    GGML_API void ggml_backend_sched_get_expert_cache_stats(
+        ggml_backend_sched_t sched,
+        int64_t * n_hits,
+        int64_t * n_misses,
+        int64_t * n_fate_hits,
+        int64_t * bytes_saved,
+        int64_t * bytes_copied);
+
     //
     // Utils
     //
