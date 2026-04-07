@@ -1607,29 +1607,100 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             expert_size_copy + padding_end);
                     };
 
-                    int id = 0;
-                    while (!ggml_bitset_get(used_ids.data(), id)) {
-                        id++;
-                    }
-                    int32_t first_id = id;
-                    int32_t last_id = first_id;
+                    if (sched->expert_cache && sched->expert_cache->enabled) {
+                        struct ggml_expert_cache_entry * entry = expert_cache_find_or_create(
+                            sched->expert_cache, input, n_expert, expert_size);
 
-                    for (++id; id < n_expert; ++id) {
-                        if (!ggml_bitset_get(used_ids.data(), id)) {
-                            continue;
+                        // Staleness check: if the GPU copy buffer changed, invalidate
+                        if (entry->gpu_data != input_cpy->data) {
+                            memset(entry->populated, 0,
+                                ggml_bitset_size(n_expert) * sizeof(ggml_bitset_t));
+                            entry->gpu_data = input_cpy->data;
                         }
 
-                        if (id == last_id + 1) {
+                        // Phase 1: FATE pre-populate — copy predicted experts that are
+                        // also needed this token (and not yet populated)
+                        for (int32_t i = 0; i < entry->n_fate_ids; i++) {
+                            int32_t fid = entry->fate_ids[i];
+                            if (fid >= 0 && fid < (int32_t)n_expert &&
+                                    ggml_bitset_get(used_ids.data(), fid) &&
+                                    !ggml_bitset_get(entry->populated, fid)) {
+                                copy_experts(fid, fid);
+                                ggml_bitset_set(entry->populated, fid);
+                                sched->expert_cache->n_fate_hits++;
+                            }
+                        }
+
+                        // Phase 2: copy needed experts, skip those already populated
+                        int32_t first_id = -1, last_id = -1;
+                        for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                            if (!ggml_bitset_get(used_ids.data(), eid)) {
+                                continue;
+                            }
+                            if (ggml_bitset_get(entry->populated, eid)) {
+                                // cache hit: flush any pending group, skip
+                                if (first_id >= 0) {
+                                    copy_experts(first_id, last_id);
+                                    first_id = -1;
+                                }
+                                sched->expert_cache->n_hits++;
+                                sched->expert_cache->bytes_saved += (int64_t)expert_size;
+                                continue;
+                            }
+                            // cache miss: extend or start consecutive group
+                            sched->expert_cache->n_misses++;
+                            sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                            ggml_bitset_set(entry->populated, eid);
+                            if (first_id < 0) {
+                                first_id = last_id = eid;
+                            } else if (eid == last_id + 1) {
+                                last_id = eid;
+                            } else {
+                                copy_experts(first_id, last_id);
+                                first_id = last_id = eid;
+                            }
+                        }
+                        if (first_id >= 0) {
+                            copy_experts(first_id, last_id);
+                        }
+
+                        // Phase 3: FATE recording — save current routing for next token
+                        entry->n_fate_ids = 0;
+                        for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                            for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t)
+                                               + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                                if (entry->n_fate_ids < (int32_t)n_expert) {
+                                    entry->fate_ids[entry->n_fate_ids++] = id;
+                                }
+                            }
+                        }
+                    } else {
+                        // Original code path (cache disabled) — UNCHANGED
+                        int id = 0;
+                        while (!ggml_bitset_get(used_ids.data(), id)) {
+                            id++;
+                        }
+                        int32_t first_id = id;
+                        int32_t last_id = first_id;
+
+                        for (++id; id < n_expert; ++id) {
+                            if (!ggml_bitset_get(used_ids.data(), id)) {
+                                continue;
+                            }
+
+                            if (id == last_id + 1) {
+                                last_id = id;
+                                continue;
+                            }
+
+                            copy_experts(first_id, last_id);
+
+                            first_id = id;
                             last_id = id;
-                            continue;
                         }
-
                         copy_experts(first_id, last_id);
-
-                        first_id = id;
-                        last_id = id;
                     }
-                    copy_experts(first_id, last_id);
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
