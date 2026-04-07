@@ -13,8 +13,8 @@ FROM ubuntu:${UBUNTU_VERSION} AS build
 ARG http_proxy
 ARG https_proxy
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         gnupg \
         wget \
@@ -27,39 +27,48 @@ RUN apt-get update && \
         ocl-icd-opencl-dev \
         opencl-headers \
         opencl-clhpp-headers \
-        intel-opencl-icd && \
-    rm -rf /var/lib/apt/lists/*
+        intel-opencl-icd \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install OpenVINO for Ubuntu 24.04
 ARG OPENVINO_VERSION_MAJOR
 ARG OPENVINO_VERSION_FULL
-RUN mkdir -p /opt/intel && \
-    wget https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
-    tar -xf openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
-    mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
-    cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
-    echo "Y" | ./install_dependencies/install_openvino_dependencies.sh && \
-    cd - && \
-    ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
+RUN mkdir -p /opt/intel \
+    && wget https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz \
+    && tar -xf openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz \
+    && mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} \
+    && cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} \
+    && echo "Y" | ./install_dependencies/install_openvino_dependencies.sh \
+    && cd - \
+    && ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
 
-ENV OpenVINO_DIR=/opt/intel/openvino
-
+    
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+    
 WORKDIR /app
-
+    
 COPY . .
-
+    
 # Build Stage
-RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
-    cmake -B build/ReleaseOV -G Ninja \
+ENV OpenVINO_DIR=/opt/intel/openvino
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    bash -c "source ${OpenVINO_DIR}/setupvars.sh \
+    && cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DGGML_OPENVINO=ON && \
-    cmake --build build/ReleaseOV -j$(nproc)"
+        -DGGML_OPENVINO=ON \
+    && cmake --build build/ReleaseOV -j$(nproc)"
 
 # Copy all necessary libraries
-RUN mkdir -p /app/lib && \
-    find build/ReleaseOV -name '*.so*' -exec cp {} /app/lib \; && \
-    find ${OpenVINO_DIR}/runtime/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \; 2>/dev/null || \
-    find ${OpenVINO_DIR}/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \;
+RUN mkdir -p /app/lib \
+    && find build/ReleaseOV -name '*.so*' -exec cp {} /app/lib \; \
+    && find ${OpenVINO_DIR}/runtime/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \; 2>/dev/null \
+    || find ${OpenVINO_DIR}/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \;
 
 # Create runtime directories and copy binaries
 RUN mkdir -p /app/full \
