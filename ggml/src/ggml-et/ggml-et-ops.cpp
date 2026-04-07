@@ -3,6 +3,7 @@
 #include "ggml-et-cpu-compare.h"
 #include "ggml-impl.h"
 #include <stdio.h>
+#include <cstdint>
 
 // CPU comparison configuration - can be enabled for debugging
 static ggml_et_cpu_compare_config rope_cpu_compare_config = {
@@ -524,11 +525,19 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant (REGLU, GEGLU, SWIGLU, etc.)
     int32_t swapped = ggml_get_op_params_i32(node, 1);      // Whether gate/value are swapped
 
-    // Support SWIGLU and GEGLU
-    if (glu_op_type != GGML_GLU_OP_SWIGLU && glu_op_type != GGML_GLU_OP_GEGLU) {
-        GGML_LOG_ERROR("ET: GLU operation with unsupported variant: %s (only SWIGLU and GEGLU supported)\n",
-                       ggml_glu_op_name((ggml_glu_op)glu_op_type));
-        return false;
+    // Supported variants
+    switch (glu_op_type) {
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_SWIGLU:
+        case GGML_GLU_OP_SWIGLU_OAI:
+        case GGML_GLU_OP_GEGLU_ERF:
+        case GGML_GLU_OP_GEGLU_QUICK:
+            break;
+        default:
+            GGML_LOG_ERROR("ET: GLU operation with unsupported variant: %s\n",
+                           ggml_glu_op_name((ggml_glu_op)glu_op_type));
+            return false;
     }
 
     // Get GLU operation name for logging
@@ -543,6 +552,12 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     params.dst = *node;
     params.glu_op_type = glu_op_type;
     params.swapped = swapped;
+    params.alpha = 0.0f;
+    params.limit = 0.0f;
+    if (glu_op_type == GGML_GLU_OP_SWIGLU_OAI) {
+        params.alpha = ggml_get_op_params_f32(node, 2);
+        params.limit = ggml_get_op_params_f32(node, 3);
+    }
     // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
     ggml_et_cpu_compare_ctx cpu_cmp_ctx;
     bool cpu_comparison_active = false;
