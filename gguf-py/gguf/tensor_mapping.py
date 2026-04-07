@@ -1441,7 +1441,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
             "model.vision_model.transformer.layers.{bid}.self_attn.qkv_proj", # Deepseek-OCR CLIP
-            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
+            "vision_tower.encoder.blocks.{bid}.wqkv", # Kimi-K2.5
             "vision_model.radio_model.model.blocks.{bid}.attn.qkv", # Nemotron Nano v2 VL
         ),
 
