@@ -30,17 +30,26 @@ RUN apt-get update \
     curl \
     libgomp1
 
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache; \
+    fi
+
 WORKDIR /app
 
 COPY . .
 
-RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
     cmake -S . -B build \
-        -DGGML_HIP=ON \
-        -DGGML_HIP_ROCWMMA_FATTN=ON \
-        -DAMDGPU_TARGETS="$ROCM_DOCKER_ARCH" \
-        -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
-        -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
+      -DGGML_HIP=ON \
+      -DGGML_HIP_ROCWMMA_FATTN=ON \
+      -DAMDGPU_TARGETS="$ROCM_DOCKER_ARCH" \
+      -DGGML_BACKEND_DL=ON \
+      -DGGML_CPU_ALL_VARIANTS=ON \
+      -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
     && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib \
