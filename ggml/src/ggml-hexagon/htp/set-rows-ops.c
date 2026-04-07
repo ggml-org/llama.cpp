@@ -17,30 +17,34 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
-#define set_rows_preamble \
+#define set_rows_preamble                      \
     const uint32_t ne00 = octx->src[0]->ne[0]; \
     const uint32_t ne01 = octx->src[0]->ne[1]; \
     const uint32_t ne02 = octx->src[0]->ne[2]; \
     const uint32_t ne03 = octx->src[0]->ne[3]; \
-                                            \
+                                               \
     const uint32_t ne10 = octx->src[1]->ne[0]; \
     const uint32_t ne11 = octx->src[1]->ne[1]; \
     const uint32_t ne12 = octx->src[1]->ne[2]; \
-                                            \
+    const uint32_t ne13 = octx->src[1]->ne[3]; \
+                                               \
     const uint32_t nb01 = octx->src[0]->nb[1]; \
     const uint32_t nb02 = octx->src[0]->nb[2]; \
     const uint32_t nb03 = octx->src[0]->nb[3]; \
-                                            \
+                                               \
     const uint32_t nb10 = octx->src[1]->nb[0]; \
     const uint32_t nb11 = octx->src[1]->nb[1]; \
     const uint32_t nb12 = octx->src[1]->nb[2]; \
-                                            \
-    const uint32_t nb1 = octx->dst->nb[1];   \
-    const uint32_t nb2 = octx->dst->nb[2];   \
-    const uint32_t nb3 = octx->dst->nb[3];   \
-                                            \
-    const uint32_t ne1 = octx->dst->ne[1];   \
-                                            \
+                                               \
+    const uint32_t nb1 = octx->dst->nb[1];     \
+    const uint32_t nb2 = octx->dst->nb[2];     \
+    const uint32_t nb3 = octx->dst->nb[3];     \
+                                               \
+    const uint32_t ne0 = octx->dst->ne[0];     \
+    const uint32_t ne1 = octx->dst->ne[1];     \
+    const uint32_t ne2 = octx->dst->ne[2];     \
+    const uint32_t ne3 = octx->dst->ne[3];     \
+                                               \
     const uint32_t nr  = ne01;
 
 struct htp_set_rows_context {
@@ -55,6 +59,8 @@ static void set_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
     struct htp_ops_context * octx = srctx->octx;
 
     set_rows_preamble;
+
+    uint64_t qt = HAP_perf_get_qtimer_count();
 
     // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
@@ -86,6 +92,10 @@ static void set_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
             }
         }
     }
+
+    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
+    FARF(HIGH, "set-rows-f32-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
 static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *data) {
@@ -93,6 +103,8 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
     struct htp_ops_context * octx = srctx->octx;
 
     set_rows_preamble;
+
+    uint64_t qt = HAP_perf_get_qtimer_count();
 
     // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
@@ -123,6 +135,10 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
             }
         }
     }
+
+    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
+    FARF(HIGH, "set-rows-f16-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
 int op_set_rows(struct htp_ops_context * octx) {

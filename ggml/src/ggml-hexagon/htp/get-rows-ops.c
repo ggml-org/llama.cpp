@@ -31,6 +31,12 @@ struct get_rows_context {
     const uint32_t ne10 = octx->src[1]->ne[0]; \
     const uint32_t ne11 = octx->src[1]->ne[1]; \
     const uint32_t ne12 = octx->src[1]->ne[2]; \
+    const uint32_t ne13 = octx->src[1]->ne[3]; \
+                                               \
+    const uint32_t ne0 = octx->dst->ne[0];     \
+    const uint32_t ne1 = octx->dst->ne[1];     \
+    const uint32_t ne2 = octx->dst->ne[2];     \
+    const uint32_t ne3 = octx->dst->ne[3];     \
                                                \
     const uint32_t nb01 = octx->src[0]->nb[1]; \
     const uint32_t nb02 = octx->src[0]->nb[2]; \
@@ -50,6 +56,8 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
     struct get_rows_context * grctx = (struct get_rows_context *)data;
     struct htp_ops_context * octx = grctx->octx;
     get_rows_preamble;
+
+    uint64_t qt = HAP_perf_get_qtimer_count();
 
     // parallelize by src1 elements (which correspond to dst rows)
     const uint32_t dr  = grctx->src1_nrows_per_thread;
@@ -77,6 +85,10 @@ static void get_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
         const uintptr_t dst_ptr  = octx->dst->data    + i10*nb1  + i11*nb2  + i12*nb3;
         hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
     }
+
+    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
+    FARF(HIGH, "get-rows-f32-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
 int op_get_rows(struct htp_ops_context * octx) {

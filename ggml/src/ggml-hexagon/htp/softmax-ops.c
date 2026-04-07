@@ -234,8 +234,7 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
         return;
     }
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    uint64_t qt = HAP_perf_get_qtimer_count();
 
     int is_aligned = 1;
     int opt_path   = 0;
@@ -324,11 +323,10 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "softmax-f32 %d/%d/%d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         smctx->use_f16, opt_path, ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13,
-         ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
+    FARF(HIGH, "softmax-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u : opt %u f16 %u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13,
+         ne0, ne1, ne2, ne3, opt_path, smctx->use_f16, (unsigned) qt);
 }
 
 static int execute_op_softmax_f32(struct htp_ops_context * octx) {
