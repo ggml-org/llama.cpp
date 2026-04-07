@@ -1051,8 +1051,9 @@ unified_cache::~unified_cache() {
         }
         // Abandon arena without calling sycl::free — context is invalid.
         arena_abandon();
-        compute_arena_ptr_ = nullptr;
-        host_pool_ptr_     = nullptr;
+        compute_arena_ptr_     = nullptr;
+        host_pool_ptr_         = nullptr;
+        host_weight_arena_ptr_ = nullptr;
         return;
     }
 
@@ -1067,8 +1068,9 @@ unified_cache::~unified_cache() {
         if (layout_pool_) {
             layout_pool_->abandon();
         }
-        compute_arena_ptr_ = nullptr;
-        host_pool_ptr_     = nullptr;
+        compute_arena_ptr_     = nullptr;
+        host_pool_ptr_         = nullptr;
+        host_weight_arena_ptr_ = nullptr;
         return;
     }
 
@@ -1118,6 +1120,13 @@ unified_cache::~unified_cache() {
         }
         host_pool_ptr_  = nullptr;
         host_pool_size_ = 0;
+    }
+
+    // Free host weight arena (sycl::malloc_host, model lifetime).
+    if (host_weight_arena_ptr_) {
+        try { sycl::free(host_weight_arena_ptr_, queue_); } catch (...) {}
+        host_weight_arena_ptr_  = nullptr;
+        host_weight_arena_size_ = 0;
     }
 
     // Free oneDNN scratch buffers BEFORE arena destroy (vram_owns() needs live arena).
@@ -2846,7 +2855,7 @@ direct_stage_result unified_cache::direct_stage_weight(ggml_sycl_cache_id   key,
     // 4. Store in lookup table (keyed by full cache_id for collision safety)
     {
         std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-        direct_weight_entries_[key] = weight_entry{ ptr, dst_size, layout };
+        direct_weight_entries_[key] = weight_entry{ ptr, dst_size, layout, cache_location::DEVICE };
     }
 
     result.ptr   = ptr;
@@ -2887,7 +2896,7 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
         }
         {
             std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-            direct_expert_entries_[key] = weight_entry{ const_cast<void *>(src_ptr), src_size, GGML_LAYOUT_AOS };
+            direct_expert_entries_[key] = weight_entry{ const_cast<void *>(src_ptr), src_size, GGML_LAYOUT_AOS, cache_location::HOST_MMAP };
         }
         result.ptr = const_cast<void *>(src_ptr);
         result.ok  = true;
@@ -2914,7 +2923,7 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
     // 4. Store in lookup table (keyed by full cache_id for collision safety)
     {
         std::unique_lock<std::shared_mutex> lock(direct_stage_mutex_);
-        direct_expert_entries_[key] = weight_entry{ ptr, dst_size, layout };
+        direct_expert_entries_[key] = weight_entry{ ptr, dst_size, layout, cache_location::DEVICE };
     }
 
     result.ptr   = ptr;
@@ -8855,6 +8864,42 @@ void * unified_cache::host_pool_alloc(size_t size) {
 
 void unified_cache::host_pool_reset() {
     host_pool_off_.store(0, std::memory_order_relaxed);
+}
+
+// --- Host Weight Arena ---
+
+bool unified_cache::host_weight_arena_reserve(size_t bytes) {
+    if (bytes == 0) { return true; }
+    if (host_weight_arena_ptr_ && host_weight_arena_size_ >= bytes) {
+        return true;
+    }
+    if (host_weight_arena_ptr_) {
+        try { sycl::free(host_weight_arena_ptr_, queue_); } catch (...) {}
+        host_weight_arena_ptr_  = nullptr;
+        host_weight_arena_size_ = 0;
+    }
+    try {
+        host_weight_arena_ptr_ = sycl::malloc_host(bytes, queue_);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[HOST-WEIGHT-ARENA] sycl::malloc_host failed (%.1f MB): %s\n",
+                       bytes / (1024.0 * 1024.0), e.what());
+        return false;
+    }
+    host_weight_arena_size_ = bytes;
+    host_weight_arena_off_.store(0, std::memory_order_relaxed);
+    GGML_LOG_INFO("[HOST-WEIGHT-ARENA] Reserved %.1f MB host-pinned\n", bytes / (1024.0 * 1024.0));
+    return true;
+}
+
+void * unified_cache::host_weight_arena_alloc(size_t bytes) {
+    if (!host_weight_arena_ptr_ || bytes == 0) { return nullptr; }
+    const size_t aligned = (bytes + 255) & ~size_t(255);
+    size_t off = host_weight_arena_off_.fetch_add(aligned, std::memory_order_relaxed);
+    if (off + aligned > host_weight_arena_size_) {
+        host_weight_arena_off_.fetch_sub(aligned, std::memory_order_relaxed);
+        return nullptr;
+    }
+    return static_cast<uint8_t *>(host_weight_arena_ptr_) + off;
 }
 
 // --- Expert Allocation ---

@@ -607,9 +607,10 @@ struct cache_layout_request {
 // No state machine, no IN_PROGRESS/READY transitions.
 
 struct weight_entry {
-    void *           ptr    = nullptr;
-    size_t           size   = 0;
-    ggml_layout_mode layout = GGML_LAYOUT_AOS;
+    void *           ptr      = nullptr;
+    size_t           size     = 0;
+    ggml_layout_mode layout   = GGML_LAYOUT_AOS;
+    cache_location   location = cache_location::DEVICE;
 };
 
 struct direct_stage_result {
@@ -1727,6 +1728,13 @@ class unified_cache {
 
     void * host_pool_base() const { return host_pool_ptr_; }
 
+    // === Host Weight Arena ===
+    bool   host_weight_arena_reserve(size_t bytes);
+    void * host_weight_arena_alloc(size_t bytes);
+    bool   host_weight_arena_active() const { return host_weight_arena_ptr_ != nullptr; }
+    size_t host_weight_arena_capacity() const { return host_weight_arena_size_; }
+    size_t host_weight_arena_used() const { return host_weight_arena_off_.load(std::memory_order_relaxed); }
+
     // === Expert Allocation ===
     // Allocates from the expert portion of the cache budget.  Falls back to
     // host-pinned when VRAM is full.  Tracked separately for diagnostics.
@@ -1861,6 +1869,12 @@ class unified_cache {
     void *              compute_arena_ptr_  = nullptr;
     size_t              compute_arena_size_ = 0;
     std::atomic<size_t> compute_arena_off_{ 0 };
+
+    // Host weight arena: single sycl::malloc_host for host-planned weights.
+    // Bump-allocated during S1-PRELOAD, persistent for model lifetime.
+    void *              host_weight_arena_ptr_  = nullptr;
+    size_t              host_weight_arena_size_ = 0;
+    std::atomic<size_t> host_weight_arena_off_{ 0 };
 
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;
