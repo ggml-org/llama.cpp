@@ -1989,8 +1989,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
     }
 
-    const size_t req_q_size = opt_opqueue * 2 * sizeof(htp_general_req);
-    const size_t rsp_q_size = opt_opqueue * 2 * sizeof(htp_general_rsp);
+    const size_t req_q_size = (sizeof(htp_general_req) * opt_opqueue * 2) + 1024;
+    const size_t rsp_q_size = (sizeof(htp_general_rsp) * opt_opqueue * 2) + 1024;
 
     // Now let's setup the DSP queue
     err = dspqueue_create(this->domain_id,
