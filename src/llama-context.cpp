@@ -1052,8 +1052,6 @@ void llama_context::set_causal_attn(bool value) {
     }
 
     cparams.causal_attn = value;
-
-    //sched_need_reserve = true;
 }
 
 void llama_context::set_warmup(bool value) {

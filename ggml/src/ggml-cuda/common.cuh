@@ -1148,7 +1148,7 @@ struct ggml_cuda_graph {
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;
-    size_t memory_usage = 0;
+    size_t allocated_memory_size = 0;
     bool committed = false;
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;

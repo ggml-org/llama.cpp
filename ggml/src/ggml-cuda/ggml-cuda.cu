@@ -5398,7 +5398,7 @@ public:
                 return; // Strictly idempotent
             }            
             // Account for old memory before recalculating
-            memory_usage_total = sat_sub(memory_usage_total, graph->memory_usage);
+            memory_usage_total = sat_sub(memory_usage_total, graph->allocated_memory_size);
         }
                 
         // Sync num_nodes from the cudaGraph_t API.
@@ -5406,9 +5406,9 @@ public:
 
         // enforce a minimum floor so zero-node graphs still consume budget.
         constexpr size_t MIN_BYTES_PER_ENTRY = 256;
-        graph->memory_usage = std::max(graph->num_nodes * 1024, MIN_BYTES_PER_ENTRY);                
+        graph->allocated_memory_size = std::max(graph->num_nodes * 1024, MIN_BYTES_PER_ENTRY);                
         graph->committed    = true;
-        memory_usage_total += graph->memory_usage;
+        memory_usage_total += graph->allocated_memory_size;
         enforce_memory_limit(); 
     }
 
@@ -5419,7 +5419,7 @@ public:
             auto& g   = it->second;
             if (g && g->graph == nullptr) {                
                 // safe subtraction.
-                memory_usage_total = sat_sub(memory_usage_total, g->memory_usage);
+                memory_usage_total = sat_sub(memory_usage_total, g->allocated_memory_size);
                 cache_map.erase(key);
                 it = lru_list.erase(it);
             } else {
@@ -5472,7 +5472,7 @@ private:
 
             // saturating subtract.
             memory_usage_total = sat_sub(memory_usage_total,
-                                         oldest.second->memory_usage);
+                                         oldest.second->allocated_memory_size);
             cache_map.erase(oldest.first);
             lru_list.pop_back();
         }
