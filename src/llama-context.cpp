@@ -579,6 +579,9 @@ void llama_context::sched_reserve() {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                if (cparams.expert_cache) {
+                    ggml_backend_sched_set_expert_cache(sched.get(), true);
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             }
             if (!gf) {

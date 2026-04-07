@@ -749,6 +749,7 @@ struct ggml_expert_cache_entry {
     struct ggml_tensor * cpu_tensor;   // key: original CPU weight tensor pointer
     void               * gpu_data;     // last-seen input_cpy->data (staleness check)
     ggml_bitset_t      * populated;    // [n_expert] bitset: which rows are current
+    ggml_bitset_t      * fate_mask;    // [n_expert] bitset: rows loaded by FATE this call
     int32_t            * fate_ids;     // [n_expert] array: last token's routing
     int32_t              n_fate_ids;   // number of valid fate IDs
     int64_t              n_expert;     // total number of experts
@@ -786,11 +787,13 @@ static struct ggml_expert_cache_entry * expert_cache_find_or_create(
     struct ggml_expert_cache_entry * entry = &cache->entries[cache->n_entries];
     memset(entry, 0, sizeof(*entry));
 
-    ggml_bitset_t * populated = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
-    int32_t       * fate_ids  = (int32_t *)calloc(n_expert, sizeof(int32_t));
+    ggml_bitset_t * populated  = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
+    ggml_bitset_t * fate_mask  = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
+    int32_t       * fate_ids   = (int32_t *)calloc(n_expert, sizeof(int32_t));
 
-    if (!populated || !fate_ids) {
+    if (!populated || !fate_mask || !fate_ids) {
         free(populated);
+        free(fate_mask);
         free(fate_ids);
         GGML_ABORT("expert cache: allocation failed");
     }
@@ -800,6 +803,7 @@ static struct ggml_expert_cache_entry * expert_cache_find_or_create(
     entry->n_expert    = n_expert;
     entry->expert_size = expert_size;
     entry->populated   = populated;
+    entry->fate_mask   = fate_mask;
     entry->fate_ids    = fate_ids;
     entry->n_fate_ids  = 0;
     cache->n_entries++;
@@ -1619,7 +1623,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         }
 
                         // Phase 1: FATE pre-populate — copy predicted experts that are
-                        // also needed this token (and not yet populated)
+                        // also needed this token (and not yet populated).
+                        // fate_mask tracks which rows were loaded here so Phase 2
+                        // can distinguish true cache hits from same-call FATE copies.
+                        memset(entry->fate_mask, 0, ggml_bitset_size(n_expert) * sizeof(ggml_bitset_t));
                         for (int32_t i = 0; i < entry->n_fate_ids; i++) {
                             int32_t fid = entry->fate_ids[i];
                             if (fid >= 0 && fid < (int32_t)n_expert &&
@@ -1627,24 +1634,31 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                                     !ggml_bitset_get(entry->populated, fid)) {
                                 copy_experts(fid, fid);
                                 ggml_bitset_set(entry->populated, fid);
+                                ggml_bitset_set(entry->fate_mask, fid);
                                 sched->expert_cache->n_fate_hits++;
+                                sched->expert_cache->bytes_copied += (int64_t)expert_size;
                             }
                         }
 
-                        // Phase 2: copy needed experts, skip those already populated
+                        // Phase 2: copy needed experts, skip those already populated.
+                        // Experts loaded by FATE this call (fate_mask) are skipped but
+                        // not counted as cache hits — their bytes were copied in Phase 1.
                         int32_t first_id = -1, last_id = -1;
                         for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
                             if (!ggml_bitset_get(used_ids.data(), eid)) {
                                 continue;
                             }
                             if (ggml_bitset_get(entry->populated, eid)) {
-                                // cache hit: flush any pending group, skip
+                                // already on GPU: flush any pending group, skip copy
                                 if (first_id >= 0) {
                                     copy_experts(first_id, last_id);
                                     first_id = -1;
                                 }
-                                sched->expert_cache->n_hits++;
-                                sched->expert_cache->bytes_saved += (int64_t)expert_size;
+                                // only a true hit if populated from a PREVIOUS token
+                                if (!ggml_bitset_get(entry->fate_mask, eid)) {
+                                    sched->expert_cache->n_hits++;
+                                    sched->expert_cache->bytes_saved += (int64_t)expert_size;
+                                }
                                 continue;
                             }
                             // cache miss: extend or start consecutive group
@@ -1861,6 +1875,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched->expert_cache) {
         for (int i = 0; i < sched->expert_cache->n_entries; i++) {
             free(sched->expert_cache->entries[i].populated);
+            free(sched->expert_cache->entries[i].fate_mask);
             free(sched->expert_cache->entries[i].fate_ids);
         }
         free(sched->expert_cache->entries);
@@ -1884,7 +1899,8 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
     if (sched->expert_cache) {
         for (int i = 0; i < sched->expert_cache->n_entries; i++) {
             struct ggml_expert_cache_entry * e = &sched->expert_cache->entries[i];
-            memset(e->populated, 0, ggml_bitset_size(e->n_expert) * sizeof(ggml_bitset_t));
+            memset(e->populated,  0, ggml_bitset_size(e->n_expert) * sizeof(ggml_bitset_t));
+            memset(e->fate_mask,  0, ggml_bitset_size(e->n_expert) * sizeof(ggml_bitset_t));
             e->gpu_data = nullptr;
         }
     }
