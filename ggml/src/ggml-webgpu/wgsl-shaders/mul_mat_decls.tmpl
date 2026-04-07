@@ -42,6 +42,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 }
 #endif // INIT_SRC0_SHMEM_FLOAT
 
+#ifndef MUL_MAT_ID
 #ifdef INIT_SRC1_SHMEM_FLOAT
 fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u32) {
     for (var elem_idx = thread_id * VEC_SIZE; elem_idx < TILE_SRC1_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE * VEC_SIZE) {
@@ -58,6 +59,7 @@ fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u3
     }
 }
 #endif // INIT_SRC1_SHMEM_FLOAT
+#endif
 
 #ifdef INIT_SRC0_SHMEM_Q4_0
 const BLOCK_SIZE = 32u;
