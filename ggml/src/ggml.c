@@ -585,18 +585,15 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
     // convert fname (UTF-8)
     wchar_t * wfname = ggml_mbstowcs(fname);
     if (wfname) {
-        // convert mode (ANSI)
-        wchar_t * wmode = GGML_MALLOC((strlen(mode) + 1) * sizeof(wchar_t));
-        wchar_t * wmode_p = wmode;
-        do {
-            *wmode_p++ = (wchar_t)*mode;
-        } while (*mode++);
-
-        // open file
-        file = _wfopen(wfname, wmode);
+        // convert mode (UTF-8)
+        wchar_t * wmode = ggml_mbstowcs(mode);
+        if (wmode) {
+            // open file
+            file = _wfopen(wfname, wmode);
+            GGML_FREE(wmode);
+        }
 
         GGML_FREE(wfname);
-        GGML_FREE(wmode);
     }
 
     return file;
