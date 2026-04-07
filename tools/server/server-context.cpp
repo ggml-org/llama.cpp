@@ -632,7 +632,7 @@ private:
 
     // load the model and initialize llama_context
     // this may also be called to resume from sleeping state
-    bool load_model(const common_params & params) {
+    bool load_model(common_params & params) {
         bool is_resume = sleeping;
 
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
@@ -640,6 +640,9 @@ private:
         params_base = params;
 
         llama_init = common_init_from_params(params_base);
+
+        // propagate model-metadata sampling defaults back to caller
+        params.sampling = params_base.sampling;
 
         model = llama_init->model();
         ctx   = llama_init->context();
@@ -2978,7 +2981,7 @@ private:
 server_context::server_context() : impl(new server_context_impl()) {}
 server_context::~server_context() = default;
 
-bool server_context::load_model(const common_params & params) {
+bool server_context::load_model(common_params & params) {
     return impl->load_model(params);
 }
 
