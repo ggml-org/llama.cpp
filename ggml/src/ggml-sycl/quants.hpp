@@ -105,6 +105,27 @@ template <> struct block_q_t<GGML_TYPE_Q6_K> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+template <> struct block_q_t<GGML_TYPE_Q8_0> {
+    struct traits {
+        static constexpr uint32_t qk       = QK8_0;      // 32
+        static constexpr uint32_t qi       = QI8_0;      // 8
+        static constexpr uint32_t qr       = QR8_0;      // 1
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Q8_0 reorder layout: [qs0|qs1|...|qsN][d0|d1|...|dN]
+    // Each block has 32 int8 weights (32 bytes) followed by all scales
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * QK8_0, 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols * nrows) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }  // 1
+};
+
 }  // namespace ggml_sycl_reordered
 
 #endif  // GGML_SYCL_QUANTS_HPP
