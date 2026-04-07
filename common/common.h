@@ -544,7 +544,6 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool expert_cache       = false; // enable MoE expert GPU cache (--expert-cache)
-    bool expert_cache_stats = false; // print cache stats on exit (--expert-cache-stats)
 
     bool single_turn       = false; // single turn chat conversation
 
