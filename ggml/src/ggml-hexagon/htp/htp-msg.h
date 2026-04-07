@@ -137,8 +137,8 @@ struct htp_general_req {
     uint32_t n_ops;       // Number of ops
     uint32_t flags;       // unused
     // struct htp_op_buf bufs[];    -- dspqueue buf 0
-    // struct htp_tensor tensors[]; -- dspqueue buf 1
-    // struct htp_op_req ops[];     -- dspqueue buf 2
+    // struct htp_tensor tensors[]; -- dspqueue buf 0
+    // struct htp_op_req ops[];     -- dspqueue buf 0
 };
 
 struct htp_general_rsp {
