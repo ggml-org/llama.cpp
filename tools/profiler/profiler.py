@@ -49,6 +49,107 @@ GGML_GLU_OP_NAMES = {
     4: "GEGLU_QUICK", 5: "SWIGLU_OAI",
 }
 
+GGML_OP_NAMES = {
+    0: "NONE", 1: "DUP", 2: "ADD", 3: "ADD_ID", 4: "ADD1",
+    5: "ACC", 6: "SUB", 7: "MUL", 8: "DIV", 9: "SQR",
+    10: "SQRT", 11: "LOG", 12: "SIN", 13: "COS", 14: "SUM",
+    15: "SUM_ROWS", 16: "CUMSUM", 17: "MEAN", 18: "ARGMAX",
+    19: "COUNT_EQUAL", 20: "REPEAT", 21: "REPEAT_BACK", 22: "CONCAT",
+    23: "SILU_BACK", 24: "NORM", 25: "RMS_NORM", 26: "RMS_NORM_BACK",
+    27: "GROUP_NORM", 28: "L2_NORM", 29: "MUL_MAT", 30: "MUL_MAT_ID",
+    31: "OUT_PROD", 32: "SCALE", 33: "SET", 34: "CPY", 35: "CONT",
+    36: "RESHAPE", 37: "VIEW", 38: "PERMUTE", 39: "TRANSPOSE",
+    40: "GET_ROWS", 41: "GET_ROWS_BACK", 42: "SET_ROWS", 43: "DIAG",
+    44: "DIAG_MASK_INF", 45: "DIAG_MASK_ZERO", 46: "SOFT_MAX",
+    47: "SOFT_MAX_BACK", 48: "ROPE", 49: "ROPE_BACK", 50: "CLAMP",
+    51: "CONV_TRANSPOSE_1D", 52: "IM2COL", 53: "IM2COL_BACK", 54: "IM2COL_3D",
+    55: "CONV_2D", 56: "CONV_3D", 57: "CONV_2D_DW", 58: "CONV_TRANSPOSE_2D",
+    59: "POOL_1D", 60: "POOL_2D", 61: "POOL_2D_BACK", 62: "UPSCALE",
+    63: "PAD", 64: "PAD_REFLECT_1D", 65: "ROLL", 66: "ARANGE",
+    67: "TIMESTEP_EMBEDDING", 68: "ARGSORT", 69: "TOP_K", 70: "LEAKY_RELU",
+    71: "TRI", 72: "FILL", 73: "FLASH_ATTN_EXT", 74: "FLASH_ATTN_BACK",
+    75: "SSM_CONV", 76: "SSM_SCAN", 77: "WIN_PART", 78: "WIN_UNPART",
+    79: "GET_REL_POS", 80: "ADD_REL_POS", 81: "RWKV_WKV6",
+    82: "GATED_LINEAR_ATTN", 83: "RWKV_WKV7", 84: "SOLVE_TRI",
+    85: "GATED_DELTA_NET", 86: "UNARY", 87: "MAP_CUSTOM1",
+    88: "MAP_CUSTOM2", 89: "MAP_CUSTOM3", 90: "CUSTOM",
+    91: "CROSS_ENTROPY_LOSS", 92: "CROSS_ENTROPY_LOSS_BACK",
+    93: "OPT_STEP_ADAMW", 94: "OPT_STEP_SGD", 95: "GLU",
+    96: "COUNT",
+}
+
+GGML_TYPE_NAMES_TO_ID = {v: k for k, v in GGML_TYPE_NAMES.items()}
+
+GGML_OP_NAMES_TO_ID = {v: k for k, v in GGML_OP_NAMES.items()}
+
+
+_EXPORT_SKIP_OPS = frozenset({
+    33,  # SET
+    34,  # CPY
+    35,  # CONT
+    36,  # RESHAPE
+    37,  # VIEW
+    38,  # PERMUTE
+    39,  # TRANSPOSE
+    41,  # GET_ROWS_BACK
+    42,  # SET_ROWS
+    43,  # DIAG
+    44,  # DIAG_MASK_INF
+    45,  # DIAG_MASK_ZERO
+    47,  # SOFT_MAX_BACK
+    49,  # ROPE_BACK
+    51,  # CONV_TRANSPOSE_1D
+    52,  # IM2COL
+    53,  # IM2COL_BACK
+    54,  # IM2COL_3D
+    58,  # CONV_TRANSPOSE_2D
+    61,  # POOL_2D_BACK
+    63,  # PAD
+    64,  # PAD_REFLECT_1D
+    65,  # ROLL
+    66,  # ARANGE
+    70,  # LEAKY_RELU (covered by UNARY)
+    71,  # TRI
+    72,  # FILL
+    77,  # WIN_PART
+    78,  # WIN_UNPART
+    92,  # CROSS_ENTROPY_LOSS_BACK
+    93,  # OPT_STEP_ADAMW
+    94,  # OPT_STEP_SGD
+    96,  # COUNT
+})
+
+
+def _compute_output_ne(op_id: int, ne0: list, ne1: list, ne2: list) -> list | None:
+    if op_id == 29:  # MUL_MAT
+        return [ne0[1], ne1[1], max(ne0[2], ne1[2]), max(ne0[3], ne1[3])]
+    if op_id == 30:  # MUL_MAT_ID
+        return [ne0[1], ne2[0], ne1[2], 1]
+    if op_id in (2, 7, 8, 32):  # ADD, MUL, DIV, SCALE
+        return [max(ne0[i], ne1[i]) for i in range(4)]
+    if op_id == 4:  # ADD1
+        return list(ne0)
+    if op_id in (9, 86):  # SQR, UNARY
+        return list(ne0)
+    if op_id in (46, 25):  # SOFT_MAX, RMS_NORM
+        return list(ne0)
+    if op_id == 73:  # FLASH_ATTN_EXT
+        return [ne1[1], ne1[1], ne0[2], ne0[3]]
+    if op_id == 40:  # GET_ROWS
+        return [ne0[0], ne1[1], ne1[2], ne1[3]]
+    if op_id == 41:  # GET_ROWS_BACK
+        return [ne0[0], ne1[1], ne1[2], ne1[3]]
+    if op_id == 42:  # SET_ROWS
+        return list(ne0)
+    if op_id == 31:  # OUT_PROD
+        return [ne0[0], ne1[0], max(ne0[2], ne1[2]), max(ne0[3], ne1[3])]
+    if op_id == 22:  # CONCAT
+        return [ne0[0] + ne1[0], max(ne0[1], ne1[1]),
+                max(ne0[2], ne1[2]), max(ne0[3], ne1[3])]
+    if op_id in (34, 35, 50, 60, 53, 68):  # CPY, CONT, CLAMP, POOL_2D, IM2COL_BACK, ARGSORT
+        return list(ne0)
+    return None
+
 
 @dataclass
 class ProfileRecord:
@@ -463,6 +564,92 @@ class ProfileData:
 
         print(f"Chrome trace exported to: {filepath}")
         print(f"Open chrome://tracing in Chrome/Edge and load this file.")
+
+    def export_graph_ops(self, filepath: str | Path) -> None:
+        """Export operations in export-graph-ops format for test-backend-ops --test-file."""
+        seen: set[tuple] = set()
+        lines: list[str] = []
+
+        backend_by_id: dict[int, dict] = {}
+        for b in self.metadata.get("backends", []):
+            backend_by_id[b["id"]] = b
+
+        for rec in self.records:
+            if rec.type != OP_EVENT:
+                continue
+
+            op_id = GGML_OP_NAMES_TO_ID.get(rec.name, -1)
+            if op_id < 0:
+                continue
+
+            if op_id in _EXPORT_SKIP_OPS:
+                continue
+
+            ne0 = rec.ne_src0
+            ne1 = rec.ne_src1
+            ne2 = rec.ne_src2
+
+            type_src0 = rec.type_src0 if rec.type_src0 >= 0 else 0
+            type_src1 = rec.type_src1 if rec.type_src1 >= 0 else 0
+            type_src2 = rec.type_src2 if rec.type_src2 >= 0 else 0
+
+            sources: list[tuple[int, list, list]] = []
+            if any(v != 0 for v in ne0):
+                sources.append((type_src0, ne0, [0, 0, 0, 0]))
+            if any(v != 0 for v in ne1):
+                sources.append((type_src1, ne1, [0, 0, 0, 0]))
+
+            if op_id == 30:  # MUL_MAT_ID: ensure rows tensor (src2) is present
+                if len(sources) < 3 and any(v != 0 for v in ne2):
+                    sources.append((type_src2, ne2, [0, 0, 0, 0]))
+                elif len(sources) < 3 and len(sources) >= 2:
+                    sources.append((24, [sources[1][1][1], 1, 1, 1], [0, 0, 0, 0]))  # I32
+            elif any(v != 0 for v in ne2):
+                sources.append((type_src2, ne2, [0, 0, 0, 0]))
+
+            src_ne0 = sources[0][1] if len(sources) > 0 else [0, 0, 0, 0]
+            src_ne1 = sources[1][1] if len(sources) > 1 else [0, 0, 0, 0]
+            src_ne2 = sources[2][1] if len(sources) > 2 else [0, 0, 0, 0]
+
+            ne_out = _compute_output_ne(op_id, src_ne0, src_ne1, src_ne2)
+            if ne_out is None:
+                continue
+
+            op_params: list[int] = []
+            if op_id == 30 and len(sources) >= 2:  # MUL_MAT_ID
+                op_params.append(sources[1][1][1])
+            elif op_id in (86, 95) and rec.sub_op >= 0:  # UNARY, GLU
+                op_params.append(rec.sub_op)
+
+            bname = ""
+            if rec.backend_id in backend_by_id:
+                bname = backend_by_id[rec.backend_id].get("device", "")
+                if not bname or bname == "unknown":
+                    bname = backend_by_id[rec.backend_id].get("name", "")
+
+            key = (op_id, tuple(ne_out), tuple(op_params), tuple((s[0], tuple(s[1])) for s in sources), bname)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            line = f"{op_id} 0 {ne_out[0]} {ne_out[1]} {ne_out[2]} {ne_out[3]} "
+            line += f"{len(op_params)}"
+            for p in op_params:
+                line += f" {p}"
+            line += f" {len(sources)}"
+            for src_type, src_ne, src_nb in sources:
+                line += f" {src_type} {src_ne[0]} {src_ne[1]} {src_ne[2]} {src_ne[3]} {src_nb[0]} {src_nb[1]} {src_nb[2]} {src_nb[3]}"
+            name = rec.name if rec.name else "-"
+            line += f" {name}"
+            if bname:
+                line += f" {bname}"
+            line += "\n"
+            lines.append(line)
+
+        with open(filepath, "w") as f:
+            f.writelines(lines)
+
+        print(f"Exported {len(lines)} unique ops to: {filepath}")
 
     def export_html_viewer(self, filepath: str | Path, max_records: int = 0) -> None:
         """Export a self-contained interactive HTML timeline viewer using Canvas."""
@@ -1007,6 +1194,7 @@ Examples:
   python -m tools.profiler.profiler profile.json
   python -m tools.profiler.profiler profile.json --chrome-trace trace.json
   python -m tools.profiler.profiler profile.json --top-ops 20
+  python -m tools.profiler.profiler profile.json --export-ops ops.txt
         """,
     )
     parser.add_argument("profile", help="Path to profiler JSON file")
@@ -1014,6 +1202,8 @@ Examples:
                         help="Export as Chrome Trace Event format")
     parser.add_argument("--html-viewer", metavar="FILE",
                         help="Export as interactive HTML timeline viewer")
+    parser.add_argument("--export-ops", metavar="FILE",
+                        help="Export ops in export-graph-ops format (for test-backend-ops --test-file)")
     parser.add_argument("--html-max-records", type=int, default=0,
                         help="Max records in HTML viewer (0=unlimited, set to downsample for huge traces)")
     parser.add_argument("--top-ops", type=int, default=0,
@@ -1032,6 +1222,9 @@ Examples:
 
     if args.html_viewer:
         data.export_html_viewer(args.html_viewer, max_records=args.html_max_records)
+
+    if args.export_ops:
+        data.export_graph_ops(args.export_ops)
 
     if args.top_ops > 0:
         print(f"\nTop {args.top_ops} operations by total time:\n")
@@ -1055,7 +1248,7 @@ Examples:
                   f"{s.count:>6} calls  {s.total_bytes / 1e6:.1f} MB")
         print()
 
-    if args.top_ops == 0 and args.top_kernels == 0 and not args.inefficiency and not args.chrome_trace and not args.html_viewer:
+    if args.top_ops == 0 and args.top_kernels == 0 and not args.inefficiency and not args.chrome_trace and not args.html_viewer and not args.export_ops:
         data.summary()
 
 
