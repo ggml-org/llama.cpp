@@ -295,6 +295,7 @@ You have access to the following tools:
 The edit tool finds and replaces text in files. Key points:
 - **old_string must match exactly** - include correct whitespace and indentation
 - **Always read the file first** - so you know the exact text to match
+- **Prefer small, targeted edits** - make multiple small edits rather than one large replacement. This reduces the chance of old_string mismatches.
 - **Use replace_all=true** when replacing a word or short phrase everywhere in the file
 - **Use more context** when there are multiple matches and you only want to change one
 
