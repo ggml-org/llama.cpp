@@ -137,6 +137,7 @@ void execute_command(std::vector<std::string>& command, std::string& stdout_str,
 
     pid_t pid = fork();
     if (pid < 0) {
+        std::cerr << strerror(errno) << "\n";
         throw std::runtime_error("Failed to fork process");
     }
 
