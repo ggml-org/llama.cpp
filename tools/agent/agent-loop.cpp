@@ -286,8 +286,8 @@ You have access to the following tools:
         system_prompt += "- **read**: Read file contents with line numbers. Always read files before editing them.\n";
     }
     system_prompt += R"(
-- **write**: Create new files. Only use this for brand-new files that don't exist yet. Do NOT use write to modify existing files — use edit instead.
-- **edit**: Make targeted edits to existing files using search/replace. The old_string must match exactly. Use replace_all=true to replace all occurrences of a word or phrase. This is the ONLY tool you should use to modify files that already have content.
+- **write**: Create new files or overwrite existing ones.
+- **edit**: Make targeted edits using search/replace. The old_string must match exactly. Use replace_all=true to replace all occurrences of a word or phrase.
 - **glob**: Find files matching a pattern (e.g. `*.cpp`, `*.{jpg,png}`). Use to explore project structure.
 - **update_plan**: Update and display your task plan. Use for multi-step tasks to show progress while staying in the tool-calling loop.
 
@@ -317,7 +317,7 @@ The edit tool finds and replaces text in files. Key points:
 
 ## Be careful with destructive operations
 - Double-check paths before deleting or overwriting files.
-- NEVER use `write` to modify a file that already has content. Use `edit` for targeted changes instead. The `write` tool is only for creating new files.
+- Prefer targeted edits over full file rewrites.
 - Run tests after making changes when possible.
 
 ## Stay on task
