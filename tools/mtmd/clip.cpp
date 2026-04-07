@@ -3457,16 +3457,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 {
                     const int n_embd = ctx->model.hparams.n_embd;
                     const int num_timescales = n_embd / 2;
-                    const float log_timescale_increment = logf(10000.0f) / std::max(num_timescales - 1, 1);
+                    const double log_timescale_increment = log(10000.0) / std::max(num_timescales - 1, 1);
                     const int rpe_len = max_past + 1;
                     std::vector<float> pos_emb(n_embd * rpe_len, 0.0f);
                     for (int p = 0; p < rpe_len; p++) {
-                        float position = (float)(max_past - p);
+                        double position = (double)(max_past - p);
                         for (int i = 0; i < num_timescales; i++) {
-                            float inv_ts = expf(-(float)i * log_timescale_increment);
-                            float scaled = position * inv_ts;
-                            pos_emb[p * n_embd + i]                 = sinf(scaled);
-                            pos_emb[p * n_embd + i + num_timescales] = cosf(scaled);
+                            double inv_ts = exp(-(double)i * log_timescale_increment);
+                            double scaled = position * inv_ts;
+                            pos_emb[p * n_embd + i]                 = (float)sin(scaled);
+                            pos_emb[p * n_embd + i + num_timescales] = (float)cos(scaled);
                         }
                     }
                     set_input_f32("pos_emb", pos_emb);
