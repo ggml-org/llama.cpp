@@ -93,6 +93,17 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+# Link against Level Zero loader for direct device memory allocation.
+# Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
+# in the xe kernel driver during multi-GPU inference.
+find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ENV LD_LIBRARY_PATH)
+if(ZE_LOADER_LIB)
+    target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
+    message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
+else()
+    message(WARNING "Level Zero loader (ze_loader) not found, multi-GPU may use excessive system RAM")
+endif()
+
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)

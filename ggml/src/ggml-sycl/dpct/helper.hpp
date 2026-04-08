@@ -15,6 +15,8 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
+#include <sycl/backend.hpp>
+#include <level_zero/ze_api.h>
 #include <oneapi/mkl.hpp>
 
 #include <map>
@@ -1307,6 +1309,14 @@ namespace dpct
 
         static inline void *dpct_malloc(size_t size, sycl::queue &q)
         {
+            try {
+                auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+                auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+                ze_device_mem_alloc_desc_t desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
+                void *ptr = nullptr;
+                if (zeMemAllocDevice(ze_ctx, &desc, size, 64, ze_dev, &ptr) == ZE_RESULT_SUCCESS && ptr)
+                    return ptr;
+            } catch (...) {}
             return sycl::malloc_device(size, q.get_device(), q.get_context());
         }
 

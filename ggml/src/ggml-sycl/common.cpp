@@ -11,6 +11,8 @@
 //
 
 #include "common.hpp"
+#include <sycl/backend.hpp>
+#include <level_zero/ze_api.h>
 
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -75,8 +77,18 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
         if (extra->data_device[i] != nullptr && streams.size()>0) {
             ggml_sycl_set_device(i);
-            SYCL_CHECK(
-                CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+            bool freed = false;
+            try {
+                auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+                    streams[i]->get_context());
+                if (zeMemFree(ze_ctx, extra->data_device[i]) == ZE_RESULT_SUCCESS) {
+                    freed = true;
+                }
+            } catch (...) {}
+            if (!freed) {
+                SYCL_CHECK(
+                    CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+            }
         }
     }
     delete extra;
