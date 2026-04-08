@@ -136,6 +136,10 @@ if (Vulkan_FOUND)
         target_link_libraries(ggml-vulkan PRIVATE ggml-cpu)
     endif()
 
+    if (GGML_VULKAN_COPY_TESTS)
+        add_compile_definitions(GGML_VULKAN_COPY_TESTS)
+    endif()
+
     # Set up toolchain for host compilation whether cross-compiling or not
     if (CMAKE_CROSSCOMPILING)
         if (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN)

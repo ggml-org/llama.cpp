@@ -1,8 +1,11 @@
 #include "ggml-vulkan.h"
 #include <vulkan/vulkan_core.h>
-#if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
+#if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS) || defined(GGML_VULKAN_COPY_TESTS)
 #include <chrono>
 #include "ggml-cpu.h"
+#endif
+#if defined(GGML_VULKAN_COPY_TESTS) && !defined(_WIN32)
+#include <unistd.h>
 #endif
 
 // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
@@ -676,6 +679,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_semaphore_fd {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -1859,6 +1863,7 @@ struct ggml_vk_garbage_collector {
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
 static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
+static vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size);
 
 static bool vk_memory_logger_enabled = false;
 
@@ -5734,6 +5739,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_KHR_external_semaphore_fd", properties.extensionName) == 0) {
+                device->external_semaphore_fd = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -6060,6 +6067,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+
+        if (device->external_semaphore_fd) {
+            device_extensions.push_back("VK_KHR_external_semaphore_fd");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -14233,7 +14244,654 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
 }
 #endif
 
+#ifdef GGML_VULKAN_COPY_TESTS
+// Cross-device copy benchmark
+// Tests different approaches to copying data between two Vulkan devices.
+// Build with -DGGML_VULKAN_COPY_TESTS and run any llama.cpp command with >= 2 Vulkan devices.
+
+// Helper: allocate shared staging buffer importable by both devices
+struct vk_shared_staging {
+    void * host_ptr = nullptr;
+    vk_buffer buf_dev0;
+    vk_buffer buf_dev1;
+    size_t size = 0;
+
+    bool alloc(vk_device & dev0, vk_device & dev1, size_t sz) {
+        size_t align = std::max(dev0->min_imported_host_pointer_alignment,
+                                dev1->min_imported_host_pointer_alignment);
+        size = (sz + align - 1) & ~(align - 1);
+#ifdef _WIN32
+        host_ptr = _aligned_malloc(size, align);
+#else
+        if (posix_memalign(&host_ptr, align, size) != 0) { host_ptr = nullptr; }
+#endif
+        if (!host_ptr) return false;
+        buf_dev0 = ggml_vk_buffer_from_host_ptr(dev0, host_ptr, size);
+        buf_dev1 = ggml_vk_buffer_from_host_ptr(dev1, host_ptr, size);
+        return buf_dev0 && buf_dev1;
+    }
+
+    void free_resources() {
+        ggml_vk_destroy_buffer(buf_dev0);
+        ggml_vk_destroy_buffer(buf_dev1);
+#ifdef _WIN32
+        _aligned_free(host_ptr);
+#else
+        free(host_ptr);
+#endif
+        host_ptr = nullptr;
+    }
+};
+
+// Helper: run a benchmark and print results
+static void vk_bench_print(const char * name, std::vector<double> & times, size_t size) {
+    std::sort(times.begin(), times.end());
+    double median = times[times.size() / 2];
+    double bw = (size / (1024.0 * 1024.0 * 1024.0)) / (median / 1000.0);
+    std::cerr << "  " << std::left << std::setw(22) << name << " : "
+              << std::fixed << std::setprecision(3) << median << " ms  "
+              << std::setprecision(2) << bw << " GB/s" << std::endl;
+}
+
+// Results stored per (method, size) for table output
+struct vk_copy_result {
+    std::string method;
+    double ms;
+    double gbps;
+};
+
+static void ggml_vk_bench_pair(
+        vk_device & dev0, vk_device & dev1,
+        const std::vector<size_t> & test_sizes,
+        std::map<std::string, std::vector<vk_copy_result>> & results) {
+
+    const size_t num_it = 20;
+    const size_t warmup = 3;
+    const size_t max_size = test_sizes.back();
+
+    // Allocate buffers
+    vk_buffer buf_src = ggml_vk_create_buffer_check(dev0, max_size, {vk::MemoryPropertyFlagBits::eDeviceLocal});
+    vk_buffer buf_dst = ggml_vk_create_buffer_check(dev1, max_size, {vk::MemoryPropertyFlagBits::eDeviceLocal});
+    vk_buffer staging_src = ggml_vk_create_buffer_check(dev0, max_size,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk_buffer staging_dst = ggml_vk_create_buffer_check(dev1, max_size,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    // Fill source
+    {
+        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+        ggml_vk_ctx_begin(dev0, subctx);
+        subctx->s->buffer->buf.fillBuffer(buf_src->buffer, 0, max_size, 0xDEADBEEF);
+        ggml_vk_ctx_end(subctx);
+        ggml_vk_submit(subctx, dev0->fence);
+        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "fill");
+        dev0->device.resetFences({ dev0->fence });
+    }
+
+    bool has_shared_staging = dev0->external_memory_host && dev1->external_memory_host;
+    bool has_syncfd = false;
+#ifndef _WIN32
+    if (dev0->external_semaphore_fd && dev1->external_semaphore_fd) {
+        vk::PhysicalDeviceExternalSemaphoreInfo query{};
+        query.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+        auto p0 = dev0->physical_device.getExternalSemaphoreProperties(query);
+        auto p1 = dev1->physical_device.getExternalSemaphoreProperties(query);
+        has_syncfd =
+            (p0.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eExportable) &&
+            (p0.compatibleHandleTypes & vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd) &&
+            (p1.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eImportable) &&
+            (p1.compatibleHandleTypes & vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd);
+    }
+#endif
+
+    // Helper to record a result
+    auto record = [&](const std::string & method, size_t size, std::vector<double> & times) {
+        std::sort(times.begin(), times.end());
+        double median = times[times.size() / 2];
+        double bw = (size / (1024.0 * 1024.0 * 1024.0)) / (median / 1000.0);
+        results[method].push_back({ method, median, bw });
+    };
+
+    // Helper to record a skipped size (sentinel: negative ms)
+    auto skip = [&](const std::string & method) {
+        results[method].push_back({ method, -1.0, -1.0 });
+    };
+
+    for (size_t size : test_sizes) {
+
+        // =================================================================
+        // 1. Baseline: current sync double-hop (separate staging buffers + memcpy)
+        // =================================================================
+        {
+            std::vector<double> times;
+            for (size_t i = 0; i < num_it + warmup; i++) {
+                auto begin = std::chrono::high_resolution_clock::now();
+
+                {
+                    std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
+                    vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                    ggml_vk_ctx_begin(dev0, subctx);
+                    ggml_vk_buffer_copy_async(subctx, staging_src, 0, buf_src, 0, size);
+                    ggml_vk_ctx_end(subctx);
+                    ggml_vk_submit(subctx, dev0->fence);
+                    VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "baseline hop1");
+                    dev0->device.resetFences({ dev0->fence });
+                }
+                memcpy(staging_dst->ptr, staging_src->ptr, size);
+                {
+                    std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
+                    vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                    ggml_vk_ctx_begin(dev1, subctx);
+                    ggml_vk_buffer_copy_async(subctx, buf_dst, 0, staging_dst, 0, size);
+                    ggml_vk_ctx_end(subctx);
+                    ggml_vk_submit(subctx, dev1->fence);
+                    VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "baseline hop2");
+                    dev1->device.resetFences({ dev1->fence });
+                }
+
+                auto end = std::chrono::high_resolution_clock::now();
+                if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+            }
+            record("baseline", size, times);
+        }
+
+        // =================================================================
+        // 2. Diagnostics: individual hop timings
+        // =================================================================
+        {
+            std::vector<double> times;
+            for (size_t i = 0; i < num_it + warmup; i++) {
+                auto begin = std::chrono::high_resolution_clock::now();
+                {
+                    std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
+                    vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                    ggml_vk_ctx_begin(dev0, subctx);
+                    ggml_vk_buffer_copy_async(subctx, staging_src, 0, buf_src, 0, size);
+                    ggml_vk_ctx_end(subctx);
+                    ggml_vk_submit(subctx, dev0->fence);
+                    VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "diag hop1");
+                    dev0->device.resetFences({ dev0->fence });
+                }
+                auto end = std::chrono::high_resolution_clock::now();
+                if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+            }
+            record("hop1_only", size, times);
+        }
+        {
+            std::vector<double> times;
+            for (size_t i = 0; i < num_it + warmup; i++) {
+                auto begin = std::chrono::high_resolution_clock::now();
+                {
+                    std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
+                    vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                    ggml_vk_ctx_begin(dev1, subctx);
+                    ggml_vk_buffer_copy_async(subctx, buf_dst, 0, staging_dst, 0, size);
+                    ggml_vk_ctx_end(subctx);
+                    ggml_vk_submit(subctx, dev1->fence);
+                    VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "diag hop2");
+                    dev1->device.resetFences({ dev1->fence });
+                }
+                auto end = std::chrono::high_resolution_clock::now();
+                if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+            }
+            record("hop2_only", size, times);
+        }
+
+        // =================================================================
+        // 3. Shared staging: single host buffer imported into both devices
+        // =================================================================
+        if (has_shared_staging) {
+            vk_shared_staging stg;
+            if (stg.alloc(dev0, dev1, size)) {
+                std::vector<double> times;
+                for (size_t i = 0; i < num_it + warmup; i++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    {
+                        std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev0, subctx);
+                        ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, 0, buf_src, 0, size);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, dev0->fence);
+                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "shared hop1");
+                        dev0->device.resetFences({ dev0->fence });
+                    }
+                    {
+                        std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev1, subctx);
+                        ggml_vk_buffer_copy_async(subctx, buf_dst, 0, stg.buf_dev1, 0, size);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, dev1->fence);
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "shared hop2");
+                        dev1->device.resetFences({ dev1->fence });
+                    }
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+                record("shared_staging", size, times);
+            } else {
+                std::cerr << "  shared_staging        : SKIPPED (import failed)" << std::endl;
+            }
+            stg.free_resources();
+        }
+
+        // =================================================================
+        // 4. Chunked pipeline: split into N chunks, overlap hop1/hop2
+        //    via full-duplex PCIe. Vary chunk count to find optimum.
+        // =================================================================
+        if (has_shared_staging) {
+            for (size_t n_chunks : { 2, 4, 8 }) {
+                char cname[32];
+                snprintf(cname, sizeof(cname), "chunked_%zu", n_chunks);
+                if (size < n_chunks * 4096) { skip(cname); continue; }
+
+                size_t align = std::max(dev0->min_imported_host_pointer_alignment,
+                                        dev1->min_imported_host_pointer_alignment);
+                size_t chunk_data = size / n_chunks;
+                size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
+
+                vk_shared_staging stg;
+                if (!stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
+                    std::cerr << "  chunked_" << n_chunks << "             : SKIPPED (import failed)" << std::endl;
+                    stg.free_resources();
+                    continue;
+                }
+
+                // Per-chunk timeline semaphores
+                std::vector<vk::Semaphore> chunk_sems(n_chunks);
+                std::vector<uint64_t> sem_vals(n_chunks, 0);
+                for (size_t c = 0; c < n_chunks; c++) {
+                    vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
+                    vk::SemaphoreCreateInfo sci{};
+                    sci.setPNext(&tci);
+                    chunk_sems[c] = dev0->device.createSemaphore(sci);
+                }
+
+                std::vector<double> times;
+                for (size_t iter = 0; iter < num_it + warmup; iter++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    // Submit all hop1s upfront
+                    for (size_t c = 0; c < n_chunks; c++) {
+                        size_t off_src = c * chunk_data;
+                        size_t off_stg = c * chunk_aligned;
+                        size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
+
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev0, subctx);
+                        ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, off_stg, buf_src, off_src, csz);
+                        sem_vals[c]++;
+                        subctx->s->signal_semaphores.push_back({ chunk_sems[c], sem_vals[c] });
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, {});
+                    }
+
+                    // Per-chunk: CPU wait hop1, submit hop2
+                    for (size_t c = 0; c < n_chunks; c++) {
+                        size_t off_dst = c * chunk_data;
+                        size_t off_stg = c * chunk_aligned;
+                        size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
+
+                        vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, chunk_sems[c], sem_vals[c]};
+                        VK_CHECK(dev0->device.waitSemaphores(swi, UINT64_MAX), "chunked sem wait");
+
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev1, subctx);
+                        ggml_vk_buffer_copy_async(subctx, buf_dst, off_dst, stg.buf_dev1, off_stg, csz);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, (c == n_chunks - 1) ? dev1->fence : vk::Fence{});
+                    }
+
+                    VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "chunked final");
+                    dev1->device.resetFences({ dev1->fence });
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (iter >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+
+                char name[32];
+                snprintf(name, sizeof(name), "chunked_%zu", n_chunks);
+                record(name, size, times);
+
+                for (size_t c = 0; c < n_chunks; c++) dev0->device.destroySemaphore(chunk_sems[c]);
+                stg.free_resources();
+            }
+        }
+
+        // =================================================================
+        // 5. sync_fd async: fully GPU-synchronised via Linux sync_file
+        // =================================================================
+#ifndef _WIN32
+        if (has_shared_staging && has_syncfd) {
+            vk_shared_staging stg;
+            if (stg.alloc(dev0, dev1, size)) {
+                std::vector<double> times;
+                bool run_ok = true;
+
+                for (size_t i = 0; i < num_it + warmup && run_ok; i++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    vk::ExportSemaphoreCreateInfo esci{};
+                    esci.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                    vk::SemaphoreCreateInfo sci{};
+                    sci.setPNext(&esci);
+                    vk::Semaphore sem_dev0 = dev0->device.createSemaphore(sci);
+
+                    // Hop 1 + signal
+                    {
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev0, subctx);
+                        ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, 0, buf_src, 0, size);
+                        subctx->s->signal_semaphores.push_back({ sem_dev0, 0 });
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, {});
+                    }
+
+                    // Export + import sync_fd
+                    int sync_fd = -1;
+                    try {
+                        vk::SemaphoreGetFdInfoKHR gi{};
+                        gi.semaphore = sem_dev0;
+                        gi.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                        sync_fd = dev0->device.getSemaphoreFdKHR(gi);
+                    } catch (vk::SystemError& e) {
+                        std::cerr << "  syncfd_async          : SKIPPED (export: " << e.what() << ")" << std::endl;
+                        dev0->device.destroySemaphore(sem_dev0);
+                        run_ok = false; break;
+                    }
+
+                    vk::Semaphore sem_dev1 = dev1->device.createSemaphore({});
+                    try {
+                        vk::ImportSemaphoreFdInfoKHR ii{};
+                        ii.semaphore = sem_dev1;
+                        ii.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                        ii.flags = vk::SemaphoreImportFlagBits::eTemporary;
+                        ii.fd = sync_fd;
+                        dev1->device.importSemaphoreFdKHR(ii);
+                    } catch (vk::SystemError& e) {
+                        std::cerr << "  syncfd_async          : SKIPPED (import: " << e.what() << ")" << std::endl;
+                        dev0->device.destroySemaphore(sem_dev0);
+                        dev1->device.destroySemaphore(sem_dev1);
+                        close(sync_fd);
+                        run_ok = false; break;
+                    }
+
+                    // Hop 2 with GPU-side wait
+                    {
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev1, subctx);
+                        subctx->s->wait_semaphores.push_back({ sem_dev1, 0 });
+                        ggml_vk_buffer_copy_async(subctx, buf_dst, 0, stg.buf_dev1, 0, size);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, dev1->fence);
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd final");
+                        dev1->device.resetFences({ dev1->fence });
+                    }
+
+                    dev0->device.destroySemaphore(sem_dev0);
+                    dev1->device.destroySemaphore(sem_dev1);
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+                if (run_ok) record("syncfd_async", size, times);
+            } else {
+                std::cerr << "  syncfd_async          : SKIPPED (import failed)" << std::endl;
+            }
+            stg.free_resources();
+        }
+
+        // =================================================================
+        // 6. sync_fd chunked: chunked pipeline with GPU-side sync_fd
+        //    between hops (no CPU waits between chunks)
+        // =================================================================
+        if (has_shared_staging && has_syncfd) {
+            for (size_t n_chunks : { 2, 4, 8 }) {
+                char scname[48];
+                snprintf(scname, sizeof(scname), "syncfd_chunked_%zu", n_chunks);
+                if (size < n_chunks * 4096) { skip(scname); continue; }
+
+                size_t align = std::max(dev0->min_imported_host_pointer_alignment,
+                                        dev1->min_imported_host_pointer_alignment);
+                size_t chunk_data = size / n_chunks;
+                size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
+
+                vk_shared_staging stg;
+                if (!stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
+                    std::cerr << "  syncfd_chunked_" << n_chunks << "      : SKIPPED (import failed)" << std::endl;
+                    stg.free_resources();
+                    continue;
+                }
+
+                std::vector<double> times;
+                bool run_ok = true;
+
+                for (size_t iter = 0; iter < num_it + warmup && run_ok; iter++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    // Create per-chunk exportable semaphores
+                    std::vector<vk::Semaphore> sems_dev0(n_chunks);
+                    for (size_t c = 0; c < n_chunks; c++) {
+                        vk::ExportSemaphoreCreateInfo esci{};
+                        esci.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                        vk::SemaphoreCreateInfo sci{};
+                        sci.setPNext(&esci);
+                        sems_dev0[c] = dev0->device.createSemaphore(sci);
+                    }
+
+                    // Submit all hop1s with per-chunk signal
+                    for (size_t c = 0; c < n_chunks; c++) {
+                        size_t off_src = c * chunk_data;
+                        size_t off_stg = c * chunk_aligned;
+                        size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
+
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev0, subctx);
+                        ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, off_stg, buf_src, off_src, csz);
+                        subctx->s->signal_semaphores.push_back({ sems_dev0[c], 0 });
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, {});
+                    }
+
+                    // Export all sync_fds and import on dev1, submit hop2s
+                    for (size_t c = 0; c < n_chunks && run_ok; c++) {
+                        size_t off_dst = c * chunk_data;
+                        size_t off_stg = c * chunk_aligned;
+                        size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
+
+                        int sync_fd = -1;
+                        try {
+                            vk::SemaphoreGetFdInfoKHR gi{};
+                            gi.semaphore = sems_dev0[c];
+                            gi.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                            sync_fd = dev0->device.getSemaphoreFdKHR(gi);
+                        } catch (vk::SystemError& e) {
+                            char nm[48]; snprintf(nm, sizeof(nm), "syncfd_chunked_%zu", n_chunks);
+                            std::cerr << "  " << nm << "      : SKIPPED (export: " << e.what() << ")" << std::endl;
+                            run_ok = false; break;
+                        }
+
+                        vk::Semaphore sem_dev1 = dev1->device.createSemaphore({});
+                        try {
+                            vk::ImportSemaphoreFdInfoKHR ii{};
+                            ii.semaphore = sem_dev1;
+                            ii.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
+                            ii.flags = vk::SemaphoreImportFlagBits::eTemporary;
+                            ii.fd = sync_fd;
+                            dev1->device.importSemaphoreFdKHR(ii);
+                        } catch (vk::SystemError& e) {
+                            char nm[48]; snprintf(nm, sizeof(nm), "syncfd_chunked_%zu", n_chunks);
+                            std::cerr << "  " << nm << "      : SKIPPED (import: " << e.what() << ")" << std::endl;
+                            dev1->device.destroySemaphore(sem_dev1);
+                            close(sync_fd);
+                            run_ok = false; break;
+                        }
+
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev1, subctx);
+                        subctx->s->wait_semaphores.push_back({ sem_dev1, 0 });
+                        ggml_vk_buffer_copy_async(subctx, buf_dst, off_dst, stg.buf_dev1, off_stg, csz);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, (c == n_chunks - 1) ? dev1->fence : vk::Fence{});
+
+                        dev1->device.destroySemaphore(sem_dev1);
+                    }
+
+                    if (run_ok) {
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd_chunked final");
+                        dev1->device.resetFences({ dev1->fence });
+                    }
+
+                    for (size_t c = 0; c < n_chunks; c++) dev0->device.destroySemaphore(sems_dev0[c]);
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (run_ok && iter >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+
+                if (run_ok) {
+                    char name[48];
+                    snprintf(name, sizeof(name), "syncfd_chunked_%zu", n_chunks);
+                    record(name, size, times);
+                }
+                stg.free_resources();
+            }
+        }
+#endif
+    }
+
+    ggml_vk_destroy_buffer(buf_src);
+    ggml_vk_destroy_buffer(buf_dst);
+    ggml_vk_destroy_buffer(staging_src);
+    ggml_vk_destroy_buffer(staging_dst);
+}
+
+static void ggml_vk_test_cross_device_copy(ggml_backend_vk_context * ctx) {
+    ggml_vk_instance_init();
+
+    const size_t n_devices = vk_instance.device_indices.size();
+    if (n_devices < 2) {
+        std::cerr << "COPY TEST: Need at least 2 Vulkan devices, found " << n_devices << std::endl;
+        return;
+    }
+
+    // List devices
+    std::cerr << "\n=== Vulkan Devices ===" << std::endl;
+    std::vector<vk_device> devices(n_devices);
+    for (size_t i = 0; i < n_devices; i++) {
+        devices[i] = ggml_vk_get_device(i);
+        std::cerr << "  [" << i << "] " << devices[i]->name << std::endl;
+    }
+
+    const std::vector<size_t> test_sizes = {
+        4096,               // 4 KB
+        256 * 1024,         // 256 KB
+        1 * 1024 * 1024,   // 1 MB
+        16 * 1024 * 1024,  // 16 MB
+        64 * 1024 * 1024,  // 64 MB
+        256 * 1024 * 1024, // 256 MB
+    };
+
+    // Collect results: results[pair_label][method_name] = vector of vk_copy_result (one per size)
+    struct pair_results {
+        std::string label;
+        std::map<std::string, std::vector<vk_copy_result>> methods;
+    };
+    std::vector<pair_results> all_results;
+
+    // Run benchmarks for all ordered pairs
+    for (size_t i = 0; i < n_devices; i++) {
+        for (size_t j = 0; j < n_devices; j++) {
+            if (i == j) continue;
+
+            std::string label = devices[i]->name + " -> " + devices[j]->name;
+            std::cerr << "\n\n=== " << label << " ===" << std::endl;
+
+            pair_results pr;
+            pr.label = label;
+            ggml_vk_bench_pair(devices[i], devices[j], test_sizes, pr.methods);
+            all_results.push_back(std::move(pr));
+        }
+    }
+
+    // Output markdown tables: one table per method
+    // Collect all method names
+    std::vector<std::string> method_order;
+    if (!all_results.empty()) {
+        // Use first pair's method order as canonical
+        for (auto & [method, _] : all_results[0].methods) {
+            method_order.push_back(method);
+        }
+        // Add any methods from other pairs not in the first
+        for (auto & pr : all_results) {
+            for (auto & [method, _] : pr.methods) {
+                if (std::find(method_order.begin(), method_order.end(), method) == method_order.end()) {
+                    method_order.push_back(method);
+                }
+            }
+        }
+    }
+
+    std::cerr << "\n\n# Cross-Device Copy Benchmark Results\n" << std::endl;
+
+    for (auto & method : method_order) {
+        std::cerr << "## " << method << "\n" << std::endl;
+
+        // Header: | Direction | 4KB | 256KB | ... |
+        std::cerr << "| Direction |";
+        for (size_t s : test_sizes) {
+            if (s < 1024 * 1024) {
+                std::cerr << " " << s / 1024 << " KB |";
+            } else {
+                std::cerr << " " << s / (1024 * 1024) << " MB |";
+            }
+        }
+        std::cerr << std::endl;
+
+        // Separator
+        std::cerr << "|---|";
+        for (size_t s = 0; s < test_sizes.size(); s++) {
+            std::cerr << "---|";
+            GGML_UNUSED(s);
+        }
+        std::cerr << std::endl;
+
+        // Data rows
+        for (auto & pr : all_results) {
+            std::cerr << "| " << pr.label << " |";
+            auto it = pr.methods.find(method);
+            if (it != pr.methods.end() && it->second.size() == test_sizes.size()) {
+                for (auto & r : it->second) {
+                    if (r.ms < 0) {
+                        std::cerr << " - |";
+                    } else {
+                        std::cerr << " " << std::fixed << std::setprecision(1) << r.ms << " ms (" << std::setprecision(1) << r.gbps << " GB/s) |";
+                    }
+                }
+            } else {
+                for (size_t s = 0; s < test_sizes.size(); s++) {
+                    std::cerr << " - |";
+                    GGML_UNUSED(s);
+                }
+            }
+            std::cerr << std::endl;
+        }
+        std::cerr << std::endl;
+    }
+
+    GGML_ABORT("GGML_VULKAN_COPY_TESTS completed");
+    GGML_UNUSED(ctx);
+}
+#endif
+
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
+#if defined(GGML_VULKAN_COPY_TESTS)
+    ggml_vk_test_cross_device_copy(ctx);
+#endif
 #if defined(GGML_VULKAN_RUN_TESTS)
     const std::vector<size_t> vals {
         512, 512, 128,
