@@ -39,13 +39,10 @@
 #include  <mutex>
 #include <condition_variable>
 
-
 using namespace tsi::runtime;
 
-
-
 // This will  go in deployment file at next PR
-#define NUM_OF_TXES 2
+#define NUM_OF_TXES 1
 
 // ggml-tsavorite.cpp
 namespace {
@@ -60,8 +57,6 @@ struct TsavoriteRuntimeState {
     std::mutex device_mutex;
     std::mutex tsi_pack_mutex;
     std::condition_variable device_cv;
-
-
     // blobs
     BlobDescriptor *blobDescriptor_add[NUM_OF_TXES] = {};
     BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES] = {};
@@ -191,14 +186,14 @@ static std::string blob_prefix(const char *rel) {
     return tsavorite_llama_root() + rel;
 }
 
-void tsi_load_all_blobs() {
+static void tsi_load_all_blobs() {
     static void *loadResult_add[NUM_OF_TXES];
     static void *loadResult_mult[NUM_OF_TXES];
     static void *loadResult_rms_norm[NUM_OF_TXES];
     int i;
     char blob_name[64];
 
-    for (int i = 0; i < NUM_OF_TXES; ++i) {
+    for (int i = 0; i < num_of_txes; ++i) {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
@@ -266,7 +261,7 @@ error:
 
 
 static void tsi_unload_all_blobs() {
-for (int i=0; i < NUM_OF_TXES; ++i) {
+for (int i=0; i < num_of_txes; ++i) {
   tsi_unload_blob(blobDescriptor_add[i]);
   tsi_unload_blob(blobDescriptor_mult[i]);
   tsi_unload_blob(blobDescriptor_rms_norm[i]);
