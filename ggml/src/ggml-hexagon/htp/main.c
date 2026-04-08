@@ -407,83 +407,79 @@ static inline void profile_stop(struct profile_data * d) {
     d->pkts   = hex_get_pktcnt() - d->pkts;
 }
 
-static void execute_op(struct htp_ops_context * octx) {
+static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
         case HTP_OP_MUL_MAT:
-            op_matmul(octx);
-            break;
+            return op_matmul(octx);
 
         case HTP_OP_MUL_MAT_ID:
-            op_matmul_id(octx);
-            break;
+            return op_matmul_id(octx);
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:
         case HTP_OP_SUB:
         case HTP_OP_DIV:
         case HTP_OP_ADD_ID:
-            op_binary(octx);
-            break;
+            return op_binary(octx);
 
         case HTP_OP_RMS_NORM:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
-            op_unary(octx);
-            break;
+        case HTP_OP_UNARY_SOFTPLUS:
+        case HTP_OP_UNARY_SIGMOID:
+        case HTP_OP_UNARY_NEG:
+        case HTP_OP_UNARY_EXP:
+            return op_unary(octx);
 
         case HTP_OP_UNARY_SILU:
         case HTP_OP_UNARY_GELU:
         case HTP_OP_GLU_SWIGLU:
         case HTP_OP_GLU_SWIGLU_OAI:
         case HTP_OP_GLU_GEGLU:
-            op_activations(octx);
-            break;
+            return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
-            op_softmax(octx);
-            break;
+            return op_softmax(octx);
 
         case HTP_OP_ROPE:
-            op_rope(octx);
-            break;
+            return op_rope(octx);
 
         case HTP_OP_FLASH_ATTN_EXT:
-            op_flash_attn_ext(octx);
-            break;
+            return op_flash_attn_ext(octx);
 
         case HTP_OP_SET_ROWS:
-            op_set_rows(octx);
-            break;
+            return op_set_rows(octx);
 
         case HTP_OP_GET_ROWS:
-            op_get_rows(octx);
-            break;
+            return op_get_rows(octx);
 
         case HTP_OP_SUM_ROWS:
-            op_sum_rows(octx);
-            break;
+            return op_sum_rows(octx);
 
         case HTP_OP_CPY:
-            op_cpy(octx);
-            break;
+            return op_cpy(octx);
 
         case HTP_OP_REPEAT:
-            op_repeat(octx);
-            break;
+            return op_repeat(octx);
 
         case HTP_OP_ARGSORT:
-            op_argsort(octx);
-            break;
+            return op_argsort(octx);
 
         case HTP_OP_SSM_CONV:
-            op_ssm_conv(octx);
+            return op_ssm_conv(octx);
+
+        case HTP_OP_CUMSUM:
+            return op_cumsum(octx);
+
+        case HTP_OP_INVALID:
             break;
 
-        default:
-            FARF(ERROR, "Unknown Op %u", octx->op);
-            break;
+        // No default to catch missing cases
     }
+
+    FARF(ERROR, "Unknown Op %u", octx->op);
+    return -1;
 }
 
 static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_op_buf *b) {
@@ -620,7 +616,7 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
     FARF(HIGH, "prep-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
         dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
 
-    execute_op(octx);
+    (void) execute_op(octx);
 
     // flush buffers on output
     hex_l2flush((void *) dst->data, dst->size);
