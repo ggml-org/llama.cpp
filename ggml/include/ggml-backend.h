@@ -340,6 +340,21 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // MoE expert weight cache: avoids redundant CPU->GPU copies by tracking
+    // which expert rows are already present on GPU. Use with --n-cpu-moe.
+    // n_slots: 0=disabled, !=0 = enabled (dedup-only in this version).
+    GGML_API void ggml_backend_sched_set_expert_cache(ggml_backend_sched_t sched, int32_t n_slots);
+
+    GGML_API void ggml_backend_sched_get_expert_cache_stats(
+            ggml_backend_sched_t sched,
+            int64_t * n_hits,
+            int64_t * n_misses,
+            int64_t * n_fate_hits,
+            int64_t * bytes_saved,
+            int64_t * bytes_copied);
+
+    GGML_API void ggml_backend_sched_reset_expert_cache_stats(ggml_backend_sched_t sched);
+
     //
     // Utils
     //

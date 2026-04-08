@@ -160,8 +160,9 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
-    cparams.op_offload = params.op_offload;
-    cparams.kv_unified = params.kv_unified;
+    cparams.op_offload          = params.op_offload;
+    cparams.expert_cache_n_slots = params.expert_cache_n_slots;
+    cparams.kv_unified          = params.kv_unified;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -365,6 +366,15 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (cparams.expert_cache_n_slots != 0 && sched) {
+        int64_t hits, misses, fate, saved, copied;
+        ggml_backend_sched_get_expert_cache_stats(sched.get(), &hits, &misses, &fate, &saved, &copied);
+        if (hits + misses > 0) {
+            LLAMA_LOG_INFO("%s: expert-cache: hits=%" PRId64 " (%.1f%%) misses=%" PRId64 " fate=%" PRId64 " saved=%.1fMB copied=%.1fMB\n",
+                __func__, hits, 100.0 * hits / (hits + misses), misses, fate,
+                saved / 1048576.0, copied / 1048576.0);
+        }
+    }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -408,6 +418,10 @@ void llama_context::sched_reserve() {
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+
+    if (cparams.expert_cache_n_slots != 0) {
+        ggml_backend_sched_set_expert_cache(sched.get(), cparams.expert_cache_n_slots);
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -562,6 +576,9 @@ void llama_context::sched_reserve() {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                if (cparams.expert_cache_n_slots != 0) {
+                    ggml_backend_sched_set_expert_cache(sched.get(), cparams.expert_cache_n_slots);
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             }
             if (!gf) {
@@ -2217,6 +2234,27 @@ llm_graph_cb llama_context::graph_get_cb() const {
                 }
             }
         }
+
+        // Expert cache: when expert weights are on CPU (via --n-cpu-moe / tensor_buft_overrides)
+        // the scheduler normally assigns MUL_MAT_ID to CPU, preventing cross-backend copies
+        // and leaving the expert weight cache inactive.  Force MUL_MAT_ID to the layer's GPU
+        // backend so the scheduler creates a CPU→GPU copy that the cache can intercept.
+        if (cparams.expert_cache_n_slots != 0 &&
+                cur->op == GGML_OP_MUL_MAT_ID &&
+                il >= 0 &&
+                cur->src[0] != nullptr &&
+                cur->src[0]->buffer != nullptr &&
+                ggml_backend_buffer_is_host(cur->src[0]->buffer) &&
+                ggml_backend_buffer_get_usage(cur->src[0]->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            const auto & dev_layer = model.dev_layer(il);
+            for (const auto & backend : backends) {
+                if (ggml_backend_get_device(backend.get()) == dev_layer &&
+                        ggml_backend_supports_op(backend.get(), cur)) {
+                    ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
+                    break;
+                }
+            }
+        }
     };
 }
 
@@ -2910,6 +2948,7 @@ llama_context_params llama_context_default_params() {
         /*.offload_kqv                 =*/ true,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
+        /*.expert_cache_n_slots         =*/ 0,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
@@ -3066,6 +3105,21 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+void llama_expert_cache_stats(
+        const llama_context * ctx,
+        int64_t * n_hits,
+        int64_t * n_misses,
+        int64_t * n_fate_hits,
+        int64_t * bytes_saved,
+        int64_t * bytes_copied) {
+    ggml_backend_sched_get_expert_cache_stats(
+        ctx->get_sched(), n_hits, n_misses, n_fate_hits, bytes_saved, bytes_copied);
+}
+
+void llama_expert_cache_stats_reset(llama_context * ctx) {
+    ggml_backend_sched_reset_expert_cache_stats(ctx->get_sched());
 }
 
 float * llama_get_logits(llama_context * ctx) {
