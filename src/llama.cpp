@@ -29,6 +29,10 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+#ifdef LLAMA_TURBOQUANT
+#include "llama-turboquant.h"
+#endif
+
 //
 // interface implementation
 //
@@ -804,6 +808,10 @@ void llama_backend_init(void) {
         struct ggml_context * ctx = ggml_init(params);
         ggml_free(ctx);
     }
+
+#ifdef LLAMA_TURBOQUANT
+    llama_turboquant_init();
+#endif
 }
 
 void llama_numa_init(enum ggml_numa_strategy numa) {

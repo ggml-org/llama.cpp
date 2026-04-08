@@ -128,6 +128,11 @@ if (CUDAToolkit_FOUND)
                              ${GGML_SOURCES_CUDA}
                             )
 
+    if (GGML_TURBOQUANT)
+        target_compile_definitions(ggml-cuda PRIVATE LLAMA_TURBOQUANT=1)
+        target_include_directories(ggml-cuda PRIVATE ${GGML_TURBOQUANT_INCLUDE})
+    endif()
+
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
     if (GGML_CUDA_GRAPHS)

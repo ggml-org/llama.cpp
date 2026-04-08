@@ -15,6 +15,10 @@
 #include "ggml.h"
 #include "common.h"
 
+#ifdef LLAMA_TURBOQUANT
+#include "turboquant/turboquant.h"
+#endif
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
 #elif !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
@@ -203,6 +207,71 @@ typedef pthread_t ggml_thread_t;
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #endif
+
+#ifdef LLAMA_TURBOQUANT
+/* quant.cpp CPU wrappers for ggml_from_float_t and ggml_vec_dot_t */
+static void tq_cpu_from_float_impl(const float * src, void * dst, int64_t n, tq_type type) {
+    int bs = (int)tq_type_block_size(type);
+    int ts = (int)tq_type_type_size(type);
+    int nb = (int)(n / bs);
+    const tq_type_traits_t * t = &TQ_TRAITS[type];
+    if (!t->quantize) return;
+    char * out = (char *)dst;
+    for (int b = 0; b < nb; b++) {
+        t->quantize(src + b * bs, out + b * ts, bs);
+    }
+}
+static void tq_cpu_vec_dot_impl(tq_type type, int n, float * s,
+                                 size_t bs, const void * x, size_t bx,
+                                 const void * y, size_t by, int nrc) {
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+    tq_dequantize_fn dfn = TQ_TRAITS[type].dequantize;
+    if (!dfn) { *s = 0.0f; return; }
+
+    int block_size = (int)tq_type_block_size(type);
+    int type_size  = (int)tq_type_type_size(type);
+    int num_blocks = n / block_size;
+
+    float tmp[512];
+    float * buf = (n <= 512) ? tmp : (float *)malloc((size_t)n * sizeof(float));
+    if (!buf) { *s = 0.0f; return; }
+
+    const char * src = (const char *)x;
+    for (int b = 0; b < num_blocks; b++) {
+        dfn(src + b * type_size, buf + b * block_size, block_size);
+    }
+
+    float dot = 0.0f;
+    for (int i = 0; i < n; i++) { dot += buf[i] * ((const float *)y)[i]; }
+    *s = dot;
+    if (buf != tmp) free(buf);
+}
+#define TQ_CPU_WRAP(NAME, TYPE)                                                                    \
+    static void tq_cpu_from_float_##NAME(const float * x, void * y, int64_t k) {                  \
+        tq_cpu_from_float_impl(x, y, k, TYPE);                                                     \
+    }                                                                                               \
+    static void tq_cpu_vec_dot_##NAME(int n, float * s, size_t bs,                                 \
+                                       const void * x, size_t bx,                                  \
+                                       const void * y, size_t by, int nrc) {                       \
+        tq_cpu_vec_dot_impl(TYPE, n, s, bs, x, bx, y, by, nrc);                                   \
+    }
+TQ_CPU_WRAP(polar_3b,     TQ_TYPE_POLAR_3B)
+TQ_CPU_WRAP(polar_4b,     TQ_TYPE_POLAR_4B)
+TQ_CPU_WRAP(qjl_1b,       TQ_TYPE_QJL_1B)
+TQ_CPU_WRAP(turbo_3b,     TQ_TYPE_TURBO_3B)
+TQ_CPU_WRAP(turbo_4b,     TQ_TYPE_TURBO_4B)
+TQ_CPU_WRAP(uniform_4b,   TQ_TYPE_UNIFORM_4B)
+TQ_CPU_WRAP(uniform_2b,   TQ_TYPE_UNIFORM_2B)
+TQ_CPU_WRAP(mixed_4b8,    TQ_TYPE_MIXED_4B8)
+TQ_CPU_WRAP(turbo_kv_3b,  TQ_TYPE_TURBO_KV_3B)
+TQ_CPU_WRAP(turbo_kv_4b,  TQ_TYPE_TURBO_KV_4B)
+TQ_CPU_WRAP(turbo_kv_1b,  TQ_TYPE_TURBO_KV_1B)
+TQ_CPU_WRAP(turbo_kv_2b,  TQ_TYPE_TURBO_KV_2B)
+TQ_CPU_WRAP(uniform_3b,   TQ_TYPE_UNIFORM_3B)
+TQ_CPU_WRAP(turbo_kv_5b,  TQ_TYPE_TURBO_KV_5B)
+TQ_CPU_WRAP(turbo_kv_4bo, TQ_TYPE_TURBO_KV_4BO)
+TQ_CPU_WRAP(turbo_kv_3bo, TQ_TYPE_TURBO_KV_3BO)
+#endif /* LLAMA_TURBOQUANT */
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
@@ -399,6 +468,32 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
     },
+#ifdef LLAMA_TURBOQUANT
+#define TQ_CPU_TRAIT(GGML_ID, NAME) \
+    [GGML_ID] = { \
+        .from_float    = tq_cpu_from_float_##NAME, \
+        .vec_dot       = (ggml_vec_dot_t) tq_cpu_vec_dot_##NAME, \
+        .vec_dot_type  = GGML_TYPE_F32, \
+        .nrows         = 1, \
+    },
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_POLAR_3B,    polar_3b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_POLAR_4B,    polar_4b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_QJL_1B,      qjl_1b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_3B,    turbo_3b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_4B,    turbo_4b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_UNIFORM_4B,  uniform_4b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_UNIFORM_2B,  uniform_2b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_MIXED_4B8,   mixed_4b8)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_3B, turbo_kv_3b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_4B, turbo_kv_4b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_1B, turbo_kv_1b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_2B, turbo_kv_2b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_UNIFORM_3B,  uniform_3b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_5B, turbo_kv_5b)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_4BO,turbo_kv_4bo)
+    TQ_CPU_TRAIT(GGML_TYPE_TQ_TURBO_KV_3BO,turbo_kv_3bo)
+#undef TQ_CPU_TRAIT
+#endif /* LLAMA_TURBOQUANT */
 };
 
 const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {

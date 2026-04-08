@@ -10,6 +10,10 @@
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
 
+#ifdef LLAMA_TURBOQUANT
+#include "turboquant/turboquant.h"
+#endif
+
 #ifdef GGML_USE_CPU_HBM
 #include <hbwmalloc.h>
 #endif
@@ -606,6 +610,55 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
 
 }
 
+#ifdef LLAMA_TURBOQUANT
+/* quant.cpp (turboquant) GGML-compatible from_float / to_float wrappers */
+static void tq_ggml_from_float_impl(const float * src, void * dst, int64_t n, tq_type type) {
+    int block_size = (int)tq_type_block_size(type);
+    int ts         = (int)tq_type_type_size(type);
+    int num_blocks = (int)(n / block_size);
+    const tq_type_traits_t * traits = &TQ_TRAITS[type];
+    if (!traits->quantize) return;
+    char * out = (char *)dst;
+    for (int b = 0; b < num_blocks; b++) {
+        traits->quantize(src + b * block_size, out + b * ts, block_size);
+    }
+}
+static void tq_ggml_to_float_impl(const void * src, float * dst, int64_t n, tq_type type) {
+    int block_size = (int)tq_type_block_size(type);
+    int ts         = (int)tq_type_type_size(type);
+    int num_blocks = (int)(n / block_size);
+    const tq_type_traits_t * traits = &TQ_TRAITS[type];
+    if (!traits->dequantize) return;
+    const char * in = (const char *)src;
+    for (int b = 0; b < num_blocks; b++) {
+        traits->dequantize(in + b * ts, dst + b * block_size, block_size);
+    }
+}
+#define TQ_GGML_TRAIT_FNS(NAME, TYPE)                                                  \
+    static void tq_from_float_##NAME(const float * x, void * y, int64_t k) {           \
+        tq_ggml_from_float_impl(x, y, k, TYPE);                                        \
+    }                                                                                    \
+    static void tq_to_float_##NAME(const void * x, float * y, int64_t k) {             \
+        tq_ggml_to_float_impl(x, y, k, TYPE);                                           \
+    }
+TQ_GGML_TRAIT_FNS(polar_3b,     TQ_TYPE_POLAR_3B)
+TQ_GGML_TRAIT_FNS(polar_4b,     TQ_TYPE_POLAR_4B)
+TQ_GGML_TRAIT_FNS(qjl_1b,       TQ_TYPE_QJL_1B)
+TQ_GGML_TRAIT_FNS(turbo_3b,     TQ_TYPE_TURBO_3B)
+TQ_GGML_TRAIT_FNS(turbo_4b,     TQ_TYPE_TURBO_4B)
+TQ_GGML_TRAIT_FNS(uniform_4b,   TQ_TYPE_UNIFORM_4B)
+TQ_GGML_TRAIT_FNS(uniform_2b,   TQ_TYPE_UNIFORM_2B)
+TQ_GGML_TRAIT_FNS(mixed_4b8,    TQ_TYPE_MIXED_4B8)
+TQ_GGML_TRAIT_FNS(turbo_kv_3b,  TQ_TYPE_TURBO_KV_3B)
+TQ_GGML_TRAIT_FNS(turbo_kv_4b,  TQ_TYPE_TURBO_KV_4B)
+TQ_GGML_TRAIT_FNS(turbo_kv_1b,  TQ_TYPE_TURBO_KV_1B)
+TQ_GGML_TRAIT_FNS(turbo_kv_2b,  TQ_TYPE_TURBO_KV_2B)
+TQ_GGML_TRAIT_FNS(uniform_3b,   TQ_TYPE_UNIFORM_3B)
+TQ_GGML_TRAIT_FNS(turbo_kv_5b,  TQ_TYPE_TURBO_KV_5B)
+TQ_GGML_TRAIT_FNS(turbo_kv_4bo, TQ_TYPE_TURBO_KV_4BO)
+TQ_GGML_TRAIT_FNS(turbo_kv_3bo, TQ_TYPE_TURBO_KV_3BO)
+#endif /* LLAMA_TURBOQUANT */
+
 static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I8] = {
         .type_name                = "i8",
@@ -911,6 +964,168 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 0,
         .type_size                = 0,
         .is_quantized             = false,
+    },
+    // quant.cpp (turboquant) KV cache quantization types
+    // Function pointers (to_float, from_float_ref) are set at runtime by llama_turboquant_init()
+    [GGML_TYPE_TQ_POLAR_3B] = {
+        .type_name                = "tq_polar_3b",
+        .blck_size                = 128,
+        .type_size                = 72,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_polar_3b,
+        .from_float_ref           = tq_from_float_polar_3b,
+#endif
+    },
+    [GGML_TYPE_TQ_POLAR_4B] = {
+        .type_name                = "tq_polar_4b",
+        .blck_size                = 128,
+        .type_size                = 72,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_polar_4b,
+        .from_float_ref           = tq_from_float_polar_4b,
+#endif
+    },
+    [GGML_TYPE_TQ_QJL_1B] = {
+        .type_name                = "tq_qjl_1b",
+        .blck_size                = 256,
+        .type_size                = 40,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_qjl_1b,
+        .from_float_ref           = tq_from_float_qjl_1b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_3B] = {
+        .type_name                = "tq_turbo_3b",
+        .blck_size                = 128,
+        .type_size                = 112,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_3b,
+        .from_float_ref           = tq_from_float_turbo_3b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_4B] = {
+        .type_name                = "tq_turbo_4b",
+        .blck_size                = 128,
+        .type_size                = 112,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_4b,
+        .from_float_ref           = tq_from_float_turbo_4b,
+#endif
+    },
+    [GGML_TYPE_TQ_UNIFORM_4B] = {
+        .type_name                = "tq_uniform_4b",
+        .blck_size                = 128,
+        .type_size                = 68,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_uniform_4b,
+        .from_float_ref           = tq_from_float_uniform_4b,
+#endif
+    },
+    [GGML_TYPE_TQ_UNIFORM_2B] = {
+        .type_name                = "tq_uniform_2b",
+        .blck_size                = 128,
+        .type_size                = 48,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_uniform_2b,
+        .from_float_ref           = tq_from_float_uniform_2b,
+#endif
+    },
+    [GGML_TYPE_TQ_MIXED_4B8] = {
+        .type_name                = "tq_mixed_4b8",
+        .blck_size                = 128,
+        .type_size                = 80,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_mixed_4b8,
+        .from_float_ref           = tq_from_float_mixed_4b8,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_3B] = {
+        .type_name                = "tq_turbo_kv_3b",
+        .blck_size                = 128,
+        .type_size                = 56,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_3b,
+        .from_float_ref           = tq_from_float_turbo_kv_3b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_4B] = {
+        .type_name                = "tq_turbo_kv_4b",
+        .blck_size                = 128,
+        .type_size                = 72,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_4b,
+        .from_float_ref           = tq_from_float_turbo_kv_4b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_1B] = {
+        .type_name                = "tq_turbo_kv_1b",
+        .blck_size                = 128,
+        .type_size                = 24,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_1b,
+        .from_float_ref           = tq_from_float_turbo_kv_1b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_2B] = {
+        .type_name                = "tq_turbo_kv_2b",
+        .blck_size                = 128,
+        .type_size                = 40,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_2b,
+        .from_float_ref           = tq_from_float_turbo_kv_2b,
+#endif
+    },
+    [GGML_TYPE_TQ_UNIFORM_3B] = {
+        .type_name                = "tq_uniform_3b",
+        .blck_size                = 128,
+        .type_size                = 64,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_uniform_3b,
+        .from_float_ref           = tq_from_float_uniform_3b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_5B] = {
+        .type_name                = "tq_turbo_kv_5b",
+        .blck_size                = 128,
+        .type_size                = 88,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_5b,
+        .from_float_ref           = tq_from_float_turbo_kv_5b,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_4BO] = {
+        .type_name                = "tq_turbo_kv_4bo",
+        .blck_size                = 128,
+        .type_size                = 96,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_4bo,
+        .from_float_ref           = tq_from_float_turbo_kv_4bo,
+#endif
+    },
+    [GGML_TYPE_TQ_TURBO_KV_3BO] = {
+        .type_name                = "tq_turbo_kv_3bo",
+        .blck_size                = 128,
+        .type_size                = 80,
+        .is_quantized             = true,
+#ifdef LLAMA_TURBOQUANT
+        .to_float                 = tq_to_float_turbo_kv_3bo,
+        .from_float_ref           = tq_from_float_turbo_kv_3bo,
+#endif
     },
 };
 

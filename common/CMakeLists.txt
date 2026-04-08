@@ -151,3 +151,8 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+if (LLAMA_TURBOQUANT)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_TURBOQUANT=1)
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+endif()

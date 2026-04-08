@@ -115,6 +115,7 @@ option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+option(LLAMA_TURBOQUANT "llama: enable quant.cpp KV cache compression" OFF)
 
 
 # Required for relocatable CMake package
@@ -182,6 +183,15 @@ endif()
 if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
     set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
+
+    # Set turboquant cache variables BEFORE add_subdirectory(ggml) so that
+    # ggml-cpu and ggml-cuda can pick them up during their configuration.
+    if (LLAMA_TURBOQUANT)
+        set(TURBOQUANT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../quant.cpp" CACHE PATH "Path to quant.cpp source directory")
+        set(GGML_TURBOQUANT ON CACHE INTERNAL "Enable quant.cpp turboquant types in ggml backends")
+        set(GGML_TURBOQUANT_INCLUDE "${TURBOQUANT_SOURCE_DIR}/include" CACHE INTERNAL "quant.cpp include path")
+    endif()
+
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
@@ -189,6 +199,15 @@ endif()
 #
 # build the library
 #
+
+if (LLAMA_TURBOQUANT)
+    add_subdirectory(${TURBOQUANT_SOURCE_DIR} turboquant)
+    message(STATUS "quant.cpp (turboquant) KV cache compression enabled")
+    # Propagate define to ggml-base (for ggml.c type_traits)
+    target_compile_definitions(ggml-base PRIVATE LLAMA_TURBOQUANT=1)
+    target_include_directories(ggml-base PRIVATE ${TURBOQUANT_SOURCE_DIR}/include)
+    target_link_libraries(ggml-base PRIVATE turboquant)
+endif()
 
 add_subdirectory(src)
 

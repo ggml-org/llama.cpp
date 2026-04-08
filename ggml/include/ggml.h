@@ -429,7 +429,24 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        // quant.cpp (turboquant) KV cache quantization types
+        GGML_TYPE_TQ_POLAR_3B    = 42,
+        GGML_TYPE_TQ_POLAR_4B    = 43,
+        GGML_TYPE_TQ_QJL_1B      = 44,
+        GGML_TYPE_TQ_TURBO_3B    = 45,
+        GGML_TYPE_TQ_TURBO_4B    = 46,
+        GGML_TYPE_TQ_UNIFORM_4B  = 47,
+        GGML_TYPE_TQ_UNIFORM_2B  = 48,
+        GGML_TYPE_TQ_MIXED_4B8   = 49,
+        GGML_TYPE_TQ_TURBO_KV_3B = 50,
+        GGML_TYPE_TQ_TURBO_KV_4B = 51,
+        GGML_TYPE_TQ_TURBO_KV_1B = 52,
+        GGML_TYPE_TQ_TURBO_KV_2B = 53,
+        GGML_TYPE_TQ_UNIFORM_3B  = 54,
+        GGML_TYPE_TQ_TURBO_KV_5B = 55,
+        GGML_TYPE_TQ_TURBO_KV_4BO= 56,
+        GGML_TYPE_TQ_TURBO_KV_3BO= 57,
+        GGML_TYPE_COUNT   = 58,
     };
 
     // precision

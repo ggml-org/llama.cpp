@@ -163,6 +163,13 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+if (LLAMA_TURBOQUANT)
+    target_sources(llama PRIVATE llama-turboquant.cpp)
+    target_include_directories(llama PRIVATE ${TURBOQUANT_SOURCE_DIR}/include)
+    target_link_libraries(llama PRIVATE turboquant)
+    target_compile_definitions(llama PRIVATE LLAMA_TURBOQUANT=1)
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

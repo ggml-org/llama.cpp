@@ -708,4 +708,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
         target_compile_options(${GGML_CPU_NAME} PRIVATE "-fno-associative-math")
     endif()
+
+    if (GGML_TURBOQUANT)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE LLAMA_TURBOQUANT=1)
+        target_include_directories(${GGML_CPU_NAME} PRIVATE ${GGML_TURBOQUANT_INCLUDE})
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE turboquant)
+    endif()
 endfunction()

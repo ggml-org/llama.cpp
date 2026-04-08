@@ -28,6 +28,10 @@
 #include <cstdarg>
 #include <fstream>
 #include <list>
+
+#ifdef LLAMA_TURBOQUANT
+#include "llama-turboquant.h"
+#endif
 #include <regex>
 #include <set>
 #include <string>
@@ -387,9 +391,34 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+#ifdef LLAMA_TURBOQUANT
+    GGML_TYPE_TQ_POLAR_3B,
+    GGML_TYPE_TQ_POLAR_4B,
+    GGML_TYPE_TQ_QJL_1B,
+    GGML_TYPE_TQ_TURBO_3B,
+    GGML_TYPE_TQ_TURBO_4B,
+    GGML_TYPE_TQ_UNIFORM_4B,
+    GGML_TYPE_TQ_UNIFORM_2B,
+    GGML_TYPE_TQ_MIXED_4B8,
+    GGML_TYPE_TQ_TURBO_KV_3B,
+    GGML_TYPE_TQ_TURBO_KV_4B,
+    GGML_TYPE_TQ_TURBO_KV_1B,
+    GGML_TYPE_TQ_TURBO_KV_2B,
+    GGML_TYPE_TQ_UNIFORM_3B,
+    GGML_TYPE_TQ_TURBO_KV_5B,
+    GGML_TYPE_TQ_TURBO_KV_4BO,
+    GGML_TYPE_TQ_TURBO_KV_3BO,
+#endif
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
+#ifdef LLAMA_TURBOQUANT
+    // Try turboquant aliases first (turbo3, tq-uniform-4b, etc.)
+    enum ggml_type tq_type = llama_turboquant_type_from_str(s.c_str());
+    if (tq_type != GGML_TYPE_COUNT) {
+        return tq_type;
+    }
+#endif
     for (const auto & type : kv_cache_types) {
         if (ggml_type_name(type) == s) {
             return type;

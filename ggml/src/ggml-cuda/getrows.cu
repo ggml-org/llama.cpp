@@ -2,6 +2,10 @@
 #include "dequantize.cuh"
 #include "convert.cuh"
 
+#ifdef LLAMA_TURBOQUANT
+#include "tq-quants.cuh"
+#endif
+
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
         const void * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
@@ -199,6 +203,20 @@ static void ggml_cuda_get_rows_switch_src0_type(
             get_rows_cuda_q<QK8_0, QR8_0, dequantize_q8_0>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
+#ifdef LLAMA_TURBOQUANT
+        case GGML_TYPE_TQ_UNIFORM_4B:
+            get_rows_cuda_q<TQ_QK_UNIFORM_4B, TQ_QR_UNIFORM_4B, dequantize_tq_uniform_4b>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TQ_UNIFORM_2B:
+            get_rows_cuda_q<TQ_QK_UNIFORM_2B, TQ_QR_UNIFORM_2B, dequantize_tq_uniform_2b>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TQ_UNIFORM_3B:
+            get_rows_cuda_q<TQ_QK_UNIFORM_3B, TQ_QR_UNIFORM_3B, dequantize_tq_uniform_3b>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+#endif // LLAMA_TURBOQUANT
         default:
             // TODO: k-quants
             GGML_ABORT("%s: unsupported src0 type: %s\n", __func__, ggml_type_name(src0_type));
