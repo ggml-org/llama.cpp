@@ -3,6 +3,9 @@ set(TARGET llama-agent)
 set(AGENT_SOURCES
     agent.cpp
     agent-loop.cpp
+    agent-loop-compaction.cpp
+    agent-loop-completion.cpp
+    agent-loop-tools.cpp
     clipboard-image.cpp
     compaction.cpp
     session-file.cpp
@@ -49,6 +52,9 @@ if(LLAMA_HTTPLIB)
         server/agent-session.cpp
         server/agent-routes.cpp
         agent-loop.cpp
+        agent-loop-compaction.cpp
+        agent-loop-completion.cpp
+        agent-loop-tools.cpp
         clipboard-image.cpp
         compaction.cpp
         session-file.cpp
