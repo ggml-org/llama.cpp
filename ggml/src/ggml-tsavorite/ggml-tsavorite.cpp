@@ -43,19 +43,47 @@
 using namespace tsi::runtime;
 
 
-std::vector<std::thread> workers;
-static std::mutex device_mutex;
-static std::mutex tsi_pack_mutex;
-static std::condition_variable device_cv;
-
 
 // This will  go in deployment file at next PR
 #define NUM_OF_TXES 2
-static uint32_t num_of_txes =  NUM_OF_TXES;
+
+// ggml-tsavorite.cpp
+namespace {
+
+struct TsavoriteRuntimeState {
+    // device / threading
+    uint32_t num_of_txes = NUM_OF_TXES;
+    bool *device_free = nullptr;
+    bool multi_thread_enable = false;
+
+    std::vector<std::thread> workers;
+    std::mutex device_mutex;
+    std::mutex tsi_pack_mutex;
+    std::condition_variable device_cv;
 
 
-static bool *device_free = NULL;
-static bool multi_thread_enable = false;
+    // blobs
+    BlobDescriptor *blobDescriptor_add[NUM_OF_TXES] = {};
+    BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES] = {};
+    BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES] = {};
+};
+
+static TsavoriteRuntimeState g_rt;
+
+} // anonymous namespace
+
+auto &num_of_txes = g_rt.num_of_txes;
+auto &device_free = g_rt.device_free;
+auto &multi_thread_enable     = g_rt.multi_thread_enable;
+
+auto &workers = g_rt.workers;
+auto &device_mutex = g_rt.device_mutex;
+auto &tsi_pack_mutex = g_rt.tsi_pack_mutex;
+auto &device_cv = g_rt.device_cv;
+
+auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
+auto &blobDescriptor_mult     = g_rt.blobDescriptor_mult;
+auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
 
 
 #ifdef TMU_DEBUG_VALIDATE
@@ -136,11 +164,6 @@ FILE *tsi_op_log_file;
 bool runtime_initialized = false;
 uint64_t num_of_op;
 
-
-
-static BlobDescriptor *blobDescriptor_add[NUM_OF_TXES];
-static BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES];
-static BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES];
 // ============================================================
 // (makes blob names unique per device to avoid collisions)
 //  - tsi_load_blob() expects a FILE PREFIX, not a directory.
@@ -172,6 +195,8 @@ void tsi_load_all_blobs() {
     static void *loadResult_add[NUM_OF_TXES];
     static void *loadResult_mult[NUM_OF_TXES];
     static void *loadResult_rms_norm[NUM_OF_TXES];
+    int i;
+    char blob_name[64];
 
     for (int i = 0; i < NUM_OF_TXES; ++i) {
         char name_add[64];
@@ -190,31 +215,53 @@ void tsi_load_all_blobs() {
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
             ).c_str()
         );
-        blobDescriptor_add[i] =
+
+        if (!loadResult_add[i]) {
+            strcpy(blob_name, name_add);
+            goto error;
+       }
+
+       blobDescriptor_add[i] =
             static_cast<BlobDescriptor *>(loadResult_add[i]);
 
         // MUST end in ".../blobs/txe_mult"
-        loadResult_mult[i] = tsi_load_blob(
+       loadResult_mult[i] = tsi_load_blob(
             i,
             name_mult,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
             ).c_str()
         );
+
+        if (!loadResult_mult[i]) {
+            strcpy(blob_name, name_mult);
+            goto error;
+        }
         blobDescriptor_mult[i] =
             static_cast<BlobDescriptor *>(loadResult_mult[i]);
 
         // MUST end in ".../blobs/txe_rms_norm"
-        loadResult_rms_norm[i] = tsi_load_blob(
+       loadResult_rms_norm[i] = tsi_load_blob(
             i,
             name_rms,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
             ).c_str()
         );
+
+        if (!loadResult_rms_norm[i]) {
+            strcpy(blob_name, name_rms);
+            goto error;
+        }
         blobDescriptor_rms_norm[i] =
             static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
     }
+    return;
+error:
+    fprintf(stderr,
+            "Failed to load blob (txe=%u, name=%s)\n", i, blob_name);
+    tsi_cleanup();
+    abort();
 }
 
 
@@ -250,6 +297,7 @@ static void ensure_tsi_runtime_initialized() {
     device_free = (bool *)malloc(num_of_txes * sizeof(bool));
     if (!device_free) {
         fprintf(stderr, "Failed to allocate device_free\n");
+        tsi_unload_all_blobs();
         tsi_finalize();
         abort();
     }
@@ -258,7 +306,7 @@ static void ensure_tsi_runtime_initialized() {
         device_free[i] = true;
     }
 
-    workers.reserve(2);
+    workers.reserve(num_of_txes);
     runtime_initialized = true;
     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
   }
@@ -712,6 +760,11 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     void *commandList = tsi_create_command_list(deviceId);
 
     void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
     auto *p = static_cast<int64_t *>(packed);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
@@ -733,11 +786,20 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
 
     if (idx != kPackedArgsI64) {
         printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
         abort();
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
+
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_add[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
+
     tsi_add_command_to_list(commandList, blobExecuteCmd);
 
     return commandList;
@@ -747,10 +809,15 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
     if (!multi_thread_enable) {
       _mlir_ciface_txe_add_host(a, b, res);
       // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-       #if 0
+       #if NEW_HOST_CODE
        void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
+       if (!commandList) {
+            printf("Command List Empt for ADD OPERATION on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
         tsi_blob_execution_internal(commandList);
-       #endif
+       #endif  /* NEW_HOST_CODE */
         return;
     }
 
@@ -758,6 +825,11 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
 
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
+   if (!commandList) {
+       printf("Command List Empt for ADD on device %d\n", deviceId);
+       tsi_cleanup();
+       abort();
+    }
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
@@ -774,6 +846,11 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     void *commandList = tsi_create_command_list(deviceId);
 
     void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
     auto *p = static_cast<int64_t *>(packed);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
@@ -795,11 +872,18 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
 
     if (idx != kPackedArgsI64) {
         printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
         abort();
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_mult[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
     tsi_add_command_to_list(commandList, blobExecuteCmd);
 
     return commandList;
@@ -811,10 +895,15 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
         _mlir_ciface_txe_mult_host(a, b, res);
       
       // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-        #if 0
+        #if NEW_HOST_CODE
         void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
+       if (!commandList) {
+            printf("Command List Empt for MUL OPERATION on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
         tsi_blob_execution_internal(commandList);
-        #endif
+        #endif /* NEW_HOST_CODE */
         return;
     }
 
@@ -822,6 +911,11 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
 
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
+   if (!commandList) {
+        printf("Command List Empt for MUL OPERATION on device %d\n", deviceId);
+        tsi_cleanup();
+        abort();
+   }
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
@@ -838,6 +932,11 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     void *commandList = tsi_create_command_list(deviceId);
 
     void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
     auto *p = static_cast<int64_t *>(packed);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
@@ -861,11 +960,18 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
 
     if (idx != kPackedArgsI64) {
         printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
         abort();
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
     tsi_add_command_to_list(commandList, blobExecuteCmd);
 
     return commandList;
@@ -875,10 +981,15 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     if (!multi_thread_enable) {
         _mlir_ciface_txe_rms_norm_host(a, b, buf);
       // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-      #if 0
+      #if NEW_HOST_CODE
         void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
+       if (!commandList) {
+            printf("Command List Empt for RMS OPERATION  on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
         tsi_blob_execution_internal(commandList);
-      #endif
+      #endif  /* NEW_HOST_CODE */
         return;
     }
 
@@ -886,6 +997,11 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
 
     // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
     void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
+    if (!commandList) {
+        printf("Command List Empt for RMS OPERATION on device %d\n", deviceId);
+        tsi_cleanup();
+        abort();
+    }
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
@@ -2022,6 +2138,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                                         "r=%ld c=%ld TMU=%f REF=%f\n",
                                         (long)m0, (long)n0, (long)k0, K_chunk, pi,
                                         (long)rr, (long)cc, tmu_v, ref_v);
+                                    tsi_cleanup();
                                     abort();
                                 }
                             }
