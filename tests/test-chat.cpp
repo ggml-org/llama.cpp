@@ -998,6 +998,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     auto parser = make_peg_parser(tmpls, tc.params, detailed_debug);
     if (detailed_debug) {
         LOG_DBG("Using parser: \n%s\n", parser.arena_.dump(parser.arena_.root()).c_str());
+        LOG_DBG("Generation prompt: '%s'\n", parser.params_.generation_prompt.c_str());
     }
 
     common_chat_msg msg_accum;
@@ -3102,8 +3103,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
     {
         auto tst = peg_tester("models/templates/MiniMax-M2.jinja", detailed_debug);
+        tst.test("</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist).run();
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist_thoughts).run();
+
+        tst.test("Let's call a tool:</think><minimax:tool_call>\n<invoke name=\"empty_args\">\n</invoke>\n</minimax:tool_call>").
+            enable_thinking(true).
+            reasoning_format(COMMON_REASONING_FORMAT_AUTO).
+            tools({ empty_args_tool }).
+            expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}")).
+            run();
+
         tst.test(
-               "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
+               "</think><minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
                "name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
@@ -3442,7 +3454,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                             },
                             "replaceAll": {
                                 "type": "boolean",
-                                "description": "Whether to replace all occurences."
+                                "description": "Whether to replace all occurrences."
                             }
                         },
                         "required": ["oldString", "newString"]

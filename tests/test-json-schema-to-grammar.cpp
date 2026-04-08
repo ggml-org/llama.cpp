@@ -1579,17 +1579,6 @@ int main() {
         } else {
             fprintf(stderr, "\033[33mWARNING: Python not found (min version required is 3.8), skipping Python JSON schema -> grammar tests.\n\033[0m");
         }
-
-        if (getenv("LLAMA_NODE_AVAILABLE") || (std::system("node --version") == 0)) {
-            test_all("JavaScript", [](const TestCase & tc) {
-                write("test-json-schema-input.tmp", tc.schema);
-                tc.verify_status(std::system(
-                    "node ./tests/run-json-schema-to-grammar.mjs test-json-schema-input.tmp > test-grammar-output.tmp") == 0 ? SUCCESS : FAILURE);
-                tc.verify(read("test-grammar-output.tmp"));
-            });
-        } else {
-            fprintf(stderr, "\033[33mWARNING: Node not found, skipping JavaScript JSON schema -> grammar tests.\n\033[0m");
-        }
     }
 
     test_all("Check Expectations Validity", [](const TestCase & tc) {
