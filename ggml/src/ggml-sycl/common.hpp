@@ -309,9 +309,10 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
-bool ggml_sycl_is_level_zero(sycl::queue &q);
-bool ggml_sycl_is_dgpu(sycl::queue &q);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+extern int g_ggml_sycl_enable_level_zero;
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
+#endif
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;

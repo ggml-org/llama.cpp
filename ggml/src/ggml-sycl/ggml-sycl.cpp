@@ -30,8 +30,10 @@
 #include <regex>
 
 #include <sycl/sycl.hpp>
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 #include <sycl/backend.hpp>
 #include <level_zero/ze_api.h>
+#endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #endif
@@ -65,6 +67,9 @@ int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+int g_ggml_sycl_enable_level_zero = 0;
+#endif
 int g_ggml_sycl_enable_flash_attention = 1;
 
 
@@ -220,6 +225,20 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+        if (g_ggml_sycl_enable_level_zero) {
+            // Verify all devices use the Level Zero backend before enabling L0 APIs
+            for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); i++) {
+                auto & q = dpct::dev_mgr::instance().get_device(i).default_queue();
+                if (q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+                    GGML_LOG_WARN("SYCL device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
+                    g_ggml_sycl_enable_level_zero = 0;
+                    break;
+                }
+            }
+        }
+#endif
 
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
@@ -250,6 +269,11 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
 #endif
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: no\n");
+#endif
 
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
@@ -258,6 +282,11 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
 #else
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
+#endif
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
 #endif
 #if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
@@ -348,9 +377,10 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 // Forward declaration for Level Zero allocation helper (defined below)
 static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
-// ggml_sycl_free_device and ggml_sycl_is_level_zero/dgpu are in common.hpp/common.cpp
+#endif
 
 // sycl buffer
 
@@ -372,7 +402,11 @@ struct ggml_backend_sycl_buffer_context {
     ~ggml_backend_sycl_buffer_context() {
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
             ggml_sycl_free_device(dev_ptr, *stream);
+#else
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
+#endif
         }
 
         //release extra used by tensors
@@ -505,13 +539,14 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 // Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
 // DMA-buf/TTM system RAM staging in the xe kernel driver.
 // sycl::malloc_device creates a 1:1 host memory mirror of every VRAM allocation
 // via xe_gem_prime_export, consuming system RAM equal to VRAM allocated.
 // zeMemAllocDevice uses the SVM/P2P path with no host staging.
 static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
-    if (ggml_sycl_is_level_zero(q) && ggml_sycl_is_dgpu(q)) {
+    if (g_ggml_sycl_enable_level_zero) {
         void *ptr = nullptr;
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
@@ -520,15 +555,17 @@ static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
         if (r == ZE_RESULT_SUCCESS && ptr) {
             return ptr;
         }
+        return nullptr;
     }
     return sycl::malloc_device(size, q);
 }
+#endif
 
 static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    // The legacy host-staged path supports iGPU-to-dGPU copies.
-    if (ggml_sycl_is_level_zero(q_dst) && ggml_sycl_is_dgpu(q_dst) && ggml_sycl_is_dgpu(q_src)) {
+    if (g_ggml_sycl_enable_level_zero) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
         ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
@@ -541,7 +578,8 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
             return;
         }
     }
-    // Fallback: host-staged copy (supports iGPU, non-L0 backends)
+#endif
+    // Host-staged copy
     char *host_buf = (char *)malloc(size);
     q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
     q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
@@ -710,7 +748,12 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
     const queue_ptr stream = buft_ctx->stream;
     size = std::max(size, (size_t)1); // syclMalloc returns null for size 0
 
-    void * dev_ptr = ggml_sycl_malloc_device(size, *stream);
+    void * dev_ptr;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    dev_ptr = ggml_sycl_malloc_device(size, *stream);
+#else
+    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_device(size, *stream)));
+#endif
     if (!dev_ptr) {
       GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
       return nullptr;
@@ -953,7 +996,12 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
 
         ggml_sycl_set_device(i);
         const queue_ptr stream = ctx->streams[i];
-        char * buf = (char *)ggml_sycl_malloc_device(size, *stream);
+        char * buf;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        buf = (char *)ggml_sycl_malloc_device(size, *stream);
+#else
+        SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)sycl::malloc_device(size, *stream)));
+#endif
         if (!buf) {
             char err_buf[1024];
             snprintf(err_buf, 1023, "%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
@@ -1314,7 +1362,11 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
                 ggml_sycl_free_device(b.ptr, *qptr);
+#else
+                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
+#endif
                 pool_size -= b.size;
             }
         }
@@ -1362,7 +1414,11 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         void * ptr;
         size_t look_ahead_size = (size_t) (1.05 * size);
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
         ptr = ggml_sycl_malloc_device(look_ahead_size, *qptr);
+#else
+        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *)sycl::malloc_device(look_ahead_size, *qptr)));
+#endif
         if (!ptr) {
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
             return nullptr;
@@ -1390,7 +1446,11 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             }
         }
         GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
         ggml_sycl_free_device(ptr, *qptr);
+#else
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
+#endif
         pool_size -= size;
     }
 };
