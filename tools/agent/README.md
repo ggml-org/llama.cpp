@@ -21,8 +21,11 @@ llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use 
 > # make sure llama-agent is installed
 > brew install gary149/llama-agent/llama-agent
 >
-> # launch with gemma 4 vision
-> llama-agent -hf unsloth/gemma-4-E4B-it-GGUF:UD-Q8_K_XL
+> # launch with gemma 4 vision (~5 GB, runs on 8 GB machines)
+> llama-agent -hf unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+>
+> # if you have 16 GB+ RAM, use the bigger MoE variant instead
+> llama-agent -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL
 > ```
 >
 > With vision enabled, the agent can process hundreds of images in a single session, classify animals by family, read text from screenshots, and analyze UI layouts. All locally, all with a 4B model.
