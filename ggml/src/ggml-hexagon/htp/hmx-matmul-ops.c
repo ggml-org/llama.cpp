@@ -271,10 +271,11 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
 // Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
 // full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
 // Output: out[0..3] each hold 32 FP16 values in the first 64 bytes.
-static inline void dequantize_x4x2_q4_0_x4groups_hvx(
-            const uint8_t *packed_128, bool upper_nibbles,
-            const __fp16 *scales_4, const HVX_Vector vlut_cvt,
-            HVX_Vector out[4]) {
+static inline void dequantize_x4x2_q4_0_x4groups_hvx(const uint8_t *  packed_128,
+                                                     bool             upper_nibbles,
+                                                     const __fp16 *   scales_4,
+                                                     const HVX_Vector vlut_cvt,
+                                                     HVX_Vector       out[4]) {
     // Load all 128 packed bytes (4 contiguous 32-byte groups)
     HVX_Vector vq = hvx_vmemu(packed_128);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -285,14 +286,14 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     v_quants = Q6_Vb_vshuff_Vb(v_quants);
 
     // Full-width vlut16: 128 byte lookups -> 128 fp16 results in a VectorPair
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
-    HVX_Vector v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
+    HVX_VectorPair vp   = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+    HVX_Vector     v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
+    HVX_Vector     v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
 
     // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
-    HVX_VectorPred q64 = Q6_Q_vsetq_R(64);
-    HVX_Vector v_sc01 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[0]), hvx_vec_splat_f16(scales_4[1]));
-    HVX_Vector v_sc23 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[2]), hvx_vec_splat_f16(scales_4[3]));
+    HVX_VectorPred q64    = Q6_Q_vsetq_R(64);
+    HVX_Vector     v_sc01 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[0]), hvx_vec_splat_f16(scales_4[1]));
+    HVX_Vector     v_sc23 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[2]), hvx_vec_splat_f16(scales_4[3]));
 
     v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
@@ -300,6 +301,34 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
     out[0] = v_lo; // group0 already in [0:63]
     out[1] = v_hi; // group2 already in [0:63]
+}
+
+// Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
+// full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
+// Output: out[0..3] each hold 32 FP16 values in the first 64 bytes.
+static inline void dequantize_x4x2_q4_0_x4groups_hvx_noscale(const uint8_t *   packed_128,
+                                                             bool              upper_nibbles,
+                                                             const HVX_Vector vlut_cvt,
+                                                             HVX_Vector        out[4]) {
+    // Load all 128 packed bytes (4 contiguous 32-byte groups)
+    HVX_Vector       vq       = hvx_vmemu(packed_128);
+    const HVX_Vector mask_h4  = Q6_Vb_vsplat_R(0x0F);
+    HVX_Vector       v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
+    v_quants                  = Q6_V_vand_VV(v_quants, mask_h4);
+
+    // Shuffle before LUT
+    v_quants = Q6_Vb_vshuff_Vb(v_quants);
+
+    // LUT lookup only, no vmpy
+    HVX_VectorPair vp   = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+    HVX_Vector     v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
+    HVX_Vector     v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
+
+    // Extract individual groups (no scale multiplication)
+    out[0] = v_lo;                    // group0 already in [0:63]
+    out[1] = Q6_V_vror_VR(v_lo, 64);  // group1 rotated to [0:63]
+    out[2] = v_hi;                    // group2 already in [0:63]
+    out[3] = Q6_V_vror_VR(v_hi, 64);  // group3 rotated to [0:63]
 }
 
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
