@@ -1,1 +1,0 @@
-export const DEFAULT_MOBILE_BREAKPOINT = 768;
