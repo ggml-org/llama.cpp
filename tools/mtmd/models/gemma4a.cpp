@@ -213,7 +213,7 @@ ggml_cgraph * clip_graph_gemma4a::build() {
             {
                 int64_t d = x->ne[0] / 2;
                 ggml_tensor * gate = ggml_sigmoid(ctx0,
-                    ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0]));
+                    ggml_cont(ctx0, ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0])));
                 x = ggml_mul(ctx0,
                     ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], 0), gate);
                 x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
