@@ -633,6 +633,7 @@ void process_shaders() {
         for (const bool& f16acc : {false, true}) {
             std::map<std::string, std::string> fa_base_dict = base_dict;
             fa_base_dict["ACC_TYPE"] = fp16 && f16acc ? "float16_t" : "float";
+            fa_base_dict["ACC_TYPEV2"] = fp16 && f16acc ? "f16vec2" : "vec2";
             fa_base_dict["ACC_TYPEV4"] = fp16 && f16acc ? "f16vec4" : "vec4";
             if (fp16 && f16acc) {
                 fa_base_dict["ACC_TYPE_MAX"] = "float16_t(65504.0)";

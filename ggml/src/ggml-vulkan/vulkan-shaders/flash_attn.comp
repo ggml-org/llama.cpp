@@ -73,26 +73,7 @@ shared block_a_cache kblocksh[SHMEM_STAGING != 0 ? Bc * qf_stride : 1];
 shared vec4 occupancy_limiter[LIMIT_OCCUPANCY_SHMEM > 0 ? LIMIT_OCCUPANCY_SHMEM : 1];
 
 #ifdef MMQ
-#if defined(DATA_A_Q4_0)
-int32_t get_k_qs(uint ib, uint iqs, uint a_offset) {
-    uint vui = pack32(u16vec2(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0],
-                              k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]));
-    uint shift = (iqs & 0x10) >> 2;
-    vui >>= shift;
-
-    return int32_t(vui & 0x0F0F0F0F);
-}
-#endif
-
-#if defined(DATA_A_Q8_0)
-int32_t get_k_qs(uint ib, uint iqs, uint a_offset) {
-    return pack32(i16vec2(k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2], k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2 + 1]));
-}
-#endif
-
-FLOAT_TYPE get_k_d(uint ib, uint a_offset) {
-    return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d);
-}
+#include "flash_attn_mmq_funcs.glsl"
 #endif
 
 void main() {
@@ -147,12 +128,11 @@ void main() {
 
         Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
 
-#ifdef DATA_A_Q8_0
+#if defined(DATA_A_Q8_0) || defined(DATA_A_IQ4_NL)
         if (buf_iqs == 0) {
-            // sum is only needed for q4_0
             Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0);
         }
-#else // DATA_A_Q4_0
+#else // Q4_0, Q4_1, Q5_0, Q5_1
         const FLOAT_TYPE thread_sum = vals.x + vals.y + vals.z + vals.w;
         const FLOAT_TYPE sum = subgroupClusteredAdd(thread_sum, 8);
 
@@ -302,23 +282,9 @@ void main() {
                     const uint buf_ib = c * qf_stride + block;
                     if (!KV_bounds_check || j * Bc + c < KV) {
                         const uint global_ib = (j * Bc + c) * k_stride + block;
-#if defined(DATA_A_Q4_0)
-                        kblocksh[buf_ib].qs[iqs] = pack32(u16vec2(k_packed.k_data_packed16[k_offset + global_ib].qs[iqs * 2],
-                                                                  k_packed.k_data_packed16[k_offset + global_ib].qs[iqs * 2 + 1]));
-#elif defined(DATA_A_Q8_0)
-                        kblocksh[buf_ib].qs[iqs] = pack32(i16vec2(k_packed.k_data_packed16[k_offset + global_ib].qs[iqs * 2],
-                                                                  k_packed.k_data_packed16[k_offset + global_ib].qs[iqs * 2 + 1]));
-#endif
-
-                        if (iqs == 0) {
-                            kblocksh[buf_ib].dm = FLOAT_TYPE(k_packed.k_data_packed16[k_offset + global_ib].d);
-                        }
+                        k_block_to_shmem(buf_ib, global_ib, iqs, k_offset);
                     } else {
-                        kblocksh[buf_ib].qs[iqs] = 0;
-
-                        if (iqs == 0) {
-                            kblocksh[buf_ib].dm = FLOAT_TYPE(0.0f);
-                        }
+                        k_block_to_shmem_zero(buf_ib, iqs);
                     }
                 }
             }
@@ -398,62 +364,33 @@ void main() {
 
             [[unroll]] for (uint32_t d_block = 0; d_block < HSK_per_thread / 4; d_block += d_per_step) {
                 int32_t k_quants[d_per_step];
-                ACC_TYPE k_scale;
+                ACC_TYPEV2 k_dm;
+
                 if (SHMEM_STAGING != 0) {
                     const uint k_block_idx = (d_tid * (HSK_per_thread / 4) + d_block) / 8;
                     const uint buf_ib = (c * cols_per_iter + col_tid) * qf_stride + k_block_idx;
-                    k_scale = ACC_TYPE(kblocksh[buf_ib].dm);
-
-#if defined(DATA_A_Q4_0)
-                    if (d_per_step < 8) {
-                        [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
-                            uint pos = d_tid * (HSK_per_thread / 4) + d_block + d;
-                            uint sub = pos % 4;
-                            uint shift = ((pos % 8) >= 4) ? 4 : 0;
-
-                            uint vui = kblocksh[buf_ib].qs[sub];
-                            k_quants[d] = int32_t((vui >> shift) & 0x0F0F0F0F);
-                        }
-                    } else {
-                        [[unroll]] for (uint32_t d = 0; d < 4; d++) {
-                            uint vui = kblocksh[buf_ib].qs[d];
-
-                            k_quants[d    ] = int32_t( vui       & 0x0F0F0F0F);
-                            k_quants[d + 4] = int32_t((vui >> 4) & 0x0F0F0F0F);
-                        }
-                    }
-#elif defined(DATA_A_Q8_0)
-                    [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
-                        k_quants[d] = kblocksh[buf_ib].qs[(d_tid * (HSK_per_thread / 4) + d_block) % 8 + d];
-                    }
+#if QUANT_AUXF == 1
+                    k_dm = ACC_TYPEV2(kblocksh[buf_ib].dm, 0.0);
+#else
+                    k_dm = ACC_TYPEV2(kblocksh[buf_ib].dm);
 #endif
+
+                    [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
+                        k_quants[d] = get_k_qs_shmem(buf_ib, (d_tid * (HSK_per_thread / 4) + d_block) % 8 + d);
+                    }
                 } else {
                     const uint coord = (j * Bc + c * cols_per_iter + col_tid) * k_stride * BLOCK_SIZE + 4 * (d_tid * (HSK_per_thread / 4) + d_block);
                     const uint ib = coord / BLOCK_SIZE;
                     const uint iqs = (coord % BLOCK_SIZE);
 
-                    k_scale = ACC_TYPE(get_k_d(ib, k_offset));
-#if defined(DATA_A_Q4_0)
-                    if (d_per_step < 8) {
-                        [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
-                            k_quants[d] = get_k_qs(ib, iqs + d * 4, k_offset);
-                        }
-                    } else {
-                        [[unroll]] for (uint32_t d = 0; d < 4; d++) {
-                            uint vui = pack32(u16vec2(k_packed.k_data_packed16[k_offset + ib].qs[iqs / 2 + d * 2 + 0],
-                                                      k_packed.k_data_packed16[k_offset + ib].qs[iqs / 2 + d * 2 + 1]));
-
-                            k_quants[d    ] = int32_t( vui       & 0x0F0F0F0F);
-                            k_quants[d + 4] = int32_t((vui >> 4) & 0x0F0F0F0F);
-                        }
-                    }
-#elif defined(DATA_A_Q8_0)
+#if QUANT_AUXF == 1
+                    k_dm = ACC_TYPEV2(get_k_d(ib, k_offset), 0.0);
+#else
+                    k_dm = ACC_TYPEV2(get_k_dm(ib, k_offset));
+#endif
                     [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
                         k_quants[d] = get_k_qs(ib, iqs + d * 4, k_offset);
                     }
-#else
-#error unimplemented
-#endif
                 }
 
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
@@ -465,12 +402,10 @@ void main() {
                         acc += dotPacked4x8EXT(Qf[qib].qs[qiqs + d], k_quants[d]);
                     }
 
-                    Sf[r][c] += ACC_TYPE(acc) * ACC_TYPE(Qf[qib].ds.x) * k_scale;
-#if defined(DATA_A_Q4_0)
+                    Sf[r][c] += ACC_TYPE(acc) * ACC_TYPE(Qf[qib].ds.x) * k_dm.x;
                     if ((d_tid * (HSK_per_thread / 4) + d_block) % 8 == 0) {
-                        Sf[r][c] -= ACC_TYPE(8.0) * ACC_TYPE(Qf[qib].ds.y) * k_scale;
+                        Sf[r][c] += k_dot_correction(qib, k_dm);
                     }
-#endif
                 }
             }
         }

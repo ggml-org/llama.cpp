@@ -2912,7 +2912,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     result.d_split = std::min(std::min(result.subgroup_size, 8u), D_lsb / 4);
 
-    result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
+    result.shmem_staging = (hsk < 256 && hsv < 256) ? 1 : 0;
 
     if (!reduce_block_rows && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc)) {
         result.block_rows /= 2;
