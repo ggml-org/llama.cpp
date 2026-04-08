@@ -3994,12 +3994,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
     if (use_cuda_graph) {
         ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+        bool graph_instance_valid = false;
         if (graph->instance == nullptr) { // Create executable graph from captured graph.
             CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
+            graph_instance_valid = true;
         }
         if (cuda_graph_update_required) { // Update graph executable
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
+            graph_instance_valid = true;
         }
+        
+        // remove unused_graphs once, before launching the graph to free up memory, only if not in warmup.
+        if(graph_instance_valid && !graph->warmup_complete) 
+            cuda_ctx->remove_unused_graphs();
+
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));                
 #else
