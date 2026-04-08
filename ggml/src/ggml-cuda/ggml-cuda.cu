@@ -3994,22 +3994,15 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
     if (use_cuda_graph) {
         ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
-        bool graph_instance_valid = false;
         if (graph->instance == nullptr) { // Create executable graph from captured graph.
             CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
-            graph_instance_valid = true;
         }
         if (cuda_graph_update_required) { // Update graph executable
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
-            graph_instance_valid = true;
         }
-        
-        // remove unused_graphs once, before launching the graph to free up memory, only if not in warmup.
-        if(graph_instance_valid && !graph->warmup_complete) 
-            cuda_ctx->remove_unused_graphs();
 
         // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));                
+        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
@@ -5278,7 +5271,7 @@ public:
             return it->second->second.get();
         }
         auto  g   = std::make_unique<ggml_cuda_graph>();
-        auto* ptr = g.get();
+        ggml_cuda_graph* ptr = g.get();
         lru_list.emplace_front(first_node_ptr, std::move(g));
         cache_map[first_node_ptr] = lru_list.begin();
         return ptr;
@@ -5361,7 +5354,7 @@ private:
     std::unordered_map<const void*, typename std::list<CacheItem>::iterator> cache_map;
 
     size_t memory_usage_total = 0;        
-    static constexpr size_t upper_bound_bytes  = 20ULL * 1024 * 1024; // MiB
+    static constexpr size_t upper_bound_bytes  = 10ULL * 1024 * 1024; // MiB
 
     // threshold on number of entries so zero-memory graphs can't grow the cache unboundedly.
     static constexpr size_t MAX_ENTRIES = 128;
