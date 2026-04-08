@@ -239,6 +239,7 @@ task_params server_task::params_from_json_cmpl(
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data) {
     task_params params;
 
@@ -562,7 +563,7 @@ task_params server_task::params_from_json_cmpl(
         if (params.sampling.ignore_eos) {
             params.sampling.logit_bias.insert(
                     params.sampling.logit_bias.end(),
-                    defaults.sampling.logit_bias_eog.begin(), defaults.sampling.logit_bias_eog.end());
+                    logit_bias_eog.begin(), logit_bias_eog.end());
         }
     }
 

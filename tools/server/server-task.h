@@ -209,6 +209,7 @@ struct server_task {
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data);
 
     // utility function
