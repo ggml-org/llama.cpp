@@ -32,7 +32,8 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
     ggml_tensor * inp_per_layer = build_inp_per_layer();
     ggml_build_forward_expand(gf, inp_per_layer);
 
-    ggml_tensor * inp0 = inpL;
+    // inp_per_layer now has shape: [n_embd_altup, n_tokens, n_layer]
+    inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
 
     // inpL now has only 1 altup, project it to the rest of the altups
     // these "added" altups will be concat to the last dim of inpL
@@ -46,7 +47,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
         inpL                        = ggml_concat(ctx0, inpL, altup_added, 2);  // shape: [n_embd, n_tokens, n_altup]
         cb(inpL, "inp_stacked", -1);
     }
-    // inpL now has shape: [n_embd,       n_tokens, n_altup]
+    // inpL now has shape: [n_embd, n_tokens, n_altup]
 
     for (int il = 0; il < n_layer; ++il) {
         // this block is made to be closely resemble Gemma3p5DecoderLayer on python code
@@ -164,11 +165,6 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             first_prediction = build_lora_mm(model.layers[il].per_layer_inp_gate, first_prediction);
             first_prediction = ggml_gelu(ctx0, first_prediction);                 // [n_embd_altup, n_tokens]
             cb(first_prediction, "first_prediction_gated", il);
-
-            if (il == 0) {
-                // inp_per_layer now has shape: [n_embd_altup, n_tokens, n_layer]
-                inp_per_layer = project_per_layer_inputs(inp0, inp_per_layer);
-            }
 
             ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il);   // [n_embd_altup, n_tokens]
             first_prediction = ggml_mul(ctx0, first_prediction, inp_this_layer);  // [n_embd_altup, n_tokens]

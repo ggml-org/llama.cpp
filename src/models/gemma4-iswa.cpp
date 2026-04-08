@@ -32,6 +32,9 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
     if (model.per_layer_tok_embd) {
         inp_per_layer = build_inp_per_layer();
         ggml_build_forward_expand(gf, inp_per_layer);
+
+        // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
+        inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
     for (int il = 0; il < n_layer; ++il) {
@@ -203,11 +206,6 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
 
             cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
             cur = ggml_gelu(ctx0, cur);
-
-            if (il == 0) {
-                // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
-                inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
-            }
 
             ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
