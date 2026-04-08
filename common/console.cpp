@@ -89,6 +89,20 @@ namespace console {
 
     static completion_callback completion_cb = nullptr;
 
+    // Clipboard image paste state
+    static paste_image_callback paste_image_cb;
+    static std::vector<std::pair<std::vector<uint8_t>, std::string>> pending_images_;
+
+    void set_paste_image_callback(paste_image_callback cb) {
+        paste_image_cb = std::move(cb);
+    }
+
+    std::vector<std::pair<std::vector<uint8_t>, std::string>> take_pending_images() {
+        std::vector<std::pair<std::vector<uint8_t>, std::string>> result;
+        result.swap(pending_images_);
+        return result;
+    }
+
     //
     // Init and cleanup
     //
@@ -143,6 +157,9 @@ namespace console {
             new_termios.c_lflag &= ~(ICANON | ECHO);
             new_termios.c_cc[VMIN] = 1;
             new_termios.c_cc[VTIME] = 0;
+#ifdef VLNEXT
+            new_termios.c_cc[VLNEXT] = _POSIX_VDISABLE;  // free Ctrl+V for image paste
+#endif
             tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
 
             tty = fopen("/dev/tty", "w+");
@@ -861,6 +878,9 @@ namespace console {
         bool is_special_char = false;
         bool end_of_stream = false;
         bracket_paste_mode = false; // reset paste state for each readline
+        // Note: pending_images_ is NOT cleared here — in multiline mode, readline()
+        // is called repeatedly and images pasted on earlier lines must be preserved.
+        // Images are drained by take_pending_images() after the readline loop.
 
         size_t byte_pos = 0; // current byte index
         size_t char_pos = 0; // current character index (one char can be multiple bytes)
@@ -1127,6 +1147,21 @@ namespace console {
                         fputc(' ', out);
                     }
                     move_cursor(-(tail_width + w));
+                }
+            } else if (input_char == 0x16 && !bracket_paste_mode) {
+                // Ctrl+V: attempt clipboard image paste
+                if (paste_image_cb) {
+                    std::vector<uint8_t> bytes;
+                    std::string mime;
+                    if (paste_image_cb(bytes, mime)) {
+                        pending_images_.push_back({std::move(bytes), std::move(mime)});
+                        std::string marker = pending_images_.size() == 1
+                            ? "[image]" : "[image " + std::to_string(pending_images_.size()) + "]";
+                        size_t cursor_after = byte_pos + marker.size();
+                        std::string new_line = line.substr(0, byte_pos) + marker + line.substr(byte_pos);
+                        set_line_contents(new_line, line, widths, char_pos, byte_pos,
+                                          static_cast<int>(cursor_after));
+                    }
                 }
             } else {
                 // insert character

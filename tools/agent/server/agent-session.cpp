@@ -92,7 +92,7 @@ agent_session_info agent_session::info() const {
     return info;
 }
 
-void agent_session::send_message(const std::string & content,
+void agent_session::send_message(const json & content,
                                   agent_event_callback on_event) {
     // Wait for any previous operation to complete
     if (worker_thread_.joinable()) {

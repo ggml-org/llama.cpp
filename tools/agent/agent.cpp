@@ -1,9 +1,12 @@
 #include "common.h"
 #include "arg.h"
+#include "base64.hpp"
 #include "console.h"
 
 #include "agent-loop.h"
+#include "clipboard-image.h"
 #include "config-dir.h"
+#include "terminal-image.h"
 #include "tool-registry.h"
 #include "permission.h"
 #include "skills/skills-manager.h"
@@ -416,6 +419,15 @@ int main(int argc, char ** argv) {
     console::init(params.simple_io, params.use_color);
     atexit([]() { console::cleanup(); });
 
+    // Register clipboard image paste handler for Ctrl+V
+    console::set_paste_image_callback([](std::vector<uint8_t> & bytes, std::string & mime) -> bool {
+        auto img = clipboard_read_image();
+        if (!img) return false;
+        bytes = std::move(img->bytes);
+        mime  = std::move(img->mime_type);
+        return true;
+    });
+
     console::set_display(DISPLAY_TYPE_RESET);
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
@@ -693,6 +705,7 @@ int main(int argc, char ** argv) {
         console::log("  /compact    manually compact conversation context\n");
         console::log("  !<cmd>      run a shell command (output shared with LLM)\n");
         console::log("  !!<cmd>     run a shell command (output hidden from LLM)\n");
+        console::log("  Ctrl+V      paste image from clipboard\n");
         console::log("  ESC/Ctrl+C  abort generation\n");
         console::log("\n");
     }
@@ -703,6 +716,7 @@ int main(int argc, char ** argv) {
     // Main loop
     while (true) {
         std::string buffer;
+        std::vector<std::pair<std::vector<uint8_t>, std::string>> pasted_images;
 
         if (first_turn) {
             // Use the initial prompt
@@ -725,6 +739,9 @@ int main(int argc, char ** argv) {
 
             console::set_display(DISPLAY_TYPE_RESET);
 
+            // Collect clipboard images pasted during readline (via Ctrl+V)
+            pasted_images = console::take_pending_images();
+
             if (should_stop()) {
                 g_is_interrupted.store(false);
                 break;
@@ -735,13 +752,13 @@ int main(int argc, char ** argv) {
                 buffer.pop_back();
             }
 
-            // Skip empty input
-            if (buffer.empty()) {
+            // Skip empty input (unless images were pasted)
+            if (buffer.empty() && pasted_images.empty()) {
                 continue;
             }
 
             // Handle ! prefix: run shell command
-            if (buffer[0] == '!') {
+            if (!buffer.empty() && buffer[0] == '!') {
                 bool exclude_from_context = (buffer.size() >= 2 && buffer[1] == '!');
                 size_t cmd_start = exclude_from_context ? 2 : 1;
                 std::string cmd = buffer.substr(cmd_start);
@@ -874,8 +891,50 @@ int main(int argc, char ** argv) {
 
         console::log("\n");
 
+        // Build user content — multimodal if images were pasted, plain string otherwise
+        json user_content;
+        if (!pasted_images.empty() && inf.has_inp_image) {
+            // Show terminal preview of pasted images
+            for (const auto & [bytes, mime] : pasted_images) {
+                render_image_to_terminal(bytes.data(), bytes.size(), mime);
+            }
+            // Strip [image] / [image N] markers that were inserted for display only
+            std::string clean_text = buffer;
+            for (size_t n = pasted_images.size(); n >= 1; n--) {
+                std::string marker = n == 1 ? "[image]" : "[image " + std::to_string(n) + "]";
+                size_t pos = clean_text.find(marker);
+                if (pos != std::string::npos) {
+                    clean_text.erase(pos, marker.size());
+                }
+            }
+            // Trim whitespace left by marker removal
+            while (!clean_text.empty() && clean_text.back() == ' ') clean_text.pop_back();
+
+            // Build content block array: text + image_url blocks
+            user_content = json::array();
+            if (!clean_text.empty()) {
+                user_content.push_back({{"type", "text"}, {"text", clean_text}});
+            }
+            for (const auto & [bytes, mime] : pasted_images) {
+                std::string b64 = base64::encode(
+                    reinterpret_cast<const char *>(bytes.data()), bytes.size());
+                user_content.push_back({
+                    {"type", "image_url"},
+                    {"image_url", {{"url", "data:" + mime + ";base64," + b64}}}
+                });
+            }
+        } else {
+            if (!pasted_images.empty()) {
+                console::set_display(DISPLAY_TYPE_ERROR);
+                console::log("[model lacks vision — %zu image(s) not included]\n",
+                             pasted_images.size());
+                console::set_display(DISPLAY_TYPE_RESET);
+            }
+            user_content = buffer;
+        }
+
         // Run agent loop
-        agent_loop_result result = agent.run(buffer);
+        agent_loop_result result = agent.run(user_content);
 
         console::log("\n");
 

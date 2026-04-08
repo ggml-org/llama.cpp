@@ -205,14 +205,31 @@ agent_routes::agent_routes(agent_session_manager & session_mgr)
             return make_error(404, "Session not found");
         }
 
-        // Parse message content from body
-        std::string content;
+        // Parse message content from body (string or array of content blocks)
+        json content;
         try {
             json body = json::parse(req.body);
-            if (!body.contains("content") || !body["content"].is_string()) {
+            if (!body.contains("content")) {
                 return make_error(400, "Missing 'content' field");
             }
-            content = body["content"].get<std::string>();
+            auto & c = body["content"];
+            if (c.is_string()) {
+                content = c;
+            } else if (c.is_array()) {
+                // Validate content block structure
+                for (const auto & block : c) {
+                    if (!block.is_object() || !block.contains("type")) {
+                        return make_error(400, "Each content block must have a 'type' field");
+                    }
+                    const auto & type = block["type"];
+                    if (!type.is_string() || (type != "text" && type != "image_url")) {
+                        return make_error(400, "Content block type must be 'text' or 'image_url'");
+                    }
+                }
+                content = c;
+            } else {
+                return make_error(400, "'content' must be a string or array");
+            }
         } catch (const json::exception & e) {
             return make_error(400, std::string("Invalid JSON: ") + e.what());
         }

@@ -969,14 +969,14 @@ void agent_loop::accumulate_stats(const result_timings & timings) {
     }
 }
 
-agent_loop_result agent_loop::run(const std::string & user_prompt) {
+agent_loop_result agent_loop::run(const json & user_content) {
     agent_loop_result result;
     result.iterations = 0;
 
-    // Add user message
+    // Add user message (content can be a string or an array of content blocks)
     messages_.push_back({
         {"role", "user"},
-        {"content", user_prompt}
+        {"content", user_content}
     });
     if (session_file_) session_file_->append_message(messages_.back());
 
@@ -1063,7 +1063,7 @@ agent_loop_result agent_loop::run(const std::string & user_prompt) {
 
 // Streaming version of run() for API use
 agent_loop_result agent_loop::run_streaming(
-    const std::string & user_prompt,
+    const json & user_content,
     agent_event_callback on_event,
     std::function<bool()> should_stop,
     permission_manager_async * async_perms) {
@@ -1076,10 +1076,10 @@ agent_loop_result agent_loop::run_streaming(
         should_stop = [this]() { return is_interrupted_.load(); };
     }
 
-    // Add user message
+    // Add user message (content can be a string or an array of content blocks)
     messages_.push_back({
         {"role", "user"},
-        {"content", user_prompt}
+        {"content", user_content}
     });
     if (session_file_) session_file_->append_message(messages_.back());
 

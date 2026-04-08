@@ -173,16 +173,18 @@ public:
                session_file * sf = nullptr,
                const loaded_session * resume = nullptr);
 
-    // Run the agent loop with an initial user prompt
-    agent_loop_result run(const std::string & user_prompt);
+    // Run the agent loop with user content.
+    // content can be a plain string or a JSON array of content blocks
+    // (e.g. [{type:"text",text:"..."}, {type:"image_url",image_url:{url:"data:..."}}])
+    agent_loop_result run(const json & user_content);
 
-    // Run the agent loop with streaming events via callback
-    // This is the API-friendly version that emits events instead of console output
+    // Run the agent loop with streaming events via callback.
+    // content can be a plain string or a JSON array of content blocks.
     // The callback is called for each event (text deltas, tool calls, permissions, etc.)
     // should_stop is polled to check if the client wants to abort
     // async_perms: optional async permission manager for non-blocking permission handling
     agent_loop_result run_streaming(
-        const std::string & user_prompt,
+        const json & user_content,
         agent_event_callback on_event,
         std::function<bool()> should_stop = nullptr,
         permission_manager_async * async_perms = nullptr);

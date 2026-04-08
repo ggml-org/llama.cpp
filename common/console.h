@@ -27,6 +27,16 @@ namespace console {
     using completion_callback = std::function<std::vector<std::pair<std::string, size_t>>(std::string_view, size_t)>;
     void set_completion_callback(completion_callback cb);
 
+    // Clipboard image paste support (Ctrl+V).
+    // The callback should attempt to read an image from the OS clipboard.
+    // On success, write bytes and mime type to the output params and return true.
+    using paste_image_callback = std::function<bool(std::vector<uint8_t> & bytes, std::string & mime)>;
+    void set_paste_image_callback(paste_image_callback cb);
+
+    // Returns and clears images accumulated during the last readline call.
+    // Each pair is (bytes, mime_type).
+    std::vector<std::pair<std::vector<uint8_t>, std::string>> take_pending_images();
+
     namespace spinner {
         void start();
         void stop();

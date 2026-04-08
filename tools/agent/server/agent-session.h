@@ -72,7 +72,7 @@ public:
     // Send a message and get streaming events
     // Returns immediately - events are delivered via callback
     // Call is_complete() and get_result() to check status
-    void send_message(const std::string & content,
+    void send_message(const json & content,
                       agent_event_callback on_event);
 
     // Check if the current operation is complete
