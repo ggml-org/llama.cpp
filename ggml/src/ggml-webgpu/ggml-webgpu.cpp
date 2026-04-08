@@ -535,7 +535,7 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
 static void ggml_backend_webgpu_collect_profile_futures(webgpu_global_context &             ctx,
-                                                        const std::vector<webgpu_command> & commands,
+                                                        const std::vector<webgpu_encoded_op> & commands,
                                                         std::vector<wgpu::FutureWaitInfo> & futures) {
     for (const auto & command : commands) {
         auto label   = command.pipeline_name;
