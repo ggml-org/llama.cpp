@@ -1,6 +1,14 @@
 # llama-agent
 
-A coding agent optimized for local models, built entirely inside [llama.cpp](https://github.com/ggml-org/llama.cpp): single binary, single process, zero dependencies, same cache, light harness, native performance.
+llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use loop on top. The result:
+
+* **Single binary, zero dependencies**: no Python, no Node.js, just download and run
+* **Single process**: model inference and the agent loop share the same process, no IPC, no HTTP, no subprocess overhead
+* **Same model cache**: uses your existing llama.cpp models, no separate download or setup
+* **Light harness**: one loop, a tool registry, and a handful of built-in tools, no framework, no abstractions
+* **100% local**: offline, no API costs, your code stays on your machine
+* **No hidden telemetry**: zero tracking, zero phone-home, no usage events, no error reports sent anywhere
+* **API server**: `llama-agent-server` exposes the agent via HTTP API with SSE streaming
 
 <img width="1536" height="641" alt="image" src="https://github.com/user-attachments/assets/494a5615-2c3a-4aee-ad49-2a89eb862f88" />
 
@@ -35,15 +43,6 @@ A coding agent optimized for local models, built entirely inside [llama.cpp](htt
 - [Session Persistence](#session-persistence)
 - [Context Compaction](#context-compaction)
 - [HTTP API Server](#http-api-server)
-
-## What is it?
-
-`llama-agent` builds on llama.cpp's inference engine and adds an agentic tool-use loop on top. The result:
-
-- **Single binary**: no Python, no Node.js, just download and run
-- **Native speed**: tool calls in-process, no HTTP overhead
-- **100% local**: offline, no API costs, your code stays on your machine
-- **API server**: `llama-agent-server` exposes the agent via HTTP API with SSE streaming
 
 ## Quick Start
 
