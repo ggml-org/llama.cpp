@@ -1173,7 +1173,11 @@ struct ggml_cuda_graph {
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
-    std::vector<ggml_tensor> nodes_copy;
+    struct node_properties {
+        ggml_tensor node;
+        void * node_src_data_ptrs[GGML_MAX_SRC];
+    };
+    std::vector<node_properties> node_props;
 
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
