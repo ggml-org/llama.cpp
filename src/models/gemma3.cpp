@@ -17,13 +17,13 @@ llm_build_gemma3<iswa>::llm_build_gemma3(const llama_model & model, const llm_gr
     ggml_tensor * inp_pos = build_inp_pos();
 
     // TODO: is causal == true correct? might need some changes
-    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
-    inp_attn_type * inp_attn = nullptr;
+    // using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    llm_graph_input_i * inp_attn = nullptr;
 
     if constexpr (iswa) {
         inp_attn = build_attn_inp_kv_iswa();
     } else {
-        inp_attn = build_attn_inp_kv();
+        inp_attn = build_attn_inp_kv_auto();
     }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();

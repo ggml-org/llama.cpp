@@ -95,7 +95,7 @@ enum llama_example {
     LLAMA_EXAMPLE_FIT_PARAMS,
     LLAMA_EXAMPLE_RESULTS,
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
-
+    LLAMA_EXAMPLE_PAGED,
     LLAMA_EXAMPLE_COUNT,
 };
 
@@ -539,6 +539,15 @@ struct common_params {
     bool ctx_shift         = false; // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
+    bool kv_paged          = false; // enable paged KV cache
+
+    int32_t  block_size      = 16;
+
+    uint32_t n_gpu_blocks    = 1;
+    uint32_t n_cpu_blocks    = 1;
+
+    float cpu_to_gpu_blocks_ratio = 0.25;
+    float kv_paged_watermark      = 0.05;  // percentage
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool use_mmap          = true;  // enable mmap to use filesystem cache

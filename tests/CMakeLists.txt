@@ -232,6 +232,8 @@ set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download
 
 llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
+llama_build_and_test(test-paged-kv-e2e.cpp ARGS -m "${MODEL_DEST}" -ngl 99)
+set_tests_properties(test-paged-kv-e2e PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-arg-parser.cpp)
 
@@ -300,3 +302,13 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+# Special-case: test-paged-kv needs access to internal headers in src
+add_executable(test-paged-kv test-paged-kv.cpp get-model.cpp)
+target_link_libraries(test-paged-kv PRIVATE llama-common llama)
+target_include_directories(test-paged-kv PRIVATE ${PROJECT_SOURCE_DIR}/src)
+if (LLAMA_TESTS_INSTALL)
+    install(TARGETS test-paged-kv RUNTIME)
+endif()
+add_test(NAME test-paged-kv COMMAND $<TARGET_FILE:test-paged-kv>)
+set_property(TEST test-paged-kv PROPERTY LABELS main)

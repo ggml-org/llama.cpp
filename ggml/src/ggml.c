@@ -7758,3 +7758,42 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->strict_cpu != p1->strict_cpu ) return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
 }
+
+struct ggml_tensor * ggml_paged_attn(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * q,
+    struct ggml_tensor  * k_new,
+    struct ggml_tensor  * v_new,
+    struct ggml_tensor  * k_cache,
+    struct ggml_tensor  * v_cache,
+    struct ggml_tensor  * block_table,
+    struct ggml_tensor  * write_slots,
+    struct ggml_tensor  * context_lens,
+    struct ggml_tensor  * batch_offsets,
+    struct ggml_tensor  * batch_lens,
+    float                 scale,
+    int                   block_size,
+    int                   max_blocks) {
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, q->type, ggml_n_dims(q), q->ne);
+    result->op = GGML_OP_PAGED_ATTN;
+    result->src[0] = q;
+    result->src[1] = k_new;
+    result->src[2] = v_new;
+    result->src[3] = k_cache;
+    result->src[4] = v_cache;
+    result->src[5] = block_table;
+    result->src[6] = write_slots;
+    result->src[7] = context_lens;
+    result->src[8] = batch_offsets;
+    result->src[9] = batch_lens;
+
+    // Storing hyperparams directly in op_params
+    float * op_params_f = (float *)result->op_params;
+    op_params_f[0] = scale;
+    int32_t * op_params_i = (int32_t *)(op_params_f + 1);
+    op_params_i[0] = block_size;
+    op_params_i[1] = max_blocks;
+
+    return result;
+}

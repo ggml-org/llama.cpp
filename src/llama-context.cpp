@@ -21,6 +21,36 @@
 // llama_context
 //
 
+namespace {
+// Returns empty string on success, or an error message describing why
+// paged KV cache cannot be used with the current model placement.
+std::string validate_paged_kv_placement(const llama_model & model) {
+    std::set<ggml_backend_dev_t> devs_used;
+    for (uint32_t il = 0; il < model.hparams.n_layer; ++il) {
+        ggml_backend_dev_t dev = model.dev_layer(il);
+        if (dev != nullptr) {
+            devs_used.insert(dev);
+        }
+    }
+
+    if (devs_used.size() > 1) {
+        std::string dev_list;
+        for (auto * d : devs_used) {
+            if (!dev_list.empty()) dev_list += ", ";
+            dev_list += ggml_backend_dev_name(d);
+        }
+        return format(
+            "paged KV cache (--kv-paged) currently requires all model layers "
+            "to live on a single device, but the model is split across %zu "
+            "devices (%s). Re-run with `-sm none -mg <gpu_id>` to pin the "
+            "model to one device, or omit --kv-paged.",
+            devs_used.size(), dev_list.c_str());
+    }
+
+    return {};
+}
+} // namespace
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -164,6 +194,11 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.kv_paged   = params.kv_paged;
+    cparams.block_size = params.block_size;
+    cparams.n_gpu_blocks = params.n_gpu_blocks;
+    cparams.n_cpu_blocks = params.n_cpu_blocks;
+    cparams.kv_paged_watermark = params.kv_paged_watermark;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -280,7 +315,28 @@ llama_context::llama_context(
             /*.swa_full =*/ params.swa_full,
         };
 
-        memory.reset(model.create_memory(params_mem, cparams));
+        ggml_backend_t gpu_handle = nullptr;
+        if (cparams.kv_paged) {
+            std::string err = validate_paged_kv_placement(model);
+            if (!err.empty()) {
+                LLAMA_LOG_ERROR("%s: %s\n", __func__, err.c_str());
+                throw std::runtime_error(err);
+            }
+            // Find the first non-CPU backend to use as the primary GPU/Compute backend
+            for (auto & b : backends) {
+                if (ggml_backend_get_device(b.get()) &&
+                    ggml_backend_dev_type(ggml_backend_get_device(b.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    gpu_handle = b.get();
+                    break;
+                }
+            }
+            // Fallback: If no GPU, use CPU for both
+            if (!gpu_handle) {
+                gpu_handle = backend_cpu;
+            }
+        }
+
+        memory.reset(model.create_memory(params_mem, cparams, gpu_handle, backend_cpu));
     }
 
     // init backends
@@ -693,6 +749,10 @@ uint32_t llama_context::n_ubatch() const {
 
 uint32_t llama_context::n_seq_max() const {
     return cparams.n_seq_max;
+}
+
+uint32_t llama_context::block_size() const {
+    return cparams.block_size;
 }
 
 uint32_t llama_context::n_threads() const {
@@ -2916,6 +2976,11 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.kv_paged                    =*/ false,
+        /*.block_size                  =*/ 16,
+        /*.n_gpu_blocks                =*/ 0,
+        /*.n_cpu_blocks                =*/ 0,
+        /*.kv_paged_watermark          =*/ 0.05,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };

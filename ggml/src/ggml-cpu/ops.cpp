@@ -11212,3 +11212,192 @@ void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_
             }
     }
 }
+
+void ggml_compute_forward_paged_attn(const ggml_compute_params * params, ggml_tensor * dst) {
+    // Single threaded reference
+    if (params->ith != 0) {
+        return;
+    }
+
+    static bool log_warning = false;
+    if (!log_warning) {
+        log_warning = true;
+        GGML_LOG_WARN(
+            "%s: running CPU reference implementation of paged attention. This is for correctness validation only and "
+            "is not optimized. See docs/paged-attention.md for details.\n",
+            __func__);
+    }
+
+    const ggml_tensor * q             = dst->src[0];
+    const ggml_tensor * k_new         = dst->src[1];
+    const ggml_tensor * v_new         = dst->src[2];
+    const ggml_tensor * kv_cache      = dst->src[3];  // for reads
+    ggml_tensor *       kv_cache_mut  = dst->src[3];  // for writes
+    const ggml_tensor * block_table   = dst->src[5];
+    const ggml_tensor * write_slots   = dst->src[6];
+    const ggml_tensor * ctx_lens      = dst->src[7];
+    const ggml_tensor * batch_offsets = dst->src[8];
+    const ggml_tensor * batch_lens    = dst->src[9];
+
+    const float * op_params_f = (const float *) (dst->op_params);
+    const float   scale       = op_params_f[0];
+    const int     block_size  = ((const int32_t *) (op_params_f + 1))[0];
+    const int     max_blocks  = ((const int32_t *) (op_params_f + 2))[0];
+
+    const int head_dim   = q->ne[0];
+    const int n_heads    = q->ne[1];
+    const int n_seq      = batch_lens->ne[0];
+    const int n_heads_kv = k_new->ne[1];
+
+    GGML_ASSERT(block_size != 0 && "block_size cannot be 0.");
+    GGML_ASSERT(n_heads != 0 && "n_head cannot be 0.");
+    GGML_ASSERT(n_heads_kv != 0 && "n_head_kv cannot be 0.");
+    GGML_ASSERT(n_heads % n_heads_kv == 0 && "n_heads must be divisible by n_head_kv.");
+
+    const size_t stride_token = kv_cache->nb[1] / sizeof(ggml_fp16_t);
+    const size_t stride_head  = kv_cache->nb[2] / sizeof(ggml_fp16_t);
+    const size_t stride_block = kv_cache->nb[3] / sizeof(ggml_fp16_t);
+
+    // Accessing tensors via backend API to make the CPU reference implementation backend agnostic
+    std::vector<float>   q_host(ggml_nelements(q));
+    std::vector<float>   k_host(ggml_nelements(k_new));
+    std::vector<float>   v_host(ggml_nelements(v_new));
+    std::vector<int32_t> block_table_host(ggml_nelements(block_table));
+    std::vector<int32_t> slots_host(ggml_nelements(write_slots));
+    std::vector<int32_t> ctx_lens_host(ggml_nelements(ctx_lens));
+    std::vector<int32_t> batch_offsets_host(ggml_nelements(batch_offsets));
+    std::vector<int32_t> batch_lens_host(ggml_nelements(batch_lens));
+    std::vector<float>   out_host(ggml_nelements(dst));
+
+    ggml_backend_tensor_get(q,             q_host.data(),             0, ggml_nbytes(q));
+    ggml_backend_tensor_get(k_new,         k_host.data(),             0, ggml_nbytes(k_new));
+    ggml_backend_tensor_get(v_new,         v_host.data(),             0, ggml_nbytes(v_new));
+    ggml_backend_tensor_get(block_table,   block_table_host.data(),   0, ggml_nbytes(block_table));
+    ggml_backend_tensor_get(write_slots,   slots_host.data(),         0, ggml_nbytes(write_slots));
+    ggml_backend_tensor_get(ctx_lens,      ctx_lens_host.data(),      0, ggml_nbytes(ctx_lens));
+    ggml_backend_tensor_get(batch_offsets, batch_offsets_host.data(), 0, ggml_nbytes(batch_offsets));
+    ggml_backend_tensor_get(batch_lens,    batch_lens_host.data(),    0, ggml_nbytes(batch_lens));
+
+    const float *   q_data             = q_host.data();
+    const float *   k_data             = k_host.data();
+    const float *   v_data             = v_host.data();
+    const int32_t * block_table_data   = block_table_host.data();
+    const int32_t * slots_data         = slots_host.data();
+    const int32_t * ctx_lens_data      = ctx_lens_host.data();
+    const int32_t * batch_offsets_data = batch_offsets_host.data();
+    const int32_t * batch_lens_data    = batch_lens_host.data();
+    float * out_data = out_host.data(); // use host buffer throughout
+
+    // We use staging buffers for KV cache access to make it agnostic to where
+    // the KV cache is allocated.
+    const size_t             head_bytes = (size_t) head_dim * sizeof(ggml_fp16_t);
+    std::vector<ggml_fp16_t> staging_k(head_dim);
+    std::vector<ggml_fp16_t> staging_v(head_dim);
+    std::vector<ggml_fp16_t> staging_write_k(head_dim);
+    std::vector<ggml_fp16_t> staging_write_v(head_dim);
+
+    // Write to KV cache
+    for (int seq = 0; seq < n_seq; ++seq) {
+        const int seq_start  = batch_offsets_data[seq];
+        const int num_tokens = batch_lens_data[seq];
+
+        for (int i = 0; i < num_tokens; ++i) {
+            const int token_batch_idx = seq_start + i;
+            const int target_slot     = slots_data[token_batch_idx];
+            const int block_id        = target_slot / block_size;
+            const int token_in_block  = target_slot % block_size;
+
+            for (int h_id = 0; h_id < n_heads_kv; ++h_id) {
+                const size_t k_cache_byte_offset = ((size_t) block_id * stride_block + (size_t) h_id * stride_head +
+                                                    (size_t) token_in_block * stride_token) *
+                                                   sizeof(ggml_fp16_t);
+                const size_t v_cache_byte_offset =
+                    ((size_t) block_id * stride_block + (size_t) (n_heads_kv + h_id) * stride_head +
+                     (size_t) token_in_block * stride_token) *
+                    sizeof(ggml_fp16_t);
+                const size_t input_offset = (size_t) token_batch_idx * n_heads_kv * head_dim + (size_t) h_id * head_dim;
+
+                for (int d_id = 0; d_id < head_dim; ++d_id) {
+                    staging_write_k[d_id] = GGML_FP32_TO_FP16(k_data[input_offset + d_id]);
+                    staging_write_v[d_id] = GGML_FP32_TO_FP16(v_data[input_offset + d_id]);
+                }
+                ggml_backend_tensor_set((ggml_tensor *) kv_cache_mut, staging_write_k.data(), k_cache_byte_offset,
+                                        head_bytes);
+                ggml_backend_tensor_set((ggml_tensor *) kv_cache_mut, staging_write_v.data(), v_cache_byte_offset,
+                                        head_bytes);
+            }
+        }
+    }
+
+    // Decode
+    for (int seq = 0; seq < n_seq; ++seq) {
+        const int seq_start      = batch_offsets_data[seq];
+        const int num_new_tokens = batch_lens_data[seq];
+        const int ctx_len        = ctx_lens_data[seq];
+
+        for (int i = 0; i < num_new_tokens; ++i) {
+            const int token_batch_idx = seq_start + i;
+            const int q_pos           = (ctx_len - num_new_tokens) + i;
+            const int num_blocks      = (q_pos / block_size) + 1;
+
+            for (int h_id = 0; h_id < n_heads; ++h_id) {
+                const int kv_h = h_id / (n_heads / n_heads_kv);
+
+                const float * q_vec = q_data + token_batch_idx * n_heads * head_dim + h_id * head_dim;
+
+                float              qk_max  = -FLT_MAX;
+                float              exp_sum = 0.0f;
+                std::vector<float> acc(head_dim, 0.0f);
+                std::fill(acc.begin(), acc.end(), 0.0f);
+
+                for (int bid = 0; bid < num_blocks; ++bid) {
+                    const int physical_block = block_table_data[seq * max_blocks + bid];
+                    const int start_token    = bid * block_size;
+                    const int end_token =
+                        ((start_token + block_size) < (q_pos + 1)) ? start_token + block_size : q_pos + 1;
+
+                    for (int tok = start_token; tok < end_token; ++tok) {
+                        const int    token_in_block = tok % block_size;
+                        const size_t k_byte_offset =
+                            ((size_t) physical_block * stride_block + (size_t) kv_h * stride_head +
+                             (size_t) token_in_block * stride_token) *
+                            sizeof(ggml_fp16_t);
+                        const size_t v_byte_offset =
+                            ((size_t) physical_block * stride_block + (size_t) (n_heads_kv + kv_h) * stride_head +
+                             (size_t) token_in_block * stride_token) *
+                            sizeof(ggml_fp16_t);
+
+                        // Fetch K and V from cache (this might involve device to host transfers)
+                        ggml_backend_tensor_get(kv_cache, staging_k.data(), k_byte_offset, head_bytes);
+                        ggml_backend_tensor_get(kv_cache, staging_v.data(), v_byte_offset, head_bytes);
+
+                        // QK dot product
+                        float qk = 0.0f;
+                        for (int d_id = 0; d_id < head_dim; ++d_id) {
+                            qk += q_vec[d_id] * GGML_FP16_TO_FP32(staging_k[d_id]);
+                        }
+                        qk *= scale;
+
+                        // Online softmax update
+                        const float qk_max_new = fmaxf(qk_max, qk);
+                        const float exp_old    = expf(qk_max - qk_max_new);
+                        const float exp_new    = expf(qk - qk_max_new);
+
+                        exp_sum = exp_sum * exp_old + exp_new;
+                        for (int d_id = 0; d_id < head_dim; ++d_id) {
+                            acc[d_id] = acc[d_id] * exp_old + exp_new * GGML_FP16_TO_FP32(staging_v[d_id]);
+                        }
+                        qk_max = qk_max_new;
+                    }
+                }
+                // Write output
+                const size_t out_idx = (size_t) token_batch_idx * n_heads * head_dim + (size_t) h_id * head_dim;
+                for (int d_id = 0; d_id < head_dim; ++d_id) {
+                    out_data[out_idx + d_id] = acc[d_id] / (exp_sum + 1e-6f);
+                }
+            }
+        }
+    }
+    // Write output back to dst (might involve host to device transfer)
+    ggml_backend_tensor_set(dst, out_host.data(), 0, ggml_nbytes(dst));
+}
