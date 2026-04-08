@@ -7,8 +7,6 @@
 //     state[i] = state[i] * w + v[i]*k + sa * b
 //     output[i]= dot(state[i], r)
 //
-// Parallelized across heads. Inner loops are 8-wide vectorized.
-// head_size must be a multiple of 8.
 //******************************************************************************
 
 #include <stdint.h>
@@ -88,8 +86,47 @@ int entry_point(struct ggml_et_rwkv_wkv7_params* params, void* env) {
     const int32_t tps = T / n_seqs;  // tokens per sequence
     float* state_out = dst_data + C * T;
 
-    // Parallelize across heads
-    for (int32_t h = thread_id; h < H; h += num_threads) {
+    // Fix #2: hoist w[0..S-1] across the i loop.  In the inner j-loop of pass
+    // 2, w/k/b/r are loop-invariant w.r.t. i but were being reloaded for every
+    // i value (16 times redundantly after Fix #1).  Pinning all four arrays
+    // would need 32 vector regs (won't fit), so we hoist just w — it's used
+    // in the critical fmadd chain and lives cleanly in f24-f31, which the
+    // existing kernel never touches.  Saves ~20% of pass-2 load issues.
+    //
+    // GCC local register variables: declared as `float` but the underlying
+    // f-reg holds the wide vector loaded by flw.ps.  GCC reserves f24-f31 for
+    // these variables for the whole function and never generates code that
+    // touches them on its own, so the upper 7 lanes survive between asm
+    // blocks.  Only used when S == 64 (the RWKV-7 case); other head sizes
+    // fall through to the original unhoisted path.
+    register float w_h0 __asm__("f24");
+    register float w_h1 __asm__("f25");
+    register float w_h2 __asm__("f26");
+    register float w_h3 __asm__("f27");
+    register float w_h4 __asm__("f28");
+    register float w_h5 __asm__("f29");
+    register float w_h6 __asm__("f30");
+    register float w_h7 __asm__("f31");
+    const int wkv7_fast = (S == 64);
+
+    // Tile i by one cache line so each hart's output writes never share a
+    // 64-B line with another hart's writes (the chip is non-coherent).
+    // For S=64 this gives 4 tiles per head; for S<16 or odd S we fall back
+    // to one-hart-per-head (= the original parallelism).
+    const int32_t i_tile = (S % 16 == 0) ? 16 : S;
+    const int32_t tiles_per_head = S / i_tile;
+    const int32_t total_units = H * tiles_per_head;
+
+    // Parallelize across (head, i-tile) pairs.  The t loop stays inside this
+    // unit loop so the same hart owns the same state rows across all
+    // timesteps — required for the recurrence to read back its own writes
+    // without going through L2.
+    for (int32_t u = thread_id; u < total_units; u += num_threads) {
+        const int32_t h       = u / tiles_per_head;
+        const int32_t tile    = u % tiles_per_head;
+        const int32_t i_start = tile * i_tile;
+        const int32_t i_end   = i_start + i_tile;
+
         const int32_t h_off = h * S;          // offset within C for this head
         const int32_t s2d   = h * S * S;      // offset within state for this head
 
@@ -116,7 +153,26 @@ int entry_point(struct ggml_et_rwkv_wkv7_params* params, void* env) {
             const float* a_ptr = a + th;
             const float* b_ptr = b + th;
 
-            for (int32_t i = 0; i < S; i++) {
+            // Hoist w[0..63] into f24-f31 once per (h, t).  These values are
+            // invariant across the i loop below, so the inner j-unroll can
+            // reference them by register name and skip the per-i reload.
+            if (wkv7_fast) {
+                __asm__ volatile(
+                    "flw.ps f24,   0(%[wp])\n"
+                    "flw.ps f25,  32(%[wp])\n"
+                    "flw.ps f26,  64(%[wp])\n"
+                    "flw.ps f27,  96(%[wp])\n"
+                    "flw.ps f28, 128(%[wp])\n"
+                    "flw.ps f29, 160(%[wp])\n"
+                    "flw.ps f30, 192(%[wp])\n"
+                    "flw.ps f31, 224(%[wp])\n"
+                    : "=f"(w_h0), "=f"(w_h1), "=f"(w_h2), "=f"(w_h3),
+                      "=f"(w_h4), "=f"(w_h5), "=f"(w_h6), "=f"(w_h7)
+                    : [wp] "r"(w_ptr)
+                );
+            }
+
+            for (int32_t i = i_start; i < i_end; i++) {
                 const float* sp_row = s_prev + i * S;  // state_prev row i
                 float* sc_row       = s_cur  + i * S;  // state_cur  row i
 
@@ -159,27 +215,62 @@ int entry_point(struct ggml_et_rwkv_wkv7_params* params, void* env) {
                     : "f10", "f20", "f21"
                 );
 
-                for (int32_t j = 0; j < S; j += 8) {
-                    __asm__ volatile(
-                        "flw.ps f11, %[s_vec]\n"        // state_prev[j..j+7]
-                        "flw.ps f12, %[w_vec]\n"        // w[j..j+7]
-                        "flw.ps f13, %[k_vec]\n"        // k[j..j+7]
-                        "flw.ps f14, %[b_vec]\n"        // b[j..j+7]
-                        "flw.ps f15, %[r_vec]\n"        // r[j..j+7]
-                        "fmul.ps f16, f20, f13\n"       // kv = v_broadcast * k
-                        "fmadd.ps f11, f11, f12, f16\n" // state*w + kv
-                        "fmadd.ps f11, f21, f14, f11\n" // + sa*b
-                        "fsw.ps f11, %[sc_vec]\n"       // store new state
-                        "fmadd.ps f10, f11, f15, f10\n" // result += new_state * r
+                if (wkv7_fast) {
+                    // Fast path: 8 chunks unrolled, w hoisted to f24-f31.
+                    // Saves one flw per chunk vs the original loop.
+                    #define WKV7_PASS2_CHUNK(j_off, w_var)                          \
+                        __asm__ volatile(                                            \
+                            "flw.ps f11, %[s_vec]\n"                                 \
+                            "flw.ps f13, %[k_vec]\n"                                 \
+                            "flw.ps f14, %[b_vec]\n"                                 \
+                            "flw.ps f15, %[r_vec]\n"                                 \
+                            "fmul.ps f16, f20, f13\n"                                \
+                            "fmadd.ps f11, f11, %[w_h], f16\n"                       \
+                            "fmadd.ps f11, f21, f14, f11\n"                          \
+                            "fsw.ps f11, %[sc_vec]\n"                                \
+                            "fmadd.ps f10, f11, f15, f10\n"                          \
+                            : [sc_vec] "=m"(*(float(*)[8])&sc_row[j_off])            \
+                            : [s_vec]  "m"(*(const float(*)[8])&sp_row[j_off]),      \
+                              [k_vec]  "m"(*(const float(*)[8])&k_ptr[j_off]),       \
+                              [b_vec]  "m"(*(const float(*)[8])&b_ptr[j_off]),       \
+                              [r_vec]  "m"(*(const float(*)[8])&r_ptr[j_off]),       \
+                              [w_h]    "f"(w_var)                                    \
+                            : "f10", "f11", "f13", "f14", "f15", "f16"               \
+                        )
 
-                        : [sc_vec] "=m"(*(float(*)[8])&sc_row[j])
-                        : [s_vec]  "m"(*(const float(*)[8])&sp_row[j]),
-                          [w_vec]  "m"(*(const float(*)[8])&w_ptr[j]),
-                          [k_vec]  "m"(*(const float(*)[8])&k_ptr[j]),
-                          [b_vec]  "m"(*(const float(*)[8])&b_ptr[j]),
-                          [r_vec]  "m"(*(const float(*)[8])&r_ptr[j])
-                        : "f10", "f11", "f12", "f13", "f14", "f15", "f16"
-                    );
+                    WKV7_PASS2_CHUNK(0,  w_h0);
+                    WKV7_PASS2_CHUNK(8,  w_h1);
+                    WKV7_PASS2_CHUNK(16, w_h2);
+                    WKV7_PASS2_CHUNK(24, w_h3);
+                    WKV7_PASS2_CHUNK(32, w_h4);
+                    WKV7_PASS2_CHUNK(40, w_h5);
+                    WKV7_PASS2_CHUNK(48, w_h6);
+                    WKV7_PASS2_CHUNK(56, w_h7);
+
+                    #undef WKV7_PASS2_CHUNK
+                } else {
+                    for (int32_t j = 0; j < S; j += 8) {
+                        __asm__ volatile(
+                            "flw.ps f11, %[s_vec]\n"        // state_prev[j..j+7]
+                            "flw.ps f12, %[w_vec]\n"        // w[j..j+7]
+                            "flw.ps f13, %[k_vec]\n"        // k[j..j+7]
+                            "flw.ps f14, %[b_vec]\n"        // b[j..j+7]
+                            "flw.ps f15, %[r_vec]\n"        // r[j..j+7]
+                            "fmul.ps f16, f20, f13\n"       // kv = v_broadcast * k
+                            "fmadd.ps f11, f11, f12, f16\n" // state*w + kv
+                            "fmadd.ps f11, f21, f14, f11\n" // + sa*b
+                            "fsw.ps f11, %[sc_vec]\n"       // store new state
+                            "fmadd.ps f10, f11, f15, f10\n" // result += new_state * r
+
+                            : [sc_vec] "=m"(*(float(*)[8])&sc_row[j])
+                            : [s_vec]  "m"(*(const float(*)[8])&sp_row[j]),
+                              [w_vec]  "m"(*(const float(*)[8])&w_ptr[j]),
+                              [k_vec]  "m"(*(const float(*)[8])&k_ptr[j]),
+                              [b_vec]  "m"(*(const float(*)[8])&b_ptr[j]),
+                              [r_vec]  "m"(*(const float(*)[8])&r_ptr[j])
+                            : "f10", "f11", "f12", "f13", "f14", "f15", "f16"
+                        );
+                    }
                 }
 
                 dst_data[th + i] = hsum_f10();
