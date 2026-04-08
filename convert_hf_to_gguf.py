@@ -2219,10 +2219,10 @@ class MmprojModel(ModelBase):
             self.image_size = self.find_vparam(["image_size"])
             self.gguf_writer.add_vision_image_size(self.image_size)
             self.gguf_writer.add_vision_patch_size(self.find_vparam(["patch_size"]))
-            self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size", "vt_hidden_size"]))
+            self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size", "width", "vt_hidden_size"]))
             self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size", "vt_intermediate_size"]))
             self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys))
-            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "vt_num_attention_heads"]))
+            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "heads", "vt_num_attention_heads"]))
 
             # preprocessor config
             image_mean = _MISTRAL_COMMON_DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
@@ -4949,6 +4949,73 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("StepVLForConditionalGeneration")
+class Step3VLVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+
+        if not self.hparams_vision.get("intermediate_size"):
+            hidden_size = self.hparams_vision.get("hidden_size") or self.hparams_vision.get("width") or 0
+            assert hidden_size > 0
+            mlp_ratio = float(self.hparams_vision.get("mlp_ratio", 8960 / 1536))
+            self.hparams_vision["intermediate_size"] = int(round(hidden_size * mlp_ratio))
+
+        self.preprocessor_config.setdefault("image_mean", list(_MISTRAL_COMMON_DATASET_MEAN))
+        self.preprocessor_config.setdefault("image_std", list(_MISTRAL_COMMON_DATASET_STD))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        projector_stride = int(self.global_config.get("understand_projector_stride", -1))
+        hidden_size = int(self.hparams_vision.get("hidden_size", self.hparams_vision.get("width", -1)))
+        num_layers = int(self.hparams_vision.get("num_hidden_layers", self.hparams_vision.get("layers", -1)))
+        assert (projector_stride, int(self.hparams_vision.get("image_size", -1)), hidden_size, num_layers) == (2, 728, 1536, 47), (
+            "current Step3-VL conversion path is only validated for Step3-VL-10B"
+        )
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.STEP3VL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(self.hparams_vision.get("layer_norm_eps", 1e-5)))
+        self.gguf_writer.add_vision_projector_scale_factor(projector_stride ** 2)
+        # 3024 max resize comes from step3-vl-10b processing_step3.py.
+        self.gguf_writer.add_vision_preproc_image_size(3024)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.") or name.startswith("lm_head."):
+            return
+
+        if name.startswith("vision_model.vit_downsampler"):
+            match = re.match(r"vision_model\.vit_downsampler(\d+)\.(weight|bias)", name)
+            if match is None:
+                raise ValueError(f"Unexpected Step3-VL projector tensor {name!r}")
+
+            proj_id = int(match.group(1)) - 1
+            suffix = f".{match.group(2)}"
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, proj_id, suffix=suffix), data_torch)
+            return
+
+        if name == "vit_large_projector.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ_FC), data_torch)
+            return
+
+        if name.startswith("vision_model."):
+            if name == "vision_model.positional_embedding":
+                name += ".weight"
+            elif name.endswith(".gamma") and ".ls_" in name:
+                name = name.removesuffix(".gamma") + ".weight"
+
+            name = name.replace("attn.in_proj_weight", "attn.in_proj.weight")
+            name = name.replace("attn.in_proj_bias", "attn.in_proj.bias")
+
+            yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration")
 class Qwen3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
@@ -4966,6 +5033,16 @@ class Qwen3VLTextModel(Qwen3Model):
         if name.startswith("model.visual."):
             return
 
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("StepVLForConditionalGeneration")
+class Step3VLTextModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("vision_model.") or name.startswith("model.vision_model.") or name.startswith("vit_large_projector."):
+            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -12993,6 +13070,12 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     elif "ssm_cfg" in hparams:
         # For non-hf Mamba and Mamba2 models
         arch = hparams["ssm_cfg"].get("layer", "Mamba") + "ForCausalLM"
+
+    # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
+    # For text conversion we route to a dedicated text-only class.
+    # TODO: refactor this later to avoid adding exception here
+    if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+        return arch
 
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:

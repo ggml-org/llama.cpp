@@ -1406,6 +1406,7 @@ class TensorNameMap:
             "siglip2.vision_model.embeddings.patch_embedding",
             "vision_model.radio_model.model.patch_generator.embedder", # Nemotron Nano v2 VL
             "model.vision_tower.patch_embedder.input_proj", # gemma4
+            "vision_model.conv1", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
@@ -1425,6 +1426,7 @@ class TensorNameMap:
             "visual.embeddings.position_embedding", # glm4v
             "vision_model.radio_model.model.patch_generator.pos_embed", # Nemotron Nano v2 VL
             "model.vision_tower.patch_embedder.position_embedding_table", # gemma4
+            "vision_model.positional_embedding", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
@@ -1443,6 +1445,7 @@ class TensorNameMap:
             "model.vision_model.transformer.layers.{bid}.self_attn.qkv_proj", # Deepseek-OCR CLIP
             "vision_tower.encoder.blocks.{bid}.wqkv", # Kimi-K2.5
             "vision_model.radio_model.model.blocks.{bid}.attn.qkv", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.attn.in_proj", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
@@ -1523,6 +1526,7 @@ class TensorNameMap:
             "model.vision_model.transformer.layers.{bid}.layer_norm1", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm1",
             "vision_model.radio_model.model.blocks.{bid}.norm1", # Nemotron Nano v2 VL
+            "vision_model.transformer.resblocks.{bid}.ln_1", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1543,6 +1547,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
             "vision_model.radio_model.model.blocks.{bid}.attn.proj", # Nemotron Nano v2 VL
             "vision_model.model.layers.{bid}.self_attn.o_proj.linear", # gemma4
+            "vision_model.transformer.resblocks.{bid}.attn.out_proj", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1562,6 +1567,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm2",
             "vision_model.radio_model.model.blocks.{bid}.norm2", # Nemotron Nano v2 VL
             "vision_model.model.layers.{bid}.pre_feedforward_layernorm", # gemma4
+            "vision_model.transformer.resblocks.{bid}.ln_2", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1582,6 +1588,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc1", # Nemotron Nano v2 VL
             "vision_model.model.layers.{bid}.mlp.up_proj", # gemma4
+            "vision_model.transformer.resblocks.{bid}.mlp.c_fc", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
@@ -1609,6 +1616,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc2", # Nemotron Nano v2 VL
             "vision_model.model.layers.{bid}.mlp.down_proj", # gemma4
+            "vision_model.transformer.resblocks.{bid}.mlp.c_proj", # Step3-VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_POST_NORM: (
@@ -1622,11 +1630,13 @@ class TensorNameMap:
         MODEL_TENSOR.V_LAYER_SCALE_1: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
+            "vision_model.transformer.resblocks.{bid}.ls_1", # Step3-VL
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
+            "vision_model.transformer.resblocks.{bid}.ls_2", # Step3-VL
         ),
 
         MODEL_TENSOR.V_LAYER_OUT_SCALE: (
@@ -1639,6 +1649,7 @@ class TensorNameMap:
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
             "model.vision_model.pre_layrnorm", # Deepseek-OCR CLIP
+            "vision_model.ln_pre", # Step3-VL
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
