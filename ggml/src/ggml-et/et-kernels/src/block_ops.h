@@ -286,6 +286,331 @@ static inline float compute_row_dot_q8_0(const block_q8_0* q_row,
     return result;
 }
 
+//******************************************************************************
+// Hoisted Q8_0 dot API
+//
+// q8_dot_begin/end save/restore the vector mask once around a long sequence of
+// dot products, so the per-row mask shuffles are hoisted out of the inner
+// loops. q8_dot_compute does a full-row dot (no mask handling). The _x2
+// variant computes two rows together while reusing each loaded B chunk —
+// only safe when both row pointers share the same 32-byte alignment phase
+// (i.e. the Q8 row stride is a multiple of 32).
+//******************************************************************************
+
+typedef struct {
+    unsigned long saved_mask;
+} q8_dot_state;
+
+static inline void q8_dot_begin(q8_dot_state* state) {
+    __asm__ volatile("mova.x.m %0" : "=r"(state->saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+}
+
+static inline void q8_dot_end(const q8_dot_state* state) {
+    __asm__ volatile("mova.m.x %0" :: "r"(state->saved_mask));
+}
+
+// Equivalent to q8_dot_reset+tile+reduce, without touching the mask register.
+// Caller is responsible for q8_dot_begin/end around the surrounding loop.
+static inline float q8_dot_compute(const block_q8_0* q_row,
+                                   const float* b_col,
+                                   int64_t K_blocks) {
+    q8_dot_reset();
+    q8_dot_tile(q_row, b_col, K_blocks);
+    return q8_dot_reduce();
+}
+
+// Compute two row dots together while reusing the same loaded B chunks.
+//
+// Safe when every row starts at the same 32-byte offset, i.e. the Q8 row stride
+// is a multiple of 32. In that case the gather/alignment pattern is the same
+// for both rows at a given `kb`, so one set of B vector loads feeds both row
+// accumulators.
+static inline void q8_dot_compute_x2_aligned(const block_q8_0* q_row0,
+                                             const block_q8_0* q_row1,
+                                             const float* b_col,
+                                             int64_t K_blocks,
+                                             float* out0,
+                                             float* out1) {
+    const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    const uint64_t gather_0_to_7 = 0x398a418820ULL;
+    __asm__ volatile(
+        "flw.ps f31, %[g]\n"
+        :
+        : [g] "m"(*(const int32_t(*)[8])gather_pattern)
+        : "f31"
+    );
+    __asm__ volatile(
+        "fbci.pi f20, 0\n"
+        "fbci.pi f21, 0\n"
+        ::: "f20", "f21"
+    );
+
+    for (int64_t kb = 0; kb < K_blocks; kb++) {
+        const block_q8_0* blk0 = q_row0 + kb;
+        const block_q8_0* blk1 = q_row1 + kb;
+        const float* b_ptr = b_col + (kb << 5);
+
+        const uintptr_t qs_addr0 = (uintptr_t)blk0->qs;
+        const uintptr_t qs_addr1 = (uintptr_t)blk1->qs;
+        const uintptr_t qs_aligned0 = qs_addr0 & ~(uintptr_t)31;
+        const uintptr_t qs_aligned1 = qs_addr1 & ~(uintptr_t)31;
+        const int fast_chunks = (int)((32 - (qs_addr0 & 31)) >> 3);
+
+        if (fast_chunks >= 3) {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "fbci.pi     f11, 0\n"
+
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap0])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f12, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap0])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f12, f11\n"
+
+                "flw.ps      f13, %[bv1]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap1])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f13, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap1])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f13, f11\n"
+
+                "flw.ps      f14, %[bv2]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap2])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f14, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap2])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f14, f11\n"
+
+                "flw.ps      f15, %[bv3]\n"
+                "fgb.ps      f16, f31(%[r0ap3])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f15, f10\n"
+                "fgb.ps      f17, f31(%[r1ap3])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f15, f11\n"
+                :
+                : [gi]    "r"(gather_0_to_7),
+                  [r0ap0] "r"(qs_addr0),
+                  [r0ap1] "r"(qs_aligned0 | ((qs_addr0 + 8)  & 31)),
+                  [r0ap2] "r"(qs_aligned0 | ((qs_addr0 + 16) & 31)),
+                  [r0ap3] "r"(&blk0->qs[24]),
+                  [r1ap0] "r"(qs_addr1),
+                  [r1ap1] "r"(qs_aligned1 | ((qs_addr1 + 8)  & 31)),
+                  [r1ap2] "r"(qs_aligned1 | ((qs_addr1 + 16) & 31)),
+                  [r1ap3] "r"(&blk1->qs[24]),
+                  [bv0]   "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1]   "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2]   "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3]   "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"
+            );
+        } else if (fast_chunks == 2) {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "fbci.pi     f11, 0\n"
+
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap0])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f12, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap0])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f12, f11\n"
+
+                "flw.ps      f13, %[bv1]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap1])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f13, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap1])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f13, f11\n"
+
+                "flw.ps      f14, %[bv2]\n"
+                "fgb.ps      f16, f31(%[r0ap2])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f14, f10\n"
+                "fgb.ps      f17, f31(%[r1ap2])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f14, f11\n"
+
+                "flw.ps      f15, %[bv3]\n"
+                "fgb.ps      f16, f31(%[r0ap3])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f15, f10\n"
+                "fgb.ps      f17, f31(%[r1ap3])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f15, f11\n"
+                :
+                : [gi]    "r"(gather_0_to_7),
+                  [r0ap0] "r"(qs_addr0),
+                  [r0ap1] "r"(qs_aligned0 | ((qs_addr0 + 8) & 31)),
+                  [r0ap2] "r"(&blk0->qs[16]),
+                  [r0ap3] "r"(&blk0->qs[24]),
+                  [r1ap0] "r"(qs_addr1),
+                  [r1ap1] "r"(qs_aligned1 | ((qs_addr1 + 8) & 31)),
+                  [r1ap2] "r"(&blk1->qs[16]),
+                  [r1ap3] "r"(&blk1->qs[24]),
+                  [bv0]   "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1]   "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2]   "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3]   "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"
+            );
+        } else if (fast_chunks == 1) {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "fbci.pi     f11, 0\n"
+
+                "flw.ps      f12, %[bv0]\n"
+                "fg32b.ps    f16, %[gi](%[r0ap0])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f12, f10\n"
+                "fg32b.ps    f17, %[gi](%[r1ap0])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f12, f11\n"
+
+                "flw.ps      f13, %[bv1]\n"
+                "fgb.ps      f16, f31(%[r0ap1])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f13, f10\n"
+                "fgb.ps      f17, f31(%[r1ap1])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f13, f11\n"
+
+                "flw.ps      f14, %[bv2]\n"
+                "fgb.ps      f16, f31(%[r0ap2])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f14, f10\n"
+                "fgb.ps      f17, f31(%[r1ap2])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f14, f11\n"
+
+                "flw.ps      f15, %[bv3]\n"
+                "fgb.ps      f16, f31(%[r0ap3])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f15, f10\n"
+                "fgb.ps      f17, f31(%[r1ap3])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f15, f11\n"
+                :
+                : [gi]    "r"(gather_0_to_7),
+                  [r0ap0] "r"(qs_addr0),
+                  [r0ap1] "r"(&blk0->qs[8]),
+                  [r0ap2] "r"(&blk0->qs[16]),
+                  [r0ap3] "r"(&blk0->qs[24]),
+                  [r1ap0] "r"(qs_addr1),
+                  [r1ap1] "r"(&blk1->qs[8]),
+                  [r1ap2] "r"(&blk1->qs[16]),
+                  [r1ap3] "r"(&blk1->qs[24]),
+                  [bv0]   "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1]   "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2]   "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3]   "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"
+            );
+        } else {
+            __asm__ volatile(
+                "fbci.pi     f10, 0\n"
+                "fbci.pi     f11, 0\n"
+
+                "flw.ps      f12, %[bv0]\n"
+                "fgb.ps      f16, f31(%[r0ap0])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f12, f10\n"
+                "fgb.ps      f17, f31(%[r1ap0])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f12, f11\n"
+
+                "flw.ps      f13, %[bv1]\n"
+                "fgb.ps      f16, f31(%[r0ap1])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f13, f10\n"
+                "fgb.ps      f17, f31(%[r1ap1])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f13, f11\n"
+
+                "flw.ps      f14, %[bv2]\n"
+                "fgb.ps      f16, f31(%[r0ap2])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f14, f10\n"
+                "fgb.ps      f17, f31(%[r1ap2])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f14, f11\n"
+
+                "flw.ps      f15, %[bv3]\n"
+                "fgb.ps      f16, f31(%[r0ap3])\n"
+                "fcvt.ps.pw  f16, f16\n"
+                "fmadd.ps    f10, f16, f15, f10\n"
+                "fgb.ps      f17, f31(%[r1ap3])\n"
+                "fcvt.ps.pw  f17, f17\n"
+                "fmadd.ps    f11, f17, f15, f11\n"
+                :
+                : [r0ap0] "r"(&blk0->qs[0]),
+                  [r0ap1] "r"(&blk0->qs[8]),
+                  [r0ap2] "r"(&blk0->qs[16]),
+                  [r0ap3] "r"(&blk0->qs[24]),
+                  [r1ap0] "r"(&blk1->qs[0]),
+                  [r1ap1] "r"(&blk1->qs[8]),
+                  [r1ap2] "r"(&blk1->qs[16]),
+                  [r1ap3] "r"(&blk1->qs[24]),
+                  [bv0]   "m"(*(const float(*)[8])&b_ptr[0]),
+                  [bv1]   "m"(*(const float(*)[8])&b_ptr[8]),
+                  [bv2]   "m"(*(const float(*)[8])&b_ptr[16]),
+                  [bv3]   "m"(*(const float(*)[8])&b_ptr[24])
+                : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"
+            );
+        }
+
+        const uint32_t scale_raw0 = (uint32_t)blk0->d;
+        const uint32_t scale_raw1 = (uint32_t)blk1->d;
+        __asm__ volatile(
+            "fbcx.ps     f24, %[s0]\n"
+            "fcvt.ps.f16 f24, f24\n"
+            "fmadd.ps    f20, f10, f24, f20\n"
+            "fbcx.ps     f25, %[s1]\n"
+            "fcvt.ps.f16 f25, f25\n"
+            "fmadd.ps    f21, f11, f25, f21\n"
+            :
+            : [s0] "r"(scale_raw0),
+              [s1] "r"(scale_raw1)
+            : "f20", "f21", "f24", "f25"
+        );
+    }
+
+    float result0;
+    float result1;
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result0)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f21, 0xB1 \n\t"
+        "fadd.ps   f2, f21, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result1)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+
+    *out0 = result0;
+    *out1 = result1;
+}
+
 
 // Compute dot product between f16 block and f32 column vector (NAIVE VERSION)
 // Scalar implementation for debugging - no vectorization
