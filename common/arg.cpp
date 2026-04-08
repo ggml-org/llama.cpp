@@ -2328,6 +2328,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
+    add_opt(common_arg(
+        {"--expert-cache-slots"}, "N",
+        "N-slot LRU expert cache: N GPU slots per MoE layer (saves VRAM vs full GPU copy); use with --cpu-moe. "
+        "N=0 disables (default), N=-1 dedup-only, N=-2 or 'auto' fills available VRAM",
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.expert_cache_n_slots = -2;
+            } else {
+                params.expert_cache_n_slots = std::stoi(value);
+            }
+        }
+    ).set_env("LLAMA_ARG_EXPERT_CACHE_SLOTS"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
