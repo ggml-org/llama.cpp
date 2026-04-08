@@ -10,6 +10,10 @@ llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use 
 * **No hidden telemetry**: zero tracking, zero phone-home, no usage events, no error reports sent anywhere
 * **API server**: `llama-agent-server` exposes the agent via HTTP API with SSE streaming
 
+```bash
+brew install gary149/llama-agent/llama-agent
+```
+
 <img width="1536" height="641" alt="image" src="https://github.com/user-attachments/assets/494a5615-2c3a-4aee-ad49-2a89eb862f88" />
 
 > [!NOTE]
