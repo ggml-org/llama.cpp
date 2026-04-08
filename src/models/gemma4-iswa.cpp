@@ -1,5 +1,12 @@
 #include "models.h"
 
+// get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
+static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+    GGML_ASSERT(idx < (int) x->ne[2]);
+    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
+                        idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
+}
+
 llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params),
         model(model),
@@ -19,17 +26,13 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
     // TODO: is causal == true correct? might need some changes
     auto * inp_attn = build_attn_inp_kv_iswa();
 
-    // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
     ggml_tensor * inp_per_layer = nullptr;
     if (model.per_layer_tok_embd) {
         inp_per_layer = build_inp_per_layer();
         ggml_build_forward_expand(gf, inp_per_layer);
-
-        inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
-        ggml_build_forward_expand(gf, inp_per_layer);
     }
-
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
@@ -200,7 +203,13 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
 
             cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
             cur = ggml_gelu(ctx0, cur);
-            ggml_tensor * inp_this_layer = view_2d_slice(inp_per_layer, il); // [n_embd_per_layer, n_tokens]
+
+            if (il == 0) {
+                // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
+                inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
+            }
+
+            ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
             if (il == n_layer - 1 && inp_out_ids) {
@@ -250,13 +259,6 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
-}
-
-// get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
-ggml_tensor * llm_build_gemma4_iswa::view_2d_slice(ggml_tensor * x, int idx) {
-    GGML_ASSERT(idx < (int) x->ne[2]);
-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
-                        idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
 }
 
 // equivalent to get_per_layer_inputs() in python code

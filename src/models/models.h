@@ -258,7 +258,6 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
     ggml_tensor * calc_magnitude(ggml_tensor * x);
 
     // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
-    ggml_tensor * view_2d_slice(ggml_tensor * x, int idx);
     ggml_tensor * build_inp_per_layer();
     ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
 
@@ -277,7 +276,6 @@ struct llm_build_gemma4_iswa : public llm_graph_context {
     llm_build_gemma4_iswa(const llama_model & model, const llm_graph_params & params);
 
     // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
-    ggml_tensor * view_2d_slice(ggml_tensor * x, int idx);
     ggml_tensor * build_inp_per_layer();
     ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
 };
