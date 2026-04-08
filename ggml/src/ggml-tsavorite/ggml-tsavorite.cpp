@@ -1470,6 +1470,9 @@ static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     // If this blocks valid cases in your build, comment it out.
     if (a->ne[1] != N) return false;
 
+    // Disable MAT_MUL offloading to Tsavorite for the Tiny‑Llama‑v0.3‑FP32‑1.1B model
+    return false;
+
     // -------------------------------------------------------------------------
     // Tiny-Llama-v0.3-FP32-1.1B-F32.gguf shapes (from your static-shape list)
     // Most frequent inference shapes are M=7 with K=2048 and N in {256,2048,5632}
