@@ -79,7 +79,6 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-
     std::unordered_set<int32_t> vision_feature_layer;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
