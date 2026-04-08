@@ -1963,7 +1963,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = true;
     std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
     auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
-    params.generation_prompt     = diff.right;
+    params.generation_prompt     = diff.right + diff.suffix;
 
     params.add_generation_prompt = inputs.add_generation_prompt;
 
