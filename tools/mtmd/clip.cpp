@@ -2330,43 +2330,21 @@ struct clip_model_loader {
             LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
         }
 
-        // Auto-detect and fix swapped conv norm mapping in Gemma 4 audio GGUFs.
+        // Fix swapped conv norm tensors in Gemma 4 audio GGUFs.
         //
-        // Publicly released Gemma 4 mmproj GGUFs have conv_norm and norm_conv
-        // tensor data swapped: HF pre_layer_norm ended up in GGUF conv_norm and
-        // vice versa. The C++ code uses layer.norm_conv_w as the pre-conv norm
-        // and layer.conv_norm_w as the post-conv norm, so the swapped data
-        // produces incorrect encoder output.
+        // The upstream tensor_mapping.py maps gemma4 HF tensors to GGUF names
+        // with conv_norm and norm_conv swapped:
+        //   HF lconv1d.pre_layer_norm -> GGUF a.blk.{bid}.conv_norm (should be norm_conv)
+        //   HF lconv1d.conv_norm      -> GGUF a.blk.{bid}.norm_conv (should be conv_norm)
         //
-        // We detect the swap by comparing weight magnitudes: pre_layer_norm
-        // weights have significantly higher energy than conv_norm weights in
-        // Gemma 4 conformer layers. If conv_norm has higher energy, the mapping
-        // is swapped and we fix it by swapping the loaded tensor pointers.
-        if (model.proj_type == PROJECTOR_TYPE_GEMMA4A
-                && hparams.n_layer > 0
-                && model.layers[0].conv_norm_w
-                && model.layers[0].norm_conv_w) {
-            // Read first N values from each tensor and compute sum-of-squares
-            const int n_check = std::min((int)model.layers[0].conv_norm_w->ne[0], 64);
-            std::vector<float> buf_cn(n_check), buf_nc(n_check);
-            ggml_backend_tensor_get(model.layers[0].conv_norm_w, buf_cn.data(), 0, n_check * sizeof(float));
-            ggml_backend_tensor_get(model.layers[0].norm_conv_w, buf_nc.data(), 0, n_check * sizeof(float));
-
-            float ss_cn = 0.0f, ss_nc = 0.0f;
-            for (int i = 0; i < n_check; i++) {
-                ss_cn += buf_cn[i] * buf_cn[i];
-                ss_nc += buf_nc[i] * buf_nc[i];
-            }
-
-            // In correctly-mapped GGUFs, conv_norm (post-conv) has lower magnitude
-            // than norm_conv (pre-conv/pre_layer_norm). If conv_norm has higher
-            // magnitude, the mapping is swapped and we need to fix it.
-            if (ss_cn > ss_nc * 1.5f) {
-                LOG_INF("%s: detected swapped conv norm mapping in GGUF, auto-fixing\n", __func__);
-                for (int il = 0; il < hparams.n_layer; ++il) {
-                    std::swap(model.layers[il].conv_norm_w, model.layers[il].norm_conv_w);
-                    std::swap(model.layers[il].conv_norm_b, model.layers[il].norm_conv_b);
-                }
+        // All publicly released Gemma 4 mmproj GGUFs have this issue. Rather
+        // than changing the Python mapping (which would break gemma3n compat),
+        // we swap the tensor pointers after loading so they match their
+        // semantic usage: norm_conv_w = pre-conv norm, conv_norm_w = post-conv norm.
+        if (model.proj_type == PROJECTOR_TYPE_GEMMA4A && hparams.n_layer > 0) {
+            for (int il = 0; il < hparams.n_layer; ++il) {
+                std::swap(model.layers[il].conv_norm_w, model.layers[il].norm_conv_w);
+                std::swap(model.layers[il].conv_norm_b, model.layers[il].norm_conv_b);
             }
         }
     }
