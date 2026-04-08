@@ -17,8 +17,7 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
     inpL = build_inp_embd(model.tok_embd);
 
     // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
-    // use BF16-rounded scale to match PyTorch's native BF16 training precision (ref: PR #21451)
-    inpL = ggml_scale(ctx0, inpL, ubatch.token ? ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf(n_embd))) : 1.0f);
+    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions
@@ -151,7 +150,7 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
 
             // custom MoE logits calculation (router operates on attn_out, not cur)
             ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
-            tmp = ggml_scale(ctx0, tmp, 1.0f / ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf((float) n_embd))));
+            tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
             tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
