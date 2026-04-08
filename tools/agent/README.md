@@ -18,7 +18,10 @@ llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use 
 > [Gemma 4](https://blog.google/technology/developers/gemma-4/) is Google's latest open model family (Apache 2.0), built for agentic use with native tool calling and multimodal input. The **E4B variant** (4.5B effective params, ~5 GB quantized) runs comfortably on an 8 GB laptop and brings full vision capabilities to llama-agent. The model can read and analyze images, screenshots, diagrams, and documents.
 >
 > ```bash
+> # install
 > brew install gary149/llama-agent/llama-agent
+>
+> # launch with gemma 4 vision
 > llama-agent -hf unsloth/gemma-4-E4B-it-GGUF:UD-Q8_K_XL
 > ```
 >
