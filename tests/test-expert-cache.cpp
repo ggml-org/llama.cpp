@@ -2,35 +2,34 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 static void test_expert_cache_enable_disable() {
     ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-    assert(cpu);
+    GGML_ASSERT(cpu);
 
     ggml_backend_t backends[] = { cpu };
     ggml_backend_sched_t sched = ggml_backend_sched_new(
         backends, nullptr, 1, 512, false, false);
-    assert(sched);
+    GGML_ASSERT(sched);
 
     // Stats should be zero before enabling
     int64_t hits = -1, misses = -1, fate = -1, saved = -1, copied = -1;
     ggml_backend_sched_get_expert_cache_stats(sched, &hits, &misses, &fate, &saved, &copied);
-    assert(hits == 0);
-    assert(misses == 0);
-    assert(fate == 0);
-    assert(saved == 0);
-    assert(copied == 0);
+    GGML_ASSERT(hits == 0);
+    GGML_ASSERT(misses == 0);
+    GGML_ASSERT(fate == 0);
+    GGML_ASSERT(saved == 0);
+    GGML_ASSERT(copied == 0);
 
     ggml_backend_sched_set_expert_cache(sched, true);
     ggml_backend_sched_set_expert_cache(sched, false);
 
     ggml_backend_sched_get_expert_cache_stats(sched, &hits, &misses, &fate, &saved, &copied);
-    assert(hits == 0);
-    assert(misses == 0);
+    GGML_ASSERT(hits == 0);
+    GGML_ASSERT(misses == 0);
 
     ggml_backend_sched_free(sched);
     ggml_backend_free(cpu);
@@ -52,7 +51,7 @@ static void test_expert_cache_reset_survives() {
 
     int64_t h, m, f, s, c;
     ggml_backend_sched_get_expert_cache_stats(sched, &h, &m, &f, &s, &c);
-    assert(h == 0 && m == 0 && f == 0 && s == 0 && c == 0);
+    GGML_ASSERT(h == 0 && m == 0 && f == 0 && s == 0 && c == 0);
 
     ggml_backend_sched_free(sched);
     ggml_backend_free(cpu);
@@ -72,7 +71,7 @@ static void test_expert_cache_toggle() {
 
     int64_t h, m, f, s, c;
     ggml_backend_sched_get_expert_cache_stats(sched, &h, &m, &f, &s, &c);
-    assert(h == 0);
+    GGML_ASSERT(h == 0);
 
     ggml_backend_sched_free(sched);
     ggml_backend_free(cpu);
@@ -91,7 +90,7 @@ static void test_expert_cache_null_stats() {
 
     int64_t hits;
     ggml_backend_sched_get_expert_cache_stats(sched, &hits, nullptr, nullptr, nullptr, nullptr);
-    assert(hits == 0);
+    GGML_ASSERT(hits == 0);
 
     ggml_backend_sched_free(sched);
     ggml_backend_free(cpu);
@@ -110,7 +109,7 @@ static void test_expert_cache_disabled_no_crash() {
 
     int64_t h, m, f, s, c;
     ggml_backend_sched_get_expert_cache_stats(sched, &h, &m, &f, &s, &c);
-    assert(h == 0 && m == 0);
+    GGML_ASSERT(h == 0 && m == 0);
 
     ggml_backend_sched_free(sched);
     ggml_backend_free(cpu);
@@ -134,41 +133,43 @@ static void test_expert_cache_hit_on_second_token() {
     const int n_ff          = 16;
     const int n_embd        = 8;
     const int n_expert_used = 2;
-    const int n_tokens      = 1;
+    // n_tokens must be >= GGML_OP_OFFLOAD_MIN_BATCH (default 32) for MUL_MAT_ID
+    // to be offloaded to GPU, which is required to trigger the cross-backend copy path
+    const int n_tokens      = 32;
 
     ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-    assert(cpu);
+    GGML_ASSERT(cpu);
 
     ggml_backend_t             backends[2] = { gpu, cpu };
     ggml_backend_buffer_type_t buft_gpu    = ggml_backend_get_default_buffer_type(gpu);
     ggml_backend_buffer_type_t buft_cpu    = ggml_backend_get_default_buffer_type(cpu);
     ggml_backend_buffer_type_t bufts[2]    = { buft_gpu, buft_cpu };
 
-    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, bufts, 2, 512, false, false);
-    assert(sched);
+    // op_offload=true is required for weights on the last (CPU) backend to be
+    // offloaded to GPU, which triggers the cross-backend expert copy path
+    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, bufts, 2, 8192, false, true);
+    GGML_ASSERT(sched);
     ggml_backend_sched_set_expert_cache(sched, true);
-
-    // CPU buffer for expert weight tensor [n_embd, n_ff, n_expert]
-    const size_t expert_bytes = (size_t)n_embd * n_ff * n_expert * sizeof(float);
-    ggml_backend_buffer_t cpu_buf = ggml_backend_buft_alloc_buffer(buft_cpu, expert_bytes);
-    assert(cpu_buf);
-    ggml_backend_buffer_set_usage(cpu_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     struct ggml_init_params iparams = { 1024*1024, nullptr, true };
     struct ggml_context * ctx = ggml_init(iparams);
-    assert(ctx);
+    GGML_ASSERT(ctx);
 
     // Expert weight tensor: [n_embd, n_ff, n_expert] on CPU (host weights)
     struct ggml_tensor * experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_ff, n_expert);
-    ggml_backend_tensor_alloc(cpu_buf, experts, nullptr);
     ggml_set_name(experts, "ffn_up_exps");
 
+    // Allocate CPU buffer sized correctly for this tensor (accounts for alignment)
+    ggml_backend_buffer_t cpu_buf = ggml_backend_buft_alloc_buffer(buft_cpu,
+        ggml_backend_buft_get_alloc_size(buft_cpu, experts));
+    GGML_ASSERT(cpu_buf);
+    ggml_backend_buffer_set_usage(cpu_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    struct ggml_tallocr tallocr = ggml_tallocr_new(cpu_buf);
+    ggml_tallocr_alloc(&tallocr, experts);
+
     // Zero-fill the weight data
-    float * wdata = (float *)malloc(expert_bytes);
-    assert(wdata);
-    memset(wdata, 0, expert_bytes);
-    ggml_backend_tensor_set(experts, wdata, 0, expert_bytes);
-    free(wdata);
+    memset(experts->data, 0, ggml_nbytes(experts));
 
     // Input: [n_embd, n_expert_used, n_tokens]
     struct ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_expert_used, n_tokens);
@@ -183,39 +184,40 @@ static void test_expert_cache_hit_on_second_token() {
 
     ggml_backend_sched_alloc_graph(sched, graph);
 
-    // Set IDs: use experts 0 and 1 on both tokens
-    int32_t id_vals[2] = { 0, 1 };
-    ggml_backend_tensor_set(ids, id_vals, 0, sizeof(id_vals));
+    // IDs: experts 0 and 1 interleaved across all tokens (same on every run)
+    const int n_id_vals = n_expert_used * n_tokens;
+    int32_t * id_vals = (int32_t *)malloc(n_id_vals * sizeof(int32_t));
+    GGML_ASSERT(id_vals);
+    for (int i = 0; i < n_id_vals; i++) { id_vals[i] = i % n_expert_used; }
+    ggml_backend_tensor_set(ids, id_vals, 0, n_id_vals * sizeof(int32_t));
+    free(id_vals);
 
     // Zero-fill input activations
     const size_t input_bytes = (size_t)n_embd * n_expert_used * n_tokens * sizeof(float);
     float * indata = (float *)calloc(n_embd * n_expert_used * n_tokens, sizeof(float));
-    assert(indata);
+    GGML_ASSERT(indata);
     ggml_backend_tensor_set(input, indata, 0, input_bytes);
     free(indata);
 
     // Token 1: cold cache — expect misses >= n_expert_used
     ggml_backend_sched_graph_compute(sched, graph);
-    ggml_backend_sched_synchronize(sched);
 
     int64_t h1, m1, f1, s1, c1;
     ggml_backend_sched_get_expert_cache_stats(sched, &h1, &m1, &f1, &s1, &c1);
     printf("  After token 1: hits=%lld misses=%lld fate=%lld saved=%lld\n",
         (long long)h1, (long long)m1, (long long)f1, (long long)s1);
-    assert(m1 >= n_expert_used);
+    GGML_ASSERT(m1 >= n_expert_used);
 
-    // Token 2: same IDs — cache should hit and save bytes
-    ggml_backend_tensor_set(ids, id_vals, 0, sizeof(id_vals));
+    // Token 2: same IDs — cache should hit and save bytes (ids already set above)
     ggml_backend_sched_graph_compute(sched, graph);
-    ggml_backend_sched_synchronize(sched);
 
     int64_t h2, m2, f2, s2, c2;
     ggml_backend_sched_get_expert_cache_stats(sched, &h2, &m2, &f2, &s2, &c2);
     printf("  After token 2: hits=%lld misses=%lld fate=%lld saved=%lld\n",
         (long long)h2, (long long)m2, (long long)f2, (long long)s2);
     // Either direct hits or FATE pre-population should fire on the second token
-    assert(h2 > h1 || f2 > f1);
-    assert(s2 > 0);
+    GGML_ASSERT(h2 > h1 || f2 > f1);
+    GGML_ASSERT(s2 > 0);
 
     ggml_free(ctx);
     ggml_backend_buffer_free(cpu_buf);

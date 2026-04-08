@@ -367,7 +367,7 @@ extern "C" {
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
-        bool expert_cache; ///< enable MoE expert GPU cache (reduces redundant CPU->GPU copies)
+        int32_t expert_cache_n_slots; // N-slot LRU expert cache: 0=off, -1=dedup-only (no VRAM saving), N>0=N GPU slots per layer
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
@@ -991,6 +991,18 @@ extern "C" {
     // This is automatically done when using one of the functions below to obtain the computation results
     // and is not necessary to call it explicitly in most cases
     LLAMA_API void llama_synchronize(struct llama_context * ctx);
+
+    // Expert cache statistics for MoE weight offloading (--expert-cache-slots / --n-cpu-moe).
+    // All output pointers are optional (may be NULL). Reset counters with llama_expert_cache_stats_reset().
+    LLAMA_API void llama_expert_cache_stats(
+            const struct llama_context * ctx,
+            int64_t * n_hits,
+            int64_t * n_misses,
+            int64_t * n_fate_hits,
+            int64_t * bytes_saved,
+            int64_t * bytes_copied);
+
+    LLAMA_API void llama_expert_cache_stats_reset(struct llama_context * ctx);
 
     // Token logits obtained from the last call to llama_decode()
     // The logits for which llama_batch.logits[i] != 0 are stored contiguously

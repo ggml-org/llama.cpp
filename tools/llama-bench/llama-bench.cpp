@@ -341,6 +341,7 @@ struct cmd_params {
     std::vector<bool>                use_direct_io;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<int32_t>             expert_cache;
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
@@ -385,6 +386,7 @@ static const cmd_params cmd_params_defaults = {
     /* use_direct_io        */ { false },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* expert_cache         */ { 0 },
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
@@ -456,6 +458,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
+    printf("  -ec, --expert-cache-slots <N>               (default: %s)\n", join(cmd_params_defaults.expert_cache, ",").c_str());
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
@@ -817,6 +820,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "-ec" || arg == "--expert-cache-slots") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<int32_t>(argv[i], split_delim);
+                params.expert_cache.insert(params.expert_cache.end(), p.begin(), p.end());
             } else if (arg == "--no-host") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1087,6 +1097,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
+    if (params.expert_cache.empty()) {
+        params.expert_cache = cmd_params_defaults.expert_cache;
+    }
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
@@ -1138,6 +1151,7 @@ struct cmd_params_instance {
     bool               use_direct_io;
     bool               embeddings;
     bool               no_op_offload;
+    int32_t            expert_cache;
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
@@ -1216,8 +1230,9 @@ struct cmd_params_instance {
         cparams.offload_kqv     = !no_kv_offload;
         cparams.flash_attn_type = flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         cparams.embeddings      = embeddings;
-        cparams.op_offload      = !no_op_offload;
-        cparams.swa_full        = false;
+        cparams.op_offload           = !no_op_offload;
+        cparams.expert_cache_n_slots = expert_cache;
+        cparams.swa_full             = false;
 
         return cparams;
     }
@@ -1243,6 +1258,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
+    for (const auto & ec : params.expert_cache)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -1284,6 +1300,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .expert_cache = */ ec,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1321,6 +1338,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .expert_cache = */ ec,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1358,6 +1376,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .expert_cache = */ ec,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1400,6 +1419,7 @@ struct test {
     bool                     use_direct_io;
     bool                     embeddings;
     bool                     no_op_offload;
+    int32_t                  expert_cache;
     bool                     no_host;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
@@ -1440,6 +1460,7 @@ struct test {
         use_direct_io  = inst.use_direct_io;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        expert_cache   = inst.expert_cache;
         no_host        = inst.no_host;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
@@ -1500,7 +1521,7 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
+            "no_op_offload",  "expert_cache",   "no_host",        "fit_target",     "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1513,7 +1534,7 @@ struct test {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
-            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
+            field == "stddev_ns" || field == "no_op_offload" || field == "expert_cache" || field == "n_cpu_moe" ||
             field == "fit_target" || field == "fit_min_ctx") {
             return INT;
         }
@@ -1594,6 +1615,7 @@ struct test {
                                             std::to_string(use_direct_io),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(expert_cache),
                                             std::to_string(no_host),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
@@ -1788,6 +1810,9 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
+        if (field == "expert_cache") {
+            return 2;
+        }
         if (field == "no_host") {
             return 4;
         }
@@ -1827,6 +1852,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
+        }
+        if (field == "expert_cache") {
+            return "ec";
         }
         if (field == "no_host") {
             return "noh";
@@ -1920,6 +1948,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.expert_cache.size() > 1 || params.expert_cache != cmd_params_defaults.expert_cache) {
+            fields.emplace_back("expert_cache");
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
@@ -2317,6 +2348,9 @@ int main(int argc, char ** argv) {
             }
         }
 
+        // Reset expert cache counters before the timed runs so stats reflect this test only.
+        llama_expert_cache_stats_reset(ctx);
+
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2393,6 +2427,19 @@ int main(int argc, char ** argv) {
         if (p) {
             p->print_test(t);
             fflush(p->fout);
+        }
+
+        // Print expert cache stats if the cache is active.
+        if (t.expert_cache != 0) {
+            int64_t ec_hits = 0, ec_misses = 0, ec_fate = 0, ec_saved = 0, ec_copied = 0;
+            llama_expert_cache_stats(ctx, &ec_hits, &ec_misses, &ec_fate, &ec_saved, &ec_copied);
+            const double hit_pct = (ec_hits + ec_misses > 0)
+                ? 100.0 * ec_hits / (ec_hits + ec_misses) : 0.0;
+            fprintf(stderr, "expert-cache: hits=%" PRId64 " (%.1f%%) misses=%" PRId64
+                    " fate=%" PRId64 " saved=%.1fMiB copied=%.1fMiB\n",
+                    ec_hits, hit_pct, ec_misses, ec_fate,
+                    ec_saved / 1048576.0, ec_copied / 1048576.0);
+            fflush(stderr);
         }
 
         if (p_err) {

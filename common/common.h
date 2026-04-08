@@ -543,7 +543,7 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
-    bool expert_cache       = false; // enable MoE expert GPU cache (--expert-cache)
+    int32_t expert_cache_n_slots = 0; // N-slot LRU expert cache: 0=off, -1=dedup-only, N>0=N GPU slots per layer (--expert-cache-slots)
 
     bool single_turn       = false; // single turn chat conversation
 

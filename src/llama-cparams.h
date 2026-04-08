@@ -37,7 +37,7 @@ struct llama_cparams {
     bool no_perf;
     bool warmup;
     bool op_offload;
-    bool expert_cache;
+    int32_t expert_cache_n_slots;
     bool kv_unified;
     bool pipeline_parallel;
 
