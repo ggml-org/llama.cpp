@@ -682,6 +682,8 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+struct ggml_backend_sched_expert_cache;
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -736,7 +738,146 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    struct ggml_backend_sched_expert_cache * expert_cache = nullptr;
 };
+
+// Expert cache for MoE weight offloading.
+// Tracks which expert rows are already present in the GPU input_cpy tensor
+// and skips redundant CPU->GPU transfers during graph reuse.
+struct ggml_expert_cache_entry {
+    struct ggml_tensor * cpu_tensor;   // key: original CPU weight tensor pointer
+    void               * gpu_data;     // last-seen input_cpy->data (staleness check)
+    ggml_bitset_t      * populated;    // [n_expert] bitset: which rows are current (n_slots_alloc==0 only)
+    ggml_bitset_t      * fate_mask;    // [n_expert] bitset: rows loaded by FATE this call (n_slots_alloc==0 only)
+    int32_t            * fate_ids;     // [n_expert] array: last token's routing
+    int32_t              n_fate_ids;   // number of valid fate IDs
+    int64_t              n_expert;     // total number of experts
+    size_t               expert_size;  // bytes per expert row
+    // N-slot LFRU fields (only used when n_slots_alloc > 0):
+    // LFRU eviction score: freq / age where age = lru_counter - lru_clock[slot] + 1
+    // Evict slot with minimum score (least frequently, most stale). Empty slots score 0.
+    int32_t              n_slots_alloc;   // number of GPU slots (0 = full-copy dedup mode)
+    int32_t            * slot_to_expert;  // [n_slots_alloc] slot_id → expert_id (-1 = empty slot)
+    int32_t            * expert_to_slot;  // [n_expert] expert_id → slot_id (-1 = not cached)
+    int64_t            * lru_clock;       // [n_slots_alloc] last-access timestamp per slot
+    int32_t            * slot_freq;       // [n_slots_alloc] access frequency per slot (LFRU)
+    int64_t              lru_counter;     // monotonic counter, incremented on each cache access
+    int64_t              last_decay_counter; // lru_counter at last frequency decay
+    // Write-back skip optimization: avoid redundant GPU ids_tensor write when mapping is unchanged.
+    bool                 slot_ids_dirty;     // true if any slot→expert mapping changed since last write
+    struct ggml_tensor * last_ids_tensor;    // ids_tensor pointer we last wrote slot_ids into
+    int32_t            * prefill_freq;       // [n_expert] frequency count from prefill routing (for warmup)
+};
+
+struct ggml_backend_sched_expert_cache {
+    struct ggml_expert_cache_entry * entries;
+    int    n_entries;
+    int    max_entries;
+    bool   enabled;
+    int32_t n_slots; // 0 = dedup-only mode, >0 = LRU N-slot mode (VRAM savings)
+    int64_t n_hits;
+    int64_t n_misses;
+    int64_t n_fate_hits;
+    int64_t bytes_saved;
+    int64_t bytes_copied;
+};
+
+static struct ggml_expert_cache_entry * expert_cache_find_or_create(
+        struct ggml_backend_sched_expert_cache * cache,
+        struct ggml_tensor * cpu_tensor,
+        int64_t n_expert,
+        size_t expert_size) {
+    for (int i = 0; i < cache->n_entries; i++) {
+        if (cache->entries[i].cpu_tensor == cpu_tensor) {
+            return &cache->entries[i];
+        }
+    }
+    if (cache->n_entries >= cache->max_entries) {
+        cache->max_entries = cache->max_entries > 0 ? cache->max_entries * 2 : 64;
+        cache->entries = (struct ggml_expert_cache_entry *)realloc(
+            cache->entries, cache->max_entries * sizeof(struct ggml_expert_cache_entry));
+        if (!cache->entries) {
+            GGML_ABORT("expert cache: allocation failed");
+        }
+    }
+    struct ggml_expert_cache_entry * entry = &cache->entries[cache->n_entries];
+    memset(entry, 0, sizeof(*entry));
+
+    ggml_bitset_t * populated  = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
+    ggml_bitset_t * fate_mask  = (ggml_bitset_t *)calloc(ggml_bitset_size(n_expert), sizeof(ggml_bitset_t));
+    int32_t       * fate_ids   = (int32_t *)calloc(n_expert, sizeof(int32_t));
+    int32_t       * prefill_freq = (int32_t *)calloc(n_expert, sizeof(int32_t));
+
+    if (!populated || !fate_mask || !fate_ids || !prefill_freq) {
+        free(populated);
+        free(fate_mask);
+        free(fate_ids);
+        free(prefill_freq);
+        GGML_ABORT("expert cache: allocation failed");
+    }
+
+    entry->cpu_tensor   = cpu_tensor;
+    entry->gpu_data     = nullptr;
+    entry->n_expert     = n_expert;
+    entry->expert_size  = expert_size;
+    entry->populated    = populated;
+    entry->fate_mask    = fate_mask;
+    entry->fate_ids     = fate_ids;
+    entry->n_fate_ids   = 0;
+    entry->prefill_freq = prefill_freq;
+
+    // N-slot LRU initialization
+    const int32_t n_slots_alloc = cache->n_slots;
+    entry->n_slots_alloc       = n_slots_alloc;
+    entry->lru_counter         = 0;
+    entry->last_decay_counter  = 0;
+    entry->slot_ids_dirty      = true;   // first token must always write
+    entry->last_ids_tensor     = nullptr;
+    if (n_slots_alloc > 0) {
+        entry->slot_to_expert = (int32_t *)malloc((size_t)n_slots_alloc * sizeof(int32_t));
+        entry->expert_to_slot = (int32_t *)malloc((size_t)n_expert     * sizeof(int32_t));
+        entry->lru_clock      = (int64_t *)calloc((size_t)n_slots_alloc, sizeof(int64_t));
+        entry->slot_freq      = (int32_t *)calloc((size_t)n_slots_alloc, sizeof(int32_t));
+        if (!entry->slot_to_expert || !entry->expert_to_slot || !entry->lru_clock || !entry->slot_freq) {
+            free(entry->slot_to_expert);
+            free(entry->expert_to_slot);
+            free(entry->lru_clock);
+            free(entry->slot_freq);
+            GGML_ABORT("expert cache: slot allocation failed");
+        }
+        for (int32_t i = 0; i < n_slots_alloc; i++) entry->slot_to_expert[i] = -1;
+        for (int64_t i = 0; i < n_expert;       i++) entry->expert_to_slot[i] = -1;
+    } else {
+        entry->slot_to_expert = nullptr;
+        entry->expert_to_slot = nullptr;
+        entry->lru_clock      = nullptr;
+        entry->slot_freq      = nullptr;
+    }
+
+    cache->n_entries++;
+    return entry;
+}
+
+// LFRU eviction: find slot with minimum freq/age score (cross-multiply to avoid float).
+// Empty slots (freq=0) are preferred. Ties broken by first-encountered.
+static int32_t expert_cache_find_evict_slot(
+        const struct ggml_expert_cache_entry * entry) {
+    int32_t evict_slot = 0;
+    int64_t best_freq  = entry->slot_freq[0];
+    int64_t best_age   = entry->lru_counter - entry->lru_clock[0] + 1;
+    for (int32_t s = 1; s < entry->n_slots_alloc; s++) {
+        const int64_t freq = entry->slot_freq[s];
+        const int64_t age  = entry->lru_counter - entry->lru_clock[s] + 1;
+        // evict s if freq/age < best_freq/best_age  (cross-multiply)
+        if (freq * best_age < best_freq * age) {
+            evict_slot = s;
+            best_freq  = freq;
+            best_age   = age;
+        }
+    }
+    return evict_slot;
+}
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
@@ -1263,7 +1404,24 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
-                            struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
+                            // For MoE expert weights in N-slot mode, allocate only N GPU slots
+                            // instead of the full expert dimension — this is where VRAM is saved.
+                            const int32_t ec_n_slots = (sched->expert_cache &&
+                                sched->expert_cache->n_slots > 0) ? sched->expert_cache->n_slots : 0;
+                            // N-slot tensors are only safe for unquantized types.
+                            // Quantized types (MXFP4, Q4, etc.) use CUDA MMQ kernels that read
+                            // a few bytes past the last expert row; N-slot tensors have no room
+                            // for this and trigger illegal memory access. Fall back to full-size
+                            // tensor + dedup-only path for quantized types.
+                            const bool use_slot_tensor = (ec_n_slots > 0 &&
+                                node->op == GGML_OP_MUL_MAT_ID && j == 0 &&
+                                ggml_n_dims(src) == 3 &&
+                                ggml_backend_buffer_is_host(src->buffer) &&
+                                ggml_backend_buffer_get_usage(src->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                                !ggml_is_quantized(src->type));
+                            struct ggml_tensor * tensor_copy = use_slot_tensor
+                                ? ggml_new_tensor_3d(sched->ctx, src->type, src->ne[0], src->ne[1], ec_n_slots)
+                                : ggml_dup_tensor_layout(sched->ctx, src);
                             ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
                             if (sched->n_copies > 1) {
                                 ggml_set_input(tensor_copy);
@@ -1447,7 +1605,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     struct ggml_backend_sched_split * splits = sched->splits;
 
     ggml_tensor * prev_ids_tensor = nullptr;
-    std::vector<int32_t> ids;
+    std::vector<int32_t> ids;       // original expert IDs (never modified after download)
+    std::vector<int32_t> slot_ids;  // remapped slot IDs for N-slot LFRU write-back
     std::vector<ggml_bitset_t> used_ids;
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
@@ -1539,29 +1698,314 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             expert_size_copy + padding_end);
                     };
 
-                    int id = 0;
-                    while (!ggml_bitset_get(used_ids.data(), id)) {
-                        id++;
-                    }
-                    int32_t first_id = id;
-                    int32_t last_id = first_id;
+                    if (sched->expert_cache && sched->expert_cache->enabled) {
+                        struct ggml_expert_cache_entry * entry = expert_cache_find_or_create(
+                            sched->expert_cache, input, n_expert, expert_size);
 
-                    for (++id; id < n_expert; ++id) {
-                        if (!ggml_bitset_get(used_ids.data(), id)) {
-                            continue;
+                        // Staleness check: if the GPU copy buffer changed, all slots are invalid.
+                        if (entry->gpu_data != input_cpy->data) {
+                            memset(entry->populated, 0, ggml_bitset_size(n_expert) * sizeof(ggml_bitset_t));
+                            entry->gpu_data       = input_cpy->data;
+                            entry->slot_ids_dirty = true;
+                            entry->last_ids_tensor = nullptr;
+                            if (entry->n_slots_alloc > 0) {
+                                for (int32_t i = 0; i < entry->n_slots_alloc; i++) entry->slot_to_expert[i] = -1;
+                                for (int64_t i = 0; i < n_expert;              i++) entry->expert_to_slot[i] = -1;
+                                memset(entry->lru_clock, 0, (size_t)entry->n_slots_alloc * sizeof(int64_t));
+                                memset(entry->slot_freq,  0, (size_t)entry->n_slots_alloc * sizeof(int32_t));
+                                entry->lru_counter        = 0;
+                                entry->last_decay_counter = 0;
+                            }
                         }
 
-                        if (id == last_id + 1) {
+                        // Route to LFRU when GPU tensor is N-slot sized (both prefill and decode).
+                        // Overflow (n_unique > n_slots) is handled gracefully with forced eviction.
+                        const bool gpu_is_slot_tensor = (entry->n_slots_alloc > 0 &&
+                            input_cpy->ne[2] == (int64_t)entry->n_slots_alloc);
+
+                        if (gpu_is_slot_tensor) {
+                            // =========================================================
+                            // N-slot LFRU mode: fixed GPU slots, LFRU eviction, id remap.
+                            // LFRU eviction score: freq / age (higher = more valuable).
+                            // Implemented via cross-multiply to avoid floating point.
+                            // =========================================================
+
+                            // One-shot warmup: on first decode token, pre-populate slots from prefill frequencies.
+                            if (entry->lru_counter == 0 && entry->prefill_freq != nullptr) {
+                                // Find top-N experts by prefill frequency.
+                                // Simple O(n_expert * n_slots) selection — runs once.
+                                std::vector<std::pair<int32_t, int32_t>> freq_sorted; // (freq, expert_id)
+                                for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                    if (entry->prefill_freq[eid] > 0) {
+                                        freq_sorted.push_back({entry->prefill_freq[eid], eid});
+                                    }
+                                }
+                                std::sort(freq_sorted.begin(), freq_sorted.end(), std::greater<>());
+
+                                const int32_t n_warmup = std::min((int32_t)freq_sorted.size(), entry->n_slots_alloc);
+                                for (int32_t i = 0; i < n_warmup; i++) {
+                                    const int32_t eid = freq_sorted[i].second;
+                                    const int32_t slot = i; // slots 0..n_warmup-1
+                                    {
+                                        ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                            (const uint8_t *)input->data + (size_t)eid * expert_size,
+                                            (size_t)slot * expert_size, expert_size);
+                                    }
+                                    entry->slot_to_expert[slot] = eid;
+                                    entry->expert_to_slot[eid]   = slot;
+                                    entry->lru_clock[slot]       = 1; // initial timestamp
+                                    entry->slot_freq[slot]       = entry->prefill_freq[eid]; // carry over frequency
+                                    sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                }
+                                entry->lru_counter = 1;
+                                entry->slot_ids_dirty = true;
+
+                                // Clear prefill_freq to prevent re-warmup on cache invalidation.
+                                memset(entry->prefill_freq, 0, (size_t)n_expert * sizeof(int32_t));
+                            }
+
+                            // P1: Frequency decay to prevent old high-freq experts from dominating.
+                            // Decay every n_slots_alloc accesses (~once per token in steady state).
+                            if (entry->lru_counter - entry->last_decay_counter >= entry->n_slots_alloc) {
+                                for (int32_t s = 0; s < entry->n_slots_alloc; s++) {
+                                    entry->slot_freq[s] = (entry->slot_freq[s] + 1) >> 1; // halve, floor 1
+                                }
+                                entry->last_decay_counter = entry->lru_counter;
+                            }
+
+                            // Count unique experts; fall back gracefully on overflow.
+                            int32_t n_unique = 0;
+                            for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                if (ggml_bitset_get(used_ids.data(), eid)) n_unique++;
+                            }
+
+                            if (n_unique > entry->n_slots_alloc) {
+                                // Prefill overflow: n_unique experts > n_slots GPU slots.
+                                // Run full LFRU eviction with slot_ids remap.
+                                // Silent-corruption fix: all experts get a slot assignment; no slot-0 fallback.
+                                GGML_LOG_DEBUG("expert-cache: %d unique > %d slots (overflow, using forced eviction)\n",
+                                    n_unique, entry->n_slots_alloc);
+                                for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                    if (!ggml_bitset_get(used_ids.data(), eid)) continue;
+                                    const int32_t evict_slot = expert_cache_find_evict_slot(entry);
+                                    const int32_t old_eid = entry->slot_to_expert[evict_slot];
+                                    if (old_eid >= 0) entry->expert_to_slot[old_eid] = -1;
+                                    {
+                                        ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                            (const uint8_t *)input->data + (size_t)eid * expert_size,
+                                            (size_t)evict_slot * expert_size, expert_size);
+                                    }
+                                    entry->slot_to_expert[evict_slot] = eid;
+                                    entry->expert_to_slot[eid]         = evict_slot;
+                                    entry->lru_clock[evict_slot]       = ++entry->lru_counter;
+                                    entry->slot_freq[evict_slot]       = 1;
+                                    sched->expert_cache->n_misses++;
+                                    sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                }
+                                // Remap ids → slot_ids and write to GPU.
+                                // Overflow: n_unique > n_slots, so some early-loaded experts may have
+                                // been evicted by later ones. Map evicted experts to slot 0 (known quality
+                                // degradation; only affects overflow prefill batches, not decode).
+                                entry->slot_ids_dirty = true;
+                                slot_ids.resize(ids.size());
+                                for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                                    for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                        const size_t pos = i1 * (ids_tensor->nb[1] / sizeof(int32_t)) +
+                                                           i0 * (ids_tensor->nb[0] / sizeof(int32_t));
+                                        const int32_t sl = entry->expert_to_slot[ids[pos]];
+                                        slot_ids[pos] = (sl >= 0) ? sl : 0;
+                                    }
+                                }
+                                ggml_backend_tensor_set_async(ids_backend, ids_tensor,
+                                    slot_ids.data(), 0, ggml_nbytes(ids_tensor));
+                                entry->last_ids_tensor = ids_tensor;
+                                entry->slot_ids_dirty  = false;
+                            } else {
+                                // FATE pre-load: load predicted experts before processing hits/misses
+                                for (int32_t i = 0; i < entry->n_fate_ids; i++) {
+                                    int32_t fid = entry->fate_ids[i];
+                                    if (fid >= 0 && fid < (int32_t)n_expert &&
+                                            ggml_bitset_get(used_ids.data(), fid) &&
+                                            entry->expert_to_slot[fid] < 0) {
+                                        // FATE miss: evict and load
+                                        const int32_t evict_slot = expert_cache_find_evict_slot(entry);
+                                        const int32_t old_eid = entry->slot_to_expert[evict_slot];
+                                        if (old_eid >= 0) {
+                                            entry->expert_to_slot[old_eid] = -1;
+                                        }
+                                        {
+                                            ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                                (const uint8_t *)input->data + (size_t)fid * expert_size,
+                                                (size_t)evict_slot * expert_size, expert_size);
+                                        }
+                                        entry->slot_to_expert[evict_slot] = fid;
+                                        entry->expert_to_slot[fid]         = evict_slot;
+                                        entry->lru_clock[evict_slot]       = ++entry->lru_counter;
+                                        entry->slot_freq[evict_slot]       = 1;
+                                        entry->slot_ids_dirty              = true;
+                                        sched->expert_cache->n_fate_hits++;
+                                        sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                    }
+                                }
+                                // Normal LFRU path: per-expert hit/miss with eviction.
+                                for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                    if (!ggml_bitset_get(used_ids.data(), eid)) continue;
+
+                                    const int32_t slot = entry->expert_to_slot[eid];
+                                    if (slot >= 0) {
+                                        // Cache hit: update LFRU frequency and recency.
+                                        entry->lru_clock[slot] = ++entry->lru_counter;
+                                        entry->slot_freq[slot]++;
+                                        sched->expert_cache->n_hits++;
+                                        sched->expert_cache->bytes_saved += (int64_t)expert_size;
+                                    } else {
+                                        // Cache miss: LFRU eviction.
+                                        const int32_t evict_slot = expert_cache_find_evict_slot(entry);
+                                        const int32_t old_eid = entry->slot_to_expert[evict_slot];
+                                        if (old_eid >= 0) {
+                                            entry->expert_to_slot[old_eid] = -1;
+                                        }
+
+                                        // Copy new expert into eviction slot.
+                                        {
+                                            ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                                (const uint8_t *)input->data + (size_t)eid * expert_size,
+                                                (size_t)evict_slot * expert_size, expert_size);
+                                        }
+
+                                        entry->slot_to_expert[evict_slot] = eid;
+                                        entry->expert_to_slot[eid]         = evict_slot;
+                                        entry->lru_clock[evict_slot]       = ++entry->lru_counter;
+                                        entry->slot_freq[evict_slot]       = 1;
+
+                                        // Mapping changed — must write slot_ids back to GPU.
+                                        entry->slot_ids_dirty = true;
+
+                                        sched->expert_cache->n_misses++;
+                                        sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                    }
+                                }
+
+                                // P0: Skip slot_ids write-back if no mapping changed AND this
+                                // entry last wrote to the same ids_tensor (handles w13/w2 sharing).
+                                // When w13 writes to ids_tensor, w2 still needs to write its own
+                                // slot mapping even if its own mapping is unchanged, because w13
+                                // overwrote the shared tensor. last_ids_tensor tracks this.
+                                if (entry->slot_ids_dirty || ids_tensor != entry->last_ids_tensor) {
+                                    slot_ids.resize(ids.size());
+                                    for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                                        for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                            const size_t pos = i1 * (ids_tensor->nb[1] / sizeof(int32_t)) +
+                                                               i0 * (ids_tensor->nb[0] / sizeof(int32_t));
+                                            const int32_t sl = entry->expert_to_slot[ids[pos]];
+                                            GGML_ASSERT(sl >= 0 && "LFRU: expert not loaded");
+                                            slot_ids[pos] = sl;
+                                        }
+                                    }
+                                    ggml_backend_tensor_set_async(ids_backend, ids_tensor,
+                                        slot_ids.data(), 0, ggml_nbytes(ids_tensor));
+                                    entry->last_ids_tensor = ids_tensor;
+                                    entry->slot_ids_dirty  = false;
+                                }
+
+                                // P5: FATE recording using used_ids bitset (dedup, no duplicates).
+                                entry->n_fate_ids = 0;
+                                for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                    if (ggml_bitset_get(used_ids.data(), eid)) {
+                                        entry->fate_ids[entry->n_fate_ids++] = eid;
+                                    }
+                                }
+                            }
+
+                        } else {
+                            // =========================================================
+                            // Dedup-only mode (n_slots_alloc == 0): no VRAM saving.
+                            // Keeps all experts in GPU but skips re-copying within a batch.
+                            // FATE pre-populates predicted experts before the next token.
+                            // =========================================================
+
+                            // Phase 1: FATE pre-populate — copy predicted experts that are
+                            // needed this token but not yet on GPU (from previous token's routing).
+                            memset(entry->fate_mask, 0, ggml_bitset_size(n_expert) * sizeof(ggml_bitset_t));
+                            for (int32_t i = 0; i < entry->n_fate_ids; i++) {
+                                int32_t fid = entry->fate_ids[i];
+                                if (fid >= 0 && fid < (int32_t)n_expert &&
+                                        ggml_bitset_get(used_ids.data(), fid) &&
+                                        !ggml_bitset_get(entry->populated, fid)) {
+                                    copy_experts(fid, fid);
+                                    ggml_bitset_set(entry->populated, fid);
+                                    ggml_bitset_set(entry->fate_mask, fid);
+                                    sched->expert_cache->n_fate_hits++;
+                                    sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                }
+                            }
+
+                            // Phase 2: copy remaining needed experts; skip already-populated.
+                            int32_t first_id = -1, last_id = -1;
+                            for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                if (!ggml_bitset_get(used_ids.data(), eid)) {
+                                    continue;
+                                }
+                                if (ggml_bitset_get(entry->populated, eid)) {
+                                    if (first_id >= 0) { copy_experts(first_id, last_id); first_id = -1; }
+                                    if (!ggml_bitset_get(entry->fate_mask, eid)) {
+                                        sched->expert_cache->n_hits++;
+                                        sched->expert_cache->bytes_saved += (int64_t)expert_size;
+                                    }
+                                    continue;
+                                }
+                                sched->expert_cache->n_misses++;
+                                sched->expert_cache->bytes_copied += (int64_t)expert_size;
+                                ggml_bitset_set(entry->populated, eid);
+                                if (first_id < 0) { first_id = last_id = eid; }
+                                else if (eid == last_id + 1) { last_id = eid; }
+                                else { copy_experts(first_id, last_id); first_id = last_id = eid; }
+                            }
+                            if (first_id >= 0) { copy_experts(first_id, last_id); }
+
+                            // Accumulate prefill routing frequencies for LFRU warmup.
+                            if (entry->n_slots_alloc > 0) {
+                                for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                    if (ggml_bitset_get(used_ids.data(), eid)) {
+                                        entry->prefill_freq[eid]++;
+                                    }
+                                }
+                            }
+
+                            // Phase 3: record routing for FATE on next token (deduped via used_ids bitset).
+                            entry->n_fate_ids = 0;
+                            for (int32_t eid = 0; eid < (int32_t)n_expert; eid++) {
+                                if (ggml_bitset_get(used_ids.data(), eid)) {
+                                    entry->fate_ids[entry->n_fate_ids++] = eid;
+                                }
+                            }
+                        }
+                    } else {
+                        // cache disabled: copy all needed expert rows in one pass
+                        int id = 0;
+                        while (!ggml_bitset_get(used_ids.data(), id)) {
+                            id++;
+                        }
+                        int32_t first_id = id;
+                        int32_t last_id = first_id;
+
+                        for (++id; id < n_expert; ++id) {
+                            if (!ggml_bitset_get(used_ids.data(), id)) {
+                                continue;
+                            }
+
+                            if (id == last_id + 1) {
+                                last_id = id;
+                                continue;
+                            }
+
+                            copy_experts(first_id, last_id);
+
+                            first_id = id;
                             last_id = id;
-                            continue;
                         }
-
                         copy_experts(first_id, last_id);
-
-                        first_id = id;
-                        last_id = id;
                     }
-                    copy_experts(first_id, last_id);
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
@@ -1719,6 +2163,20 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->context_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
+    if (sched->expert_cache) {
+        for (int i = 0; i < sched->expert_cache->n_entries; i++) {
+            free(sched->expert_cache->entries[i].populated);
+            free(sched->expert_cache->entries[i].fate_mask);
+            free(sched->expert_cache->entries[i].fate_ids);
+            free(sched->expert_cache->entries[i].slot_to_expert);
+            free(sched->expert_cache->entries[i].expert_to_slot);
+            free(sched->expert_cache->entries[i].lru_clock);
+            free(sched->expert_cache->entries[i].slot_freq);
+            free(sched->expert_cache->entries[i].prefill_freq);
+        }
+        free(sched->expert_cache->entries);
+        free(sched->expert_cache);
+    }
     free(sched);
 }
 
@@ -1732,6 +2190,27 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         sched->is_reset = true;
     }
     sched->is_alloc = false;
+    // Invalidate expert cache populated state: GPU buffer data may be stale after reset.
+    // Entries (cpu_tensor keys) are preserved to avoid re-discovering tensors next graph.
+    if (sched->expert_cache) {
+        for (int i = 0; i < sched->expert_cache->n_entries; i++) {
+            struct ggml_expert_cache_entry * e = &sched->expert_cache->entries[i];
+            memset(e->populated,  0, ggml_bitset_size(e->n_expert) * sizeof(ggml_bitset_t));
+            memset(e->fate_mask,  0, ggml_bitset_size(e->n_expert) * sizeof(ggml_bitset_t));
+            e->gpu_data = nullptr;
+            if (e->n_slots_alloc > 0) {
+                for (int32_t j = 0; j < e->n_slots_alloc; j++) e->slot_to_expert[j] = -1;
+                for (int64_t j = 0; j < e->n_expert;       j++) e->expert_to_slot[j] = -1;
+                memset(e->lru_clock, 0, (size_t)e->n_slots_alloc * sizeof(int64_t));
+                memset(e->slot_freq, 0, (size_t)e->n_slots_alloc * sizeof(int32_t));
+                e->lru_counter        = 0;
+                e->last_decay_counter = 0;
+            }
+            if (e->prefill_freq) {
+                memset(e->prefill_freq, 0, (size_t)e->n_expert * sizeof(int32_t));
+            }
+        }
+    }
 }
 
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
@@ -1822,6 +2301,53 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_expert_cache(ggml_backend_sched_t sched, int32_t n_slots) {
+    GGML_ASSERT(sched);
+    const bool enabled = (n_slots != 0);
+    if (enabled && !sched->expert_cache) {
+        sched->expert_cache = (struct ggml_backend_sched_expert_cache *)calloc(1, sizeof(struct ggml_backend_sched_expert_cache));
+        GGML_ASSERT(sched->expert_cache && "expert cache: allocation failed");
+    }
+    if (sched->expert_cache) {
+        sched->expert_cache->enabled = enabled;
+        sched->expert_cache->n_slots = (n_slots > 0) ? n_slots : 0;
+    }
+}
+
+void ggml_backend_sched_get_expert_cache_stats(
+        ggml_backend_sched_t sched,
+        int64_t * n_hits,
+        int64_t * n_misses,
+        int64_t * n_fate_hits,
+        int64_t * bytes_saved,
+        int64_t * bytes_copied) {
+    GGML_ASSERT(sched);
+    int64_t h = 0, m = 0, f = 0, s = 0, c = 0;
+    if (sched->expert_cache) {
+        h = sched->expert_cache->n_hits;
+        m = sched->expert_cache->n_misses;
+        f = sched->expert_cache->n_fate_hits;
+        s = sched->expert_cache->bytes_saved;
+        c = sched->expert_cache->bytes_copied;
+    }
+    if (n_hits)       *n_hits       = h;
+    if (n_misses)     *n_misses     = m;
+    if (n_fate_hits)  *n_fate_hits  = f;
+    if (bytes_saved)  *bytes_saved  = s;
+    if (bytes_copied) *bytes_copied = c;
+}
+
+void ggml_backend_sched_reset_expert_cache_stats(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    if (sched->expert_cache) {
+        sched->expert_cache->n_hits       = 0;
+        sched->expert_cache->n_misses     = 0;
+        sched->expert_cache->n_fate_hits  = 0;
+        sched->expert_cache->bytes_saved  = 0;
+        sched->expert_cache->bytes_copied = 0;
+    }
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
