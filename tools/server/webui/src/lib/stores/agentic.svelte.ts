@@ -501,6 +501,7 @@ class AgenticStore {
 			sessionMessages.push({
 				role: MessageRole.ASSISTANT,
 				content: turnContent || undefined,
+				reasoning_content: turnReasoningContent || undefined,
 				tool_calls: normalizedCalls
 			});
 

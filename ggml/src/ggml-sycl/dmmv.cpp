@@ -972,6 +972,103 @@ static void dequantize_mul_mat_vec_q5_1_sycl(const void *vx, const dfloat *y,
     }
 }
 
+static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloat *y,
+                                             float *dst, const int ncols,
+                                             const int nrows,
+                                             dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
+
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                // Q8_0 reorder layout: [all qs (ncols*nrows bytes)][all d values]
+                // Cannot reuse dequantize_mul_mat_vec_reorder template because it has
+                // Q4_0-specific constants hardcoded (d_ptr offset and qs stride).
+                const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+                if (row >= nrows) return;
+
+                const int tid = item_ct1.get_local_id(2);
+                const int iter_stride = 8*2*GGML_SYCL_DMMV_X;
+                const int vals_per_iter = iter_stride / WARP_SIZE;
+                const int ncols_left = ncols % (QK8_0*WARP_SIZE);
+                const int ncols_align = ncols - ncols_left;
+
+#ifdef GGML_SYCL_F16
+                sycl::half2 tmp = {0.0f, 0.0f};
+#else
+                float tmp = 0.0f;
+#endif
+                const char *d_ptr = (const char*)vx + ncols*nrows;  // d after all qs
+
+                int i = 0;
+                for (i = 0; i < ncols_align; i += iter_stride) {
+                    const int col = i + vals_per_iter*tid;
+                    const int ib = (row*ncols + col)/QK8_0;
+                    const int iqs = col % QK8_0;
+
+#pragma unroll
+                    for (int j = 0; j < vals_per_iter; j += 2) {
+                        dfloat2 v;
+                        dequantize_q8_0_reorder((const void *)d_ptr, ib, (const void *)vx,
+                                                ib * QK8_0 + iqs + j, v);
+
+#ifdef GGML_SYCL_F16
+                        dfloat2 t1{y[col + j + 0], y[col + j + 1]};
+                        tmp += v * t1;
+#else
+                        tmp += v.x() * y[col + j + 0];
+                        tmp += v.y() * y[col + j + 1];
+#endif
+                    }
+                }
+
+                // handle remaining columns
+                for (; i < ncols; i += iter_stride) {
+                    if (tid >= ncols_left/QK8_0) continue;
+                    const int col = i + vals_per_iter*tid;
+                    const int ib = (row*ncols + col)/QK8_0;
+                    const int iqs = col % QK8_0;
+
+#pragma unroll
+                    for (int j = 0; j < vals_per_iter; j += 2) {
+                        dfloat2 v;
+                        dequantize_q8_0_reorder((const void *)d_ptr, ib, (const void *)vx,
+                                                ib * QK8_0 + iqs + j, v);
+
+#ifdef GGML_SYCL_F16
+                        dfloat2 t1{y[col + j + 0], y[col + j + 1]};
+                        tmp += v * t1;
+#else
+                        tmp += v.x() * y[col + j + 0];
+                        tmp += v.y() * y[col + j + 1];
+#endif
+                    }
+                }
+
+                // reduce
+                const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
+                for (int mask = mask_start; mask > 0; mask >>= 1) {
+                    tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+                }
+
+                if (tid == 0) {
+#ifdef GGML_SYCL_F16
+                    dst[row] = tmp.x() + tmp.y();
+#else
+                    dst[row] = tmp;
+#endif
+                }
+            });
+    }
+}
+
 static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
@@ -1122,7 +1219,12 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q8_0:
-            dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                dequantize_mul_mat_vec_q8_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            } else {
+                dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q2_K:
             dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
