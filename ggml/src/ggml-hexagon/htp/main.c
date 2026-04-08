@@ -213,22 +213,33 @@ AEEResult htp_iface_munmap(remote_handle64 handle, int fd) {
 }
 
 static void vtcm_acquire(struct htp_context * ctx) {
-    if (ctx->vtcm_valid) return;
+    if (!ctx->vtcm_valid) {
+        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000u);
+        if (err != 0) {
+            FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
+            abort();
+        }
 
-    int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
-    if (err != 0) {
-        FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned)err);
-        abort();
+        ctx->vtcm_needs_release = false;
+        ctx->vtcm_valid = true;
+
+        // Drop the priority to make sure we get the release callback from other GGML-HTP and QNN-HTP sessions
+        HAP_compute_res_update_priority(ctx->vtcm_rctx, ctx->thread_prio + 10);
     }
-
-    ctx->vtcm_valid = true;
 }
 
 static void vtcm_release(struct htp_context * ctx) {
-    if (!ctx->vtcm_valid) return;
+    if (ctx->vtcm_valid) {
+        ctx->vtcm_valid         = false;
+        ctx->vtcm_needs_release = false;
+        HAP_compute_res_release_cached(ctx->vtcm_rctx);
+    }
+}
 
-    HAP_compute_res_release_cached(ctx->vtcm_rctx);
-    ctx->vtcm_valid = false;
+static int vtcm_release_callback(unsigned int rctx, void * state) {
+    struct htp_context * ctx = (struct htp_context *) state;
+    ctx->vtcm_needs_release = true;
+    return 0;
 }
 
 static int vtcm_alloc(struct htp_context * ctx) {
@@ -240,6 +251,7 @@ static int vtcm_alloc(struct htp_context * ctx) {
     HAP_compute_res_attr_set_serialize(&attr, 0);
     HAP_compute_res_attr_set_cache_mode(&attr, 1);
     HAP_compute_res_attr_set_vtcm_param_v2(&attr, vtcm_size, vtcm_size, vtcm_size); // single page
+    HAP_compute_res_attr_set_release_callback(&attr, vtcm_release_callback, (void *) ctx);
     HAP_compute_res_attr_set_hmx_param(&attr, 1);
 
     // Allocate VTCM for scratch pads
@@ -260,6 +272,7 @@ static int vtcm_alloc(struct htp_context * ctx) {
     ctx->vtcm_size          = vtcm_size;
     ctx->vtcm_rctx          = rctx;
     ctx->vtcm_valid         = false;
+    ctx->vtcm_needs_release = false;
 
     return 0;
 }
@@ -600,7 +613,7 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
         if (!src) continue;
 
         if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
-            // invalidate compute buffers on input
+            // flush compute buffers on input
             hex_l2flush((void *) src->data, src->size);
         }
 
@@ -626,11 +639,19 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
         dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
 }
 
+#define DSPQUEUE_POLL_TIMEOUT_USEC 100
+#define DSPQUEUE_POLL_COUNT        100
+
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
     struct htp_context * ctx = (struct htp_context *) context;
 
     int err;
-    while (1) {
+
+    uint32_t poll_count = DSPQUEUE_POLL_COUNT;
+
+    vtcm_acquire(ctx);
+
+    while (!ctx->vtcm_needs_release) {
         struct htp_general_req req;
         uint32_t r_size = sizeof(req);
 
@@ -640,12 +661,16 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         err = dspqueue_read_noblock(queue, &flags, n_dbufs, &n_dbufs, &dbuf, r_size, &r_size, (uint8_t *) &req);
         if (err == AEE_EWOULDBLOCK) {
-            return;
+            if (--poll_count) {
+                qurt_sleep(DSPQUEUE_POLL_TIMEOUT_USEC);
+                continue;
+            }
+            break;
         }
 
         if (err != 0) {
             FARF(ERROR, "dspqueue_read_noblock failed: 0x%08x", (unsigned) err);
-            return;
+            break;
         }
 
         if (r_size < sizeof(req) || n_dbufs != 1) {
@@ -663,8 +688,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         if (dbuf.size < b_size + t_size + o_size) {
             FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
-            continue;
+            break;
         }
+
+        // Reset poll count for valid requests
+        poll_count = DSPQUEUE_POLL_COUNT;
 
         uint8_t * m_ptr = dbuf.ptr;
         struct htp_op_buf* bufs = (struct htp_op_buf*) m_ptr; m_ptr += b_size;
@@ -676,8 +704,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         prep_op_bufs(ctx, bufs, n_bufs);
         prep_tensors(ctx, bufs, tens, n_tens);
-
-        vtcm_acquire(ctx);
 
         struct htp_ops_context octx;
         memset(&octx, 0, sizeof(octx));
@@ -698,8 +724,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
-        vtcm_release(ctx);
-
         struct htp_general_rsp rsp;
         rsp.status = HTP_STATUS_OK; // FIXME
 
@@ -707,6 +731,9 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
         if (err != 0) {
             FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
+            break;
         }
     }
+
+    vtcm_release(ctx);
 }

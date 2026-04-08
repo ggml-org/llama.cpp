@@ -39,6 +39,7 @@ struct htp_context {
     size_t                 vtcm_size;
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
+    atomic_bool            vtcm_needs_release;
 };
 
 #endif /* HTP_CTX_H */
