@@ -2912,7 +2912,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     result.d_split = std::min(std::min(result.subgroup_size, 8u), D_lsb / 4);
 
-    result.shmem_staging = (hsk < 256 && hsv < 256) ? 1 : 0;
+    result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
     if (!reduce_block_rows && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc)) {
         result.block_rows /= 2;
@@ -3446,6 +3446,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, )
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
 
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if (device->integer_dot_product) {
             CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _int8)
             CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _int8)
@@ -3453,7 +3454,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, _int8)
             CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, _int8)
             CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _int8)
-        } else {
+        } else
+#endif
+        {
             CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, )
             CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, )
             CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, )
@@ -3465,6 +3468,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, _fp32)
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, _fp32)
 
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if (device->integer_dot_product) {
             CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _fp32_int8)
             CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _fp32_int8)
@@ -3472,7 +3476,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, _fp32_int8)
             CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, _fp32_int8)
             CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _fp32_int8)
-        } else {
+        } else
+#endif
+        {
             CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _fp32)
             CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _fp32)
             CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, _fp32)
