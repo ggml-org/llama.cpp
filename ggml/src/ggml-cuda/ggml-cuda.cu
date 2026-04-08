@@ -2979,25 +2979,25 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     // Check if the graph size has changed
-    if ((int)graph->nodes_props.size() != cgraph->n_nodes) {
+    if ((int)graph->node_props.size() != cgraph->n_nodes) {
         res = true;
-        graph->nodes_props.resize(cgraph->n_nodes);
+        graph->node_props.resize(cgraph->n_nodes);
     }
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_cuda_graph::node_property prop = {};
+        ggml_cuda_graph::node_properties prop = {};
         memcpy(&prop.node, cgraph->nodes[i], sizeof(ggml_tensor));
 
-        // src->data being same is enough to guarantee that node->srcs are consistent. ref:
+        // if the backend scheduler is making copies of CPU tensors, the src pointers can be the same but with different data, see:
         // https://github.com/ggml-org/llama.cpp/pull/21472#discussion_r3052235188
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
             prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j] ? cgraph->nodes[i]->src[j]->data : nullptr;
         }
 
-        if (!res && memcmp(&graph->nodes_props[i], &prop, sizeof(prop)) != 0) {
+        if (!res && memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
             res = true;
         }
-        graph->nodes_props[i] = prop;
+        graph->node_props[i] = prop;
     }
 
     return res;
