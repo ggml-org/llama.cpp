@@ -3453,69 +3453,6 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
-// returns whether the write (out) nodes overwrite the read nodes in operation
-static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
-                                                 int           node_idx,
-                                                 int           node_count,
-                                                 int *         out_nodes,
-                                                 int           out_count) {
-    auto nodes_overlap = [&](const ggml_tensor * a, const ggml_tensor * b) {
-        const int64_t a_start = (int64_t) a->data;
-        const int64_t a_end   = a_start + ggml_nbytes(a);
-
-        const int64_t b_start = (int64_t) b->data;
-        const int64_t b_end   = b_start + ggml_nbytes(b);
-
-        if ((b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end)) {
-            return true;
-        }
-
-        return false;
-    };
-
-    bool is_ok = true;
-    // for nrows=1, all fusion operations correctly read the src before writing dst or do it elementwise, so we should be ok
-    if (ggml_nrows(cgraph->nodes[node_idx]) == 1) {
-        return true;
-    }
-
-    for (int i = 0; i < out_count; ++i) {
-        const ggml_tensor * dst = cgraph->nodes[out_nodes[i]];
-
-        for (int j = node_idx; j < node_idx + node_count; ++j) {
-            // Loop over all srcs of all nodes in the fusion. If the src overlaps
-            // the destination and the src is not an intermediate node that's being
-            // elided, then disable fusion.
-
-            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
-                const ggml_tensor * src = cgraph->nodes[j]->src[src_idx];
-
-                if (!src || src->op == GGML_OP_NONE) {
-                    continue;
-                }
-
-                if (nodes_overlap(dst, src)) {
-                    bool found = false;
-
-                    for (int k = node_idx; k < j; ++k) {
-                        if (cgraph->nodes[k] == src) {
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if (!found) {
-                        is_ok = false;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    return is_ok;
-}
-
 /// @brief Evaluates and captures a CUDA graph for a given GGML computation graph. 
 /// Scans ggml_cgraph nodes, if required, apply fusion of operations and record kernel functions in the cuda_stream.
 /// @param cuda_ctx Pointer to the CUDA backend context. It includes the CUDA stream.
