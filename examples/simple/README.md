@@ -9,7 +9,7 @@ The purpose of this example is to demonstrate a minimal usage of llama.cpp for g
 
 main: n_len = 32, n_ctx = 2048, n_parallel = 1, n_kv_req = 32
 
- Hello my name is Shawn and I'm a 20 year old male from the United States. I'm a 20 year old
+ Hello my name is Shawn and I'm a 20 year old male from the United States.
 
 main: decoded 27 tokens in 2.31 s, speed: 11.68 t/s
 
