@@ -227,6 +227,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'alwaysShowAgenticTurns',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
+	},
+	{
+		key: 'excludeReasoningFromContext',
+		serverKey: 'excludeReasoningFromContext',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
 	}
 ];
 

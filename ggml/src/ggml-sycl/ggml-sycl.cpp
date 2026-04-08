@@ -411,7 +411,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         assert(tensor->view_src->buffer->buft == buffer->buft);
         return GGML_STATUS_SUCCESS;
     }
-    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
+    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
         !g_ggml_sycl_disable_optimize) {
         ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
         tensor->extra                 = extra;
@@ -569,9 +569,15 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
     SYCL_CHECK(
         CHECK_TRY_ERROR(dpct::get_current_device().queues_wait_and_throw()));
 
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream)
-                                    .memset(ctx->dev_ptr, value, buffer->size)
-                                    .wait()));
+    constexpr size_t MAX_CHUNK = 2ULL << 30;  // 2 GiB
+    for (size_t off = 0; off < buffer->size; off += MAX_CHUNK) {
+        size_t chunk = std::min(buffer->size - off, MAX_CHUNK);
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (*stream)
+                .memset(static_cast<char*>(ctx->dev_ptr) + off, value, chunk)
+                .wait()
+        ));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -3248,6 +3254,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
             return true;
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
@@ -3260,6 +3267,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
             return true;
         default:
             return false;
@@ -3269,6 +3277,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
             return true;
@@ -3349,6 +3358,40 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
             for (int j = 0; j < QK4_0/2; j ++)
             {
                 *(qs_ptr + ib * QK4_0 / 2 + j) = x[ib].qs[j];
+            }
+            *(d_ptr + ib) = x[ib].d;
+        });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    sycl_ext_free(stream, tmp_buf);
+}
+
+static void reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
+                            dpct::queue_ptr stream) {
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    GGML_ASSERT((size % sizeof(block_q8_0) == 0));
+    GGML_ASSERT((offset % sizeof(block_q8_0) == 0));
+    int offset_blks = offset / sizeof(block_q8_0);
+    auto qs_ptr = data_device + offset_blks * QK8_0;
+    auto d_ptr = (sycl::half*)(qs_ptr + ncols * nrows) + offset_blks;
+
+    auto reorder_event = stream->parallel_for(
+        size / sizeof(block_q8_0),
+            [=](auto i) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            const block_q8_0* x = (const block_q8_0*)tmp_buf;
+            const int ib = i;
+
+            for (int j = 0; j < QK8_0; j++)
+            {
+                *((int8_t*)qs_ptr + ib * QK8_0 + j) = x[ib].qs[j];
             }
             *(d_ptr + ib) = x[ib].d;
         });
@@ -3453,6 +3496,9 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
             reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
             break;
         case GGML_TYPE_Q4_K:
             reorder_qw_q4_k(data_device, size, 0, stream);

@@ -50,6 +50,10 @@ if ($null -ne $env:NDEV) {
     $env:GGML_HEXAGON_NDEV=$env:NDEV
 }
 
+if ($null -ne $env:HB) {
+    $env:GGML_HEXAGON_HOSTBUF=$env:HB
+}
+
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
 & "$basedir\bin\$tool" `

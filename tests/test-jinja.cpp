@@ -387,6 +387,24 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "empty computed member defaults to undefined",
+        "{{ a[]|default('fallback') }}",
+        {{"a", {{"name", "Bob"}}}},
+        "fallback"
+    );
+
+    test_template(t, "empty computed member is undefined",
+        "{{ a[] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
+    test_template(t, "undefined computed member is undefined",
+        "{{ a[undefined] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
     test_template(t, "array access",
         "{{ items[1] }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -503,6 +521,18 @@ static void test_filters(testing & t) {
         "{{ 'HELLO'|lower }}",
         json::object(),
         "hello"
+    );
+
+    test_template(t, "upper array",
+        "{{ items|upper }}",
+        {{"items", json::array({"hello", "world"})}},
+        "['HELLO', 'WORLD']"
+    );
+
+    test_template(t, "upper dict",
+        "{{ items|upper }}",
+        {{"items", {{"hello", "world"}}}},
+        "{'HELLO': 'WORLD'}"
     );
 
     test_template(t, "capitalize",
@@ -883,6 +913,24 @@ static void test_macros(testing & t) {
         "{% macro greet(name='Guest') %}Hi {{ name }}{% endmacro %}{{ greet() }}",
         json::object(),
         "Hi Guest"
+    );
+
+    test_template(t, "macro kwargs input",
+        "{% macro my_func(a, b=False) %}{% if b %}{{ a }}{% else %}nope{% endif %}{% endmacro %}{{ my_func(1, b=True) }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "macro with multiple args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(1, 2) }},{{ add(1, 2, 3) }},{{ add(1, b=10) }},{{ add(1, 2, c=5) }}",
+        json::object(),
+        "3,6,11,8"
+    );
+
+    test_template(t, "macro with kwarg out-of-order input",
+        "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
+        json::object(),
+        "Hello, John Smith,Hi, Jane Doe"
     );
 }
 

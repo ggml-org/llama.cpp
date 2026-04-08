@@ -31,6 +31,12 @@ struct htp_context {
 
     uint32_t opmask;
 
+    // Cached src1 spad position from the last quantize pass.
+    // When SKIP_QUANTIZE is set the Q8 activation data is already in VTCM
+    // at this address; the matmul must read from here instead of recomputing
+    // the offset (which depends on the current op's src0 size).
+    uint8_t * prev_src1_spad;
+
     // HMX acceleration fields (v73+, enabled by compile-time HTP_HAS_HMX)
 #ifdef HTP_HAS_HMX
     int        hmx_enabled;       // Runtime flag: HMX initialisation succeeded

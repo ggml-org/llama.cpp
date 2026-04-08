@@ -346,6 +346,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
     const HVX_Vector logit_cap = hvx_vec_splat_f32(factx->logit_softcap);
 
+    dma_cache m_cache;
+    dma_cache_init(&m_cache, spad_m, factx->size_m_block, DMA_CACHE_MAX_SIZE);
+
     for (uint32_t ir = ir0; ir < ir1; ++ir) {
         const uint32_t iq3 = fastdiv(ir, &factx->src0_div21);
         const uint32_t iq2 = fastdiv(ir - iq3*neq2*neq1, &factx->src0_div1);
@@ -389,9 +392,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             // Mask
             if (mask) {
                 const uint8_t * m_src = (const uint8_t *) (mp_base + ic_start);
-                uint8_t * m_dst = spad_m + (ib % 2) * factx->size_m_block;
                 // Mask is 1D contiguous for this row
-                dma_queue_push(dma, dma_make_ptr(m_dst, m_src), current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
+                dma_cache_push(dma, &m_cache, m_src, current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
             }
 
             // FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
@@ -554,7 +556,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 // Mask
                 if (mask) {
                     const uint8_t * m_src = (const uint8_t *) (mp_base + next_ic_start);
-                    dma_queue_push(dma, dma_make_ptr(m_base, m_src), next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
+                    dma_cache_push(dma, &m_cache, m_src, next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
                 }
 
                 // FARF(HIGH, "fa %u: prefetch KVM: ir %u ib %u : iq1 %u iq2 %u iq3 %u : size_k_row %u size_v_row %u bs %u: usec %u",
@@ -684,7 +686,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     octx->src0_spad.size_per_thread = size_q_block * 1;
     octx->src1_spad.size_per_thread = factx.size_k_block * 2;
     octx->src2_spad.size_per_thread = factx.size_v_block * 2;
-    octx->src3_spad.size_per_thread = mask ? factx.size_m_block * 2 : 0;
+    octx->src3_spad.size_per_thread = mask ? factx.size_m_block * DMA_CACHE_MAX_SIZE : 0;
     octx->dst_spad.size_per_thread  = size_vkq_acc;
 
     octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
@@ -704,6 +706,8 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size;
     octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size;
     octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size;
+
+    // FARF(ERROR, "fa: qrows-per-thread %u", factx.qrows_per_thread);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         worker_pool_run_func(octx->ctx->worker_pool, flash_attn_ext_f16_thread, &factx, octx->n_threads);

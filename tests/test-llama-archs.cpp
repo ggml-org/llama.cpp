@@ -90,6 +90,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_embd = 64;
         n_head = 1;
         n_ff   = 96;
+        n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     } else if (arch == LLM_ARCH_DEEPSEEK2
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
@@ -101,8 +102,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
         n_vocab = 10240;
-    } else if (arch == LLM_ARCH_GEMMA3N) {
-        n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     }
 
     const uint32_t n_embd_head = n_embd / n_head;
@@ -231,9 +230,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     return ret;
 }
 
+static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/) {
+    return true;
+}
+
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-        struct gguf_context * gguf_ctx, const size_t seed, const std::vector<ggml_backend_dev_t> & devs) {
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs) {
+    GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
@@ -244,7 +249,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     ctx_params.n_threads_batch = 4;
 
     size_t tmp = seed;
-    llama_model_ptr model(llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params));
+    llama_model_ptr model(gguf_ctx != nullptr ?
+        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params) :
+        llama_model_load_from_file_ptr(file, model_params));
     if (!model) {
         throw std::runtime_error("failed to create llama model");
     }
@@ -351,7 +358,6 @@ static bool moe_implemented(const llm_arch arch) {
 }
 
 static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
-    GGML_ABORT("llama_model_save_to_file is broken");
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -376,6 +382,22 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
         }
+        if (arch == LLM_ARCH_CHAMELEON) {
+            continue; // Only half-implemented and to be removed in the future.
+        }
+        if (arch == LLM_ARCH_GEMMA4) {
+            continue; // FIXME @ngxson
+        }
+        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
+            continue; // FIXME
+        }
+        if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
+                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
+            continue; // TODO vocab
+        }
+        if (arch == LLM_ARCH_PLM) {
+            continue; // TODO tensor shapes
+        }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;
@@ -383,8 +405,12 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
+            if (!llama_model_saver_supports_arch(arch)) {
+                LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
+                continue;
+            }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), seed, {});
+            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
@@ -416,14 +442,20 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 
     bool all_ok = true;
     common_log_flush(common_log_main());
-    printf("|%15s|%30s|%6s|%8s|%6s|\n", "Model arch.", "Device", "Config", "NMSE", "Status");
-    printf("|---------------|------------------------------|------|--------|------|\n");
+    printf("|%15s|%30s|%6s|%15s|%9s|\n", "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
+    printf("|---------------|------------------------------|------|---------------|---------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
         if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
             continue;
         }
         if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
             continue; // These models don't have usable implementations.
+        }
+        if (arch == LLM_ARCH_CHAMELEON) {
+            continue; // Only half-implemented and to be removed in the future.
+        }
+        if (arch == LLM_ARCH_GEMMA4) {
+            continue; // FIXME @ngxson
         }
         if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
             continue; // FIXME CUDA backend crashes.
@@ -439,6 +471,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
             continue; // TODO vocab
         }
         if (arch == LLM_ARCH_PLM) {
+            continue; // TODO tensor shapes
+        }
+        if (arch == LLM_ARCH_DEEPSEEK2OCR) {
             continue; // TODO tensor shapes
         }
 
@@ -458,22 +493,50 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), seed, {});
+            auto model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
             const std::vector<float> logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
             for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
                 if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                     continue;
                 }
-                auto model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), seed, {dev});
+                auto model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev});
+                std::string config_name = moe ? "MoE" : "Dense";
                 const std::vector<float> logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                 const double nmse_val = nmse(logits_cpu, logits_dev);
-                const bool ok = nmse_val <= 1e-4;
-                all_ok = all_ok && ok;
                 char nmse_str[10];
                 snprintf(nmse_str, sizeof(nmse_str), "%.2e", nmse_val);
-                printf("|%15s|%30s|%6s|%8s|%17s|\n", llm_arch_name(arch), ggml_backend_dev_description(dev),
-                    moe ? "MoE" : "Dense", nmse_str, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+                std::string status_nmse = "\033[1;32mOK\033[0m";
+                if (nmse_val > 1e-4) {
+                    all_ok = false;
+                    status_nmse = "\033[1;31mFAIL\033[0m";
+                }
+
+                std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
+                FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
+                if (file != nullptr && llama_model_saver_supports_arch(arch)) {
+                    llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
+                    ms.add_kv_from_model();
+                    ms.add_tensors_from_model();
+                    ms.save(file);
+                    rewind(file);
+
+                    auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, {dev});
+                    const std::vector<float> logits_roundtrip = get_logits(
+                        model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                    status_roundtrip = "\033[1;32mOK\033[0m";
+                    GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
+                    for (size_t i = 0; i < logits_roundtrip.size(); i++) {
+                        if (logits_roundtrip[i] != logits_dev[i]) {
+                            all_ok = false;
+                            status_roundtrip = "\033[1;31mFAIL\033[0m";
+                            break;
+                        }
+                    }
+                }
+
+                printf("|%15s|%30s|%6s|%15s (%8s)|%20s|\n", llm_arch_name(arch), ggml_backend_dev_description(dev),
+                    config_name.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
             }
         }
     }
@@ -526,6 +589,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
+    printf("%s: using seed %zu\n", __func__, seed);
 
     try {
         if (!out.empty()) {

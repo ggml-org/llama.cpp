@@ -270,6 +270,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_norm         = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
     struct ggml_tensor * ffn_post_norm    = nullptr;
+    struct ggml_tensor * ffn_post_norm_1  = nullptr; // gemma4
+    struct ggml_tensor * ffn_post_norm_2  = nullptr; // gemma4
+    struct ggml_tensor * ffn_pre_norm_2   = nullptr; // gemma4
     struct ggml_tensor * layer_out_norm   = nullptr;
     struct ggml_tensor * layer_out_norm_b = nullptr;
     struct ggml_tensor * ffn_norm_exps    = nullptr;
@@ -285,6 +288,7 @@ struct llama_layer {
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp      = nullptr;
+    struct ggml_tensor * ffn_gate_inp_s    = nullptr; // gemma4
     struct ggml_tensor * ffn_gate_exps     = nullptr;
     struct ggml_tensor * ffn_down_exps     = nullptr;
     struct ggml_tensor * ffn_up_exps       = nullptr;
@@ -414,6 +418,27 @@ struct llama_layer {
     struct ggml_tensor * ssm_alpha_s = nullptr;
     struct ggml_tensor * ssm_beta_s  = nullptr;
 
+    // input scales
+    struct ggml_tensor * wq_in_s            = nullptr;
+    struct ggml_tensor * wk_in_s            = nullptr;
+    struct ggml_tensor * wv_in_s            = nullptr;
+    struct ggml_tensor * wo_in_s            = nullptr;
+    struct ggml_tensor * wqkv_in_s          = nullptr;
+    struct ggml_tensor * wqkv_gate_in_s     = nullptr;
+    struct ggml_tensor * ffn_gate_in_s      = nullptr;
+    struct ggml_tensor * ffn_up_in_s        = nullptr;
+    struct ggml_tensor * ffn_down_in_s      = nullptr;
+    struct ggml_tensor * ffn_gate_exps_in_s = nullptr;
+    struct ggml_tensor * ffn_down_exps_in_s = nullptr;
+    struct ggml_tensor * ffn_up_exps_in_s   = nullptr;
+    struct ggml_tensor * ffn_gate_shexp_in_s= nullptr;
+    struct ggml_tensor * ffn_up_shexp_in_s  = nullptr;
+    struct ggml_tensor * ffn_down_shexp_in_s= nullptr;
+    struct ggml_tensor * ssm_in_in_s        = nullptr;
+    struct ggml_tensor * ssm_out_in_s       = nullptr;
+    struct ggml_tensor * ssm_alpha_in_s     = nullptr;
+    struct ggml_tensor * ssm_beta_in_s      = nullptr;
+
     // altup & laurel
     struct ggml_tensor * per_layer_inp_gate   = nullptr;
     struct ggml_tensor * per_layer_proj       = nullptr;
@@ -461,6 +486,9 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+
+    // gemma4 layer output scale
+    struct ggml_tensor * out_scale = nullptr;
 
     struct llama_layer_posnet posnet;
 
