@@ -1,6 +1,6 @@
 # llama-agent
 
-llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use loop on top. The result:
+llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use loop on top.
 
 * **Single binary, zero dependencies**: no Python, no Node.js, just download and run
 * **Single process**: inference and agent loop in one process, no IPC overhead
