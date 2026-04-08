@@ -348,9 +348,9 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-// Forward declarations for Level Zero allocation helpers (defined after this struct)
+// Forward declaration for Level Zero allocation helper (defined below)
 static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
-static void ggml_sycl_free_device(void *ptr, sycl::queue &q);
+// ggml_sycl_free_device and ggml_sycl_is_level_zero/dgpu are in common.hpp/common.cpp
 
 // sycl buffer
 
@@ -511,8 +511,8 @@ catch (sycl::exception const &exc) {
 // via xe_gem_prime_export, consuming system RAM equal to VRAM allocated.
 // zeMemAllocDevice uses the SVM/P2P path with no host staging.
 static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
-    void *ptr = nullptr;
-    try {
+    if (ggml_sycl_is_level_zero(q) && ggml_sycl_is_dgpu(q)) {
+        void *ptr = nullptr;
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
         ze_device_mem_alloc_desc_t alloc_desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
@@ -520,22 +520,15 @@ static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
         if (r == ZE_RESULT_SUCCESS && ptr) {
             return ptr;
         }
-    } catch (...) {}
+    }
     return sycl::malloc_device(size, q);
-}
-
-static void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
-    if (!ptr) return;
-    try {
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
-        if (zeMemFree(ze_ctx, ptr) == ZE_RESULT_SUCCESS) return;
-    } catch (...) {}
-    sycl::free(ptr, q);
 }
 
 static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
-    try {
+    // Use Level Zero direct copy for dGPU-to-dGPU transfers.
+    // The legacy host-staged path supports iGPU-to-dGPU copies.
+    if (ggml_sycl_is_level_zero(q_dst) && ggml_sycl_is_dgpu(q_dst) && ggml_sycl_is_dgpu(q_src)) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
         ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
@@ -547,8 +540,8 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
             zeCommandListDestroy(cl);
             return;
         }
-    } catch (...) {}
-    // Fallback to host-staged copy
+    }
+    // Fallback: host-staged copy (supports iGPU, non-L0 backends)
     char *host_buf = (char *)malloc(size);
     q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
     q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();

@@ -68,6 +68,23 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
   return sycl_down_blk_size;
 }
 
+bool ggml_sycl_is_level_zero(sycl::queue &q) {
+    return q.get_backend() == sycl::backend::ext_oneapi_level_zero;
+}
+
+bool ggml_sycl_is_dgpu(sycl::queue &q) {
+    return !q.get_device().get_info<sycl::info::device::host_unified_memory>();
+}
+
+void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
+    if (!ptr) return;
+    if (ggml_sycl_is_level_zero(q)) {
+        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+        if (zeMemFree(ze_ctx, ptr) == ZE_RESULT_SUCCESS) return;
+    }
+    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, q)));
+}
+
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
@@ -77,18 +94,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
         if (extra->data_device[i] != nullptr && streams.size()>0) {
             ggml_sycl_set_device(i);
-            bool freed = false;
-            try {
-                auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-                    streams[i]->get_context());
-                if (zeMemFree(ze_ctx, extra->data_device[i]) == ZE_RESULT_SUCCESS) {
-                    freed = true;
-                }
-            } catch (...) {}
-            if (!freed) {
-                SYCL_CHECK(
-                    CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
-            }
+            ggml_sycl_free_device(extra->data_device[i], *(streams[i]));
         }
     }
     delete extra;
