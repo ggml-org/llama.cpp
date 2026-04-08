@@ -150,7 +150,6 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
             cb(cur_moe, "ffn_norm_2", il);
 
             // custom MoE logits calculation (router operates on attn_out, not cur)
-            // use BF16-rounded scale to match PyTorch's native BF16 training precision (ref: PR #21451)
             ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
             tmp = ggml_scale(ctx0, tmp, 1.0f / ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf((float) n_embd))));
             tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);

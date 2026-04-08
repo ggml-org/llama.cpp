@@ -2066,7 +2066,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_NORM: (
             "conformer.layers.{bid}.conv.batch_norm", # lfm2
-            "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n, gemma4
+            "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n, gemma4
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
@@ -2081,7 +2081,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
-            "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n, gemma4
+            "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n, gemma4
         ),
 
         MODEL_TENSOR.A_PER_DIM_K_SCALE: (
