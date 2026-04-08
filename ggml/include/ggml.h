@@ -560,6 +560,7 @@ extern "C" {
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
         GGML_OP_SCATTER,
+        GGML_OP_LIGHTNING_INDEXER,
 
         GGML_OP_UNARY,
 
@@ -2493,6 +2494,14 @@ extern "C" {
         struct ggml_tensor  * a,
         struct ggml_tensor  * ids,
         float                 c);
+
+    GGML_API struct ggml_tensor * ggml_lightning_indexer(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * weights,
+        float                 scale_embd,
+        float                 scale_heads);
 
     // custom operators
 

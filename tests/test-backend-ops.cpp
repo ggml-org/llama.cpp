@@ -6713,6 +6713,57 @@ struct test_scatter : public test_case {
     }
 };
 
+// GGML_OP_LIGHTNING_INDEXER
+struct test_lightning_indexer : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const ggml_type type_c;
+    const std::array<int64_t, 4> ne_a;
+    const std::array<int64_t, 4> ne_b;
+    const std::array<int64_t, 4> ne_c;
+    float scale_embd;
+    float scale_heads;
+
+    std::string vars() override {
+        return VARS_TO_STR8(type_a, type_b, type_c, ne_a, ne_b, ne_c, scale_embd, scale_heads);
+    }
+
+    test_lightning_indexer(ggml_type type_a = GGML_TYPE_F32,
+            ggml_type type_b = GGML_TYPE_F16,
+            ggml_type type_c = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne_a = {128, 64, 128, 1},
+            std::array<int64_t, 4> ne_b = {128, 1, 256, 1},
+            std::array<int64_t, 4> ne_c = {64, 128, 1, 1},
+            float scale_embd = 1.0f / sqrtf(float(128)),
+            float scale_heads = 1.0f / sqrtf(float(64)))
+        : type_a(type_a), type_b(type_b), type_c(type_c), ne_a(ne_a), ne_b(ne_b), ne_c(ne_c), scale_embd(scale_embd), scale_heads(scale_heads) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type_a, 4, ne_a.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ggml_new_tensor(ctx, type_b, 4, ne_b.data());
+        ggml_set_param(b);
+        ggml_set_name(b, "b");
+
+        ggml_tensor * c = ggml_new_tensor(ctx, type_c, 4, ne_c.data());
+        ggml_set_param(c);
+        ggml_set_name(c, "c");
+
+        ggml_tensor * out = ggml_lightning_indexer(ctx, a, b, c, scale_embd, scale_heads);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t);
+        }
+    }
+};
+
 // Deserializable generic test case
 struct input_tensor {
     ggml_type type;
@@ -8785,6 +8836,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, true));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, false));
 
+    test_cases.emplace_back(new test_lightning_indexer());
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -9065,6 +9118,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F32, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, false));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, true));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, false));
+
+    test_cases.emplace_back(new test_lightning_indexer());
 
     return test_cases;
 }

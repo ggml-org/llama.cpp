@@ -141,9 +141,6 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
                 cb(indexer_weights, "indexer_weights", il);
 
-                indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_indexer_head)));
-                cb(indexer_weights, "indexer_weights", il);
-
                 // get cached indexer keys
                 indexer_k = mctx_lid->get_k(ctx0, il);
 
@@ -152,6 +149,10 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 indexer_q = ggml_view_4d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2]/n_stream, n_stream, indexer_q->nb[1], indexer_q->nb[2], indexer_q->nb[3]/n_stream, 0);
                 indexer_weights = ggml_view_4d(ctx0, indexer_weights, indexer_weights->ne[0], indexer_weights->ne[1]/n_stream, indexer_weights->ne[2], n_stream, indexer_weights->nb[1], indexer_weights->nb[2]/n_stream, indexer_weights->nb[3]/n_stream, 0);
 
+#if 1
+                ggml_tensor * indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head)), 1.0f / sqrtf(float(n_indexer_head)));
+                cb(indexer_score, "indexer_score", il);
+#else
                 // calculate indexer kq
                 indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
                 cb(indexer_q, "indexer_q", il);
@@ -168,6 +169,10 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 // apply ReLU
                 ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
                 cb(indexer_score, "indexer_score", il);
+
+                // scale weights
+                indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_indexer_head)));
+                cb(indexer_weights, "indexer_weights", il);
 
                 // multiply scores by indexer weights
                 indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
@@ -186,7 +191,7 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 // TODO maybe pre-scale indexer weights, so we won't have to do it here
                 indexer_score = ggml_scale(ctx0, indexer_score, 1.0f / sqrtf(float(n_embd_indexer_head)));
                 cb(indexer_score, "indexer_score", il);
-
+#endif
                 // mask indexer scores
                 ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
                 indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);

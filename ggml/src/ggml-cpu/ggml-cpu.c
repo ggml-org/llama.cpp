@@ -2035,6 +2035,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_scatter(params, tensor);
             } break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            {
+                ggml_compute_forward_lightning_indexer(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2355,6 +2359,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
         case GGML_OP_SCATTER:
+        case GGML_OP_LIGHTNING_INDEXER:
             {
                 n_tasks = n_threads;
             } break;
@@ -2938,6 +2943,11 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         GGML_ABORT("fatal error");
                     }
+                case GGML_OP_LIGHTNING_INDEXER:
+                    {
+                        const int64_t ne00 = node->src[0]->ne[0];
+                        cur += sizeof(float)*ne00*n_tasks;
+                    } break;
                 default:
                     break;
             }
