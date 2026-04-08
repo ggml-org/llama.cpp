@@ -28,6 +28,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <deque>
 
 #if defined(GGML_USE_HIP)
 #include "vendors/hip.h"
@@ -151,6 +152,7 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #define GGML_CUDA_MAX_STREAMS 8
+#define GGML_CUDA_MAX_GRAPHS 64
 
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
@@ -1367,11 +1369,17 @@ struct ggml_backend_cuda_context {
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+    std::deque<const void *> graph_roots;
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
         auto it = cuda_graphs.find(first_node_ptr);
         if (it == cuda_graphs.end()) {
+            if (graph_roots.size() >= GGML_CUDA_MAX_GRAPHS) {
+                cuda_graphs.erase(graph_roots.front());
+                graph_roots.pop_front();
+            }
             cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
+            graph_roots.push_back(first_node_ptr);
             return cuda_graphs[first_node_ptr].get();
         }
         return it->second.get();
