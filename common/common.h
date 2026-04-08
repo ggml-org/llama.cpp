@@ -356,6 +356,10 @@ struct common_params_speculative {
     bool has_dft() const {
         return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
     }
+
+    bool requires_dft() const {
+        return type == COMMON_SPECULATIVE_TYPE_DRAFT || type == COMMON_SPECULATIVE_TYPE_EAGLE3;
+    }
 };
 
 struct common_params_vocoder {
