@@ -1230,7 +1230,7 @@ struct common_speculative_session::impl {
         return !draft.empty();
     }
 
-    void clear_draft() {
+    void leave_draft_state() {
         draft.clear();
         spec_ckpt_n_denials  = 0;
     }
@@ -1241,19 +1241,19 @@ struct common_speculative_session::impl {
                const int            n_draft_max) {
         if (spec == nullptr) {
             // no implementation, nothing to do
-            clear_draft();
+            leave_draft_state();
             return draft;
         }
 
         if (n_draft_max == 0) {
-            clear_draft();
+            leave_draft_state();
             return draft;
         }
         if (params_spec.use_checkpoints && spec_ckpt_n_denials > 1) {
             // We shouldn't get two denials.
             LOG_WRN("%s: #tokens=%zu, spec_ckpt_n_denials=%d, id_last=%d, #draft=%zu\n", __func__,
                     cached_text_tokens.size(), spec_ckpt_n_denials, id_last, draft.size());
-            clear_draft();
+            leave_draft_state();
             return draft;
         }
 
@@ -1262,6 +1262,7 @@ struct common_speculative_session::impl {
             if (draft.empty()) {
                 // switch to non-draft inference
                 LOG_DBG("%s: draft of length 0 after denied checkpoint\n", __func__);
+                leave_draft_state();
                 return draft;
             }
             // we use the shortened draft of previous speculation
@@ -1274,7 +1275,7 @@ struct common_speculative_session::impl {
             draft = common_speculative_draft(spec, params_spec, cached_text_tokens, id_last);
             LOG_DBG("draft: id_last=%d, #draft=%zu\n", id_last, draft.size());
             if (draft.empty()) {
-                clear_draft();
+                leave_draft_state();
                 return draft;
             }
         }
@@ -1299,7 +1300,7 @@ struct common_speculative_session::impl {
 
         if (params_spec.n_min > (int) draft.size()) {
             LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params_spec.n_min);
-            clear_draft();
+            leave_draft_state();
             return draft;
         }
 
@@ -1307,7 +1308,7 @@ struct common_speculative_session::impl {
             const size_t n = callback.create_checkpoint();
             if (n == 0) {
                 LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, cached_text_tokens.size());
-                clear_draft();
+                leave_draft_state();
                 return draft;
             }
             spec_ckpt_size_part = n;
@@ -1398,7 +1399,7 @@ struct common_speculative_session::impl {
             return;
         }
 
-        clear_draft();
+        leave_draft_state();
 
         spec_has_ckpt        = false;
         spec_ckpt_size_part  = 0;
