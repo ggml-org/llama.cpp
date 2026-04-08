@@ -890,6 +890,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     quantize_state_impl qs(model, params);
 
+    // warn about quantization sensitivity for multimodal audio models
+    if (model.arch == LLM_ARCH_GEMMA4) {
+        const bool is_low_quant = (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S ||
+                                   ftype == LLAMA_FTYPE_MOSTLY_Q4_0   || ftype == LLAMA_FTYPE_MOSTLY_Q4_1   ||
+                                   ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ||
+                                   ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L || ftype == LLAMA_FTYPE_MOSTLY_Q2_K);
+        if (is_low_quant) {
+            LLAMA_LOG_WARN("\n%s: WARNING: Gemma 4 audio transcription is sensitive to quantization.\n", __func__);
+            LLAMA_LOG_WARN("%s:          Q5_K_M is the minimum recommended quantization for audio.\n", __func__);
+            LLAMA_LOG_WARN("%s:          Lower quantizations may produce repetitive output on longer audio.\n\n", __func__);
+        }
+    }
+
     if (params->only_copy) {
         ftype = ml.ftype;
     }
