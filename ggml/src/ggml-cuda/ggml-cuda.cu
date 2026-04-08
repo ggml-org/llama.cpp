@@ -3981,7 +3981,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
             graph_evaluated_or_captured = true; // CUDA graph has been captured                        
-            cuda_ctx->commit_graph(graph_key);                                         
+            cuda_ctx->commit_graph(graph_key);
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
             if (ggml_cuda_lock_counter.fetch_sub(1, std::memory_order_relaxed) == 1) {
@@ -4001,8 +4001,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
         }
         // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
-        cuda_ctx->remove_unused_graphs();
+        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));                
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
