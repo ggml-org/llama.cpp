@@ -589,12 +589,6 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
-    // ctx_copy is re-allocated by ggml_opt_alloc whenever the graph
-    // shape changes (see the ggml_free+ggml_init pair near the top of
-    // that function). The last allocation survives into ggml_opt_free,
-    // so we must release it here — otherwise the final per-batch
-    // context (~900 KB for typical GNN training) leaks per opt_ctx.
-    // Safe when ctx_copy == nullptr; ggml_free guards against NULL.
     ggml_free(opt_ctx->ctx_copy);
     delete opt_ctx;
 }
