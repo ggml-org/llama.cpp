@@ -9,10 +9,6 @@
 //     4. Attention:    attn[j] = dot(S_row_j, q) * scale
 //
 // State is stored transposed: s_out[j*S_v + i] = S[i][j]
-// Steps 2-4 are fused per row to avoid a scratch buffer.
-//
-// Parallelized across (head, seq) pairs. Inner loops are 8-wide vectorized.
-// S_v (head dimension) must be a multiple of 8.
 //******************************************************************************
 
 #include <stdint.h>
@@ -145,9 +141,21 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
     unsigned long default_mask;
     __asm__ volatile("mova.x.m %[ms]\n" : [ms] "=r"(default_mask));
 
-    // Parallelize over (j_block, head, seq). Block j by cachgeline size
-    // to avoid incoherency problems
-    const int32_t J_BLK = ET_CACHE_LINE_SIZE_BYTES / (int32_t)sizeof(float);
+    // Parallelize over (j_block, head, seq).  J_BLK must satisfy two separate
+    // cache-line alignment constraints at once:
+    //   (a) State: J_BLK consecutive rows of s_out (each S_v floats) span an
+    //       integer number of cache lines.  For S_v * sizeof(float) >= 64 this
+    //       is trivially any J_BLK >= 1.
+    //   (b) Attention output: each j writes exactly one float into
+    //       attn_ptr[j], which is densely packed.  If J_BLK * sizeof(float) is
+    //       less than a cache line, distinct threads will share a line and
+    //       race on scalar stores — ET's L1 isn't coherent so we lose writes.
+    //
+    // (b) dominates: J_BLK must be at least ET_CACHE_LINE_SIZE_BYTES / 4 so
+    // that each thread owns a whole cache line of attn_ptr.  That's 16 on
+    // ET-SoC-1, and it's also a whole number of state rows for every
+    // S_v >= 1, so (a) is automatically satisfied.
+    const int32_t J_BLK      = ET_CACHE_LINE_SIZE_BYTES / (int32_t)sizeof(float);
     const int32_t n_j_blocks = (S_v + J_BLK - 1) / J_BLK;
     const int32_t total_work = n_j_blocks * H * n_seqs;
 
@@ -168,24 +176,15 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
         float* s_out = state_out_base + state_base;
         const float* s_in = state_in + state_base;
 
-        __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-        for (int32_t j = j_start; j < j_end; j++) {
-            float* row_out = &s_out[j * S_v];
-            const float* row_in = &s_in[j * S_v];
-            for (int32_t i = 0; i < S_v; i += 8) {
-                __asm__ volatile(
-                    "flw.ps f10, %[src]\n"
-                    "fsw.ps f10, %[dst]\n"
-                    : [dst] "=m"(*(float(*)[8])&row_out[i])
-                    : [src] "m"(*(const float(*)[8])&row_in[i])
-                    : "f10"
-                );
-            }
-        }
-        __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
+        // Skip the explicit s_in -> s_out copy. At t=0 pass A/B read through
+        // src_state = s_in; pass B writes the first new row to s_out. From
+        // t=1 onward src_state flips to s_out (read-modify-write in place).
+        const float* src_state = s_in;
 
         const int32_t attn_stride_t = S_v * H;
         float* attn_ptr = attn_out_base + (seq * n_tokens * H + head) * S_v;
+
+        const float zero = 0.0f;
 
         for (int32_t t = 0; t < n_tokens; t++) {
             const float* q_t = (const float *)((const char *)q + seq_q * q_nb3 + t * q_nb2 + h_q * q_nb1);
@@ -194,6 +193,10 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
             const float* g_t = g + seq * g_stride_s + t * g_stride_t + head * g_stride_h;
             const float  beta_val = beta[seq * b_stride_s + t * b_stride_t + head];
 
+            // Precompute per-element gate for the kda path; scalar decay
+            // otherwise. Decay is fused into per-j pass A/B below, not
+            // applied to state in a separate pre-pass.
+            float decay = 0.0f;  // only used when !kda
             if (kda) {
                 const float log2e = 1.4426950408889634f;
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
@@ -209,59 +212,53 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                         : "f10"
                     );
                 }
-                for (int32_t j = j_start; j < j_end; j++) {
-                    float* row = &s_out[j * S_v];
-                    for (int32_t i = 0; i < S_v; i += 8) {
-                        __asm__ volatile(
-                            "flw.ps f10, %[s_vec]\n"
-                            "flw.ps f11, %[g_vec]\n"
-                            "fmul.ps f10, f10, f11, rne\n"
-                            "fsw.ps f10, %[s_out]\n"
-                            : [s_out] "=m"(*(float(*)[8])&row[i])
-                            : [s_vec] "m"(*(const float(*)[8])&row[i]),
-                              [g_vec] "m"(*(const float(*)[8])&exp_g_buf[i])
-                            : "f10", "f11"
-                        );
-                    }
-                }
                 __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
             } else {
-                float decay = et_expf(g_t[0]);
-                __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-                __asm__ volatile("fbc.ps f20, %[d]\n" : : [d] "m"(decay) : "f20");
-                for (int32_t j = j_start; j < j_end; j++) {
-                    float* row = &s_out[j * S_v];
-                    for (int32_t i = 0; i < S_v; i += 8) {
-                        __asm__ volatile(
-                            "flw.ps f10, %[s_vec]\n"
-                            "fmul.ps f10, f10, f20, rne\n"
-                            "fsw.ps f10, %[s_out]\n"
-                            : [s_out] "=m"(*(float(*)[8])&row[i])
-                            : [s_vec] "m"(*(const float(*)[8])&row[i])
-                            : "f10"
-                        );
-                    }
-                }
-                __asm__ volatile("mova.m.x %[ms]\n" : : [ms] "r"(default_mask));
+                decay = et_expf(g_t[0]);
             }
 
             for (int32_t j = j_start; j < j_end; j++) {
-                float* row = &s_out[j * S_v];
+                const float* src_row = src_state + j * S_v;
+                float*       dst_row = s_out     + j * S_v;
 
-                float zero = 0.0f;
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-                __asm__ volatile("fbc.ps f10, %[z]\n" : : [z] "m"(zero) : "f10");
-
-                for (int32_t i = 0; i < S_v; i += 8) {
+                if (kda) {
+                    __asm__ volatile("fbc.ps f10, %[z]\n"
+                                     : : [z] "m"(zero) : "f10");
+                    for (int32_t i = 0; i < S_v; i += 8) {
+                        __asm__ volatile(
+                            "flw.ps f11, %[s_vec]\n"
+                            "flw.ps f12, %[g_vec]\n"
+                            "flw.ps f13, %[k_vec]\n"
+                            "fmul.ps f11, f11, f12\n"        // row_dec = row * g
+                            "fmadd.ps f10, f11, f13, f10\n"  // acc += row_dec * k
+                            :
+                            : [s_vec] "m"(*(const float(*)[8])&src_row[i]),
+                              [g_vec] "m"(*(const float(*)[8])&exp_g_buf[i]),
+                              [k_vec] "m"(*(const float(*)[8])&k_t[i])
+                            : "f10", "f11", "f12", "f13"
+                        );
+                    }
+                } else {
                     __asm__ volatile(
-                        "flw.ps f11, %[s_vec]\n"
-                        "flw.ps f12, %[k_vec]\n"
-                        "fmadd.ps f10, f11, f12, f10\n"
+                        "fbc.ps f10, %[z]\n"
+                        "fbc.ps f22, %[d]\n"
                         :
-                        : [s_vec] "m"(*(const float(*)[8])&row[i]),
-                          [k_vec] "m"(*(const float(*)[8])&k_t[i])
-                        : "f10", "f11", "f12"
+                        : [z] "m"(zero), [d] "m"(decay)
+                        : "f10", "f22"
                     );
+                    for (int32_t i = 0; i < S_v; i += 8) {
+                        __asm__ volatile(
+                            "flw.ps f11, %[s_vec]\n"
+                            "flw.ps f13, %[k_vec]\n"
+                            "fmul.ps f11, f11, f22\n"        // row_dec = row * decay
+                            "fmadd.ps f10, f11, f13, f10\n"  // acc += row_dec * k
+                            :
+                            : [s_vec] "m"(*(const float(*)[8])&src_row[i]),
+                              [k_vec] "m"(*(const float(*)[8])&k_t[i])
+                            : "f10", "f11", "f13"
+                        );
+                    }
                 }
 
                 float dot_sk = hsum_f10();
@@ -269,29 +266,59 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
 
                 float delta_j = (v_t[j] - dot_sk) * beta_val;
 
+                // -------- Pass B: decay + outer product + attn --------
                 __asm__ volatile("mov.m.x m0, x0, 255\n" :::);
-                __asm__ volatile(
-                    "fbc.ps f20, %[dj]\n"
-                    "fbc.ps f10, %[z]\n"
-                    :
-                    : [dj] "m"(delta_j), [z] "m"(zero)
-                    : "f10", "f20"
-                );
-
-                for (int32_t i = 0; i < S_v; i += 8) {
+                if (kda) {
                     __asm__ volatile(
-                        "flw.ps f11, %[s_vec]\n"
-                        "flw.ps f12, %[k_vec]\n"
-                        "flw.ps f13, %[q_vec]\n"
-                        "fmadd.ps f11, f20, f12, f11\n"
-                        "fsw.ps f11, %[s_out]\n"
-                        "fmadd.ps f10, f11, f13, f10\n"
-                        : [s_out] "=m"(*(float(*)[8])&row[i])
-                        : [s_vec] "m"(*(const float(*)[8])&row[i]),
-                          [k_vec] "m"(*(const float(*)[8])&k_t[i]),
-                          [q_vec] "m"(*(const float(*)[8])&q_t[i])
-                        : "f10", "f11", "f12", "f13"
+                        "fbc.ps f10, %[z]\n"
+                        "fbc.ps f21, %[dj]\n"
+                        :
+                        : [z] "m"(zero), [dj] "m"(delta_j)
+                        : "f10", "f21"
                     );
+                    for (int32_t i = 0; i < S_v; i += 8) {
+                        __asm__ volatile(
+                            "flw.ps f11, %[s_vec]\n"
+                            "flw.ps f12, %[g_vec]\n"
+                            "flw.ps f13, %[k_vec]\n"
+                            "flw.ps f14, %[q_vec]\n"
+                            "fmul.ps f11, f11, f12\n"        // row_dec = row * g
+                            "fmadd.ps f11, f13, f21, f11\n"  // row_new = row_dec + k*delta_j
+                            "fsw.ps f11, %[s_out]\n"
+                            "fmadd.ps f10, f11, f14, f10\n"  // attn_acc += row_new * q
+                            : [s_out] "=m"(*(float(*)[8])&dst_row[i])
+                            : [s_vec] "m"(*(const float(*)[8])&src_row[i]),
+                              [g_vec] "m"(*(const float(*)[8])&exp_g_buf[i]),
+                              [k_vec] "m"(*(const float(*)[8])&k_t[i]),
+                              [q_vec] "m"(*(const float(*)[8])&q_t[i])
+                            : "f10", "f11", "f12", "f13", "f14"
+                        );
+                    }
+                } else {
+                    __asm__ volatile(
+                        "fbc.ps f10, %[z]\n"
+                        "fbc.ps f21, %[dj]\n"
+                        "fbc.ps f22, %[d]\n"
+                        :
+                        : [z] "m"(zero), [dj] "m"(delta_j), [d] "m"(decay)
+                        : "f10", "f21", "f22"
+                    );
+                    for (int32_t i = 0; i < S_v; i += 8) {
+                        __asm__ volatile(
+                            "flw.ps f11, %[s_vec]\n"
+                            "flw.ps f13, %[k_vec]\n"
+                            "flw.ps f14, %[q_vec]\n"
+                            "fmul.ps f11, f11, f22\n"        // row_dec = row * decay
+                            "fmadd.ps f11, f13, f21, f11\n"  // row_new = row_dec + k*delta_j
+                            "fsw.ps f11, %[s_out]\n"
+                            "fmadd.ps f10, f11, f14, f10\n"  // attn_acc += row_new * q
+                            : [s_out] "=m"(*(float(*)[8])&dst_row[i])
+                            : [s_vec] "m"(*(const float(*)[8])&src_row[i]),
+                              [k_vec] "m"(*(const float(*)[8])&k_t[i]),
+                              [q_vec] "m"(*(const float(*)[8])&q_t[i])
+                            : "f10", "f11", "f13", "f14"
+                        );
+                    }
                 }
 
                 float attn_val = hsum_f10();
@@ -300,6 +327,9 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
                 attn_ptr[j] = attn_val * scale;
             }
 
+            // After t=0, state lives in s_out; flip src_state so subsequent
+            // timesteps read-modify-write in place.
+            src_state = s_out;
             attn_ptr += attn_stride_t;
         }
     }

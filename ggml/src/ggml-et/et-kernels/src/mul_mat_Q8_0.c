@@ -15,6 +15,7 @@
 #define KSPLIT_MIN_K_BLOCKS 256   /* K >= 8192 elements */
 #define KSPLIT_MAX_ROWS     8     /* max rows per minion for K-split */
 #define TILE_KB           256     /* K-tile size in Q8_0 blocks (8192 elems, 32KB B data) */
+#define KSPLIT_GROUP_ROWS 4
 
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
@@ -63,10 +64,10 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const int use_ksplit = (K_blocks >= KSPLIT_MIN_K_BLOCKS)
                         && (rows_per_minion <= KSPLIT_MAX_ROWS)
                         && (rows_per_minion <= 4 || k_half <= TILE_KB);
-
-    unsigned long saved_mask;
-    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
-    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    const int use_ksplit_group = !use_ksplit
+                              && (K_blocks >= KSPLIT_MIN_K_BLOCKS)
+                              && (rows_per_minion > 4)
+                              && (rows_per_minion <= KSPLIT_MAX_ROWS);
 
     if (use_ksplit) {
         /* Each hart processes half the K dimension */
@@ -95,9 +96,8 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                     for (int64_t m = minion_id; m < M; m += STRIDE_M_KSPLIT) {
                         const block_q8_0* q_row = (const block_q8_0*)(src0_ptr2 + m * nb01);
 
-                        q8_dot_reset();
-                        q8_dot_tile(q_row + k_start, b_col_base + k_start * 32, k_len);
-                        float partial = q8_dot_reduce();
+                        float partial = compute_row_dot_q8_0(
+                            q_row + k_start, b_col_base + k_start * 32, k_len);
 
                         if (is_hart1) {
                             *l2scp_slot = partial;
@@ -113,6 +113,103 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 
                             float* dst_entry = (float*)(dst_ptr2 + n * nbd1 + m * sizeof(float));
                             atomic_store_f32((volatile float*)dst_entry, partial + other);
+                        }
+                    }
+                }
+            }
+        }
+    } else if (use_ksplit_group) {
+        /*
+         * Grouped K-split for the 5-8 rows/minion regime.
+         *
+         * Both harts process the same 4-row group, each on half of K, and
+         * exchange 4 partial sums once per group instead of once per row.
+         * This keeps the K-split bandwidth benefit while cutting semaphore
+         * traffic by 4x relative to the old per-row exchange.
+         */
+        const int64_t k_start = is_hart1 ? k_half : 0;
+        const int64_t k_len   = is_hart1 ? (K_blocks - k_half) : k_half;
+        volatile float* l2scp_slot =
+            (volatile float*)et_shire_l2scp_local(local_minion * 64);
+
+        for (int64_t i3 = 0; i3 < ne13; i3++) {
+            const int64_t i03 = i3 / r3;
+            const char* src0_ptr3 = (const char*)params->src0.data + i03 * nb03;
+            const char* src1_ptr3 = (const char*)params->src1.data + i3 * nb13;
+            char* dst_ptr3       = (char*)params->dst.data + i3 * nbd3;
+
+            for (int64_t i2 = 0; i2 < ne12; i2++) {
+                const int64_t i02 = i2 / r2;
+                const char* src0_ptr2 = src0_ptr3 + i02 * nb02;
+                const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
+                char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
+
+                for (int64_t n = 0; n < N; n++) {
+                    const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
+
+                    for (int64_t m_base = minion_id; m_base < M;
+                         m_base += STRIDE_M_KSPLIT * KSPLIT_GROUP_ROWS) {
+                        const int64_t m0 = m_base;
+                        const int64_t m1 = m0 + STRIDE_M_KSPLIT;
+                        const int64_t m2 = m1 + STRIDE_M_KSPLIT;
+                        const int64_t m3 = m2 + STRIDE_M_KSPLIT;
+
+                        float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+
+                        for (int64_t kb = 0; kb < K_blocks; kb += TILE_KB) {
+                            int64_t tile_len = k_len - kb;
+                            if (tile_len > TILE_KB) tile_len = TILE_KB;
+                            if (tile_len <= 0) {
+                                break;
+                            }
+                            const float* b_tile = b_col_base + (k_start + kb) * 32;
+                            const int64_t row_kb = k_start + kb;
+
+                            if (m0 < M) {
+                                s0 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m0 * nb01) + row_kb,
+                                    b_tile, tile_len);
+                            }
+                            if (m1 < M) {
+                                s1 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m1 * nb01) + row_kb,
+                                    b_tile, tile_len);
+                            }
+                            if (m2 < M) {
+                                s2 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m2 * nb01) + row_kb,
+                                    b_tile, tile_len);
+                            }
+                            if (m3 < M) {
+                                s3 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m3 * nb01) + row_kb,
+                                    b_tile, tile_len);
+                            }
+                        }
+
+                        if (is_hart1) {
+                            l2scp_slot[0] = s0;
+                            l2scp_slot[1] = s1;
+                            l2scp_slot[2] = s2;
+                            l2scp_slot[3] = s3;
+                            FENCE;
+                            flush_to_l2((const void*)l2scp_slot, 1, 64);
+                            WAIT_CACHEOPS;
+                            et_sem_post(ET_BARRIER_MINION);
+                            et_sem_wait(ET_BARRIER_MINION);
+                        } else {
+                            et_sem_wait(ET_BARRIER_MINION);
+                            const float p0 = l2scp_slot[0];
+                            const float p1 = l2scp_slot[1];
+                            const float p2 = l2scp_slot[2];
+                            const float p3 = l2scp_slot[3];
+                            et_sem_post(ET_BARRIER_MINION);
+
+                            float* c_base = (float*)(dst_ptr2 + n * nbd1);
+                            if (m0 < M) atomic_store_f32((volatile float*)(c_base + m0), s0 + p0);
+                            if (m1 < M) atomic_store_f32((volatile float*)(c_base + m1), s1 + p1);
+                            if (m2 < M) atomic_store_f32((volatile float*)(c_base + m2), s2 + p2);
+                            if (m3 < M) atomic_store_f32((volatile float*)(c_base + m3), s3 + p3);
                         }
                     }
                 }
@@ -153,27 +250,23 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             if (tile_len > TILE_KB) tile_len = TILE_KB;
                             const float* b_tile = b_col_base + kb * 32;
 
-                            q8_dot_reset();
-                            q8_dot_tile((const block_q8_0*)(src0_ptr2 + m0 * nb01) + kb,
-                                        b_tile, tile_len);
-                            s0 += q8_dot_reduce();
+                            s0 += compute_row_dot_q8_0(
+                                (const block_q8_0*)(src0_ptr2 + m0 * nb01) + kb,
+                                b_tile, tile_len);
                             if (m1 < M) {
-                                q8_dot_reset();
-                                q8_dot_tile((const block_q8_0*)(src0_ptr2 + m1 * nb01) + kb,
-                                            b_tile, tile_len);
-                                s1 += q8_dot_reduce();
+                                s1 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m1 * nb01) + kb,
+                                    b_tile, tile_len);
                             }
                             if (m2 < M) {
-                                q8_dot_reset();
-                                q8_dot_tile((const block_q8_0*)(src0_ptr2 + m2 * nb01) + kb,
-                                            b_tile, tile_len);
-                                s2 += q8_dot_reduce();
+                                s2 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m2 * nb01) + kb,
+                                    b_tile, tile_len);
                             }
                             if (m3 < M) {
-                                q8_dot_reset();
-                                q8_dot_tile((const block_q8_0*)(src0_ptr2 + m3 * nb01) + kb,
-                                            b_tile, tile_len);
-                                s3 += q8_dot_reduce();
+                                s3 += compute_row_dot_q8_0(
+                                    (const block_q8_0*)(src0_ptr2 + m3 * nb01) + kb,
+                                    b_tile, tile_len);
                             }
                         }
 
@@ -206,9 +299,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                     for (int64_t m = hart_id; m < M; m += STRIDE_M) {
                         const block_q8_0* q_row = (const block_q8_0*)(src0_ptr2 + m * nb01);
 
-                        q8_dot_reset();
-                        q8_dot_tile(q_row, b_col_base, K_blocks);
-                        float sum = q8_dot_reduce();
+                        float sum = compute_row_dot_q8_0(q_row, b_col_base, K_blocks);
 
                         float* dst_entry = (float*)(dst_ptr2 + n * nbd1 + m * sizeof(float));
                         atomic_store_f32((volatile float*)dst_entry, sum);
@@ -218,6 +309,5 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
         }
     }
 
-    __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
     return 0;
 }

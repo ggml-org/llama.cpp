@@ -484,6 +484,10 @@ bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
         }
     }
 
+    // fprintf(stderr, "ET: el_map s0 [%ld, %ld, %ld, %ld] s1 [%ld, %ld, %ld, %ld]\n",
+    //     node->src[0]->ne[0], node->src[0]->ne[1], node->src[0]->ne[2], node->src[0]->ne[3],
+    //     node->src[1]->ne[0], node->src[1]->ne[1], node->src[1]->ne[2], node->src[1]->ne[3]);
+
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, "el_map_f32", &params, sizeof(params), 0xFFFFFFFF);
 
     // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)

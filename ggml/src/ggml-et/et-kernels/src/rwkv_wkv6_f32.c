@@ -11,8 +11,6 @@
 //   dst[j]     += temp[j] * r[i]     (accumulated across all i)
 //   state[i][j] = state[i][j] * td[i] + kv[j]
 //
-// Parallelized across heads. Inner j-loop is 8-wide vectorized.
-// head_size must be a multiple of 8.
 //******************************************************************************
 
 #include <stdint.h>
@@ -74,8 +72,26 @@ int entry_point(struct ggml_et_rwkv_wkv6_params* params, void* env) {
     float* state_out = dst_data + C * T;
     float zero = 0.0f;
 
-    // Parallelize across heads
-    for (int32_t h = thread_id; h < H; h += num_threads) {
+    // Tile j by one cache line so each hart's dst/state writes never share
+    // a 64-B line with another hart's writes (the chip is non-coherent).
+    // Tiling on j (not i) is required for WKV6 because dst[j] is accumulated
+    // across i — splitting i across harts would race on dst writes.
+    // For S=64 this gives 4 tiles per head; for S<16 or odd S we fall back
+    // to one-hart-per-head (= the original parallelism).
+    const int32_t j_tile = (S % 16 == 0) ? 16 : S;
+    const int32_t tiles_per_head = S / j_tile;
+    const int32_t total_units = H * tiles_per_head;
+
+    // Parallelize across (head, j-tile) pairs.  The t loop stays inside this
+    // unit loop so the same hart owns the same column slice of state across
+    // all timesteps — required for the recurrence to read back its own
+    // writes without going through L2.
+    for (int32_t u = thread_id; u < total_units; u += num_threads) {
+        const int32_t h       = u / tiles_per_head;
+        const int32_t tile    = u % tiles_per_head;
+        const int32_t j_start = tile * j_tile;
+        const int32_t j_end   = j_start + j_tile;
+
         const int32_t h_off = h * S;          // offset within C for this head
         const int32_t s2d   = h * S * S;      // offset within state for this head
 
@@ -102,10 +118,10 @@ int entry_point(struct ggml_et_rwkv_wkv6_params* params, void* env) {
             const float* tf_ptr = tf + h_off;   // tf is per-head, no t offset
             const float* td_ptr = td + th;
 
-            // Zero the output for this head's slice: dst[th..th+S-1]
+            // Zero this hart's slice of dst: dst[th + j_start..th + j_end-1]
             // WKV6 accumulates dst[j] across all i, so must start from zero
             float* dst_row = dst_data + th;
-            for (int32_t j = 0; j < S; j += 8) {
+            for (int32_t j = j_start; j < j_end; j += 8) {
                 __asm__ volatile(
                     "fbc.ps f10, %[z]\n"
                     "fsw.ps f10, %[dst_vec]\n"
@@ -136,7 +152,7 @@ int entry_point(struct ggml_et_rwkv_wkv6_params* params, void* env) {
                     : "f20", "f21", "f22", "f23"
                 );
 
-                for (int32_t j = 0; j < S; j += 8) {
+                for (int32_t j = j_start; j < j_end; j += 8) {
                     __asm__ volatile(
                         // Load v[j], state_prev[i][j], dst[j]
                         "flw.ps f10, %[v_vec]\n"        // v[j..j+7]
