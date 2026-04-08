@@ -10742,6 +10742,49 @@ class NemotronHModel(GraniteHybridModel):
             if (latent_size := self.hparams.get("moe_latent_size")) is not None:
                 self.gguf_writer.add_moe_latent_size(latent_size)
 
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        # The NemotronH config uses pattern characters (e.g. '-') that may not
+        # be supported by the installed transformers version.
+        # Using trust_remote_code=True to load the model's own config class.
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+        assert max(tokenizer.vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        return tokens, toktypes, tokpre
+
     def set_vocab(self):
         super().set_vocab()
 
