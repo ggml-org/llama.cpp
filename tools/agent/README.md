@@ -5,7 +5,7 @@ llama-agent builds on llama.cpp's inference engine and adds an agentic tool-use 
 * **Single binary, zero dependencies**: no Python, no Node.js, just download and run
 * **Single process**: inference and agent loop in one process, no IPC overhead
 * **Same model cache**: uses your existing llama.cpp models, no separate download or setup
-* **Light harness**: one loop, a tool registry, and a handful of built-in tools, no framework, no abstractions
+* **Light harness**: one simple loop with a handful of built-in tools, optimized for small local models
 * **100% local**: offline, no API costs, your code stays on your machine
 * **No hidden telemetry**: zero tracking, zero phone-home, no usage events, no error reports sent anywhere
 * **API server**: `llama-agent-server` exposes the agent via HTTP API with SSE streaming
