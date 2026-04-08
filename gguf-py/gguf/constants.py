@@ -506,6 +506,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GEMMA3N   = auto()
     GEMMA3    = auto()
     QWEN3VL   = auto()
+    STEP3VL   = auto()
     COGVLM    = auto()
 
 
@@ -987,6 +988,8 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
     VISION_PROJECTOR_TYPE.GLM_EDGE:  "adapter",
     VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
     VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
+    VISION_PROJECTOR_TYPE.QWEN3VL:   "qwen3vl_merger",
+    VISION_PROJECTOR_TYPE.STEP3VL:   "step3vl",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -3996,6 +3999,8 @@ class GGMLQuantizationType(IntEnum):
     TQ2_0   = 35
     MXFP4   = 39
     NVFP4   = 40
+    TQ3_0   = 41
+    Q1_0    = 42
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4049,6 +4054,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_TQ2_0         = 37  # except 1d tensors
     MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
     MOSTLY_NVFP4         = 39  # except 1d tensors
+    MOSTLY_Q1_0          = 40  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -4103,6 +4109,7 @@ class VisionProjectorType:
     QWEN2VL = "qwen2vl_merger"
     QWEN25VL = "qwen2.5vl_merger"
     QWEN3VL = "qwen3vl_merger"
+    STEP3VL = "step3vl"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
     QWEN2A = "qwen2a" # audio
@@ -4159,8 +4166,10 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.BF16:    (1, 2),
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
+    GGMLQuantizationType.TQ3_0:   (32, 2 + 8 + 4),
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
+    GGMLQuantizationType.Q1_0:    (128, 2 + 16),
 }
 
 
