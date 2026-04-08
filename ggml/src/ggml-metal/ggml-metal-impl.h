@@ -8,6 +8,9 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
+#define N_R0_Q1_0 8
+#define N_SG_Q1_0 2
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 

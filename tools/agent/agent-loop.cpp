@@ -521,7 +521,7 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         std::vector<raw_buffer> files;
         json data = oaicompat_chat_params_parse(body, meta.chat_params, files);
 
-        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, data);
+        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, meta.logit_bias_eog, data);
 
         task.cli        = true;
         task.cli_prompt = data.at("prompt").get<std::string>();
@@ -1205,7 +1205,7 @@ common_chat_msg agent_loop::generate_completion_streaming(
         std::vector<raw_buffer> files;
         json data = oaicompat_chat_params_parse(body, meta.chat_params, files);
 
-        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, data);
+        task.params = server_task::params_from_json_cmpl(vocab_, *params_, meta.slot_n_ctx, meta.logit_bias_eog, data);
 
         task.cli        = true;
         task.cli_prompt = data.at("prompt").get<std::string>();
