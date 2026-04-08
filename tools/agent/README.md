@@ -326,7 +326,7 @@ Create an `mcp.json` file in your working directory or at `~/.llama-agent/mcp.js
 }
 ```
 
-Use `/tools` to see all available tools including MCP tools.
+Use `/tools` to see all available tools including MCP tools. Use `--no-mcp` to skip MCP server loading entirely.
 
 <details>
 <summary><strong>MCP configuration details</strong></summary>

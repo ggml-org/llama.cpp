@@ -284,6 +284,7 @@ int main(int argc, char ** argv) {
     // Check for custom flags before common_params_parse
     bool yolo_mode = false;
     int max_iterations = 0;  // 0 = unlimited (default)
+    bool enable_mcp = true;
     bool enable_skills = true;
     bool enable_agents_md = true;
     bool enable_compaction = true;
@@ -302,6 +303,14 @@ int main(int argc, char ** argv) {
             }
             argc--;
             i--;  // Re-check this position
+        } else if (arg == "--no-mcp") {
+            enable_mcp = false;
+            // Remove from argv
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         } else if (arg == "--no-skills") {
             enable_skills = false;
             // Remove from argv
@@ -451,13 +460,15 @@ int main(int argc, char ** argv) {
     // Load MCP servers (Unix only - requires fork/pipe)
     mcp_server_manager mcp_mgr;
     int mcp_tools_count = 0;
-    std::string mcp_config = find_mcp_config(working_dir);
-    if (!mcp_config.empty()) {
-        if (mcp_mgr.load_config(mcp_config)) {
-            int started = mcp_mgr.start_servers();
-            if (started > 0) {
-                register_mcp_tools(mcp_mgr);
-                mcp_tools_count = (int)mcp_mgr.list_all_tools().size();
+    if (enable_mcp) {
+        std::string mcp_config = find_mcp_config(working_dir);
+        if (!mcp_config.empty()) {
+            if (mcp_mgr.load_config(mcp_config)) {
+                int started = mcp_mgr.start_servers();
+                if (started > 0) {
+                    register_mcp_tools(mcp_mgr);
+                    mcp_tools_count = (int)mcp_mgr.list_all_tools().size();
+                }
             }
         }
     }
