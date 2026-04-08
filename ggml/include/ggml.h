@@ -2518,7 +2518,7 @@ extern "C" {
     *  If lower = false, assumes upper triangular instead
     *  If uni = true, assumes diagonal of A to be all ones (will override actual values)
     *
-    *  TODO: currently only lower, right, non-unitriangular variant is implemented
+    *  TODO: currently only lower, left, non-unitriangular variant is implemented
     */
     GGML_API struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
