@@ -1104,9 +1104,9 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought") + p.optional(p.literal("\n")) + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought") + p.optional(p.literal("\n")) + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
         }
 
         auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));
