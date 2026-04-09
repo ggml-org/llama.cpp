@@ -125,8 +125,8 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #define SHMEM_STRIDE (BK / 2 + 1)
 #endif
 
-shared FLOAT_TYPE_VEC2 buf_a[BM * SHMEM_STRIDE];
-shared FLOAT_TYPE_VEC2 buf_b[BN * SHMEM_STRIDE];
+shared FLOAT_TYPEV2 buf_a[BM * SHMEM_STRIDE];
+shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
 
@@ -258,17 +258,17 @@ void main() {
         sums[i] = coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0f);
     }
 #else
-    ACC_TYPE_VEC2 sums[WMITER * TM * WNITER * TN/2];
+    ACC_TYPEV2 sums[WMITER * TM * WNITER * TN/2];
 #if defined(DATA_A_F32) || defined(DATA_A_F16)
-    FLOAT_TYPE_VEC4 cache_a[WMITER * TM];
-    FLOAT_TYPE_VEC4 cache_b;
+    FLOAT_TYPEV4 cache_a[WMITER * TM];
+    FLOAT_TYPEV4 cache_b;
 #else
-    FLOAT_TYPE_VEC2 cache_a[WMITER * TM];
-    FLOAT_TYPE_VEC2 cache_b;
+    FLOAT_TYPEV2 cache_a[WMITER * TM];
+    FLOAT_TYPEV2 cache_b;
 #endif
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN/2; i++) {
-        sums[i] = ACC_TYPE_VEC2(0.0f, 0.0f);
+        sums[i] = ACC_TYPEV2(0.0f, 0.0f);
     }
 #endif
 
