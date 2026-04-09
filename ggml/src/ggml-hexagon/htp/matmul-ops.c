@@ -2947,7 +2947,9 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
 int op_matmul(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
-#ifdef HTP_HAS_HMX
+#ifndef HTP_HAS_HMX
+    return op_matmul_hvx(octx);
+#else
     if (!octx->ctx->hmx_enabled) {
         return op_matmul_hvx(octx);
     }
@@ -3075,9 +3077,9 @@ int op_matmul(struct htp_ops_context * octx) {
         FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1_tail.data, (void *) dst_tail.data);
         return op_matmul_hvx(octx);
     }
-#endif // HTP_HAS_HMX
 
-    return op_matmul_hvx(octx);
+    return 0;
+#endif // HTP_HAS_HMX
 }
 
 int op_matmul_id(struct htp_ops_context * octx) {
