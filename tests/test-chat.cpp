@@ -3788,6 +3788,51 @@ static void test_developer_role_to_system_workaround() {
     }
 }
 
+// Test that common_chat_parser_params constructor properly loads the parser from common_chat_params.
+// Regression test for https://github.com/ggml-org/llama.cpp/issues/21650
+static void test_chat_parser_params_constructor() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+
+    common_chat_templates_inputs inputs;
+    inputs.tools = { special_function_tool };
+    inputs.add_generation_prompt = true;
+    inputs.use_jinja = true;
+    common_chat_msg msg;
+    msg.role = "user";
+    msg.content = "call special_function";
+    inputs.messages = { msg };
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    // The parser string should be non-empty when tools are provided
+    GGML_ASSERT(!params.parser.empty() && "chat params should contain a serialized parser when tools are present");
+
+    // Construct parser params using the constructor (the fix under test)
+    common_chat_parser_params pp(params);
+
+    // The arena should now be loaded (non-empty) from the constructor
+    GGML_ASSERT(!pp.parser.empty() && "constructor should load parser from chat_params.parser");
+
+    // Parse a tool call response using common_chat_parse (which relies on pp.parser)
+    std::string tool_call_output =
+        "<tool_call>\n"
+        "<function=special_function>\n"
+        "<parameter=arg1>\n1\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+
+    auto result = common_chat_parse(tool_call_output, false, pp);
+
+    // Tool calls should be parsed, not dumped into content
+    GGML_ASSERT(!result.tool_calls.empty() && "common_chat_parse should parse tool calls when constructor loads parser");
+    GGML_ASSERT(result.tool_calls[0].name == "special_function");
+    GGML_ASSERT(result.content.empty() || result.content.find("<tool_call>") == std::string::npos);
+
+    printf("[chat] test_chat_parser_params_constructor passed\n");
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -3929,6 +3974,7 @@ int main(int argc, char ** argv) {
         test_msgs_oaicompat_json_conversion();
         test_tools_oaicompat_json_conversion();
         test_developer_role_to_system_workaround();
+        test_chat_parser_params_constructor();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }
