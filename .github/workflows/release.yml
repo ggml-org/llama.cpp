@@ -349,6 +349,20 @@ jobs:
             echo "value=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check if tag exists
+        id: check_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.name }}"
+          if git ls-remote --tags https://github.com/${{ github.repository }}.git | grep -q "refs/tags/${TAG_NAME}$"; then
+            echo "Tag ${TAG_NAME} already exists in ${{ github.repository }}. Skipping release creation."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag ${TAG_NAME} does not exist in ${{ github.repository }}. Proceeding with release."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create release
         id: create_release
         uses: ggml-org/action-create-release@v1
