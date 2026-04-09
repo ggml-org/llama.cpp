@@ -22,6 +22,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	renderUserContentAsMarkdown: false,
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
+	sendOnEnter: true,
 	autoMicOnEmpty: false,
 	fullHeightCodeBlocks: false,
 	showRawModelNames: false,
@@ -126,6 +127,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 	autoShowSidebarOnNewChat:
 		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
+	sendOnEnter:
+		'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	fullHeightCodeBlocks:

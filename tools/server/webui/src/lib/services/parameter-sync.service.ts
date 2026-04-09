@@ -239,6 +239,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'excludeReasoningFromContext',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
+	},
+	{
+		key: 'sendOnEnter',
+		serverKey: 'sendOnEnter',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
 	}
 ];
 

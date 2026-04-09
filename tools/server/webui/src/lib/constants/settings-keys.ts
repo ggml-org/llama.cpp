@@ -11,6 +11,7 @@ export const SETTINGS_KEYS = {
 	SYSTEM_MESSAGE: 'systemMessage',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
+	SEND_ON_ENTER: 'sendOnEnter',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	ASK_FOR_TITLE_CONFIRMATION: 'askForTitleConfirmation',

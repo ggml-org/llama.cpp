@@ -65,6 +65,11 @@
 					type: SettingsFieldType.INPUT
 				},
 				{
+					key: SETTINGS_KEYS.SEND_ON_ENTER,
+					label: 'Send message on Enter',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
 					label: 'Copy text attachments as plain text',
 					type: SettingsFieldType.CHECKBOX
