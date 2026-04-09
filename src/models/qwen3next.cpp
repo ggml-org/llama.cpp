@@ -414,19 +414,19 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
         GGML_ASSERT(num_v_heads % num_k_heads == 0);
         int64_t repeat_factor = num_v_heads / num_k_heads;
 
-        // repeat interleave: reshape to (repeat part, 1, remaining part), do repeat, then reshape back
-        ggml_tensor * q_reshaped = ggml_reshape_3d(ctx0, q_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
-        ggml_tensor * k_reshaped = ggml_reshape_3d(ctx0, k_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
+        // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
+        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
 
         // Repeat along the third dimension (the new dimension with size 1)
         ggml_tensor * q_repeated =
-            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
+            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
         ggml_tensor * k_repeated =
-            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
+            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
 
         // Reshape back to merge the head and repeat dimensions
-        // From [head_dim, num_k_heads, repeat_factor, n_seq_tokens * n_seqs]
-        // Back to [head_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs]
+        // From [head_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs]
+        // Back to [head_dim, repeat_factor * num_k_heads, n_seq_tokens, n_seqs]
         q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
         k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
     }
