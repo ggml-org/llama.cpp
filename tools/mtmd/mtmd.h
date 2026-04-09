@@ -95,6 +95,8 @@ struct mtmd_context_params {
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
+    float image_max_pixels_tolerance; // tolerance multiplier for tiling threshold (default: -1 = use model default 2.0)
+    bool image_resize_bicubic;        // use bicubic interpolation (default: false = bilinear)
 
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;

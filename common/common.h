@@ -558,6 +558,8 @@ struct common_params {
     std::vector<std::string> image; // path to image file(s)
     int image_min_tokens = -1;
     int image_max_tokens = -1;
+    float image_max_pixels_tolerance = -1.0f;
+    bool image_resize_bicubic = false;
 
     // finetune
     struct lr_opt lr;

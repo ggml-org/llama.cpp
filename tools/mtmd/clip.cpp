@@ -197,6 +197,14 @@ struct clip_ctx {
         if (ctx_params.image_max_tokens > 0) {
             model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
         }
+        if (ctx_params.image_max_pixels_tolerance > 0) {
+            model.hparams.custom_max_pixels_tolerance = ctx_params.image_max_pixels_tolerance;
+        }
+        if (ctx_params.image_resize_bicubic) {
+            model.hparams.image_resize_algo    = RESIZE_ALGO_BICUBIC;
+            model.hparams.image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
+            model.hparams.image_resize_algo_ov = RESIZE_ALGO_BICUBIC;
+        }
 
         backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));

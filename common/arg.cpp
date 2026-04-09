@@ -2197,6 +2197,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image_max_tokens = value;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
+    add_opt(common_arg(
+        {"--image-max-pixels-tolerance"}, "N",
+        "tolerance multiplier for tiling threshold in vision models (default: read from model, typically 2.0)",
+        [](common_params & params, const std::string & value) {
+            params.image_max_pixels_tolerance = std::stof(value);
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_PIXELS_TOLERANCE"));
+    add_opt(common_arg(
+        {"--image-resize-bicubic"},
+        "use bicubic interpolation for image resizing (default: bilinear). bicubic is slower but preserves fine detail",
+        [](common_params & params) {
+            params.image_resize_bicubic = true;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_RESIZE_BICUBIC"));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",

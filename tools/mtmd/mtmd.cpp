@@ -115,6 +115,8 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* image_max_pixels_tolerance */ -1.0f,
+        /* image_resize_bicubic       */ false,
         /* cb_eval           */ nullptr,
         /* cb_eval_user_data */ nullptr,
     };
@@ -182,6 +184,8 @@ struct mtmd_context {
             /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
+            /* image_max_pixels_tolerance */ ctx_params.image_max_pixels_tolerance,
+            /* image_resize_bicubic       */ ctx_params.image_resize_bicubic,
             /* warmup            */ ctx_params.warmup,
             /* cb_eval           */ ctx_params.cb_eval,
             /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
