@@ -23,13 +23,63 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <math.h>
-#include <string>
 #include <iostream>
+#include <magic_enum/magic_enum.hpp>
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml.h"
+#include "tsi-rt/TXEDeviceConfig.h"
+#include "tsi-rt/host/BlobDescriptor.h"
+#include "tsi-rt/queues/Command.h"
 #include "HostShimCAPI.h"
 #include "tsi-rt/utils/Profiler.h"
+
+#include <thread>
+#include <vector>
+#include  <mutex>
+#include <condition_variable>
+
+using namespace tsi::runtime;
+
+// This will  go in deployment file at next PR
+#define NUM_OF_TXES 1
+
+// ggml-tsavorite.cpp
+namespace {
+
+struct TsavoriteRuntimeState {
+    // device / threading
+    uint32_t num_of_txes = NUM_OF_TXES;
+    bool *device_free = nullptr;
+    bool multi_thread_enable = false;
+
+    std::vector<std::thread> workers;
+    std::mutex device_mutex;
+    std::mutex tsi_pack_mutex;
+    std::condition_variable device_cv;
+    // blobs
+    BlobDescriptor *blobDescriptor_add[NUM_OF_TXES] = {};
+    BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES] = {};
+    BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES] = {};
+};
+
+static TsavoriteRuntimeState g_rt;
+
+} // anonymous namespace
+
+auto &num_of_txes = g_rt.num_of_txes;
+auto &device_free = g_rt.device_free;
+auto &multi_thread_enable     = g_rt.multi_thread_enable;
+
+auto &workers = g_rt.workers;
+auto &device_mutex = g_rt.device_mutex;
+auto &tsi_pack_mutex = g_rt.tsi_pack_mutex;
+auto &device_cv = g_rt.device_cv;
+
+auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
+auto &blobDescriptor_mult     = g_rt.blobDescriptor_mult;
+auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
+
 
 #ifdef TMU_DEBUG_VALIDATE
 
@@ -108,13 +158,150 @@ typedef struct _txe_compute_pipeline_state_t *txe_compute_pipeline_state_s;
 FILE *tsi_op_log_file;
 bool runtime_initialized = false;
 uint64_t num_of_op;
+
+// ============================================================
+// (makes blob names unique per device to avoid collisions)
+//  - tsi_load_blob() expects a FILE PREFIX, not a directory.
+//  - It will append ".blob" internally.
+//  - Therefore we must pass ".../blobs/txe_xxx" (NOT ".../blobs").
+//  - This code reconstructs the SAME prefix paths that worked before.
+// =======================================================================
+
+static std::string tsavorite_llama_root() {
+    // __FILE__ =
+    // /proj/work/.../llama.cpp/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+    std::string f(__FILE__);
+    const std::string tag = "/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp";
+    size_t pos = f.find(tag);
+    if (pos == std::string::npos) {
+        // Hard fail — path layout assumption broken
+        return "";
+    }
+    // Result:
+    // /proj/work/.../llama.cpp
+    return f.substr(0, pos);
+}
+
+static std::string blob_prefix(const char *rel) {
+    return tsavorite_llama_root() + rel;
+}
+
+static void tsi_load_all_blobs() {
+    static void *loadResult_add[NUM_OF_TXES];
+    static void *loadResult_mult[NUM_OF_TXES];
+    static void *loadResult_rms_norm[NUM_OF_TXES];
+    int i;
+    char blob_name[64];
+
+    for (int i = 0; i < num_of_txes; ++i) {
+        char name_add[64];
+        char name_mult[64];
+        char name_rms[64];
+
+        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%d", i);
+        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%d", i);
+        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%d", i);
+
+        // MUST end in ".../blobs/txe_add"
+        loadResult_add[i] = tsi_load_blob(
+            i,
+            name_add,
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
+            ).c_str()
+        );
+
+        if (!loadResult_add[i]) {
+            strcpy(blob_name, name_add);
+            goto error;
+       }
+
+       blobDescriptor_add[i] =
+            static_cast<BlobDescriptor *>(loadResult_add[i]);
+
+        // MUST end in ".../blobs/txe_mult"
+       loadResult_mult[i] = tsi_load_blob(
+            i,
+            name_mult,
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
+            ).c_str()
+        );
+
+        if (!loadResult_mult[i]) {
+            strcpy(blob_name, name_mult);
+            goto error;
+        }
+        blobDescriptor_mult[i] =
+            static_cast<BlobDescriptor *>(loadResult_mult[i]);
+
+        // MUST end in ".../blobs/txe_rms_norm"
+       loadResult_rms_norm[i] = tsi_load_blob(
+            i,
+            name_rms,
+            blob_prefix(
+                "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
+            ).c_str()
+        );
+
+        if (!loadResult_rms_norm[i]) {
+            strcpy(blob_name, name_rms);
+            goto error;
+        }
+        blobDescriptor_rms_norm[i] =
+            static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
+    }
+    return;
+error:
+    fprintf(stderr,
+            "Failed to load blob (txe=%u, name=%s)\n", i, blob_name);
+    tsi_cleanup();
+    abort();
+}
+
+
+static void tsi_unload_all_blobs() {
+for (int i=0; i < num_of_txes; ++i) {
+  tsi_unload_blob(blobDescriptor_add[i]);
+  tsi_unload_blob(blobDescriptor_mult[i]);
+  tsi_unload_blob(blobDescriptor_rms_norm[i]);
+}
+  return;
+}
+
 // Centralized TSI runtime initialization - called once globally
 static void ensure_tsi_runtime_initialized() {
   if (!runtime_initialized) {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
+
     // TSI Run time Initalization
-    tsi_initialize(NUM_OF_TXES, NULL);
+    #ifdef GGML_TARGET_POSIX
+        num_of_txes = 1;
+        multi_thread_enable = false;
+    #else
+        num_of_txes = NUM_OF_TXES;
+        multi_thread_enable = false;
+    #endif /* GGML_TARGET_POSIX */
+    tsi_initialize(num_of_txes, NULL);
+
+    if (multi_thread_enable) {
+        // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+        tsi_load_all_blobs();
+    }
+    device_free = (bool *)malloc(num_of_txes * sizeof(bool));
+    if (!device_free) {
+        fprintf(stderr, "Failed to allocate device_free\n");
+        tsi_unload_all_blobs();
+        tsi_finalize();
+        abort();
+    }
+    
+    for (int i = 0; i < num_of_txes; i++) {
+        device_free[i] = true;
+    }
+
+    workers.reserve(num_of_txes);
     runtime_initialized = true;
     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
   }
@@ -491,6 +678,332 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
     return;
 }
 
+
+// Packed args layout for 3x memref<?xf32, strided<[1], offset: ?>, 1>
+// Per TXE_PackArgsOp: group per-arg as (handle, offset, sizes, strides),
+// and only dynamic metadata is packed. For this type: offset is dynamic, size(0) is dynamic, stride(0)=1 is static.
+// So each arg contributes: (handle, offset, size0) => 3 int64s per arg.
+// Total = 3 args * 3 int64 = 9 int64 = 72 bytes.)
+
+
+// ============================================================
+// DEVICE ACQUIRE / RELEASE
+// ============================================================
+
+static inline int acquire_device_blocking() {
+    std::unique_lock<std::mutex> lock(device_mutex);
+
+    device_cv.wait(lock, [] {
+        for (int i = 0; i < num_of_txes; ++i)
+            if (device_free[i])
+                return true;
+        return false;
+    });
+
+    for (int i = 0; i < num_of_txes; ++i) {
+        if (device_free[i]) {
+            device_free[i] = false;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static inline void release_device(int deviceId) {
+    std::lock_guard<std::mutex> lock(device_mutex);
+    device_free[deviceId] = true;
+    device_cv.notify_one();
+}
+
+// ============================================================
+// Final join — invoke at the end of each node’s execution
+// within the ggml_tsavorite_graph_compute() subgraph loop.
+// ============================================================
+
+static inline void join_all_workers() {
+    for (auto &t : workers) {
+        if (t.joinable())
+            t.join();
+    }
+    workers.clear();
+
+    {
+        std::lock_guard<std::mutex> lock(device_mutex);
+        for (int i = 0; i < num_of_txes; ++i)
+            device_free[i] = true;
+    }
+    device_cv.notify_all();
+}
+
+static void tsi_blob_execution_internal(void *commandList) {
+  // Enqueue & run
+  tsi_finalize_command_list(commandList);
+  tsi_wait(commandList);
+  return;
+}
+
+//lock goes out of scope
+// <--- function scope ends here mutex will be released
+//tsi_pack_mutex.unlock() is called automatically
+//std::lock_guard releases the mutex automatically when it goes out of scope.
+static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
+    constexpr int64_t kPackedArgsI64   = 9;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
+
+    void *commandList = tsi_create_command_list(deviceId);
+
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
+    auto *p = static_cast<int64_t *>(packed);
+
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
+
+    int idx = 0;
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    p[idx++] = (int64_t)A->shape[0];
+
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    p[idx++] = (int64_t)B->shape[0];
+
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
+    p[idx++] = (int64_t)C->shape[0];
+
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
+        abort();
+    }
+
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
+
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_add[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
+
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
+
+    return commandList;
+}
+
+static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
+    if (!multi_thread_enable) {
+      _mlir_ciface_txe_add_host(a, b, res);
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+       #if NEW_HOST_CODE
+       void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
+       if (!commandList) {
+            printf("Command List Empt for ADD OPERATION on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
+        tsi_blob_execution_internal(commandList);
+       #endif  /* NEW_HOST_CODE */
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+
+   // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+   void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
+   if (!commandList) {
+       printf("Command List Empt for ADD on device %d\n", deviceId);
+       tsi_cleanup();
+       abort();
+    }
+    workers.emplace_back([=]() {
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+    });
+}
+
+
+static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
+    constexpr int64_t kPackedArgsI64   = 9;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
+
+    void *commandList = tsi_create_command_list(deviceId);
+
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
+    auto *p = static_cast<int64_t *>(packed);
+
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)res;
+
+    int idx = 0;
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    p[idx++] = (int64_t)A->shape[0];
+
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    p[idx++] = (int64_t)B->shape[0];
+    
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
+    p[idx++] = (int64_t)C->shape[0];
+
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
+        abort();
+    }
+
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_mult[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
+
+    return commandList;
+}
+
+
+static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
+    if (!multi_thread_enable) {
+        _mlir_ciface_txe_mult_host(a, b, res);
+      
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+        #if NEW_HOST_CODE
+        void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
+       if (!commandList) {
+            printf("Command List Empt for MUL OPERATION on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
+        tsi_blob_execution_internal(commandList);
+        #endif /* NEW_HOST_CODE */
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+
+   // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+   void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
+   if (!commandList) {
+        printf("Command List Empt for MUL OPERATION on device %d\n", deviceId);
+        tsi_cleanup();
+        abort();
+   }
+    workers.emplace_back([=]() {
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+    });
+}
+
+
+static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf, TSI_DeviceIdType deviceId) {
+    constexpr int64_t kPackedArgsI64   = 20;
+    constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+
+    std::lock_guard<std::mutex> lock(tsi_pack_mutex);
+
+    void *commandList = tsi_create_command_list(deviceId);
+
+    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if(!packed) {
+        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+        tsi_cleanup();
+        abort();
+    }
+    auto *p = static_cast<int64_t *>(packed);
+
+    MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
+    MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
+    MemRefDescriptor<Rank> *C = (MemRefDescriptor<Rank> *)buf;
+
+    int idx = 0;
+
+    p[idx++] = tsi_shmem_handle_from_ptr(A->data);
+    p[idx++] = (int64_t)A->offset;
+    for (int i = 0; i <= 3; ++i) p[idx++] = (int64_t)A->shape[i];
+    for (int i = 0; i <= 2; ++i) p[idx++] = (int64_t)A->strides[i];
+
+    p[idx++] = tsi_shmem_handle_from_ptr(B->data);
+    p[idx++] = (int64_t)B->offset;
+    for (int i = 0; i <= 3; ++i) p[idx++] = (int64_t)B->shape[i];
+    for (int i = 0; i <= 2; ++i) p[idx++] = (int64_t)B->strides[i];
+
+    p[idx++] = tsi_shmem_handle_from_ptr(C->data);
+    p[idx++] = (int64_t)C->offset;
+
+    if (idx != kPackedArgsI64) {
+        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        tsi_cleanup();
+        abort();
+    }
+
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
+    if (!blobExecuteCmd) {
+        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
+                                     deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
+        tsi_cleanup();
+        abort();
+    }
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
+
+    return commandList;
+} 
+
+static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
+    if (!multi_thread_enable) {
+        _mlir_ciface_txe_rms_norm_host(a, b, buf);
+      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+      #if NEW_HOST_CODE
+        void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
+       if (!commandList) {
+            printf("Command List Empt for RMS OPERATION  on device 0\n");
+            tsi_cleanup();
+            abort();
+        }
+        tsi_blob_execution_internal(commandList);
+      #endif  /* NEW_HOST_CODE */
+        return;
+    }
+
+    int deviceId = acquire_device_blocking();
+
+    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
+    void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
+    if (!commandList) {
+        printf("Command List Empt for RMS OPERATION on device %d\n", deviceId);
+        tsi_cleanup();
+        abort();
+    }
+    workers.emplace_back([=]() {
+        tsi_blob_execution_internal(commandList);
+        release_device(deviceId);
+    });
+}
+
+
 static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_type kernel_type) {
   txe_compute_pipeline_state_s kernel_pipeline =
       (txe_compute_pipeline_state_s)calloc(1, sizeof(struct _txe_compute_pipeline_state_t));
@@ -507,7 +1020,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_test;
           else {
-              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host;
+              #ifdef GGML_TARGET_POSIX
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host;
+              #else
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host_new;
+              #endif /* GGML_TARGET_POSIX */
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_add_16_host;
 	  }
           kernel_pipeline->kernel_name = "TXE_ADD";
@@ -523,7 +1040,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_test;
           else {
-              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host;
+              #ifdef GGML_TARGET_POSIX
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host;
+              #else
+                  kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_mult_host_new;
+              #endif /* GGML_TARGET_POSIX */
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_mult_16_host;
 	  }
           kernel_pipeline->kernel_name = "TXE_MULT";
@@ -578,7 +1099,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM:
-          kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host;
+          #ifdef GGML_TARGET_POSIX
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host;
+          #else
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_rms_norm_host_new;
+          #endif /* GGML_TARGET_POSIX */
           kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_rms_norm_16_host;
           kernel_pipeline->kernel_name = "TXE_RMS_NORM";
           flag = true;
@@ -809,6 +1334,16 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   if (runtime_initialized == true) {
       sleep(2);
       runtime_initialized = false;
+      #ifndef GGML_TARGET_POSIX
+          if (multi_thread_enable) {
+              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+              tsi_unload_all_blobs();
+          }
+      #endif /* !GGML_TARGET_POSIX */
+      if(device_free) {
+          free(device_free);
+         device_free = NULL;
+    }
       tsi_finalize();
       tsirt::utils::TSIProfiler::finalize();
       sleep(2);
@@ -826,6 +1361,16 @@ tsi_cleanup() {
     if (runtime_initialized != true)
         return;
     runtime_initialized = false;
+    #ifndef GGML_TARGET_POSIX
+          if (multi_thread_enable) {
+              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+              tsi_unload_all_blobs();
+          }
+    #endif /* !GGML_TARGET_POSIX */
+    if(device_free) {
+        free(device_free);
+        device_free = NULL;
+    }
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
@@ -919,6 +1464,9 @@ static bool mul_mat_supported_size(const struct ggml_tensor *op) {
     // (optional but usually correct for ggml mul_mat wiring)
     // If this blocks valid cases in your build, comment it out.
     if (a->ne[1] != N) return false;
+
+    // Disable MAT_MUL offloading to Tsavorite for the Tiny‑Llama‑v0.3‑FP32‑1.1B model
+    return false;
 
     // -------------------------------------------------------------------------
     // Tiny-Llama-v0.3-FP32-1.1B-F32.gguf shapes (from your static-shape list)
@@ -1588,6 +2136,7 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
                                         "r=%ld c=%ld TMU=%f REF=%f\n",
                                         (long)m0, (long)n0, (long)k0, K_chunk, pi,
                                         (long)rr, (long)cc, tmu_v, ref_v);
+                                    tsi_cleanup();
                                     abort();
                                 }
                             }
@@ -1740,7 +2289,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         for(ii=0; ii <= 95; ++ii)
                vall[ii] = 0;
     }
-
     switch (node->op) {
     case GGML_OP_ADD:
       kernel_type = GGML_TSAVORITE_KERNEL_TYPE_ADD;
@@ -2182,7 +2730,12 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
     }
 #endif /* GGML_PERF-related flags */
-  }
+    if (multi_thread_enable) {
+      join_all_workers();
+     }
+  } /* this is main for loop */
+
+
 
   // This this need to implement correctly when we have mixture of CPU and accelerator operation
   // return ggml_graph_compute(cgraph, &cplan);
