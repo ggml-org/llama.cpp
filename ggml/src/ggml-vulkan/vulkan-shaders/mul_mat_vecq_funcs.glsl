@@ -4,7 +4,7 @@
 
 #include "types.glsl"
 
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_TQ1_0) || defined(DATA_A_TQ2_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 FLOAT_TYPE get_dm(uint ib) {
     return FLOAT_TYPE(data_a[ib].d);
 }
@@ -112,6 +112,58 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 #endif
 
+#if defined(DATA_A_TQ2_0)
+#include "tq_utils.glsl"
+
+i32vec2 repack(uint ib, uint iqs) {
+    const int t00 = tq2_dequantize(ib, iqs + 0);
+    const int t01 = tq2_dequantize(ib, iqs + 1);
+    const int t02 = tq2_dequantize(ib, iqs + 2);
+    const int t03 = tq2_dequantize(ib, iqs + 3);
+
+    const int v0 = (t00 & 0xFF) | ((t01 & 0xFF) << 8) | ((t02 & 0xFF) << 16) | ((t03 & 0xFF) << 24);
+
+    const int t10 = tq2_dequantize(ib, iqs + 32 + 0);
+    const int t11 = tq2_dequantize(ib, iqs + 32 + 1);
+    const int t12 = tq2_dequantize(ib, iqs + 32 + 2);
+    const int t13 = tq2_dequantize(ib, iqs + 32 + 3);
+
+    const int v1 = (t10 & 0xFF) | ((t11 & 0xFF) << 8) | ((t12 & 0xFF) << 16) | ((t13 & 0xFF) << 24);
+
+    return i32vec2(v0, v1);
+}
+
+ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
+    return ACC_TYPE(da * float(q_sum) * dsb.x);
+}
+#endif
+
+#if defined(DATA_A_TQ1_0)
+#include "tq_utils.glsl"
+
+i32vec2 repack(uint ib, uint iqs) {
+    const int t00 = tq1_dequantize(ib, iqs + 0);
+    const int t01 = tq1_dequantize(ib, iqs + 1);
+    const int t02 = tq1_dequantize(ib, iqs + 2);
+    const int t03 = tq1_dequantize(ib, iqs + 3);
+
+    const int v0 = (t00 & 0xFF) | ((t01 & 0xFF) << 8) | ((t02 & 0xFF) << 16) | ((t03 & 0xFF) << 24);
+
+    const int t10 = tq1_dequantize(ib, iqs + 32 + 0);
+    const int t11 = tq1_dequantize(ib, iqs + 32 + 1);
+    const int t12 = tq1_dequantize(ib, iqs + 32 + 2);
+    const int t13 = tq1_dequantize(ib, iqs + 32 + 3);
+
+    const int v1 = (t10 & 0xFF) | ((t11 & 0xFF) << 8) | ((t12 & 0xFF) << 16) | ((t13 & 0xFF) << 24);
+
+    return i32vec2(v0, v1);
+}
+
+ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
+    return ACC_TYPE(da * float(q_sum) * dsb.x);
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 i32vec2 repack(uint ib, uint iqs) {
@@ -135,6 +187,7 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 #if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     int32_t q_sum = 0;
+
 #if QUANT_R == 2
     const i32vec2 data_a_qs = repack(ib_a, iqs);
     q_sum += dotPacked4x8EXT(data_a_qs.x,
