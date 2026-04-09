@@ -1395,37 +1395,53 @@ static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
 }
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1200
-#define VDR_TQ3_4S_Q8_1_MMVQ 16
+#define VDR_TQ3_4S_Q8_1_MMVQ 8
 #else
 #define VDR_TQ3_4S_Q8_1_MMVQ 4
 #endif
+
+static __device__ __forceinline__ float tq3_4s_ratio4s(const uint8_t byte) {
+    if (byte == 0) return 0.0f;
+    const int exp = (byte >> 5) - 9;
+    const float mantissa = 1.0f + (float) (byte & 31) / 32.0f;
+    return ldexpf(mantissa, exp);
+}
+
+static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
+    const block_tq3_4s * __restrict__ bq,
+    const block_q8_1 * __restrict__ bq8_1,
+    const int subgroup) {
+
+    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
+    const uint8_t * qp = bq->qs + subgroup * 3;
+    const float d = tq3_4s_ratio4s(bq->d[subgroup]);
+
+    float sum = 0.0f;
+    const int q8 = subgroup * 8;
+    sum += centroids[ qp[0]       & 7]              * (float) bq8_1->qs[q8 + 0];
+    sum += centroids[(qp[0] >> 3) & 7]              * (float) bq8_1->qs[q8 + 1];
+    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7]   * (float) bq8_1->qs[q8 + 2];
+    sum += centroids[(qp[1] >> 1) & 7]              * (float) bq8_1->qs[q8 + 3];
+    sum += centroids[(qp[1] >> 4) & 7]              * (float) bq8_1->qs[q8 + 4];
+    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7]   * (float) bq8_1->qs[q8 + 5];
+    sum += centroids[(qp[2] >> 2) & 7]              * (float) bq8_1->qs[q8 + 6];
+    sum += centroids[(qp[2] >> 5) & 7]              * (float) bq8_1->qs[q8 + 7];
+
+    const float2 ds8 = __half22float2(bq8_1->ds);
+    return sum * d * ds8.x;
+}
+
 static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    const int g = iqs / VDR_TQ3_4S_Q8_1_MMVQ;
-
     const block_tq3_4s * bq = (const block_tq3_4s *) vbq + kbx;
-    auto ratio4s = [] __device__ (uint8_t byte) -> float {
-        if (byte == 0) return 0.0f;
-        const int exp = (byte >> 5) - 9;
-        const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
-        return ldexpf(mantissa, exp);
-    };
-    const float d = ratio4s(bq->d[g]);
-
-    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
-    const uint8_t * qp = bq->qs + g * 3;
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
+    const int subgroup0 = iqs / 4;
     float sum = 0.0f;
-    sum += centroids[ qp[0]       & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += centroids[(qp[0] >> 3) & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += centroids[(qp[1] >> 1) & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += centroids[(qp[1] >> 4) & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += centroids[(qp[2] >> 2) & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += centroids[(qp[2] >> 5) & 7] * (float) bq8_1->qs[g*8 + 7];
 
-    return sum * d * ds8.x;
+#pragma unroll
+    for (int s = 0; s < VDR_TQ3_4S_Q8_1_MMVQ / 4; ++s) {
+        sum += tq3_4s_dot_subgroup_q8_1(bq, bq8_1, subgroup0 + s);
+    }
+
+    return sum;
 }
