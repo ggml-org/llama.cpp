@@ -5275,7 +5275,7 @@ public:
             lru_list.splice(lru_list.begin(), lru_list, it->second);
             return it->second->second.get();
         }
-        auto  g   = std::make_unique<ggml_cuda_graph>();
+        auto g = std::make_unique<ggml_cuda_graph>();
         ggml_cuda_graph* ptr = g.get();
         lru_list.emplace_front(first_node_ptr, std::move(g));
         cache_map[first_node_ptr] = lru_list.begin();
