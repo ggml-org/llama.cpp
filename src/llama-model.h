@@ -499,6 +499,19 @@ struct llama_layer {
     struct llama_layer_nextn nextn;
 };
 
+struct llama_device {
+    bool is_meta;
+
+    ggml_backend_dev_t dev;
+};
+
+struct llama_meta_device_get_split_state_userdata {
+    size_t                     n_devices;
+    const struct llama_model * model;
+};
+
+struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -534,9 +547,9 @@ struct llama_model {
     struct ggml_tensor * conv1d_b = nullptr;
 
     // gemma3n altup
-    struct ggml_tensor * tok_embd_per_layer   = nullptr;
     struct ggml_tensor * altup_proj           = nullptr;
     struct ggml_tensor * altup_unembd_proj    = nullptr;
+    struct ggml_tensor * per_layer_tok_embd   = nullptr;
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
@@ -553,13 +566,16 @@ struct llama_model {
     std::unordered_map<std::string, std::string> gguf_kv;
 
     // list of devices used in this model
-    std::vector<ggml_backend_dev_t> devices;
+    std::vector<llama_device> devices;
 
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
 
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
+
+    // statically allocated context for assigning
+    struct llama_meta_device_get_split_state_userdata get_split_state_ud;
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
@@ -581,6 +597,7 @@ struct llama_model {
     size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;
+    const float * tensor_split() const;
 
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;

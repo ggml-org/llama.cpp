@@ -39,6 +39,9 @@ struct server_context_meta {
     llama_token fim_rep_token;
     llama_token fim_sep_token;
 
+    // sampling
+    std::vector<llama_logit_bias> logit_bias_eog;
+
     // model meta
     enum llama_vocab_type model_vocab_type;
     int32_t model_vocab_n_tokens;

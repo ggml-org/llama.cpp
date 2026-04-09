@@ -1124,7 +1124,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             p.rule("gemma4-bool", p.json_bool());
             p.rule("gemma4-null", p.json_null());
             p.rule("gemma4-number", p.json_number());
-            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
+            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.chars("[^:}]", 1, -1)) + p.literal(":"));
             p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
             p.rule("gemma4-dict", [&]() {
                 auto ws = p.space();
@@ -1963,7 +1963,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = true;
     std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
     auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
-    params.generation_prompt     = diff.right;
+    params.generation_prompt     = diff.right + diff.suffix;
 
     params.add_generation_prompt = inputs.add_generation_prompt;
 

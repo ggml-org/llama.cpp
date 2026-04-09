@@ -239,6 +239,7 @@ task_params server_task::params_from_json_cmpl(
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data) {
     task_params params;
 
@@ -383,6 +384,8 @@ task_params server_task::params_from_json_cmpl(
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
+        params.sampling.grammar = defaults.sampling.grammar;
+
         std::string grammar_str = json_value(data, "grammar", std::string());
         if (!grammar_str.empty()) {
             // grammar_type key is set by the server when converting chat template grammars
@@ -562,7 +565,7 @@ task_params server_task::params_from_json_cmpl(
         if (params.sampling.ignore_eos) {
             params.sampling.logit_bias.insert(
                     params.sampling.logit_bias.end(),
-                    defaults.sampling.logit_bias_eog.begin(), defaults.sampling.logit_bias_eog.end());
+                    logit_bias_eog.begin(), logit_bias_eog.end());
         }
     }
 

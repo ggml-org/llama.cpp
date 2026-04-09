@@ -1586,6 +1586,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(experts, "ffn_moe_weighted", il);
     }
 
+    ggml_build_forward_expand(gf, experts);
+
     ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
 
     assert(n_expert_used > 0);
@@ -1605,6 +1607,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
         moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
+
+        ggml_build_forward_expand(gf, moe_out);
     }
 
     if (hparams.n_expert_used == 1) {
@@ -2443,7 +2447,7 @@ ggml_tensor * llm_graph_context::build_rs(
     ggml_build_forward_expand(gf,
         ggml_cpy(ctx0,
             states_extra,
-            ggml_view_1d(ctx0, s, state_size*(n_rs - n_seqs), (rs_head + n_seqs)*state_size*ggml_element_size(s))));
+            ggml_view_2d(ctx0, s, state_size, (n_rs - n_seqs), s->nb[1], (rs_head + n_seqs)*s->nb[1])));
 
     return output_states;
 }

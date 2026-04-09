@@ -9,6 +9,7 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <regex>
 
 static void print_usage(int /*argc*/, char ** argv) {
@@ -222,7 +223,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    base_callback_data cb_data(params, params.tensor_filter);
+    std::optional<base_callback_data> cb_data;
+    if (!params.save_logits) {
+        cb_data.emplace(params, params.tensor_filter);
+    }
 
     auto llama_init = common_init_from_params(params);
 

@@ -3013,6 +3013,8 @@ static ggml_backend_i ggml_backend_webgpu_i = {
     /* .free                    = */ ggml_backend_webgpu_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ NULL,
     /* .graph_plan_create       = */ NULL,
@@ -3170,6 +3172,8 @@ static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
     /* .memset_tensor   = */ ggml_backend_webgpu_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_webgpu_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_webgpu_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ NULL,  // TODO: optional, implement this
     /* .clear           = */ ggml_backend_webgpu_buffer_clear,
     /* .reset           = */ NULL,  // TODO: optional, think it coordinates with
@@ -4033,8 +4037,14 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_reg()");
 
     static ggml_backend_webgpu_reg_context ctx;
+    static ggml_backend_reg                reg = {
+        /* .api_version = */ GGML_BACKEND_API_VERSION,
+        /* .iface       = */ ggml_backend_webgpu_reg_i,
+        /* .context     = */ &ctx,
+    };
+
     ctx.name         = GGML_WEBGPU_NAME;
-    ctx.device_count = 1;
+    ctx.device_count = 0;
 
     wgpu::InstanceDescriptor               instance_descriptor{};
     std::vector<wgpu::InstanceFeatureName> instance_features = { wgpu::InstanceFeatureName::TimedWaitAny };
@@ -4053,19 +4063,28 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.webgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
     ctx.webgpu_global_ctx->instance = std::move(inst);
 
-#ifdef __EMSCRIPTEN__
-    if (ctx.webgpu_global_ctx->instance == nullptr) {
-        GGML_LOG_ERROR("ggml_webgpu: Failed to create WebGPU instance. Make sure either -sASYNCIFY or -sJSPI is set\n");
-        return nullptr;
-    }
-#endif
-    GGML_ASSERT(ctx.webgpu_global_ctx->instance != nullptr);
+    wgpu::Adapter adapter;
+    if (ctx.webgpu_global_ctx->instance != nullptr) {
+        wgpu::RequestAdapterOptions options = {};
 
-    static ggml_backend_reg reg = {
-        /* .api_version = */ GGML_BACKEND_API_VERSION,
-        /* .iface       = */ ggml_backend_webgpu_reg_i,
-        /* .context     = */ &ctx,
-    };
+        // probe for adapter support
+        ctx.webgpu_global_ctx->instance.WaitAny(
+            ctx.webgpu_global_ctx->instance.RequestAdapter(
+                &options, wgpu::CallbackMode::AllowSpontaneous,
+                [&adapter](wgpu::RequestAdapterStatus status, wgpu::Adapter _adapter, const char * message) {
+                    if (status != wgpu::RequestAdapterStatus::Success) {
+                        GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
+                        return;
+                    }
+                    adapter = std::move(_adapter);
+                }),
+            UINT64_MAX);
+    }
+
+    if (adapter != nullptr) {
+        ctx.device_count = 1;
+    }
+
     return &reg;
 }
 

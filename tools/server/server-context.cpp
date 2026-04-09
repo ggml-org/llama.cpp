@@ -3033,6 +3033,8 @@ server_context_meta server_context::get_meta() const {
         /* fim_rep_token          */ llama_vocab_fim_rep(impl->vocab),
         /* fim_sep_token          */ llama_vocab_fim_sep(impl->vocab),
 
+        /* logit_bias_eog         */ impl->params_base.sampling.logit_bias_eog,
+
         /* model_vocab_type       */ llama_vocab_type(impl->vocab),
         /* model_vocab_n_tokens   */ llama_vocab_n_tokens(impl->vocab),
         /* model_n_ctx_train      */ llama_model_n_ctx_train(impl->model),
@@ -3117,6 +3119,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     ctx_server.vocab,
                     params,
                     meta->slot_n_ctx,
+                    meta->logit_bias_eog,
                     data);
             task.id_slot = json_value(data, "id_slot", -1);
 
