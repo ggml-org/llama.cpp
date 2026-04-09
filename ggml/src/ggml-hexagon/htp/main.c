@@ -705,16 +705,16 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         prep_op_bufs(ctx, bufs, n_bufs);
         prep_tensors(ctx, bufs, tens, n_tens);
 
-        struct htp_ops_context octx;
-        memset(&octx, 0, sizeof(octx));
-        octx.n_threads = ctx->n_threads;
-        octx.ctx       = ctx;
+        struct htp_ops_context *octx = &ctx->octx;
+        memset(octx, 0, sizeof(*octx));
+        octx->n_threads = ctx->n_threads;
+        octx->ctx       = ctx;
 
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
             profile_start(&prof);
 
-            proc_op_req(&octx, tens, i, &ops[i]);
+            proc_op_req(octx, tens, i, &ops[i]);
 
             profile_stop(&prof);
             ops[i].prof_usecs  = prof.usecs;
