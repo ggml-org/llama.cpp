@@ -6,6 +6,10 @@ ARG BASE_MUSA_DEV_CONTAINER=mthreads/musa:${MUSA_VERSION}-devel-ubuntu${UBUNTU_V
 
 ARG BASE_MUSA_RUN_CONTAINER=mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}-amd64
 
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+
 FROM ${BASE_MUSA_DEV_CONTAINER} AS build
 
 # MUSA architecture to build for (defaults to all supported archs)
@@ -44,6 +48,17 @@ RUN mkdir -p /app/full \
 
 ## Base image
 FROM ${BASE_MUSA_RUN_CONTAINER} AS base
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url="https://github.com/ggml-org/llama.cpp" \
+      org.opencontainers.image.source="https://github.com/ggml-org/llama.cpp"
 
 RUN apt-get update \
     && apt-get install -y libgomp1 curl \

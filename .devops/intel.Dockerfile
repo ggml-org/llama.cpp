@@ -1,4 +1,7 @@
 ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 ## Build Image
 
@@ -40,11 +43,22 @@ RUN mkdir -p /app/full \
 
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
-ARG IGC_VERSION=v2.20.5
-ARG IGC_VERSION_FULL=2_2.20.5+19972
-ARG COMPUTE_RUNTIME_VERSION=25.40.35563.10
-ARG COMPUTE_RUNTIME_VERSION_FULL=25.40.35563.10-0
-ARG IGDGMM_VERSION=22.8.2
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url="https://github.com/ggml-org/llama.cpp" \
+      org.opencontainers.image.source="https://github.com/ggml-org/llama.cpp"
+
+ARG IGC_VERSION=v2.30.1
+ARG IGC_VERSION_FULL=2_2.30.1+20950
+ARG COMPUTE_RUNTIME_VERSION=26.09.37435.1
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.09.37435.1-0
+ARG IGDGMM_VERSION=22.9.0
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \

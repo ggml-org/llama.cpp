@@ -1,4 +1,7 @@
 ARG ASCEND_VERSION=8.5.0-910b-openeuler22.03-py3.10
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 FROM ascendai/cann:$ASCEND_VERSION AS build
 
@@ -28,6 +31,18 @@ RUN echo "Building with static libs" && \
 
 # TODO: use image with NNRT
 FROM ascendai/cann:$ASCEND_VERSION AS runtime
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url="https://github.com/ggml-org/llama.cpp" \
+      org.opencontainers.image.source="https://github.com/ggml-org/llama.cpp"
+
 COPY --from=build /app/build/bin/llama-cli /app/build/bin/llama-completion /
 
 ENV LC_ALL=C.utf8

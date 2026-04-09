@@ -132,6 +132,7 @@ jobs:
         config: ${{ fromJSON(needs.prepare_matrices.outputs.build_matrix) }}
     steps:
       - name: Check out the repo
+        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -187,6 +188,10 @@ jobs:
         env:
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
+      - name: Get build date
+        id: build_date
+        run: echo "date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
+
       - name: Free Disk Space (Ubuntu)
         if: ${{ matrix.config.free_disk_space == true }}
         uses: ggml-org/free-disk-space@v1.3.1
@@ -216,6 +221,9 @@ jobs:
           target: full
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
@@ -240,6 +248,9 @@ jobs:
           target: light
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
@@ -264,6 +275,9 @@ jobs:
           target: server
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
