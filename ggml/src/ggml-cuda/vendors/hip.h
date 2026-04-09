@@ -189,6 +189,10 @@
 #define GCN
 #endif // defined(GCN5) || defined(GCN4)
 
+#if defined(__gfx950__)
+#define CDNA4
+#endif // defined(__gfx950__)
+
 #if defined(__gfx942__)
 #define CDNA3
 #endif // defined(__gfx942__)
@@ -201,9 +205,9 @@
 #define CDNA1
 #endif // defined(__gfx908__)
 
-#if defined(CDNA3) || defined(CDNA2) || defined(CDNA1)
+#if defined(CDNA4) || defined(CDNA3) || defined(CDNA2) || defined(CDNA1)
 #define CDNA // For the entire family
-#endif // defined(CDNA3) || defined(CDNA2) || defined(CDNA1)
+#endif // defined(CDNA4) || defined(CDNA3) || defined(CDNA2) || defined(CDNA1)
 
 #if defined(__GFX12__)
 #define RDNA4
