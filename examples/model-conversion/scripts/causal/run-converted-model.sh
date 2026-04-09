@@ -28,4 +28,4 @@ echo $MODEL_TESTING_PROMPT
 
 cmake --build ${BUILD_DIR} --target llama-debug -j8
 
-${BUILD_DIR}/bin/llama-debug -m "$CONVERTED_MODEL" -p "$MODEL_TESTING_PROMPT" --save-logits
+${BUILD_DIR}/bin/llama-debug --temp 0 -m "$CONVERTED_MODEL" -p "$MODEL_TESTING_PROMPT" --save-logits

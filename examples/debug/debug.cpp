@@ -3,14 +3,106 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <regex>
+
+// ---------------------------------------------------------------------------
+// Tensor-saving callback
+// Saves each tensor matching the filter to <save_tensors_dir>/<name>.bin
+// (flat float32, row-major matching PyTorch layout) and a .shape sidecar.
+// ---------------------------------------------------------------------------
+
+static float tensor_elem_to_f32(const uint8_t * data, ggml_type type,
+                                  const size_t * nb,
+                                  int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+    size_t offset = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+    switch (type) {
+        case GGML_TYPE_F32:  return *(const float *)    (data + offset);
+        case GGML_TYPE_F16:  return ggml_fp16_to_fp32(*(const ggml_fp16_t *)(data + offset));
+        case GGML_TYPE_BF16: return ggml_bf16_to_fp32(*(const ggml_bf16_t *)(data + offset));
+        default: return 0.0f; // skip quantized
+    }
+}
+
+struct save_tensor_callback_data : base_callback_data {
+    std::string save_dir;
+
+    save_tensor_callback_data() = default;
+
+    save_tensor_callback_data(common_params & params,
+                               const std::vector<std::string> & filter_patterns,
+                               std::string dir)
+        : base_callback_data(params, filter_patterns), save_dir(std::move(dir)) {
+        // Override the callback set by base_callback_data
+        params.cb_eval           = save_cb;
+        params.cb_eval_user_data = this;
+    }
+
+    static bool save_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+        auto * cb = static_cast<save_tensor_callback_data *>(user_data);
+
+        if (ask) return true;
+
+        // Check filter
+        bool match = cb->tensor_filters.empty();
+        for (const auto & f : cb->tensor_filters) {
+            if (std::regex_search(t->name, f)) { match = true; break; }
+        }
+        if (!match || ggml_is_quantized(t->type)) return true;
+
+        // Fetch data (may be on device)
+        const bool is_host = ggml_backend_buffer_is_host(t->buffer);
+        const size_t n_bytes = ggml_nbytes(t);
+        if (!is_host) {
+            cb->data.resize(n_bytes);
+            ggml_backend_tensor_get(t, cb->data.data(), 0, n_bytes);
+        }
+        const uint8_t * raw = is_host ? (const uint8_t *) t->data : cb->data.data();
+
+        // Flatten to float32 in GGML dimension order (ne[0] fastest = innermost)
+        const int64_t ne0 = t->ne[0], ne1 = t->ne[1], ne2 = t->ne[2], ne3 = t->ne[3];
+        const int64_t n_elem = ne0 * ne1 * ne2 * ne3;
+        std::vector<float> floats;
+        floats.reserve(n_elem);
+        for (int64_t i3 = 0; i3 < ne3; i3++)
+        for (int64_t i2 = 0; i2 < ne2; i2++)
+        for (int64_t i1 = 0; i1 < ne1; i1++)
+        for (int64_t i0 = 0; i0 < ne0; i0++)
+            floats.push_back(tensor_elem_to_f32(raw, t->type, t->nb, i0, i1, i2, i3));
+
+        // Create output directory
+        std::filesystem::create_directories(cb->save_dir);
+
+        // Sanitize tensor name for filename (replace '/' with '_')
+        std::string safe_name = t->name;
+        for (char & c : safe_name) if (c == '/') c = '_';
+
+        // Write binary
+        {
+            std::string path = cb->save_dir + "/" + safe_name + ".bin";
+            std::ofstream f(path, std::ios::binary);
+            f.write((const char *) floats.data(), n_elem * sizeof(float));
+        }
+        // Write shape sidecar
+        {
+            std::string path = cb->save_dir + "/" + safe_name + ".shape";
+            std::ofstream f(path);
+            f << ne0 << " " << ne1 << " " << ne2 << " " << ne3 << "\n";
+        }
+
+        LOG("Saved tensor '%s' [%lld %lld %lld %lld] (%lld elems) to %s/\n",
+            t->name, (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3,
+            (long long)n_elem, cb->save_dir.c_str());
+
+        return true;
+    }
+};
 
 static void print_usage(int /*argc*/, char ** argv) {
     const std::string usage_template = R"(
@@ -26,7 +118,13 @@ static void print_usage(int /*argc*/, char ** argv) {
 
           {prog} -m model.gguf -p "Hello my name is" --save-logits
 
-          Add --embedding to save embeddings)" "\n";
+          Add --embedding to save embeddings
+
+          Save intermediate tensors for comparison:
+
+          {prog} -m model.gguf -p "Hello my name is" --tensor-filter "inp_scaled|attn_norm-0|attn_out-0|result_norm" --save-tensors data/tensors-llm
+
+          Each matching tensor is written as a flat float32 .bin + .shape sidecar.)" "\n";
 
     // Fix the source code indentation above that is introduced by the raw string literal.
     std::string usage = std::regex_replace(usage_template, std::regex("\\n {8}"), "\n");
@@ -214,6 +312,24 @@ static bool run(llama_context * ctx, const common_params & params) {
 int main(int argc, char ** argv) {
     common_params params;
 
+    // Pre-parse --save-tensors <dir> before handing off to common_params_parse.
+    // The option is consumed here and removed from argv so common_params_parse
+    // does not see an unknown flag.
+    std::string save_tensors_dir;
+    {
+        std::vector<char *> new_argv;
+        new_argv.push_back(argv[0]);
+        for (int i = 1; i < argc; i++) {
+            if (std::string(argv[i]) == "--save-tensors" && i + 1 < argc) {
+                save_tensors_dir = argv[++i];
+            } else {
+                new_argv.push_back(argv[i]);
+            }
+        }
+        argc = static_cast<int>(new_argv.size());
+        for (int i = 0; i < argc; i++) argv[i] = new_argv[i];
+    }
+
     common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DEBUG, print_usage)) {
@@ -223,9 +339,16 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    std::optional<base_callback_data> cb_data;
-    if (!params.save_logits) {
-        cb_data.emplace(params, params.tensor_filter);
+    // Use save_tensor_callback_data when --save-tensors is given, otherwise
+    // the standard verbose callback.
+    // Use optional+emplace to construct in-place so that the constructor's
+    // `this` pointer (stored in params.cb_eval_user_data) is stable.
+    std::optional<save_tensor_callback_data> save_cb;
+    std::optional<base_callback_data>        base_cb;
+    if (!save_tensors_dir.empty()) {
+        save_cb.emplace(params, params.tensor_filter, save_tensors_dir);
+    } else if (!params.save_logits) {
+        base_cb.emplace(params, params.tensor_filter);
     }
 
     auto llama_init = common_init_from_params(params);
