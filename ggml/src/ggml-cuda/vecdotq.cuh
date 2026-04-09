@@ -1367,31 +1367,58 @@ static __device__ __forceinline__ float vec_dot_tq3_0_q8_1(
     return sum * d * ds8.x;
 }
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1200
+#define VDR_TQ3_1S_Q8_1_MMVQ 8
+#else
 #define VDR_TQ3_1S_Q8_1_MMVQ 4
+#endif
+
+static __device__ __forceinline__ float tq3_1s_dot_subgroup_q8_1(
+    const block_tq3_1s * bq, const block_q8_1 * bq8_1, const int g) {
+
+    static constexpr int8_t levels[8] = {-127, -79, -45, -14, 14, 45, 79, 127};
+
+    const uint8_t * qp = bq->qs + g * 3;
+    const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
+
+    const int8_t w0 = levels[(packed >>  0) & 7];
+    const int8_t w1 = levels[(packed >>  3) & 7];
+    const int8_t w2 = levels[(packed >>  6) & 7];
+    const int8_t w3 = levels[(packed >>  9) & 7];
+    const int8_t w4 = levels[(packed >> 12) & 7];
+    const int8_t w5 = levels[(packed >> 15) & 7];
+    const int8_t w6 = levels[(packed >> 18) & 7];
+    const int8_t w7 = levels[(packed >> 21) & 7];
+
+    const int w_lo = (uint8_t)w0 | ((uint8_t)w1 << 8) | ((uint8_t)w2 << 16) | ((uint8_t)w3 << 24);
+    const int w_hi = (uint8_t)w4 | ((uint8_t)w5 << 8) | ((uint8_t)w6 << 16) | ((uint8_t)w7 << 24);
+
+    const int q8 = g * 8;
+    const int a_lo = *(const int *)&bq8_1->qs[q8 + 0];
+    const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
+
+    int sumi = __dp4a(w_lo, a_lo, 0);
+    sumi     = __dp4a(w_hi, a_hi, sumi);
+
+    const float d = (g < 2) ? __half2float(bq->d0) : __half2float(bq->d1);
+    const float2 ds8 = __half22float2(bq8_1->ds);
+
+    return (float)sumi * d * (2.1519f / 127.0f) * ds8.x;
+}
+
 static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    const int g = iqs / VDR_TQ3_1S_Q8_1_MMVQ; // group 0..3
-
     const block_tq3_1s * bq = (const block_tq3_1s *) vbq + kbx;
-    const float d = (g < 2) ? __half2float(bq->d0) : __half2float(bq->d1);
-
-    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
-
-    const uint8_t * qp = bq->qs + g * 3;
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
+    const int subgroup0 = iqs / 4;
     float sum = 0.0f;
-    sum += centroids[ qp[0]       & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += centroids[(qp[0] >> 3) & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += centroids[(qp[1] >> 1) & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += centroids[(qp[1] >> 4) & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += centroids[(qp[2] >> 2) & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += centroids[(qp[2] >> 5) & 7] * (float) bq8_1->qs[g*8 + 7];
 
-    return sum * d * ds8.x;
+#pragma unroll
+    for (int s = 0; s < VDR_TQ3_1S_Q8_1_MMVQ / 4; ++s) {
+        sum += tq3_1s_dot_subgroup_q8_1(bq, bq8_1, subgroup0 + s);
+    }
+
+    return sum;
 }
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1200
