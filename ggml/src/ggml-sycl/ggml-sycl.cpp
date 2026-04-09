@@ -411,11 +411,22 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         assert(tensor->view_src->buffer->buft == buffer->buft);
         return GGML_STATUS_SUCCESS;
     }
-    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
-        !g_ggml_sycl_disable_optimize) {
-        ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
-        tensor->extra                 = extra;
-        ctx->tensor_extras.push_back(extra);  //used to release it when destroy ctx.
+
+    if (!g_ggml_sycl_disable_optimize) {
+        // set reorder extra buffer based on supported type
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q6_K:{
+                ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+                tensor->extra                 = extra;
+                ctx->tensor_extras.push_back(extra);
+                break;
+            }
+            default:
+                break;
+        }
     }
 
     if (ggml_is_quantized(tensor->type)) {

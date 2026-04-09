@@ -44,6 +44,10 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
             GGML_ASSERT(V->ne[0] == K->ne[0]);
             ggml_sycl_flash_attn_ext_tile_case<256, 256>(ctx, dst);
         } break;
+        case 512: {
+            GGML_ASSERT(V->ne[0] == K->ne[0]);
+            ggml_sycl_flash_attn_ext_tile_case<512, 512>(ctx, dst);
+        } break;
         case 576: {
             GGML_ASSERT(V->ne[0] == 512);
             ggml_sycl_flash_attn_ext_tile_case<576, 512>(ctx, dst);
