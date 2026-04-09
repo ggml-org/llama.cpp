@@ -853,6 +853,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_pixtral>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_DOTS_OCR:
+            {
+                builder = std::make_unique<clip_graph_dotsocr>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
             {
@@ -1268,6 +1272,14 @@ struct clip_model_loader {
                         hparams.image_longest_edge = hparams.image_size;
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_DOTS_OCR:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIVL:
                     {
@@ -1982,6 +1994,17 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM, false);
                     model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"), false);
+                } break;
+            case PROJECTOR_TYPE_DOTS_OCR:
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    // post_trunk_norm: applied after all ViT blocks, before the merger
+                    model.post_ln_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
@@ -2763,6 +2786,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_PADDLEOCR:
+        case PROJECTOR_TYPE_DOTS_OCR:
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
@@ -3068,6 +3092,28 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                                 ptr++;
                             }
                         }
+                    }
+                }
+
+                set_input_i32("positions", positions);
+            } break;
+        case PROJECTOR_TYPE_DOTS_OCR:
+            {
+                const int pw = image_size_width / patch_size;
+                const int ph = image_size_height / patch_size;
+                const int n_pos = ph * pw;
+                std::vector<int> positions(n_pos * 4);
+                int ptr = 0;
+
+                // flat layout: [h, w, h, w] for each patch
+                // patches are in raster order (matching conv2d output)
+                for (int y = 0; y < ph; y++) {
+                    for (int x = 0; x < pw; x++) {
+                        positions[          ptr] = y;
+                        positions[  n_pos + ptr] = x;
+                        positions[2*n_pos + ptr] = y;
+                        positions[3*n_pos + ptr] = x;
+                        ptr++;
                     }
                 }
 
@@ -3388,6 +3434,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
+        case PROJECTOR_TYPE_DOTS_OCR:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];

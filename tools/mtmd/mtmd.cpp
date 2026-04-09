@@ -375,6 +375,13 @@ struct mtmd_context {
                     img_end = "<|im_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_DOTS_OCR:
+                {
+                    // <|img|> ... (image embeddings) ... <|endofimg|>
+                    img_beg = "<|img|>";
+                    img_end = "<|endofimg|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                 {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);

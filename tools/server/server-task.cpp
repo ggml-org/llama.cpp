@@ -384,6 +384,8 @@ task_params server_task::params_from_json_cmpl(
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
+        params.sampling.grammar = defaults.sampling.grammar;
+
         std::string grammar_str = json_value(data, "grammar", std::string());
         if (!grammar_str.empty()) {
             // grammar_type key is set by the server when converting chat template grammars
