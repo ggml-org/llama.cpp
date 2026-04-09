@@ -10742,16 +10742,26 @@ class NemotronHModel(GraniteHybridModel):
             if (latent_size := self.hparams.get("moe_latent_size")) is not None:
                 self.gguf_writer.add_moe_latent_size(latent_size)
 
-    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+    def set_vocab(self):
         # The NemotronH config uses pattern characters (e.g. '-') that may not
-        # be supported by the installed transformers version.
+        # be supported by the installed transformers version. AutoTokenizer
+        # internally calls AutoConfig which triggers this parsing failure.
         # Using trust_remote_code=True to load the model's own config class.
         tokens: list[str] = []
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+
+        # Pad vocab size (from Mamba2Model/GraniteHybridModel)
+        self.hparams["pad_vocab_size_multiple"] = 8 # Setting this here since GraniteHybridModel.set_vocab() isn't being invoked now.
+        # From Mamba2Model.set_vocab():
+        vocab_size = self.hparams["vocab_size"]
+        pad_vocab = self.hparams.get("pad_vocab_size_multiple", 16)
+        # ref: https://stackoverflow.com/a/17511341/22827863
+        vocab_size = -(vocab_size // -pad_vocab) * pad_vocab
+        self.hparams["vocab_size"] = vocab_size
+
         assert max(tokenizer.vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
@@ -10783,10 +10793,14 @@ class NemotronHModel(GraniteHybridModel):
                     toktypes.append(gguf.TokenType.NORMAL)
                 tokens.append(token)
 
-        return tokens, toktypes, tokpre
+        # From TextModel.set_vocab_gpt2():
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
 
-    def set_vocab(self):
-        super().set_vocab()
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
 
         # The tokenizer _does_ add a BOS token (via post_processor type
         # TemplateProcessing) but does not set add_bos_token to true in the
