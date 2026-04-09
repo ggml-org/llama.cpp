@@ -251,6 +251,23 @@ value binary_expression::execute_impl(context & ctx) {
         return res;
     }
 
+    // Python-style string repetition
+    // TODO: support array/tuple repetition (e.g., [1, 2] * 3 → [1, 2, 1, 2, 1, 2])
+    if (op.value == "*" &&
+            ((is_val<value_string>(left_val) && is_val<value_int>(right_val)) ||
+             (is_val<value_int>(left_val) && is_val<value_string>(right_val)))) {
+        const auto & str = is_val<value_string>(left_val) ? left_val->as_string() : right_val->as_string();
+        const int64_t repeat = is_val<value_int>(right_val) ? right_val->as_int() : left_val->as_int();
+        auto res = mk_val<value_string>();
+        if (repeat <= 0) {
+            return res;
+        }
+        for (int64_t i = 0; i < repeat; ++i) {
+            res->val_str = res->val_str.append(str);
+        }
+        return res;
+    }
+
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
         // case: "a" in "abc"
