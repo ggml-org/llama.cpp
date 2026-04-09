@@ -1158,7 +1158,6 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
-
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1403,7 +1402,6 @@ struct ggml_backend_cuda_context {
     bool any_cuda_graph_has_instance() const {
         return cuda_graphs.any_graph_has_instance();
     }
-
 #endif // USE_CUDA_GRAPH
 
     explicit ggml_backend_cuda_context(int device) :
