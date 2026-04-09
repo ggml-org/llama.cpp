@@ -48,6 +48,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_NOT_ENOUGH_DATA       =  10 + offset_has_data,
     HANDCRAFTED_DATA_BAD_ALIGN             =  15 + offset_has_data,
     HANDCRAFTED_DATA_INCONSISTENT_ALIGN    =  20 + offset_has_data,
+    HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW     =  30 + offset_has_data,
     HANDCRAFTED_DATA_SUCCESS               = 800 + offset_has_data,
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
@@ -84,6 +85,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_DATA_NOT_ENOUGH_DATA:       return "DATA_NOT_ENOUGH_DATA";
         case HANDCRAFTED_DATA_BAD_ALIGN:             return "DATA_BAD_ALIGN";
         case HANDCRAFTED_DATA_INCONSISTENT_ALIGN:    return "DATA_INCONSISTENT_ALIGN";
+        case HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW:     return "DATA_MEM_SIZE_OVERFLOW";
         case HANDCRAFTED_DATA_SUCCESS:               return "DATA_SUCCESS";
         case HANDCRAFTED_DATA_CUSTOM_ALIGN:          return "DATA_CUSTOM_ALIGN";
     }
@@ -194,6 +196,13 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     std::vector<tensor_config_t> tensor_configs;
     if (hft >= offset_has_tensors) {
         tensor_configs = get_tensor_configs(rng);
+    }
+
+    if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+        tensor_configs.resize(2);
+
+        tensor_configs[0] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+        tensor_configs[1] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
     }
 
     if (hft == HANDCRAFTED_HEADER_BAD_N_TENSORS) {
@@ -397,7 +406,8 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         for (uint32_t i = 1; i < n_dims; ++i) {
             ne *= shape[i];
         }
-        offset += GGML_PAD(ggml_row_size(type, ne), alignment);
+
+        offset += GGML_PAD(ggml_row_size(type, ne), (uint64_t) alignment);
     }
 
     while (ftell(file) % alignment != 0) {
@@ -410,6 +420,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         uint64_t nbytes = offset;
         if (hft == HANDCRAFTED_DATA_NOT_ENOUGH_DATA) {
             nbytes -= 1;
+        }
+        if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+            nbytes = 32;
         }
         for (uint64_t i = 0; i < nbytes; ++i) {
             const uint8_t random_byte = i % 256;
@@ -704,6 +717,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_DATA_NOT_ENOUGH_DATA,
         HANDCRAFTED_DATA_BAD_ALIGN,
         HANDCRAFTED_DATA_INCONSISTENT_ALIGN,
+        HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW,
         HANDCRAFTED_DATA_SUCCESS,
         HANDCRAFTED_DATA_CUSTOM_ALIGN,
     };
@@ -728,7 +742,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
             /*ctx      =*/ hft >= offset_has_data ? &ctx : nullptr,
         };
 
-        struct gguf_context * gguf_ctx = gguf_init_from_file_impl(file, gguf_params);
+        struct gguf_context * gguf_ctx = gguf_init_from_file_ptr(file, gguf_params);
 
         if (expect_context_not_null(hft)) {
             printf("%s:   - context_not_null: ", __func__);
@@ -1111,19 +1125,15 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
     GGML_ASSERT(file);
 #endif // _WIN32
 
-    {
-        std::vector<int8_t> buf;
-        gguf_write_to_buf(gguf_ctx_0, buf, only_meta);
-        GGML_ASSERT(fwrite(buf.data(), 1, buf.size(), file) == buf.size());
-        rewind(file);
-    }
+    gguf_write_to_file_ptr(gguf_ctx_0, file, only_meta);
+    rewind(file);
 
     struct ggml_context * ctx_1 = nullptr;
     struct gguf_init_params gguf_params = {
         /*no_alloc =*/ false,
         /*ctx      =*/ only_meta ? nullptr : &ctx_1,
     };
-    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_impl(file, gguf_params);
+    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
 
     printf("%s: same_version: ", __func__);
     if (gguf_get_version(gguf_ctx_0) == gguf_get_version(gguf_ctx_1)) {

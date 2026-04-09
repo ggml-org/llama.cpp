@@ -11,7 +11,12 @@
 #include "llama-model.h"
 
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "ggml-backend.h"
+#include "gguf.h"
+
+// TODO: tmp until the ggml meta backend matures and becomes public
+#include "../src/ggml-ext.h"
 
 #include <algorithm>
 #include <cassert>
@@ -22,6 +27,7 @@
 #include <cstring>
 #include <ctime>
 #include <stdexcept>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -51,7 +57,7 @@ struct llama_device_memory_data {
 
 static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         const char * path_model, const llama_model_params * mparams, const llama_context_params * cparams,
-        std::vector<ggml_backend_dev_t> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
+        std::vector<llama_device> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
         const ggml_log_level log_level) {
     struct user_data_t {
         struct {
@@ -102,7 +108,7 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
             continue;
         }
         for (size_t i = 0; i < ret.size(); i++) {
-            if (model->devices[i] == dev) {
+            if (model->devices[i].dev == dev) {
                 ret[i].mb.model   += mb.model;
                 ret[i].mb.context += mb.context;
                 ret[i].mb.compute += mb.compute;
@@ -113,7 +119,7 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     for (size_t i = 0; i < ret.size(); i++) {
         size_t free;
         size_t total;
-        ggml_backend_dev_memory(model->devices[i], &free, &total);
+        ggml_backend_dev_memory(model->devices[i].dev, &free, &total);
 
         // devices can return 0 bytes for free and total memory if they do not
         // have any to report. in this case, we will use the host memory as a fallback
@@ -160,11 +166,14 @@ static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+    if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        throw llama_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
+    }
     constexpr int64_t MiB = 1024*1024;
     typedef std::vector<llama_device_memory_data> dmds_t;
     const llama_model_params default_mparams = llama_model_default_params();
 
-    std::vector<ggml_backend_dev_t> devs;
+    std::vector<llama_device> devs;
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
@@ -189,10 +198,10 @@ static void llama_params_fit_impl(
     {
         dev_names.reserve(nd);
         size_t max_length = 0;
-        for (ggml_backend_dev_t dev : devs) {
-            std::string name = ggml_backend_dev_name(dev);
+        for (const llama_device & dev : devs) {
+            std::string name = ggml_backend_dev_name(dev.dev);
             name += " (";
-            name += ggml_backend_dev_description(dev);
+            name += ggml_backend_dev_description(dev.dev);
             name += ")";
             dev_names.push_back(name);
             max_length = std::max(max_length, name.length());
@@ -363,14 +372,14 @@ static void llama_params_fit_impl(
             case LAYER_FRACTION_ATTN: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|gate|down).*";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|up|gate_up|down).*";
                 }
                 return patterns[il].c_str();
             }
             case LAYER_FRACTION_UP: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|down).*";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|gate_up|down).*";
                 }
                 return patterns[il].c_str();
             }
@@ -384,7 +393,7 @@ static void llama_params_fit_impl(
             case LAYER_FRACTION_MOE: {
                 static std::array<std::string, n_strings> patterns;
                 if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate)_(ch|)exps";
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate_up|gate)_(ch|)exps";
                 }
                 return patterns[il].c_str();
             }
@@ -478,7 +487,7 @@ static void llama_params_fit_impl(
 
     int64_t global_surplus_cpu_moe = 0;
     if (hp_nex > 0) {
-        const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate)_(ch|)exps"; // matches all MoE tensors
+        const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
         tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
         tensor_buft_overrides[1] = {nullptr, nullptr};
@@ -683,7 +692,7 @@ static void llama_params_fit_impl(
             ngl_per_device_test[id].overflow_type = LAYER_FRACTION_UP;
             std::vector<ggml_backend_buffer_type_t> overflow_bufts_test = overflow_bufts;
             if (id < nd - 1) {
-                overflow_bufts_test[id] = ggml_backend_dev_buffer_type(devs[id + 1]);
+                overflow_bufts_test[id] = ggml_backend_dev_buffer_type(devs[id + 1].dev);
             }
             LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_UP\n", __func__);
             std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
@@ -825,7 +834,8 @@ int64_t llama_time_us(void) {
 }
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
+static int llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
+        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -834,7 +844,8 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.use_direct_io, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
+            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
 
@@ -880,9 +891,29 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 }
 
 static struct llama_model * llama_model_load_from_file_impl(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
         const std::string & path_model,
         std::vector<std::string> & splits,
+        FILE * file,
         struct llama_model_params params) {
+    {
+        int n_sources_defined = 0;
+        if (metadata != nullptr) {
+            n_sources_defined++;
+        }
+        if (!path_model.empty()) {
+            n_sources_defined++;
+        }
+        if (file != nullptr) {
+            n_sources_defined++;
+        }
+        if (n_sources_defined != 1) {
+            LLAMA_LOG_ERROR("%s: exactly one out metadata, path_model, and file must be defined\n", __func__);
+            return nullptr;
+        }
+    }
     ggml_time_init();
 
     if (!params.vocab_only && ggml_backend_reg_count() == 0) {
@@ -911,58 +942,111 @@ static struct llama_model * llama_model_load_from_file_impl(
 
     // create list of devices to use with this model
     if (params.devices) {
-        for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
-            model->devices.push_back(*dev);
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+            size_t n_devs = 0;
+            while (params.devices[n_devs]) {
+                n_devs++;
+            }
+            if (n_devs == 0) {
+                LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
+                return nullptr;
+            }
+            LLAMA_LOG_INFO("%s: creating a Meta device with %zu devices\n", __func__, n_devs);
+            for (size_t i = 0; i < n_devs; ++i) {
+                LLAMA_LOG_INFO("%s: - device %zu: %s\n", __func__, i, ggml_backend_dev_name(params.devices[i]));
+            }
+            model->get_split_state_ud.n_devices = n_devs;
+            model->get_split_state_ud.model = model;
+            model->devices.push_back({
+                true, ggml_backend_meta_device(
+                params.devices, n_devs, llama_meta_device_get_split_state, &model->get_split_state_ud)
+            });
+        } else {
+            for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
+                model->devices.push_back({false, *dev});
+            }
         }
     } else {
         // default device selection
 
         // build list of available devices
-        std::vector<ggml_backend_dev_t> gpus;
-        std::vector<ggml_backend_dev_t> igpus;
-        std::vector<ggml_backend_dev_t> rpc_servers;
+        std::vector<llama_device> gpus;
+        std::vector<llama_device> igpus;
+        std::vector<llama_device> rpc_servers;
 
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            switch (ggml_backend_dev_type(dev)) {
-                case GGML_BACKEND_DEVICE_TYPE_CPU:
-                case GGML_BACKEND_DEVICE_TYPE_ACCEL:
-                    // skip CPU backends since they are handled separately
-                    break;
-
-                case GGML_BACKEND_DEVICE_TYPE_GPU: {
-                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
-                        rpc_servers.push_back(dev);
-                    } else {
-                        // check if there is already a GPU with the same device id
-                        ggml_backend_dev_props props;
-                        ggml_backend_dev_get_props(dev, &props);
-                        auto it = std::find_if(gpus.begin(), gpus.end(), [&props](ggml_backend_dev_t d) {
-                            ggml_backend_dev_props d_props;
-                            ggml_backend_dev_get_props(d, &d_props);
-                            if (props.device_id && d_props.device_id) {
-                                return strcmp(props.device_id, d_props.device_id) == 0;
-                            }
-                            return false;
-                        });
-
-                        if (it != gpus.end()) {
-                            LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
-                                    __func__,
-                                    ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
-                                    props.device_id ? props.device_id : "unknown id",
-                                    ggml_backend_dev_name(*it), ggml_backend_dev_description(*it));
-                        } else {
-                            gpus.push_back(dev);
-                        }
-                    }
-                    break;
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+            std::vector<ggml_backend_dev_t> devs;
+            devs.reserve(ggml_backend_dev_count());
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                auto * dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_buffer_type(dev) == ggml_backend_cpu_buffer_type()) {
+                    LLAMA_LOG_INFO("%s: skipping %s (%s) for tensor parallelism\n", __func__, ggml_backend_dev_name(dev), ggml_backend_dev_description(dev));
+                    continue;
                 }
+                devs.push_back(dev);
+            }
+            if (devs.empty()) {
+                LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
+                return nullptr;
+            }
 
-                case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                    igpus.push_back(dev);
-                    break;
+            LLAMA_LOG_INFO("%s: creating a Meta device for tensor parallelism from %zu devices:\n", __func__, devs.size());
+            for (size_t i = 0; i < devs.size(); ++i) {
+                LLAMA_LOG_INFO("%s: - device %zu: %s (%s)\n", __func__, i, ggml_backend_dev_name(devs[i]), ggml_backend_dev_description(devs[i]));
+            }
+
+            GGML_ASSERT(!devs.empty());
+            model->get_split_state_ud.n_devices = devs.size();
+            model->get_split_state_ud.model     = model;
+            gpus.push_back({
+                true, ggml_backend_meta_device(
+                devs.data(), devs.size(), llama_meta_device_get_split_state, &model->get_split_state_ud)
+            });
+        } else {
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                switch (ggml_backend_dev_type(dev)) {
+                    case GGML_BACKEND_DEVICE_TYPE_CPU:
+                    case GGML_BACKEND_DEVICE_TYPE_ACCEL:
+                        // skip CPU backends since they are handled separately
+                        break;
+
+                    case GGML_BACKEND_DEVICE_TYPE_GPU: {
+                        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                        if (ggml_backend_reg_name(reg) == std::string("RPC")) {
+                            rpc_servers.push_back({false, dev});
+                        } else {
+                            // check if there is already a GPU with the same device id
+                            ggml_backend_dev_props props;
+                            ggml_backend_dev_get_props(dev, &props);
+                            auto it = std::find_if(gpus.begin(), gpus.end(), [&props](const llama_device & d) {
+                                ggml_backend_dev_props d_props;
+                                ggml_backend_dev_get_props(d.dev, &d_props);
+                                if (props.device_id && d_props.device_id) {
+                                    return strcmp(props.device_id, d_props.device_id) == 0;
+                                }
+                                return false;
+                            });
+
+                            if (it != gpus.end()) {
+                                LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
+                                        __func__,
+                                        ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                                        props.device_id ? props.device_id : "unknown id",
+                                        ggml_backend_dev_name(it->dev), ggml_backend_dev_description(it->dev));
+                            } else {
+                                gpus.push_back({false, dev});
+                            }
+                        }
+                        break;
+                    }
+
+                    case GGML_BACKEND_DEVICE_TYPE_IGPU:
+                        igpus.push_back({false, dev});
+                        break;
+                    case GGML_BACKEND_DEVICE_TYPE_META:
+                        GGML_ABORT("fatal error");
+                }
             }
         }
 
@@ -988,22 +1072,22 @@ static struct llama_model * llama_model_load_from_file_impl(
                 llama_model_free(model);
                 return nullptr;
             }
-            ggml_backend_dev_t main_gpu = model->devices[params.main_gpu];
+            llama_device main_gpu = model->devices[params.main_gpu];
             model->devices.clear();
             model->devices.push_back(main_gpu);
         }
     }
 
-    for (auto * dev : model->devices) {
+    for (const auto & dev : model->devices) {
         ggml_backend_dev_props props;
-        ggml_backend_dev_get_props(dev, &props);
+        ggml_backend_dev_get_props(dev.dev, &props);
         LLAMA_LOG_INFO("%s: using device %s (%s) (%s) - %zu MiB free\n", __func__,
-                ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                ggml_backend_dev_name(dev.dev), ggml_backend_dev_description(dev.dev),
                 props.device_id ? props.device_id : "unknown id",
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(path_model, splits, *model, params);
+    const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -1019,6 +1103,18 @@ static struct llama_model * llama_model_load_from_file_impl(
     return model;
 }
 
+struct llama_model * llama_model_init_from_user(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
+        struct llama_model_params params) {
+    GGML_ASSERT(metadata != nullptr);
+    std::string path_model;
+    std::vector<std::string> splits = {};
+    params.use_mmap = false;
+    params.use_extra_bufts = false;
+    return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
+}
 // deprecated
 struct llama_model * llama_load_model_from_file(
         const char * path_model,
@@ -1030,7 +1126,7 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params params) {
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(path_model, splits, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
 }
 
 struct llama_model * llama_model_load_from_splits(
@@ -1046,11 +1142,21 @@ struct llama_model * llama_model_load_from_splits(
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(splits.front(), splits, params);
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, splits.front(), splits, /*file*/ nullptr, params);
+}
+
+struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_model_params params) {
+    if (!file) {
+        LLAMA_LOG_ERROR("%s: file is NULL\n", __func__);
+        return nullptr;
+    }
+    std::string path_model;
+    std::vector<std::string> splits = {};
+    return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, file, params);
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
-    llama_model_saver ms(*model);
+    llama_model_saver ms(model);
     ms.add_kv_from_model();
     ms.add_tensors_from_model();
     ms.save(path_model);

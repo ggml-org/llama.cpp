@@ -31,8 +31,8 @@ dma_queue * dma_queue_create(size_t capacity) {
     q->capacity = capacity;
     q->idx_mask = capacity - 1;
 
-    q->desc = (hexagon_udma_descriptor_type1_t *) memalign(64, capacity * sizeof(hexagon_udma_descriptor_type1_t));
-    memset(q->desc, 0, capacity * sizeof(hexagon_udma_descriptor_type1_t));
+    q->desc = (dma_descriptor_2d *) memalign(64, capacity * sizeof(dma_descriptor_2d));
+    memset(q->desc, 0, capacity * sizeof(dma_descriptor_2d));
 
     q->dptr = (dma_ptr *) memalign(4, capacity * sizeof(dma_ptr));
     memset(q->dptr, 0, capacity * sizeof(dma_ptr));

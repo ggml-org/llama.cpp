@@ -460,6 +460,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
         if(NOT GGML_CPU_ALL_VARIANTS)
             set(MARCH_STR "rv64gc")
+            if (GGML_RVV)
+                string(APPEND MARCH_STR "v")
+            endif()
+
             if (GGML_RV_ZFH)
                 string(APPEND MARCH_STR "_zfh")
             endif()
@@ -467,7 +471,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             if (GGML_XTHEADVECTOR)
                 string(APPEND MARCH_STR "_xtheadvector")
             elseif (GGML_RVV)
-                string(APPEND MARCH_STR "_v")
                 if (GGML_RV_ZVFH)
                     string(APPEND MARCH_STR "_zvfh")
                 endif()
@@ -475,12 +478,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     string(APPEND MARCH_STR "_zvfbfwma")
                 endif()
             endif()
+
             if (GGML_RV_ZICBOP)
                 string(APPEND MARCH_STR "_zicbop")
             endif()
             if (GGML_RV_ZIHINTPAUSE)
                 string(APPEND MARCH_STR "_zihintpause")
             endif()
+
             list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
         else()
             # Begin with the lowest baseline
@@ -566,28 +571,40 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.16.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.22.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "0a9e9008adb6031f9e8cf70dff4a3321")
+        set(KLEIDIAI_ARCHIVE_MD5  "54049037570ab0ee0a0d126b2ba5ece1")
 
-        if (POLICY CMP0135)
-            cmake_policy(SET CMP0135 NEW)
+        set(KLEIDIAI_FETCH_ARGS
+            URL ${KLEIDIAI_DOWNLOAD_URL}
+            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5}
+        )
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+            list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP NEW)
         endif()
 
-        # TODO: Use FetchContent_MakeAvailable with EXCLUDE_FROM_ALL after bumping minimum CMake version to 3.28+
-        # Using FetchContent_Populate instead to avoid EXCLUDE_FROM_ALL which requires CMake 3.28
-        FetchContent_Declare(KleidiAI_Download
-            URL ${KLEIDIAI_DOWNLOAD_URL}
-            DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
+            FetchContent_Declare(KleidiAI_Download
+                ${KLEIDIAI_FETCH_ARGS}
+                EXCLUDE_FROM_ALL
+            )
 
-        FetchContent_GetProperties(KleidiAI_Download
-            SOURCE_DIR  KLEIDIAI_SRC
-            POPULATED   KLEIDIAI_POPULATED)
-
-        if (NOT KLEIDIAI_POPULATED)
-            FetchContent_Populate(KleidiAI_Download)
+            FetchContent_MakeAvailable(KleidiAI_Download)
             FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
+        else()
+            FetchContent_Declare(KleidiAI_Download
+                ${KLEIDIAI_FETCH_ARGS}
+            )
+
+            FetchContent_GetProperties(KleidiAI_Download
+                SOURCE_DIR KLEIDIAI_SRC
+                POPULATED KLEIDIAI_POPULATED
+            )
+
+            if (NOT KLEIDIAI_POPULATED)
+                FetchContent_Populate(KleidiAI_Download)
+                FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
+            endif()
         endif()
 
         add_compile_definitions(GGML_USE_CPU_KLEIDIAI)
@@ -608,6 +625,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qai8dxp_qsi8cxp/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/)
 
         set(ARCH_FLAGS_TEMP "${ARCH_FLAGS}")
@@ -648,7 +666,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         if (NOT SME_ENABLED MATCHES -1)
             list(APPEND GGML_KLEIDIAI_SOURCES
-                ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/kai_matmul_clamp_f32_qsi8d32p1vlx4_qsi4c32p4vlx4_1vlx4vl_sme2_mopa.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/kai_matmul_clamp_f32_qsi8d32p1x4_qsi4c32p4vlx4_1x4vl_sme2_sdot.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qai8dxp_qsi8cxp/kai_matmul_clamp_f32_qai8dxp1vlx4_qsi8cxp4vlx4_1vlx4vl_sme2_mopa.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qai8dxp_qsi8cxp/kai_matmul_clamp_f32_qai8dxp1vlx4_qsi8cxp4vlx4_1vlx4vl_sme2_mopa_asm.S
@@ -656,10 +673,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qai8dxp_qsi8cxp/kai_matmul_clamp_f32_qai8dxp1x4_qsi8cxp4vlx4_1x4vl_sme2_dot_asm.S
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/kai_matmul_clamp_f32_bf16p2vlx2_bf16p2vlx2_2vlx2vl_sme2_mopa.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/kai_matmul_clamp_f32_bf16p2vlx2_bf16p2vlx2_2vlx2vl_sme2_mopa_asm.S
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/kai_matmul_clamp_f32_f16p1vlx2_qsi4c32p4vlx2_1vlx4vl_sme2_mopa.c
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/kai_matmul_clamp_f32_f16p1vlx2_qsi4c32p4vlx2_1vlx4vl_sme2_mopa_asm.S
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_pack_bf16p2vlx2_f32_sme.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_kxn_bf16p2vlx2b_f32_x32_sme.c
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_pack_f16pmrx2_f32_neon.c
                 ${KLEIDIAI_SRC}/kai/kai_common_sme_asm.S)
-            set(PRIVATE_ARCH_FLAGS "-fno-tree-vectorize;${PRIVATE_ARCH_FLAGS}+sve+sve2")
+            set(PRIVATE_ARCH_FLAGS "-fno-tree-vectorize;${PRIVATE_ARCH_FLAGS}+sve+sve2+sme2+fp16")
         endif()
 
         if (NOT SVE_ENABLED MATCHES -1)

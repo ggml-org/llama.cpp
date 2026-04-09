@@ -5,13 +5,18 @@
 #include "log.h"
 #include "llama.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SPECULATIVE)) {
         return 1;
@@ -21,8 +26,6 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: --n-predict must be >= -1\n", __func__);
         return 1;
     }
-
-    common_init();
 
     if (params.speculative.mparams_dft.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);

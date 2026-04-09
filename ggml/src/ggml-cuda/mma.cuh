@@ -668,7 +668,7 @@ namespace ggml_cuda_mma {
 
         return ret;
     }
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     template <int I, int J>
     static __device__ __forceinline__ tile<I, J/2, half2> get_half2(const tile<I, J, float> & tile_float) {
         tile<I, J/2, half2> ret;
@@ -964,6 +964,34 @@ namespace ggml_cuda_mma {
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
 #endif // defined(RDNA4)
+#elif defined(AMD_MFMA_AVAILABLE)
+        // MFMA: FP16 input, FP32 accumulate, convert back to half2.
+        using halfx4_t = __attribute__((ext_vector_type(4))) _Float16;
+        using floatx4_t = __attribute__((ext_vector_type(4))) float;
+
+        // Convert existing half2 accumulator to float for MFMA:
+        floatx4_t acc_f32;
+        {
+            const halfx4_t acc_h = reinterpret_cast<const halfx4_t&>(D.x[0]);
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                acc_f32[i] = (float)acc_h[i];
+            }
+        }
+
+        const halfx4_t& a_frag = reinterpret_cast<const halfx4_t&>(A.x[0]);
+        const halfx4_t& b_frag = reinterpret_cast<const halfx4_t&>(B.x[0]);
+        acc_f32 = __builtin_amdgcn_mfma_f32_16x16x16f16(a_frag, b_frag, acc_f32, 0, 0, 0);
+
+        // Convert back to half2:
+        {
+            halfx4_t result_h;
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                result_h[i] = (_Float16)acc_f32[i];
+            }
+            reinterpret_cast<halfx4_t&>(D.x[0]) = result_h;
+        }
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
@@ -997,7 +1025,8 @@ namespace ggml_cuda_mma {
         const floatx2_t& a_frag = reinterpret_cast<const floatx2_t&>(A.x[0]);
         const floatx2_t& b_frag = reinterpret_cast<const floatx2_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_mfma_f32_16x16x8_xf32(a_frag, b_frag, acc_frag, 0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA1)
+#elif defined(CDNA4) || defined(CDNA2) || defined(CDNA1)
+        // CDNA4 (gfx950) does not support xf32 MFMA, use f32 path like CDNA2/CDNA1
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
             acc_frag = __builtin_amdgcn_mfma_f32_16x16x4f32(A.x[i], B.x[i], acc_frag, 0, 0, 0);
@@ -1159,7 +1188,7 @@ namespace ggml_cuda_mma {
 #elif defined(AMD_MFMA_AVAILABLE)
         using floatx4_t = __attribute__((ext_vector_type(4))) float;
         floatx4_t& acc_frag = reinterpret_cast<floatx4_t&>(D.x[0]);
-#if defined(CDNA3) || defined(CDNA2)
+#if defined(CDNA4) || defined(CDNA3) || defined(CDNA2)
         using bf16x4_t = __attribute__((ext_vector_type(4))) __bf16;
         const bf16x4_t& a_frag = reinterpret_cast<const bf16x4_t&>(A.x[0]);
         const bf16x4_t& b_frag = reinterpret_cast<const bf16x4_t&>(B.x[0]);
@@ -1188,12 +1217,12 @@ namespace ggml_cuda_mma {
 #if defined(AMD_MFMA_AVAILABLE)
         using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
         int32x4_t * acc = (int32x4_t *) D.x;
-#if defined(CDNA3)
+#if defined(CDNA4) || defined(CDNA3)
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t *) A.x)[0],
                                                        ((int64_t *) B.x)[0],
                                                        acc[0],
                                                        0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA)
+#elif defined(CDNA2) || defined(CDNA1)
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x16i8(A.x[0],
                                                       B.x[0],
                                                       acc[0],
@@ -1202,7 +1231,7 @@ namespace ggml_cuda_mma {
                                                       B.x[1],
                                                       acc[0],
                                                       0, 0, 0);
-#endif // defined(CDNA3)
+#endif // defined(CDNA4) || defined(CDNA3)
 
 #elif defined(AMD_WMMA_AVAILABLE)
 
@@ -1267,12 +1296,12 @@ namespace ggml_cuda_mma {
 #if defined(AMD_MFMA_AVAILABLE)
         using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;
         int32x16_t * acc = (int32x16_t *) D.x;
-#if defined(CDNA3)
+#if defined(CDNA4) || defined(CDNA3)
         acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t *) A.x)[0],
                                                        ((int64_t *) B.x)[0],
                                                        acc[0],
                                                        0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA)
+#elif defined(CDNA2) || defined(CDNA1)
         acc[0] = __builtin_amdgcn_mfma_i32_32x32x8i8(A.x[0],
                                                      B.x[0],
                                                      acc[0],
@@ -1281,7 +1310,7 @@ namespace ggml_cuda_mma {
                                                      B.x[1],
                                                      acc[0],
                                                      0, 0, 0);
-#endif // defined(CDNA3)
+#endif // defined(CDNA4) || defined(CDNA3)
 
 #else
         GGML_UNUSED_VARS(D, A, B);

@@ -2,17 +2,22 @@
 #include "common.h"
 #include "llama.h"
 
+#include <clocale>
 #include <vector>
 #include <cstdio>
 
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.prompt = "The quick brown fox";
     params.sampling.seed = 1234;
 
     const std::string_view state_file = "dump_state.bin";
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
@@ -23,8 +28,6 @@ int main(int argc, char ** argv) {
         printf("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
         params.kv_unified = true;
     }
-
-    common_init();
 
     if (params.n_predict < 0) {
         params.n_predict = 16;

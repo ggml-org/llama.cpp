@@ -98,6 +98,7 @@ struct task_result_state {
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
+    std::unordered_set<size_t> sent_tool_call_names;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
@@ -120,7 +121,8 @@ struct task_result_state {
     common_chat_msg update_chat_msg(
         const std::string & text_added,
         bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs);
+        std::vector<common_chat_msg_diff> & diffs,
+        bool filter_tool_calls = false);
 };
 
 struct server_task {
@@ -207,6 +209,7 @@ struct server_task {
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data);
 
     // utility function
@@ -259,14 +262,14 @@ struct result_timings {
     int32_t cache_n = -1;
 
     int32_t prompt_n = -1;
-    double prompt_ms;
-    double prompt_per_token_ms;
-    double prompt_per_second;
+    double prompt_ms = 0.0;
+    double prompt_per_token_ms = 0.0;
+    double prompt_per_second = 0.0;
 
     int32_t predicted_n = -1;
-    double predicted_ms;
-    double predicted_per_token_ms;
-    double predicted_per_second;
+    double predicted_ms = 0.0;
+    double predicted_per_token_ms = 0.0;
+    double predicted_per_second = 0.0;
 
     // Optional speculative metrics - only included when > 0
     int32_t draft_n = 0;
@@ -342,6 +345,7 @@ struct server_task_result_cmpl_final : server_task_result {
     bool truncated;
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
     int32_t n_tokens_cached;
     bool has_new_line;
     std::string stopping_word;
@@ -385,6 +389,8 @@ struct server_task_result_cmpl_final : server_task_result {
 
     json to_json_non_oaicompat();
 
+    json usage_json_oaicompat();
+
     json to_json_oaicompat();
 
     json to_json_oaicompat_chat();
@@ -406,6 +412,7 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
 
     bool post_sampling_probs;
     bool is_progress = false;
@@ -556,6 +563,8 @@ struct server_task_result_apply_lora : server_task_result {
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
+
+    int64_t n_tokens;
 
     std::vector<uint8_t> data;
 

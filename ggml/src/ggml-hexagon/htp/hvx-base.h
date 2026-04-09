@@ -3,9 +3,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
+#include <assert.h>
 
 #include "hex-utils.h"
 #include "hvx-types.h"
+
+#define hvx_vmem(A)   *((HVX_Vector *)(A))
+#define hvx_vmemu(A)  *((HVX_UVector *)(A))
 
 static inline void hvx_vec_store_u(void * restrict dst, uint32_t n, HVX_Vector v) {
     // Rotate as needed.
@@ -38,7 +43,7 @@ static inline HVX_Vector hvx_vec_splat_f32(float v) {
     return Q6_V_vsplat_R(u.i);
 }
 
-static inline HVX_Vector hvx_vec_splat_f16(float v) {
+static inline HVX_Vector hvx_vec_splat_f16(_Float16 v) {
     union { __fp16 f; uint16_t i; } u = { .f = v };
     return Q6_Vh_vsplat_R(u.i);
 }
@@ -110,11 +115,15 @@ static inline HVX_VectorPred hvx_vec_is_nan_f16(HVX_Vector v) {
     return Q6_Q_and_QQ(p_exp, p_frac);
 }
 
-static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
-    const HVX_Vector zero = Q6_V_vsplat_R(0);
+static inline HVX_Vector hvx_vec_f32_to_f16_shuff(HVX_Vector v0, HVX_Vector v1) {
+    const HVX_Vector zero = Q6_V_vzero();
     HVX_Vector q0 = Q6_Vqf32_vadd_VsfVsf(v0, zero);
     HVX_Vector q1 = Q6_Vqf32_vadd_VsfVsf(v1, zero);
-    HVX_Vector  v = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(q1, q0)));
+    return Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(q1, q0));
+}
+
+static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
+    HVX_Vector v = Q6_Vh_vdeal_Vh(hvx_vec_f32_to_f16_shuff(v0, v1));
 
 #if __HVX_ARCH__ < 79
     // replace NaNs with -INF, older arches produce NaNs for (-INF + 0.0)
@@ -125,6 +134,30 @@ static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
 
     return v;
 }
+
+#if __HVX_ARCH__ >= 79
+static inline HVX_VectorPair hvx_vec_f16_to_f32_shuff(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v, one);
+    return Q6_W_vcombine_VV(Q6_V_hi_W(p), Q6_V_lo_W(p));
+}
+static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v), one);
+    return Q6_W_vcombine_VV(Q6_V_hi_W(p), Q6_V_lo_W(p));
+}
+#else
+static inline HVX_VectorPair hvx_vec_f16_to_f32_shuff(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(v, one);
+    return Q6_W_vcombine_VV(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p)), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p)));
+}
+static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v), one);
+    return Q6_W_vcombine_VV(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p)), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p)));
+}
+#endif
 
 /* Q6_Vsf_equals_Vw is only available on v73+.*/
 #if __HVX_ARCH__ < 73
@@ -169,5 +202,72 @@ static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
     // now round down to 16
     return Q6_Vh_vround_VwVw_sat(vsf_1, vsf_0);
 }
+
+#if __HVX_ARCH__ < 79
+
+static inline HVX_VectorPair hvx_vec_mpyacc_f32_f16(HVX_VectorPair acc, HVX_Vector x, HVX_Vector y)
+{
+    HVX_VectorPair m = Q6_Wqf32_vmpy_VhfVhf(x, y);
+    HVX_Vector a0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_V_lo_W(m), Q6_V_lo_W(acc)));
+    HVX_Vector a1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_V_hi_W(m), Q6_V_hi_W(acc)));
+    return Q6_W_vcombine_VV(a1, a0);
+}
+
+#else
+
+static inline HVX_VectorPair hvx_vec_mpyacc_f32_f16(HVX_VectorPair acc, HVX_Vector x, HVX_Vector y)
+{
+    return Q6_Wsf_vmpyacc_WsfVhfVhf(acc, x, y);
+}
+
+#endif
+
+#if __HVX_ARCH__ < 79
+
+static inline HVX_Vector hvx_vec_add_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    const HVX_Vector negone = Q6_Vh_vsplat_R(0xBC00); // -1.0 in IEEE FP16
+    const HVX_Vector one    = Q6_Vh_vsplat_R(0x3C00); //  1.0 in IEEE FP16
+    HVX_VectorPair a_p = Q6_Wqf32_vmpy_VhfVhf(a, one);
+    HVX_VectorPair b_p = Q6_Wqf32_vmpy_VhfVhf(b, negone);
+    HVX_Vector a0 = Q6_Vqf32_vsub_Vqf32Vqf32(Q6_V_lo_W(a_p), Q6_V_lo_W(b_p));
+    HVX_Vector a1 = Q6_Vqf32_vsub_Vqf32Vqf32(Q6_V_hi_W(a_p), Q6_V_hi_W(b_p));
+    return Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(a1, a0));
+}
+
+static inline HVX_Vector hvx_vec_sub_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    const HVX_Vector negone = Q6_Vh_vsplat_R(0xBC00); // -1.0 in IEEE FP16
+    const HVX_Vector one    = Q6_Vh_vsplat_R(0x3C00); //  1.0 in IEEE FP16
+    HVX_VectorPair a_p = Q6_Wqf32_vmpy_VhfVhf(a, one);
+    HVX_VectorPair b_p = Q6_Wqf32_vmpy_VhfVhf(b, negone);
+    HVX_Vector a0 = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(a_p), Q6_V_lo_W(b_p));
+    HVX_Vector a1 = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_hi_W(a_p), Q6_V_hi_W(b_p));
+    return Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(a1, a0));
+}
+
+static inline HVX_Vector hvx_vec_mul_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    return Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(a, b));
+}
+
+#else
+
+static inline HVX_Vector hvx_vec_add_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    return Q6_Vhf_vadd_VhfVhf(a, b);
+}
+
+static inline HVX_Vector hvx_vec_sub_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    return Q6_Vhf_vsub_VhfVhf(a, b);
+}
+
+static inline HVX_Vector hvx_vec_mul_f16_f16(HVX_Vector a, HVX_Vector b)
+{
+    return Q6_Vhf_vmpy_VhfVhf(a, b);
+}
+
+#endif // __HVX_ARCH__ < 79
 
 #endif /* HVX_BASE_H */

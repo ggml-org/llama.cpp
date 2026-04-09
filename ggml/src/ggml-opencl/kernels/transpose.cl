@@ -44,10 +44,36 @@ kernel void kernel_transpose_16_4x1(
     write_imageh(output, i * rows + j, (half4)(temp0, temp1, temp2, temp3));
 }
 
+// Transpose treating each element as 8-bit using buffer
+kernel void kernel_transpose_8_buf(
+    global const uchar * input,
+    global uchar * output,
+    const int ldi,
+    const int ldo
+) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+
+    output[x*ldo + y] = input[y*ldi + x];
+}
+
 // Transpose treating each element as 16-bit using buffer
 kernel void kernel_transpose_16_buf(
     global const ushort * input,
     global ushort * output,
+    const int ldi,
+    const int ldo
+) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+
+    output[x*ldo + y] = input[y*ldi + x];
+}
+
+// Transpose treating each element as 32-bit using buffer
+kernel void kernel_transpose_32_buf(
+    global const uint * input,
+    global uint * output,
     const int ldi,
     const int ldo
 ) {

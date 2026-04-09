@@ -13,23 +13,20 @@
 
 constexpr bool DEBUG = false;
 
-void mtmd_audio_cache::fill_sin_cos_table(int n) {
+void mtmd_audio_cache::fill_sin_cos_table(uint32_t n) {
     sin_vals.resize(n);
     cos_vals.resize(n);
-    for (int i = 0; i < n; i++) {
+    for (uint32_t i = 0; i < n; i++) {
         double theta = (2 * M_PI * i) / n;
         sin_vals[i]  = sinf(theta);
         cos_vals[i]  = cosf(theta);
     }
 }
 
-void mtmd_audio_cache::fill_hann_window(int length, bool periodic) {
+void mtmd_audio_cache::fill_hann_window(uint32_t length, bool periodic) {
     hann_window.resize(length);
-    int offset = -1;
-    if (periodic) {
-        offset = 0;
-    }
-    for (int i = 0; i < length; i++) {
+    int offset = periodic ? 0 : -1;
+    for (uint32_t i = 0; i < length; i++) {
         hann_window[i] = 0.5 * (1.0 - cosf((2.0 * M_PI * i) / (length + offset)));
     }
 }
@@ -165,6 +162,7 @@ static void dft_impl(const mtmd_audio_cache & cache, const float * in, int N, fl
 //              false = input is complex-valued (interleaved real/imag, stride 2)
 template <bool Inverse, bool RealInput>
 static void fft_impl(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    GGML_ASSERT(N > 0);
     const int n_sin_cos_vals = cache.sin_vals.size();
 
     if (N == 1) {
@@ -407,6 +405,8 @@ static bool log_mel_spectrogram(
     }
 
 
+    GGML_ASSERT(params.n_fft_bins > 0);
+    GGML_ASSERT(params.hop_length > 0);
     out.n_mel = params.n_mel;
     out.n_len = (n_samples - frame_size) / frame_step + 1;
     // TODO: handle these checks better
@@ -438,6 +438,7 @@ static bool log_mel_spectrogram(
 
     const int effective_n_len = n_samples_in / frame_step;
     if (params.norm_per_feature) {
+        GGML_ASSERT(effective_n_len > 1);
         for (int i = 0; i < out.n_mel; i++) {
             double mean = 0;
             for (int j = 0; j < effective_n_len; ++j) {
@@ -560,7 +561,7 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
         int n_len = std::min(frames_per_chunk, (size_t) out_full.n_len - off);
         if ((size_t) n_len < frames_per_chunk) {
-            break;  // last uncomplete chunk will always be a padded chunk, safe to ignore
+            break;  // last incomplete chunk will always be a padded chunk, safe to ignore
         }
 
         mtmd_audio_mel out_chunk;
@@ -639,6 +640,7 @@ mtmd_audio_streaming_istft::mtmd_audio_streaming_istft(int n_fft, int hop_length
     padding_to_remove((n_fft - hop_length) / 2),
     ifft_in(n_fft * 2 * 4, 0.0f),  // extra space for recursive IFFT
     ifft_out(n_fft * 2 * 4, 0.0f) {
+    GGML_ASSERT(n_fft > 0 && hop_length > 0 && hop_length <= n_fft);
     cache.fill_sin_cos_table(n_fft);
     cache.fill_hann_window(n_fft, true);
 }

@@ -1,6 +1,8 @@
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
+#include "server-cors-proxy.h"
+#include "server-tools.h"
 
 #include "arg.h"
 #include "common.h"
@@ -8,6 +10,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <clocale>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -67,8 +70,12 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     // own arguments required by this example
     common_params params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
@@ -92,10 +99,8 @@ int main(int argc, char ** argv) {
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params.model_alias.empty() && !params.model.name.empty()) {
-        params.model_alias = params.model.name;
+        params.model_alias.insert(params.model.name);
     }
-
-    common_init();
 
     // struct that contains llama context and inference
     server_context ctx_server;
@@ -103,10 +108,8 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("system info: n_threads = %d, n_threads_batch = %d, total_threads = %d\n", params.cpuparams.n_threads, params.cpuparams_batch.n_threads, std::thread::hardware_concurrency());
-    LOG_INF("\n");
+    LOG_INF("build_info: %s\n", build_info.c_str());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
-    LOG_INF("\n");
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -120,6 +123,7 @@ int main(int argc, char ** argv) {
 
     // register API routes
     server_routes routes(params, ctx_server);
+    server_tools tools;
 
     bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
@@ -178,6 +182,7 @@ int main(int argc, char ** argv) {
     ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
     ctx_http.post("/v1/responses",        ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/responses",           ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
     ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
@@ -197,6 +202,25 @@ int main(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    if (params.webui_mcp_proxy) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
+        SRV_WRN("%s", "-----------------\n");
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    }
+    // EXPERIMENTAL built-in tools
+    if (!params.server_tools.empty()) {
+        tools.setup(params.server_tools);
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
+        SRV_WRN("%s", "-----------------\n");
+        ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
+        ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+    }
 
     //
     // Start the server
@@ -244,6 +268,12 @@ int main(int argc, char ** argv) {
 
         // load the model
         LOG_INF("%s: loading model\n", __func__);
+
+        if (server_models::is_child_server()) {
+            ctx_server.on_sleeping_changed([&](bool sleeping) {
+                server_models::notify_router_sleeping_state(sleeping);
+            });
+        }
 
         if (!ctx_server.load_model(params)) {
             clean_up();
@@ -295,9 +325,8 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: starting the main loop...\n", __func__);
 
         // optionally, notify router server that this instance is ready
-        const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
         std::thread monitor_thread;
-        if (router_port != nullptr) {
+        if (server_models::is_child_server()) {
             monitor_thread = server_models::setup_child_server(shutdown_handler);
         }
 

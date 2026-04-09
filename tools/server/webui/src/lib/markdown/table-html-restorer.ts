@@ -68,7 +68,7 @@ import type { Plugin } from 'unified';
 import type { Element, ElementContent, Root, Text } from 'hast';
 import { visit } from 'unist-util-visit';
 import { visitParents } from 'unist-util-visit-parents';
-import { BR_PATTERN, LIST_PATTERN, LI_PATTERN } from '$lib/constants/table-html-restorer';
+import { BR_PATTERN, LIST_PATTERN, LI_PATTERN } from '$lib/constants';
 
 /**
  * Expands text containing `<br>` tags into an array of text nodes and br elements.

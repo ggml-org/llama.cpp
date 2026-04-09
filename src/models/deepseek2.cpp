@@ -2,13 +2,16 @@
 
 llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
+    // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
+    bool is_ocr = model.arch == LLM_ARCH_DEEPSEEK2OCR;
+
     const bool is_mla = hparams.is_mla();
 
     // note: these are the actual head sizes you get when treating as MHA or after "decompression" using wv_b for MLA
     const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
 
-    const int64_t n_embd_head_qk_rope = hparams.n_rot;
+    const int64_t n_embd_head_qk_rope = hparams.n_rot();
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
 
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
@@ -54,7 +57,38 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
         cb(cur, "attn_norm", il);
 
         // self_attention
-        {
+        if (is_ocr) {
+            const int n_embed_head = hparams.n_embd / hparams.n_head();
+            const int ocr_rope_type = GGML_ROPE_TYPE_NEOX;
+            GGML_ASSERT(n_embed_head == n_embd_head_k && n_embed_head == n_embd_head_v);
+
+            ggml_tensor * Qcur = NULL;
+            ggml_tensor * Kcur = NULL;
+            ggml_tensor * Vcur = NULL;
+
+            Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
+            Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
+            Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
+            cb(Qcur, "q", il);
+            cb(Kcur, "k", il);
+            cb(Vcur, "v", il);
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embed_head, n_head, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embed_head, n_head, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embed_head, n_head, n_tokens);
+
+            GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_embed_head, ocr_rope_type, 0, freq_base, 1, 0, 1, 0, 0);
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_embed_head, ocr_rope_type, 0, freq_base, 1, 0, 1, 0, 0);
+            cb(Qcur, "q_pe", il);
+            cb(Kcur, "k_pe", il);
+
+            cur = build_attn(inp_attn_kv,
+                        model.layers[il].wo, NULL,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            cb(cur, "attn_out", il);
+        }
+        else {
             ggml_tensor * q = NULL;
 
             const bool is_lite = model.layers[il].wq;
@@ -146,7 +180,7 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
                     cb(Qcur, "Qcur_attn_temp_scaled", il);
                 }
 
-                // note: MLA with the absorption optimzation converts into MQA (ie: GQA with 1 group)
+                // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
                 cur = build_attn(inp_attn_k,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
@@ -216,9 +250,11 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
                 model.layers[il].ffn_exp_probs_b,
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, hparams.expert_weights_norm,
-                hparams.expert_weights_scale, hparams.expert_weights_scale,
+                hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
-                il);
+                il,
+                nullptr,
+                model.layers[il].ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert

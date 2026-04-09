@@ -125,8 +125,8 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #define SHMEM_STRIDE (BK / 2 + 1)
 #endif
 
-shared FLOAT_TYPE_VEC2 buf_a[BM * SHMEM_STRIDE];
-shared FLOAT_TYPE_VEC2 buf_b[BN * SHMEM_STRIDE];
+shared FLOAT_TYPEV2 buf_a[BM * SHMEM_STRIDE];
+shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
 
@@ -258,17 +258,17 @@ void main() {
         sums[i] = coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0f);
     }
 #else
-    ACC_TYPE_VEC2 sums[WMITER * TM * WNITER * TN/2];
+    ACC_TYPEV2 sums[WMITER * TM * WNITER * TN/2];
 #if defined(DATA_A_F32) || defined(DATA_A_F16)
-    FLOAT_TYPE_VEC4 cache_a[WMITER * TM];
-    FLOAT_TYPE_VEC4 cache_b;
+    FLOAT_TYPEV4 cache_a[WMITER * TM];
+    FLOAT_TYPEV4 cache_b;
 #else
-    FLOAT_TYPE_VEC2 cache_a[WMITER * TM];
-    FLOAT_TYPE_VEC2 cache_b;
+    FLOAT_TYPEV2 cache_a[WMITER * TM];
+    FLOAT_TYPEV2 cache_b;
 #endif
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN/2; i++) {
-        sums[i] = ACC_TYPE_VEC2(0.0f, 0.0f);
+        sums[i] = ACC_TYPEV2(0.0f, 0.0f);
     }
 #endif
 
@@ -377,6 +377,7 @@ void main() {
         [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
             coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
 
+            barrier();
             [[unroll]] for (uint col = 0; col < TN; col += storestride) {
                 const uint row_i = dc + cm_col * TN + col + store_c;
                 if (row_i >= _ne1) break;
@@ -387,6 +388,7 @@ void main() {
                     data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
                 }
             }
+            barrier();
         }
     }
 #else
@@ -404,18 +406,22 @@ void main() {
                 // Full coopMat is within bounds, but stride_d is not aligned
                 coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
 
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
                 [[unroll]] for (uint col = 0; col < TN; col += storestride) {
                     data_d[offsets + (dc + cm_col * TN + col + store_c) * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
                 }
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
             } else if (dr + cm_row * TM < p.M && dc + cm_col * TN < p.N) {
                 // Partial coopMat is within bounds
                 coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
 
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
                 [[unroll]] for (uint col = 0; col < TN; col += storestride) {
                     if (dr + cm_row * TM + store_r < p.M && dc + cm_col * TN + col + store_c < p.N) {
                         data_d[offsets + (dc + cm_col * TN + col + store_c) * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
                     }
                 }
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
             }
         }
     }

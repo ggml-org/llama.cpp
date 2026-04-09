@@ -1,11 +1,18 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType } from '$lib/enums';
 
+export interface McpServerOverride {
+	serverId: string;
+	enabled: boolean;
+}
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
 	lastModified: number;
 	name: string;
+	mcpServerOverrides?: McpServerOverride[];
+	forkedFromConversationId?: string;
 }
 
 export interface DatabaseMessageExtraAudioFile {
@@ -46,11 +53,31 @@ export interface DatabaseMessageExtraTextFile {
 	content: string;
 }
 
+export interface DatabaseMessageExtraMcpPrompt {
+	type: AttachmentType.MCP_PROMPT;
+	name: string;
+	serverName: string;
+	promptName: string;
+	content: string;
+	arguments?: Record<string, string>;
+}
+
+export interface DatabaseMessageExtraMcpResource {
+	type: AttachmentType.MCP_RESOURCE;
+	name: string;
+	uri: string;
+	serverName: string;
+	content: string;
+	mimeType?: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
 	| DatabaseMessageExtraPdfFile
+	| DatabaseMessageExtraMcpPrompt
+	| DatabaseMessageExtraMcpResource
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
@@ -65,6 +92,8 @@ export interface DatabaseMessage {
 	 * @deprecated - left for backward compatibility
 	 */
 	thinking?: string;
+	/** Reasoning content produced by the model (separate from visible content) */
+	reasoningContent?: string;
 	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */

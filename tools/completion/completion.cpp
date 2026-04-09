@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -84,14 +85,16 @@ static void sigint_handler(int signo) {
 #endif
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     g_params = &params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 
@@ -305,6 +308,7 @@ int main(int argc, char ** argv) {
                 inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.force_pure_content = params.force_pure_content_parser;
 
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             }
@@ -376,7 +380,7 @@ int main(int argc, char ** argv) {
             // remove any "future" tokens that we might have inherited from the previous session
             if (session_tokens.size() > n_match) {
                 if (!llama_memory_seq_rm(mem, -1, n_match, -1)) {
-                    LOG_WRN("%s: unable to resuse common prefix (for example, when the memory is recurrent)\n", __func__);
+                    LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
                     llama_memory_clear(mem, true);
                     session_tokens.clear();
                     n_match = 0;
@@ -691,7 +695,7 @@ int main(int argc, char ** argv) {
                 if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
                 n_session_consumed = session_tokens.size();
                 session_do_save = false;
 

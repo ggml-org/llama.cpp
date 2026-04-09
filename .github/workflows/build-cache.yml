@@ -37,12 +37,39 @@ jobs:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
 
-  ubuntu-24-spacemit-cache:
+  #ubuntu-24-spacemit-cache:
+  #  runs-on: ubuntu-24.04
+
+  #  env:
+  #    # Make sure this is in sync with build-linux-cross.yml
+  #    SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
+
+  #    - name: Setup Cache
+  #      uses: actions/cache@v5
+  #      id: cache-toolchain
+  #      with:
+  #        path: ./spacemit_toolchain
+  #        key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+
+  #    - name: Setup SpacemiT Toolchain
+  #      if: steps.cache-toolchain.outputs.cache-hit != 'true'
+  #      uses: ./.github/actions/linux-setup-spacemit
+  #      with:
+  #        path: ./spacemit_toolchain
+  #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+
+  ubuntu-24-openvino-cache:
     runs-on: ubuntu-24.04
 
     env:
-      # Make sure this is in sync with build-linux-cross.yml
-      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.0"
+      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
 
     steps:
       - name: Clone
@@ -51,24 +78,25 @@ jobs:
 
       - name: Setup Cache
         uses: actions/cache@v5
-        id: cache-toolchain
+        id: cache-openvino
         with:
-          path: ./spacemit_toolchain
-          key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+          path: ./openvino_toolkit
+          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
 
-      - name: Setup SpacemiT Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-spacemit
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-openvino
         with:
-          path: ./spacemit_toolchain
-          version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
   windows-2022-rocm-cache:
     runs-on: windows-2022
 
     env:
       # Make sure this is in sync with build.yml
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
 
     steps:
       - name: Clone

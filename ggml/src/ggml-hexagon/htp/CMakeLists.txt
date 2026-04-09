@@ -30,13 +30,34 @@ add_library(${HTP_LIB} SHARED
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
+    repeat-ops.c
     argsort-ops.c
+    ssm-conv.c
+    cumsum-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
+
+# HMX acceleration: available on v73+ architectures
+set(HTP_HMX_VERSIONS v73 v75 v79 v81)
+list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
+
+if (_hmx_idx GREATER_EQUAL 0)
+    target_sources(${HTP_LIB} PRIVATE
+        hmx-matmul-ops.c
+    )
+
+    # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)
+    set_source_files_properties(
+        hmx-matmul-ops.c
+        PROPERTIES COMPILE_OPTIONS "-mhmx"
+    )
+
+    target_compile_definitions(${HTP_LIB} PRIVATE HTP_HAS_HMX=1)
+endif()
 
 build_idl(htp_iface.idl ${HTP_LIB})
 

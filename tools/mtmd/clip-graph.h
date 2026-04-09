@@ -29,7 +29,7 @@ struct clip_graph {
     const int n_layer;
     const int n_mmproj_embd;
     const float eps;
-    const float kq_scale;
+    float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
 
     ggml_context_ptr ctx0_ptr;
@@ -40,6 +40,11 @@ struct clip_graph {
 
     virtual ~clip_graph() = default;
     virtual ggml_cgraph * build() = 0;
+
+    // wrapper around ggml_mul_mat, allow hooking (e.g. LoRA, clamping) depending on the model
+    // tensor w should be the weight matrix, and tensor x should be the input
+    virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
+    // TODO: build_mm(w, b, x) to support bias
 
     //
     // utility functions

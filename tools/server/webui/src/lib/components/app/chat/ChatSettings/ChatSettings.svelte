@@ -12,21 +12,24 @@
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		McpLogo,
+		McpServersSettings
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
 		SETTINGS_SECTION_TITLES,
-		type SettingsSectionTitle
-	} from '$lib/constants/settings-sections';
+		type SettingsSectionTitle,
+		NUMERIC_FIELDS,
+		POSITIVE_INTEGER_FIELDS,
+		SETTINGS_COLOR_MODES_CONFIG,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { SettingsFieldType } from '$lib/enums/settings';
 	import type { Component } from 'svelte';
-	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
-	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
-	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 
 	interface Props {
 		onSave?: () => void;
@@ -60,6 +63,11 @@
 					key: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
 					label: 'Paste long text to file length',
 					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.SEND_ON_ENTER,
+					label: 'Send message on Enter',
+					type: SettingsFieldType.CHECKBOX
 				},
 				{
 					key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
@@ -132,6 +140,11 @@
 				{
 					key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
 					label: 'Auto-show sidebar on new chat',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					label: 'Show raw model names',
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
@@ -254,12 +267,48 @@
 			fields: []
 		},
 		{
+			title: SETTINGS_SECTION_TITLES.MCP,
+			icon: McpLogo,
+			fields: [
+				{
+					key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
+					label: 'Agentic loop max turns',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
+					label: 'Always show agentic turns in conversation',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+					label: 'Max lines per tool preview',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					label: 'Show tool call in progress',
+					type: SettingsFieldType.CHECKBOX
+				}
+			]
+		},
+		{
 			title: SETTINGS_SECTION_TITLES.DEVELOPER,
 			icon: Code,
 			fields: [
 				{
+					key: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					label: 'Pre-fill KV cache after response',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
-					label: 'Disable reasoning content parsing',
+					label: 'Disable server-side thinking extraction',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
+					label: 'Strip thinking from message history',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
@@ -425,7 +474,7 @@
 
 	<!-- Mobile Header with Horizontal Scrollable Menu -->
 	<div class="flex flex-col pt-6 md:hidden">
-		<div class="border-b border-border/30 py-4">
+		<div class="border-b border-border/30 pt-4 md:py-4">
 			<!-- Horizontal Scrollable Category Menu with Navigation -->
 			<div class="relative flex items-center" style="scroll-padding: 1rem;">
 				<button
@@ -486,6 +535,19 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
+					<div class="space-y-6">
+						<ChatSettingsFields
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+							onThemeChange={handleThemeChange}
+						/>
+
+						<div class="border-t border-border/30 pt-6">
+							<McpServersSettings />
+						</div>
+					</div>
 				{:else}
 					<div class="space-y-6">
 						<ChatSettingsFields
