@@ -78,6 +78,11 @@
 			!modelsStore.isModelLoaded(modelsStore.selectedModelName)
 		) {
 			modelsStore.clearSelection();
+
+			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			if (first) {
+				await modelsStore.selectModelById(first.id);
+			}
 		}
 
 		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
