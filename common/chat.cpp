@@ -865,9 +865,10 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
         adjusted_messages.push_back(adjusted);
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = true;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = true;
 
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
@@ -887,7 +888,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
             extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
 
         // Response format parser
-        if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
+        if (has_response_format) {
             // Ministral wants to emit json surrounded by code fences
             return generation_prompt + (reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema)) << "```");
         }
@@ -928,6 +929,10 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1063,6 +1068,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1191,6 +1200,10 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1213,8 +1226,9 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         ">>>all",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Functionary v3.2 format:
@@ -1282,6 +1296,10 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1314,9 +1332,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         "</think>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
     const std::string SECTION_END   = "<|tool_calls_section_end|>";
@@ -1403,6 +1422,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1436,9 +1459,10 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         "</think>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string TOOL_CALL_START = "<|tool_call_start|>";
     const std::string TOOL_CALL_END   = "<|tool_call_end|>";
@@ -1483,6 +1507,10 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1513,9 +1541,10 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
         "</think>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
@@ -1557,6 +1586,10 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
         foreach_function(inputs.tools, [&](const json & tool) {
@@ -1582,8 +1615,9 @@ static common_chat_params common_chat_params_init_gigachat_v3(
         "<|role_sep|>\n",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     const auto *tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
@@ -1631,6 +1665,10 @@ static common_chat_params common_chat_params_init_gigachat_v3(
                 auto schema = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema_copy = inputs.json_schema;
+                builder.resolve_refs(schema_copy);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
