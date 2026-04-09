@@ -4,6 +4,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "ms.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -371,6 +372,33 @@ static handle_model_result common_params_handle_model(struct common_params_model
         if (!download_result.mmproj_path.empty()) {
             result.found_mmproj = true;
             result.mmproj.path  = download_result.mmproj_path;
+        }
+
+        if (!download_result.mtp_path.empty()) {
+            result.found_mtp = true;
+            result.mtp.path  = download_result.mtp_path;
+        }
+    } else if (!model.ms_repo.empty()) {
+        // Handle ModelScope repository
+        // Split the repo ID to extract clean repo and quantization tag
+        auto [ms_repo, ms_tag] = common_download_split_repo_tag(model.ms_repo);
+
+        // Use the complete original value for model name
+        model.name = model.ms_repo;
+
+        auto download_result = ms::download_model_with_mmproj(ms_repo, model.hf_file, offline, ms_tag, bearer_token);
+
+        if (download_result.model_path.empty()) {
+            LOG_ERR("error: failed to download model from ModelScope\n");
+            exit(1);
+        }
+
+        model.path = download_result.model_path;
+
+        // Set mmproj path if available
+        if (!download_result.mmproj_path.empty()) {
+            result.found_mmproj = true;
+            result.mmproj.path = download_result.mmproj_path;
         }
 
         if (!download_result.mtp_path.empty()) {
@@ -2660,6 +2688,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.hf_token = value;
         }
     ).set_env("HF_TOKEN"));
+
+    add_opt(common_arg(
+        {"-ms", "-msr", "--ms-repo"}, "<user>/<model>[:quant]",
+        "ModelScope model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "example: Qwen/Qwen3-0.6B-GGUF:Q8_0\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.ms_repo = value;
+        }
+    ).set_env("LLAMA_ARG_MS_REPO"));
+    add_opt(common_arg(
+        {"-msf", "--ms-file"}, "FILE",
+        "Specify a specific ModelScope file to download (default: automatically select based on quantization preference)\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.ms_file = value;
+        }
+    ).set_env("LLAMA_ARG_MS_FILE"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",
