@@ -908,8 +908,16 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lf
     inst.overview_size = img_tool::calc_size_preserved_ratio(
                             original_size, align_size,
                             hparams.image_min_pixels, hparams.image_max_pixels);
-    // tile if either dimension exceeds tile_size with tolerance
-    const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
+    // tile if pixel area exceeds max_pixels budget with tolerance
+    // matches HuggingFace transformers reference implementation
+    const float tolerance = hparams.custom_max_pixels_tolerance > 0
+        ? hparams.custom_max_pixels_tolerance
+        : max_pixels_tolerance;
+    const int max_pixels_budget = static_cast<int>(hparams.image_max_pixels * tolerance);
+    // round dimensions to align_size before area check (banker's rounding to match Python/HF)
+    const int h_bar = std::max(align_size, static_cast<int>(std::nearbyint(static_cast<float>(original_size.height) / align_size) * align_size));
+    const int w_bar = std::max(align_size, static_cast<int>(std::nearbyint(static_cast<float>(original_size.width)  / align_size) * align_size));
+    const bool needs_tiling = h_bar * w_bar > max_pixels_budget;
 
     if (!needs_tiling) {
         inst.refined_size = clip_image_size{0, 0};
