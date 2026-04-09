@@ -1461,7 +1461,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->c_name(), exc.what());
+        GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context (host): %s\n", sess->c_name(), exc.what());
         return nullptr;
     }
 }
@@ -1473,7 +1473,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->c_name(), exc.what());
+        GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context (repack): %s\n", sess->c_name(), exc.what());
         return nullptr;
     }
 }
@@ -1696,8 +1696,8 @@ struct ggml_hexagon_opbatch {
             h.flags |= HTP_TENSOR_COMPUTE;
         }
 
-        HEX_VERBOSE("ggml-hex: add-tensor #%u %s : bi %d data %p offset %zu size %zu : %zu:%zu:%zu:%zu\n",
-                ti, t->name, h.bi, (void*) t->data, (size_t) t_offset, t_size,
+        HEX_VERBOSE("ggml-hex: add-tensor #%u %s : bi %d data %p offset %zu size %zu flags 0x%x : %zu:%zu:%zu:%zu\n",
+                ti, t->name, h.bi, (void*) t->data, (size_t) t_offset, t_size, h.flags,
                 (size_t) t->ne[0], (size_t) t->ne[1], (size_t) t->ne[2], (size_t) t->ne[3]);
 
         return ti;
