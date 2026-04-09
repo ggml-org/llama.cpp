@@ -60,7 +60,7 @@ def load_model_and_tokenizer(model_path, use_sentence_transformers=False, device
         device_map = {"": device}
 
     if use_sentence_transformers:
-        from sentence_transformers import SentenceTransformer  # ty: ignore[unresolved-import]
+        from sentence_transformers import SentenceTransformer
         print("Using SentenceTransformer to apply all numbered layers")
         model = SentenceTransformer(model_path)
         tokenizer = model.tokenizer

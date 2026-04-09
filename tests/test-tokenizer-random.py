@@ -18,7 +18,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Iterator
 
-import cffi  # ty: ignore[unresolved-import]
+import cffi
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 
