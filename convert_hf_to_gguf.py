@@ -1229,15 +1229,15 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
-        assert max(tokenizer.vocab.values()) < vocab_size
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -1250,7 +1250,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -1583,13 +1583,13 @@ class TextModel(ModelBase):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
         vocab_size = hparams["vocab_size"]
-        assert max(tokenizer.get_vocab().values()) < vocab_size
+        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         merges = []
         vocab = {}
-        mergeable_ranks = tokenizer.mergeable_ranks
+        mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
         for token, rank in mergeable_ranks.items():
             vocab[QwenModel.token_bytes_to_string(token)] = rank
             if len(token) == 1:
@@ -1599,7 +1599,7 @@ class TextModel(ModelBase):
             merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
 
         # for this kind of tokenizer, added_vocab is not a subset of vocab, so they need to be combined
-        added_vocab = tokenizer.special_tokens
+        added_vocab = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
         reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **added_vocab}.items()}
 
         for i in range(vocab_size):
@@ -1622,10 +1622,10 @@ class TextModel(ModelBase):
         special_vocab.merges = merges
         # only add special tokens when they were not already loaded from config.json
         if len(special_vocab.special_token_ids) == 0:
-            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])
-            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])
+            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
         # this one is usually not in config.json anyway
-        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])
+        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_sentencepiece(self, add_to_gguf=True):
@@ -1877,10 +1877,10 @@ class TextModel(ModelBase):
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_glm(self):
@@ -1894,10 +1894,10 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_types(toktypes)
         # Special tokens
         # Note: Using <|endoftext|> (151329) for eot causes endless generation
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # 151331
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # 151336
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"]) # 151329
-        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # ty: ignore[unresolved-attribute]  # 151331
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]  # 151336
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]  # 151329
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # ty: ignore[unresolved-attribute]  # 151338
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_interns1(self):
@@ -1906,16 +1906,16 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())  # ty: ignore[unresolved-attribute]
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -1928,7 +1928,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -2516,15 +2516,15 @@ class XverseModel(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model)
-        vocab_size = hparams.get("vocab_size", len(tokenizer.vocab))
+        vocab_size = hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         # Since we are checking the maximum index, we need to ensure it's strictly less than vocab_size,
         # because vocab_size is the count of items, and indexes start at 0.
-        max_vocab_index = max(tokenizer.get_vocab().values())
+        max_vocab_index = max(tokenizer.get_vocab().values())  # ty: ignore[unresolved-attribute]
         if max_vocab_index >= vocab_size:
             raise ValueError("Vocabulary size exceeds expected maximum size.")
 
-        reverse_vocab: dict[int, str] = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        reverse_vocab: dict[int, str] = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
         for token_id in range(vocab_size):
             token_text = reverse_vocab[token_id].encode('utf-8')
@@ -2535,7 +2535,7 @@ class XverseModel(TextModel):
             elif re.fullmatch(br"<0x[0-9A-Fa-f]{2}>", token_text):
                 toktype = gguf.TokenType.BYTE  # special
             elif reverse_vocab[token_id] in added_vocab:
-                if tokenizer.added_tokens_decoder[token_id].special:
+                if tokenizer.added_tokens_decoder[token_id].special:  # ty: ignore[unresolved-attribute]
                     toktype = gguf.TokenType.CONTROL
                 else:
                     toktype = gguf.TokenType.USER_DEFINED
@@ -3752,7 +3752,7 @@ class QwenModel(TextModel):
 
     @staticmethod
     def token_bytes_to_string(b):
-        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode
+        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
         byte_encoder = bytes_to_unicode()
         return ''.join([byte_encoder[ord(char)] for char in b.decode('latin-1')])
 
@@ -3823,14 +3823,14 @@ class DreamModel(TextModel):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
 
-        vocab_dict = tokenizer.get_vocab()
+        vocab_dict = tokenizer.get_vocab()  # ty: ignore[unresolved-attribute]
         vocab_size = self.hparams.get("vocab_size", len(vocab_dict))
         assert max(vocab_dict.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab_dict.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -3888,14 +3888,14 @@ class LLaDAModel(TextModel):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
 
-        vocab_dict = tokenizer.get_vocab()
+        vocab_dict = tokenizer.get_vocab()  # ty: ignore[unresolved-attribute]
         vocab_size = self.hparams.get("vocab_size", len(vocab_dict))
         assert max(vocab_dict.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab_dict.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -4673,9 +4673,9 @@ class Qwen3Model(Qwen2Model):
 
         self.is_rerank = True
         self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
-        self.token_false_id = tokenizer.convert_tokens_to_ids("no")
-        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")
-        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[unresolved-attribute, invalid-assignment]
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[unresolved-attribute, invalid-assignment]
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")  # ty: ignore[unresolved-attribute]
 
         assert self.token_false_id is not None and self.token_true_id is not None
 
@@ -5944,7 +5944,7 @@ class KimiLinearModel(TextModel):
             # Build merges list using the approach similar to HunYuanMoE
             merges = []
             vocab = {}
-            mergeable_ranks = tokenizer.model._mergeable_ranks
+            mergeable_ranks = tokenizer.model._mergeable_ranks  # ty: ignore[unresolved-attribute]
             for token, rank in mergeable_ranks.items():
                 vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
@@ -5954,7 +5954,7 @@ class KimiLinearModel(TextModel):
                     merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
             # Build token list
             vocab_size = self.hparams["vocab_size"]
-            special_tokens = tokenizer.special_tokens
+            special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
@@ -5980,7 +5980,7 @@ class KimiLinearModel(TextModel):
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
             # override eos id in config.json with tiktoken eos id
-            self.gguf_writer.add_eos_token_id(tokenizer.eos_id)
+            self.gguf_writer.add_eos_token_id(tokenizer.eos_id)  # ty: ignore[unresolved-attribute]
         else:
             raise NotImplementedError(f"Deepseek pre-tokenizer {tokpre!r} is not supported yet!")
 
@@ -6474,11 +6474,11 @@ class BertModel(TextModel):
                 with open(tokenizer_config_path, "r", encoding="utf-8") as fp:
                     tokenizer_config_json = json.load(fp)
 
-            add_prefix = tokenizer.add_prefix_space
-            remove_whitespaces = tokenizer.clean_up_tokenization_spaces
+            add_prefix = tokenizer.add_prefix_space  # ty: ignore[unresolved-attribute]
+            remove_whitespaces = tokenizer.clean_up_tokenization_spaces  # ty: ignore[unresolved-attribute]
             precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
 
-            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
+            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)  # ty: ignore[unresolved-attribute]
         else:
             sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
@@ -6495,7 +6495,7 @@ class BertModel(TextModel):
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
-        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size  # ty: ignore[invalid-assignment]
 
         if isinstance(tokenizer, SentencePieceProcessor):
             for token_id in range(tokenizer.vocab_size()):
@@ -6517,20 +6517,20 @@ class BertModel(TextModel):
                 scores[token_id] = score
                 toktypes[token_id] = toktype
         else:
-            added_vocab = tokenizer.get_added_vocab()
+            added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
             unk_token = tokenizer_config_json.get("unk_token")
-            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
+            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))  # ty: ignore[no-matching-overload]
 
-            for token_id in range(tokenizer.vocab_size):
-                piece = tokenizer._convert_id_to_token(token_id)
-                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
+            for token_id in range(tokenizer.vocab_size):  # ty: ignore[unresolved-attribute]
+                piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[unresolved-attribute]
+                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:  # ty: ignore[unresolved-attribute]
                     text = piece.encode("utf-8")
                     score = tokenizer_json["model"]["vocab"][token_id][1]
 
                     toktype = SentencePieceTokenTypes.NORMAL
                     if token_id == unk_token_id:
                         toktype = SentencePieceTokenTypes.UNKNOWN
-                    elif token_id in tokenizer.all_special_ids:
+                    elif token_id in tokenizer.all_special_ids:  # ty: ignore[unresolved-attribute]
                         toktype = SentencePieceTokenTypes.CONTROL
                     elif token_id in added_vocab.values():
                         toktype = SentencePieceTokenTypes.USER_DEFINED
@@ -8839,7 +8839,7 @@ class DeepseekV2Model(TextModel):
             # Build merges list using the approach similar to HunYuanMoE
             merges = []
             vocab = {}
-            mergeable_ranks = tokenizer.model._mergeable_ranks
+            mergeable_ranks = tokenizer.model._mergeable_ranks  # ty: ignore[unresolved-attribute]
             for token, rank in mergeable_ranks.items():
                 vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
@@ -8850,7 +8850,7 @@ class DeepseekV2Model(TextModel):
 
             # Build token list
             vocab_size = self.hparams["vocab_size"]
-            special_tokens = tokenizer.special_tokens
+            special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
@@ -9821,10 +9821,10 @@ class Glm4Model(TextModel):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -10052,12 +10052,12 @@ class ChatGLMModel(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
-        vocab_size = hparams.get("padded_vocab_size", len(tokenizer.get_vocab()))
-        assert max(tokenizer.get_vocab().values()) < vocab_size
+        vocab_size = hparams.get("padded_vocab_size", len(tokenizer.get_vocab()))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
         role_special_tokens = ["<|system|>", "<|user|>", "<|assistant|>", "<|observation|>"]
         special_tokens = ["[MASK]", "[gMASK]", "[sMASK]", "sop", "eop"] + role_special_tokens
         for token_id in range(vocab_size):
-            piece = tokenizer._convert_id_to_token(token_id)
+            piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[unresolved-attribute]
             if token_id == 0:
                 piece = "<unk>"
             elif token_id == 1:
@@ -10065,17 +10065,17 @@ class ChatGLMModel(TextModel):
             elif token_id == 2:
                 piece = "<eos>"
 
-            text = piece.encode("utf-8")
+            text = piece.encode("utf-8")  # ty: ignore[unresolved-attribute]
             score = 0.0
             # Referencing the tokenizer Python implementation(https://huggingface.co/THUDM/chatglm3-6b/blob/main/tokenization_chatglm.py),
             # it is only valid if it is less than tokenizer.tokenizer.sp_model.vocab_size()
-            if len(piece) != 0 and token_id < tokenizer.tokenizer.sp_model.vocab_size():
-                score = tokenizer.tokenizer.sp_model.get_score(token_id)
+            if len(piece) != 0 and token_id < tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[unresolved-attribute, invalid-argument-type]
+                score = tokenizer.tokenizer.sp_model.get_score(token_id)  # ty: ignore[unresolved-attribute]
 
-            if token_id >= tokenizer.tokenizer.sp_model.vocab_size():
+            if token_id >= tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[unresolved-attribute]
                 if piece in special_tokens:
                     toktype = SentencePieceTokenTypes.CONTROL
-                elif len(piece) == 0:
+                elif len(piece) == 0:  # ty: ignore[invalid-argument-type]
                     text = f"[PAD{token_id}]".encode("utf-8")
                     toktype = SentencePieceTokenTypes.UNUSED
                 else:
@@ -10086,13 +10086,13 @@ class ChatGLMModel(TextModel):
                 continue
 
             toktype = SentencePieceTokenTypes.NORMAL
-            if tokenizer.tokenizer.sp_model.is_unknown(token_id):
+            if tokenizer.tokenizer.sp_model.is_unknown(token_id):  # ty: ignore[unresolved-attribute]
                 toktype = SentencePieceTokenTypes.UNKNOWN
-            elif tokenizer.tokenizer.sp_model.is_control(token_id):
+            elif tokenizer.tokenizer.sp_model.is_control(token_id):  # ty: ignore[unresolved-attribute]
                 toktype = SentencePieceTokenTypes.CONTROL
-            elif tokenizer.tokenizer.sp_model.is_unused(token_id):
+            elif tokenizer.tokenizer.sp_model.is_unused(token_id):  # ty: ignore[unresolved-attribute]
                 toktype = SentencePieceTokenTypes.UNUSED
-            elif tokenizer.tokenizer.sp_model.is_byte(token_id):
+            elif tokenizer.tokenizer.sp_model.is_byte(token_id):  # ty: ignore[unresolved-attribute]
                 toktype = SentencePieceTokenTypes.BYTE
 
             tokens.append(text)
@@ -10112,7 +10112,7 @@ class ChatGLMModel(TextModel):
 
     @staticmethod
     def token_bytes_to_string(b):
-        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode
+        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
         byte_encoder = bytes_to_unicode()
         return ''.join([byte_encoder[ord(char)] for char in b.decode('latin-1')])
 
@@ -10146,7 +10146,7 @@ class ChatGLMModel(TextModel):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
         vocab_size = hparams.get("padded_vocab_size",hparams["vocab_size"])
-        assert max(tokenizer.get_vocab().values()) < vocab_size
+        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
@@ -10155,10 +10155,10 @@ class ChatGLMModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         # only add special tokens when they were not already loaded from config.json
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
         # this one is usually not in config.json anyway
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -11424,7 +11424,7 @@ class HunYuanMoEModel(TextModel):
         # 2. Reverse-engineer the merges list from mergeable_ranks
         merges = []
         vocab = {}
-        mergeable_ranks = tokenizer.mergeable_ranks
+        mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
         for token, rank in mergeable_ranks.items():
             vocab[QwenModel.token_bytes_to_string(token)] = rank
             if len(token) == 1:
@@ -11435,8 +11435,8 @@ class HunYuanMoEModel(TextModel):
 
         # 3. Generate the tokens and toktypes lists
         vocab_size = self.hparams["vocab_size"]
-        assert tokenizer.vocab_size == vocab_size
-        special_tokens = tokenizer.special_tokens
+        assert tokenizer.vocab_size == vocab_size  # ty: ignore[unresolved-attribute]
+        special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
         reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -11660,7 +11660,7 @@ class HunYuanModel(TextModel):
             # 2. Reverse-engineer the merges list from mergeable_ranks
             merges = []
             vocab = {}
-            mergeable_ranks = tokenizer.mergeable_ranks
+            mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
             for token, rank in mergeable_ranks.items():
                 vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
@@ -11671,8 +11671,8 @@ class HunYuanModel(TextModel):
 
             # 3. Generate the tokens and toktypes lists
             vocab_size = self.hparams["vocab_size"]
-            assert tokenizer.vocab_size == vocab_size
-            special_tokens = tokenizer.special_tokens
+            assert tokenizer.vocab_size == vocab_size  # ty: ignore[unresolved-attribute]
+            special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
@@ -12820,10 +12820,10 @@ class SolarOpenModel(Glm4MoeModel):
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])  # ty: ignore[unresolved-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
 

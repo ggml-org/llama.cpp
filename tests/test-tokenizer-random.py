@@ -128,7 +128,7 @@ class Tokenizer:
 class TokenizerGroundtruth (Tokenizer):
 
     def __init__(self, dir_tokenizer: str):
-        self.model: PreTrainedTokenizer = AutoTokenizer.from_pretrained(dir_tokenizer)
+        self.model: PreTrainedTokenizer = AutoTokenizer.from_pretrained(dir_tokenizer)  # ty: ignore[invalid-assignment]
         # guess BOS and EOS
         ids = self.encode("a")
         assert 1 <= len(ids) <= 3
@@ -142,7 +142,7 @@ class TokenizerGroundtruth (Tokenizer):
         self.vocab = list(sorted(self.vocab))
         # tokens and lists
         self.special_tokens = list(self.model.all_special_tokens)
-        self.added_tokens   = self.model.batch_decode(self.model.added_tokens_encoder.values(), skip_special_tokens=False)
+        self.added_tokens   = self.model.batch_decode(list(self.model.added_tokens_encoder.values()), skip_special_tokens=False)
         self.bos_token = self.model.bos_token
         self.eos_token = self.model.eos_token
 
@@ -150,7 +150,7 @@ class TokenizerGroundtruth (Tokenizer):
         return self.model.encode(text, add_special_tokens=True)
 
     def decode(self, ids: list[int]) -> str:
-        return self.model.decode(ids, skip_special_tokens=False)
+        return self.model.decode(ids, skip_special_tokens=False)  # ty: ignore[invalid-return-type]
 
 
 class TokenizerLlamaCpp (Tokenizer):
