@@ -61,9 +61,9 @@
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
+#include "ggml-cuda/turbo-wht.cuh"
 #include "ggml-quants.h"
 #include "ggml-cuda/tq3-native.cuh"
-static void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 #include "ggml-cuda/tq3-prefill.cuh"
 #include "ggml.h"
 
