@@ -658,7 +658,6 @@ struct llm_tokenizer_bpe_session {
                 const auto token = vocab.text_to_token(str);
 
                 if (token == LLAMA_TOKEN_NULL) {
-                    static const char * hex = "0123456789ABCDEF";
                     for (auto j = str.begin(); j != str.end(); ++j) {
                         llama_token token_multibyte = LLAMA_TOKEN_NULL;
                         if (tokenizer.byte_encode) {
@@ -666,6 +665,7 @@ struct llm_tokenizer_bpe_session {
                             token_multibyte = vocab.text_to_token(byte_str);
                         } else {
                             // For non-byte-encoded BPE (e.g. gemma-4), byte tokens use <0xXX> format
+                            static const char * hex = "0123456789ABCDEF";
                             const uint8_t ch = (uint8_t)*j;
                             const char buf[7] = { '<', '0', 'x', hex[ch >> 4], hex[ch & 15], '>', 0 };
                             token_multibyte = vocab.text_to_token(buf);
