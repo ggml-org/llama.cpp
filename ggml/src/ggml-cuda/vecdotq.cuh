@@ -1412,23 +1412,41 @@ static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
     const block_q8_1 * __restrict__ bq8_1,
     const int subgroup) {
 
-    const float centroids[8] = {-2.1519f,-1.3439f,-0.7560f,-0.2451f,0.2451f,0.7560f,1.3439f,2.1519f};
+    // Int8 centroid levels matching the float centroids scaled to [-127,127]
+    static constexpr int8_t levels[8] = {-127, -79, -45, -14, 14, 45, 79, 127};
+
     const uint8_t * qp = bq->qs + subgroup * 3;
     const float d = tq3_4s_ratio4s(bq->d[subgroup]);
 
-    float sum = 0.0f;
-    const int q8 = subgroup * 8;
-    sum += centroids[ qp[0]       & 7]              * (float) bq8_1->qs[q8 + 0];
-    sum += centroids[(qp[0] >> 3) & 7]              * (float) bq8_1->qs[q8 + 1];
-    sum += centroids[((qp[0]>>6)|(qp[1]<<2)) & 7]   * (float) bq8_1->qs[q8 + 2];
-    sum += centroids[(qp[1] >> 1) & 7]              * (float) bq8_1->qs[q8 + 3];
-    sum += centroids[(qp[1] >> 4) & 7]              * (float) bq8_1->qs[q8 + 4];
-    sum += centroids[((qp[1]>>7)|(qp[2]<<1)) & 7]   * (float) bq8_1->qs[q8 + 5];
-    sum += centroids[(qp[2] >> 2) & 7]              * (float) bq8_1->qs[q8 + 6];
-    sum += centroids[(qp[2] >> 5) & 7]              * (float) bq8_1->qs[q8 + 7];
+    // Unpack 8 3-bit indices into 8 int8 weight values
+    const int8_t w0 = levels[ qp[0]       & 7];
+    const int8_t w1 = levels[(qp[0] >> 3) & 7];
+    const int8_t w2 = levels[((qp[0]>>6)|(qp[1]<<2)) & 7];
+    const int8_t w3 = levels[(qp[1] >> 1) & 7];
+    const int8_t w4 = levels[(qp[1] >> 4) & 7];
+    const int8_t w5 = levels[((qp[1]>>7)|(qp[2]<<1)) & 7];
+    const int8_t w6 = levels[(qp[2] >> 2) & 7];
+    const int8_t w7 = levels[(qp[2] >> 5) & 7];
 
+    // Pack into two int32 for dp4a
+    const int w_lo = (uint8_t)w0 | ((uint8_t)w1 << 8) | ((uint8_t)w2 << 16) | ((uint8_t)w3 << 24);
+    const int w_hi = (uint8_t)w4 | ((uint8_t)w5 << 8) | ((uint8_t)w6 << 16) | ((uint8_t)w7 << 24);
+
+    // Pack activation q8 values (already int8 in bq8_1->qs)
+    const int q8 = subgroup * 8;
+    const int a_lo = *(const int *)&bq8_1->qs[q8 + 0];
+    const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
+
+    // dp4a: each does 4 int8 multiply-adds
+    int sumi = __dp4a(w_lo, a_lo, 0);
+    sumi     = __dp4a(w_hi, a_hi, sumi);
+
+    // Scale: d_weight * (centroid_scale / 127) * d_activation
+    // centroids range [-2.1519, 2.1519], levels range [-127, 127]
+    // so levels[i] = centroids[i] * (127 / 2.1519)
+    // dot = sumi * d_weight * (2.1519 / 127) * d_activation
     const float2 ds8 = __half22float2(bq8_1->ds);
-    return sum * d * ds8.x;
+    return (float)sumi * d * (2.1519f / 127.0f) * ds8.x;
 }
 
 static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
