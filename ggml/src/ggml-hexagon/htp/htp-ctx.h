@@ -2,7 +2,7 @@
 #define HTP_CTX_H
 
 #include "hex-dma.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "worker-pool.h"
 
 #include <assert.h>
@@ -31,7 +31,7 @@ struct htp_spad {
 };
 
 // Context while processing an Op
-// TODO: fold this into the main context as we don't really need two separate contexts at this point
+// TODO: fold this into the main context
 struct htp_ops_context {
     struct htp_context * ctx;
 
@@ -63,7 +63,7 @@ struct htp_context {
     int                    thread_id;
     int                    thread_prio;
 
-    int                    hmx_enabled;       // Runtime flag: HMX initialisation succeeded
+    int                    hmx_enabled;
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;

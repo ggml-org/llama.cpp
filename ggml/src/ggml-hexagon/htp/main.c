@@ -24,7 +24,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 #include "worker-pool.h"
 
@@ -495,7 +495,7 @@ static int execute_op(struct htp_ops_context * octx) {
     return -1;
 }
 
-static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_op_buf *b) {
+static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_buf_desc *b) {
     b->base = NULL;
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
@@ -520,7 +520,7 @@ static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     }
 }
 
-static inline void mmap_buf(struct htp_context *ctx, struct htp_op_buf *b) {
+static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
     if (b->base) return; // already mapped
 
     // find unused mapping
@@ -544,7 +544,7 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_op_buf *b) {
     }
 }
 
-static void prep_op_bufs(struct htp_context *ctx, struct htp_op_buf *bufs, uint32_t n_bufs) {
+static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t n_bufs) {
     uint32_t m_reuse = 0; // mmap reuse mask (index from ctx->mmap array)
     uint32_t b_reuse = 0; // buf reuse count
 
@@ -553,7 +553,7 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_op_buf *bufs, uint3
 
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
-        struct htp_op_buf *b = bufs + i;
+        struct htp_buf_desc *b = bufs + i;
         if (reuse_buf(ctx, &m_reuse, b)) { b_reuse++; } else { e_vmem += b->size; }
         FARF(HIGH, "prep-buf #%u : pass0 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
     }
@@ -575,13 +575,13 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_op_buf *bufs, uint3
 
     // Create missing mappings
     for (uint32_t i=0; i < n_bufs; i++) {
-        struct htp_op_buf *b = bufs + i;
+        struct htp_buf_desc *b = bufs + i;
         mmap_buf(ctx, b);
         FARF(HIGH, "prep-buf #%u : pass1 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
     }
 }
 
-static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32_t idx, struct htp_tensor *t) {
+static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t idx, struct htp_tensor *t) {
     uint32_t offset = t->data;
     uint32_t size   = t->size;
     uint32_t bi     = t->bi;
@@ -592,13 +592,13 @@ static void prep_tensor(struct htp_context *ctx, struct htp_op_buf *bufs, uint32
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
 }
 
-static void prep_tensors(struct htp_context *ctx, struct htp_op_buf *bufs, struct htp_tensor *tens, uint32_t n_tens) {
+static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t n_tens) {
     for (uint32_t i=0; i < n_tens; i++) {
         prep_tensor(ctx, bufs, i, tens + i);
     }
 }
 
-static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_req * op) {
+static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     octx->flags = op->flags;
     octx->op    = op->opcode;
@@ -652,7 +652,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
     vtcm_acquire(ctx);
 
     while (!ctx->vtcm_needs_release) {
-        struct htp_general_req req;
+        struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 
         struct dspqueue_buffer dbuf;
@@ -682,9 +682,9 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         const uint32_t n_tens = req.n_tensors;
         const uint32_t n_ops  = req.n_ops;
 
-        const uint32_t b_size = sizeof(struct htp_op_buf) * n_bufs;
-        const uint32_t t_size = sizeof(struct htp_tensor) * n_tens;
-        const uint32_t o_size = sizeof(struct htp_op_req) * n_ops;
+        const uint32_t b_size = sizeof(struct htp_buf_desc) * n_bufs;
+        const uint32_t t_size = sizeof(struct htp_tensor)   * n_tens;
+        const uint32_t o_size = sizeof(struct htp_op_desc)  * n_ops;
 
         if (dbuf.size < b_size + t_size + o_size) {
             FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
@@ -695,9 +695,9 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         poll_count = DSPQUEUE_POLL_COUNT;
 
         uint8_t * m_ptr = dbuf.ptr;
-        struct htp_op_buf* bufs = (struct htp_op_buf*) m_ptr; m_ptr += b_size;
-        struct htp_tensor* tens = (struct htp_tensor*) m_ptr; m_ptr += t_size;
-        struct htp_op_req*  ops = (struct htp_op_req*) m_ptr;
+        struct htp_buf_desc* bufs = (struct htp_buf_desc*) m_ptr; m_ptr += b_size;
+        struct htp_tensor*   tens = (struct htp_tensor*)   m_ptr; m_ptr += t_size;
+        struct htp_op_desc*   ops = (struct htp_op_desc*)  m_ptr;
 
         FARF(HIGH, "processing opbatch: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u",
                 n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
@@ -724,7 +724,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
-        struct htp_general_rsp rsp;
+        struct htp_opbatch_rsp rsp;
         rsp.status = HTP_STATUS_OK; // FIXME
 
         dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;

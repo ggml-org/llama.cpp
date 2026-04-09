@@ -20,7 +20,7 @@
 #include "hvx-dump.h"
 #include "worker-pool.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 
 #include "hmx-utils.h"
 #include "hmx-ops.h"

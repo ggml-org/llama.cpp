@@ -12,7 +12,7 @@
 #include "hex-dma.h"
 
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 #ifndef MIN

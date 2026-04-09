@@ -37,7 +37,7 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "op-desc.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -1539,9 +1539,9 @@ struct ggml_hexagon_opshm {
 
         block_mask.resize(max_pending, true);
 
-        block_size = sizeof(htp_op_buf) * n_bufs    +
-                     sizeof(htp_tensor) * n_tensors +
-                     sizeof(htp_op_req) * n_ops;
+        block_size = sizeof(htp_buf_desc) * n_bufs    +
+                     sizeof(htp_tensor)   * n_tensors +
+                     sizeof(htp_op_desc)  * n_ops;
 
         sbuf = new ggml_hexagon_shared_buffer(sess, block_size * block_mask.size(), true /* pinned */);
 
@@ -1578,9 +1578,9 @@ struct ggml_hexagon_opshm {
 struct ggml_hexagon_opbatch {
     const char* name;
 
-    std::vector<htp_op_buf> buffers;
-    std::vector<htp_tensor> tensors;
-    std::vector<htp_op_req> ops;
+    std::vector<htp_buf_desc> buffers;
+    std::vector<htp_tensor>   tensors;
+    std::vector<htp_op_desc>  ops;
 
     std::unordered_map<int, int>                b_map; // buffer fd   to index
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
@@ -1641,7 +1641,7 @@ struct ggml_hexagon_opbatch {
 
         b_map.insert({sbuf->fd, bi});
 
-        htp_op_buf &b = buffers[bi];
+        htp_buf_desc &b = buffers[bi];
         b.base = (uint64_t) sbuf->base;
         b.fd   = sbuf->fd;
         b.size = sbuf->size;
@@ -1738,7 +1738,7 @@ struct ggml_hexagon_opbatch {
     // assumes that fit_op() was called first and returned true
     void add_op(htp_op_code opcode, const struct ggml_tensor * t) {
         // Add new op
-        htp_op_req &o = ops[n_ops++];
+        htp_op_desc &o = ops[n_ops++];
         GGML_ASSERT(n_ops <= n_ops_max);
 
         memcpy(&o.params, &t->op_params, sizeof(t->op_params));
@@ -1758,13 +1758,13 @@ struct ggml_hexagon_opbatch {
     }
 
     size_t flush(uint8_t * mem_addr, size_t mem_size) {
-        static_assert(sizeof(htp_op_buf) % 8 == 0, "sizeof(htp_op_buf) must be multiple of 8");
-        static_assert(sizeof(htp_tensor) % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
-        static_assert(sizeof(htp_op_req) % 8 == 0, "sizeof(htp_op_req) must be multiple of 8");
+        static_assert(sizeof(htp_buf_desc) % 8 == 0, "sizeof(htp_buf_desc) must be multiple of 8");
+        static_assert(sizeof(htp_tensor)   % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
+        static_assert(sizeof(htp_op_desc)  % 8 == 0, "sizeof(htp_op_desc) must be multiple of 8");
 
-        const size_t b_size = sizeof(htp_op_buf) * n_bufs;
-        const size_t t_size = sizeof(htp_tensor) * n_tens;
-        const size_t o_size = sizeof(htp_op_req) * n_ops;
+        const size_t b_size = sizeof(htp_buf_desc) * n_bufs;
+        const size_t t_size = sizeof(htp_tensor)   * n_tens;
+        const size_t o_size = sizeof(htp_op_desc)  * n_ops;
 
         const size_t m_size = b_size + t_size + o_size;
         GGML_ASSERT(m_size <= mem_size);
@@ -1781,7 +1781,7 @@ struct ggml_hexagon_opbatch {
                 name, n_bufs, n_tens, n_ops, b_vmem, b_size, t_size, o_size);
 
         if (opt_verbose > 1) {
-            htp_op_buf *b = (htp_op_buf*) b_ptr;
+            htp_buf_desc *b = (htp_buf_desc*) b_ptr;
             for (unsigned int i=0; i < n_bufs; i++) {
                 GGML_LOG_DEBUG("ggml-hex: %s htp-buf #%u : fd %d base %p size %zu\n", name, i,
                             b[i].fd, (void *) b[i].base, (size_t) b[i].size);
@@ -1803,7 +1803,7 @@ struct ggml_hexagon_opbatch {
 // Flush HTP response queue i.e wait for all outstanding requests to complete
 void ggml_hexagon_session::flush_pending(bool all) {
     while (this->op_pending) {
-        struct htp_general_rsp rsp;
+        struct htp_opbatch_rsp rsp;
         uint32_t               rsp_size;
         uint32_t               flags;
 
@@ -1847,7 +1847,7 @@ void ggml_hexagon_session::flush_pending(bool all) {
 void ggml_hexagon_session::flush_batch() {
     if (op_batch->empty()) { return; }
 
-    htp_general_req req;
+    htp_opbatch_req req;
     req.n_bufs    = op_batch->n_bufs;
     req.n_tensors = op_batch->n_tens;
     req.n_ops     = op_batch->n_ops;
@@ -1991,8 +1991,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
     }
 
-    const size_t req_q_size = (sizeof(htp_general_req) * opt_opqueue * 2) + 1024;
-    const size_t rsp_q_size = (sizeof(htp_general_rsp) * opt_opqueue * 2) + 1024;
+    const size_t req_q_size = (sizeof(htp_opbatch_req) * opt_opqueue * 2) + 1024;
+    const size_t rsp_q_size = (sizeof(htp_opbatch_rsp) * opt_opqueue * 2) + 1024;
 
     // Now let's setup the DSP queue
     err = dspqueue_create(this->domain_id,
