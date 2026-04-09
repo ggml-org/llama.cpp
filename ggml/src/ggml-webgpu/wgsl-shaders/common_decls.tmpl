@@ -26,6 +26,13 @@ fn load_src0_u32_at(byte_offset: u32) -> u32 {
     return (lo >> shift) | (hi << (32u - shift));
 }
 
+// Always reads the 4-byte-aligned word containing byte_offset.
+// Caller extracts the 16-bit half it needs via & 0xFFFFu or >> 16u.
+// this is used in k-quants for better performance
+fn load_src0_u32_at_aligned(byte_offset: u32) -> u32 {
+    return src0[(byte_offset & ~3u) / 4u];
+}
+
 fn load_src0_f16_at(byte_offset: u32) -> f16 {
     let packed = unpack2x16float(load_src0_u16_at(byte_offset));
     return f16(packed[0]);

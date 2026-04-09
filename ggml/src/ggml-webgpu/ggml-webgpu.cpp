@@ -1701,8 +1701,8 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context &       ctx,
 
     const bool kv_vec_type_supported =
         K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
-    const bool use_vec = (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) && (V->ne[0] % 4 == 0) && kv_vec_type_supported &&
-                         (K->type != GGML_TYPE_F16 || f16_vec4_aligned) && (V->type == K->type);
+    const bool     use_vec = (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) && (V->ne[0] % 4 == 0) && kv_vec_type_supported &&
+                             (K->type != GGML_TYPE_F16 || f16_vec4_aligned) && (V->type == K->type);
     const uint32_t vec_nwg_cap = std::max(1u, std::min<uint32_t>(32u, ctx->global_ctx->capabilities.max_subgroup_size));
     const bool     use_blk     = use_vec && has_mask;
 
@@ -3262,7 +3262,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                         const size_t q_tile       = sg_mat_m;
                         const size_t base_q_bytes = (Q->ne[0] + V->ne[0]) * q_tile * GGML_WEBGPU_F16_SIZE_BYTES +
                                                     2 * q_tile * GGML_WEBGPU_F32_SIZE_BYTES;
-                        size_t bytes_per_kv = 0;
+                        size_t       bytes_per_kv = 0;
                         if (!kv_direct) {
                             bytes_per_kv += std::max(Q->ne[0], V->ne[0]);
                         }
@@ -3471,9 +3471,16 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     std::vector<wgpu::FeatureName> required_features       = { wgpu::FeatureName::ShaderF16 };
 
 #ifndef __EMSCRIPTEN__
+    // required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
+    // if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
+    //     required_features.push_back(wgpu::FeatureName::Subgroups);
+    //     required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
+    // }
+
     required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
+    required_features.push_back(wgpu::FeatureName::Subgroups);
+
     if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
-        required_features.push_back(wgpu::FeatureName::Subgroups);
         required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
     }
 #endif
@@ -3790,12 +3797,12 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     break;
                 }
                 // Head dimensions must fit in workgroup memory with minimum tile sizes
-                size_t     limit_bytes = ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
-                const bool has_mask    = op->src[3] != nullptr;
-                const bool kv_direct   = src1->type == GGML_TYPE_F16 &&
-                                       (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
-                                       (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
-                const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                size_t       limit_bytes = ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
+                const bool   has_mask    = op->src[3] != nullptr;
+                const bool   kv_direct   = src1->type == GGML_TYPE_F16 &&
+                                           (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
+                                           (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
+                const size_t min_bytes   = ggml_webgpu_flash_attn_wg_mem_bytes(
                     ctx->webgpu_global_ctx->capabilities.sg_mat_m, ctx->webgpu_global_ctx->capabilities.sg_mat_n,
                     (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
                 if (min_bytes > limit_bytes) {

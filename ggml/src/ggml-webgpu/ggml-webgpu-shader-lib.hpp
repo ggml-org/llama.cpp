@@ -46,16 +46,16 @@
 
 // Must be multiple of 4 to work with vectorized paths, and must divide
 // mul_mat_vec wg size
-#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 64
-#define WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K         256
+#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 8
+#define WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K         1024
 
-#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 64
-#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_TILE_K         256
+#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 8
+#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_TILE_K         1024
 
 // Requires 32 threads per output (wg_size/outputs_per_wg == 32)
 #define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG 8
 // Requires at least two (and multiple of 2) k-quant blocks per tile
-#define WEBGPU_MUL_MAT_VEC_K_Q_TILE_K         512
+#define WEBGPU_MUL_MAT_VEC_K_Q_TILE_K         2048
 
 // default size for legacy matrix multiplication
 #define WEBGPU_MUL_MAT_WG_SIZE 256
@@ -1734,11 +1734,11 @@ class ggml_webgpu_shader_lib {
         const bool                     is_unary = context.dst->op == GGML_OP_UNARY;
         const int                      op       = is_unary ? (int) ggml_get_unary_op(context.dst) : context.dst->op;
         ggml_webgpu_unary_pipeline_key key      = {
-                 .type     = context.dst->type,
-                 .op       = op,
-                 .is_unary = is_unary,
-                 .inplace  = context.inplace,
-                 .ttype    = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0),
+            .type     = context.dst->type,
+            .op       = op,
+            .is_unary = is_unary,
+            .inplace  = context.inplace,
+            .ttype    = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0),
         };
 
         auto it = unary_pipelines.find(key);
