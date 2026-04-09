@@ -377,11 +377,6 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-// Forward declaration for Level Zero allocation helper (defined below)
-static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
-#endif
-
 // sycl buffer
 
 struct ggml_backend_sycl_buffer_context {
@@ -402,11 +397,7 @@ struct ggml_backend_sycl_buffer_context {
     ~ggml_backend_sycl_buffer_context() {
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-            ggml_sycl_free_device(dev_ptr, *stream);
-#else
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
-#endif
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
         }
 
         //release extra used by tensors
@@ -538,28 +529,6 @@ catch (sycl::exception const &exc) {
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
 }
-
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-// Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
-// DMA-buf/TTM system RAM staging in the xe kernel driver.
-// sycl::malloc_device creates a 1:1 host memory mirror of every VRAM allocation
-// via xe_gem_prime_export, consuming system RAM equal to VRAM allocated.
-// zeMemAllocDevice uses the SVM/P2P path with no host staging.
-static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
-    if (g_ggml_sycl_enable_level_zero) {
-        void *ptr = nullptr;
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
-        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
-        ze_device_mem_alloc_desc_t alloc_desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
-        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
-        if (r == ZE_RESULT_SUCCESS && ptr) {
-            return ptr;
-        }
-        return nullptr;
-    }
-    return sycl::malloc_device(size, q);
-}
-#endif
 
 static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
@@ -749,11 +718,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
     size = std::max(size, (size_t)1); // syclMalloc returns null for size 0
 
     void * dev_ptr;
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    dev_ptr = ggml_sycl_malloc_device(size, *stream);
-#else
-    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_device(size, *stream)));
-#endif
+    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream)));
     if (!dev_ptr) {
       GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
       return nullptr;
@@ -997,11 +962,7 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
         ggml_sycl_set_device(i);
         const queue_ptr stream = ctx->streams[i];
         char * buf;
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        buf = (char *)ggml_sycl_malloc_device(size, *stream);
-#else
-        SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)sycl::malloc_device(size, *stream)));
-#endif
+        SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)ggml_sycl_malloc_device(size, *stream)));
         if (!buf) {
             char err_buf[1024];
             snprintf(err_buf, 1023, "%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
@@ -1362,11 +1323,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-                ggml_sycl_free_device(b.ptr, *qptr);
-#else
-                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
-#endif
+                SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(b.ptr, *qptr)));
                 pool_size -= b.size;
             }
         }
@@ -1414,11 +1371,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         void * ptr;
         size_t look_ahead_size = (size_t) (1.05 * size);
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        ptr = ggml_sycl_malloc_device(look_ahead_size, *qptr);
-#else
-        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *)sycl::malloc_device(look_ahead_size, *qptr)));
-#endif
+        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *)ggml_sycl_malloc_device(look_ahead_size, *qptr)));
         if (!ptr) {
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
             return nullptr;
@@ -1446,11 +1399,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             }
         }
         GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        ggml_sycl_free_device(ptr, *qptr);
-#else
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
-#endif
+        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(ptr, *qptr)));
         pool_size -= size;
     }
 };
