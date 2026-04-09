@@ -56,6 +56,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	dry_penalty_last_n: undefined,
 	max_tokens: undefined,
 	custom: '', // custom json-stringified object
+	preEncodeConversation: false,
 	// experimental features
 	pyInterpreterEnabled: false,
 	enableContinueGeneration: false
@@ -106,9 +107,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	disableReasoningParsing:
-		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+		'Send reasoning_format=none so the server returns thinking tokens inline instead of extracting them into a separate field.',
 	excludeReasoningFromContext:
-		'Strip reasoning content from previous messages before sending to the model. When unchecked, reasoning is sent back via the reasoning_content field so the model can see its own chain-of-thought across turns.',
+		'Strip thinking from previous messages before sending. When off, thinking is sent back via the reasoning_content field so the model sees its own chain-of-thought across turns.',
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
@@ -143,6 +144,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically expand tool call details while executing and keep them expanded after completion.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
+	preEncodeConversation:
+		'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };

@@ -292,13 +292,18 @@
 			icon: Code,
 			fields: [
 				{
+					key: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					label: 'Pre-fill KV cache after response',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
-					label: 'Disable reasoning content parsing',
+					label: 'Disable server-side thinking extraction',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
 					key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
-					label: 'Exclude reasoning from context',
+					label: 'Strip thinking from message history',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
