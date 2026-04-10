@@ -15,7 +15,8 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
 	DEFAULT_MCP_CONFIG,
 	DEFAULT_CLIENT_VERSION,
-	DEFAULT_IMAGE_MIME_TYPE
+	DEFAULT_IMAGE_MIME_TYPE,
+	MCP_PARTIAL_REDACT_HEADERS
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
@@ -43,9 +44,17 @@ import {
 	buildProxiedUrl,
 	buildProxiedHeaders,
 	getAuthHeaders,
+	sanitizeHeaders,
 	throwIfAborted,
 	isAbortError,
-	createBase64DataUrl
+	createBase64DataUrl,
+	getRequestUrl,
+	getRequestMethod,
+	getRequestBody,
+	summarizeRequestBody,
+	formatDiagnosticErrorMessage,
+	extractJsonRpcMethods,
+	type RequestBodySummary
 } from '$lib/utils';
 
 interface ToolResultContentItem {
@@ -62,11 +71,6 @@ interface ToolCallResult {
 	_meta?: Record<string, unknown>;
 }
 
-interface RequestBodySummary {
-	kind: string;
-	size?: number;
-}
-
 interface DiagnosticRequestDetails {
 	url: string;
 	method: string;
@@ -78,25 +82,6 @@ interface DiagnosticRequestDetails {
 }
 
 export class MCPService {
-	private static readonly REDACTED_HEADERS = new Set([
-		'authorization',
-		'api-key',
-		'cookie',
-		'mcp-session-id',
-		'proxy-authorization',
-		'set-cookie',
-		'x-auth-token',
-		'x-api-key'
-	]);
-
-	private static redactHeaderValue(headerName: string, value: string): string {
-		if (headerName === 'mcp-session-id') {
-			return `....${value.slice(-5)}`;
-		}
-
-		return '[redacted]';
-	}
-
 	/**
 	 * Create a connection log entry for phase tracking.
 	 *
@@ -121,132 +106,6 @@ export class MCPService {
 		};
 	}
 
-	private static sanitizeHeaders(
-		headers?: HeadersInit,
-		extraRedactedHeaders?: Iterable<string>
-	): Record<string, string> {
-		if (!headers) {
-			return {};
-		}
-
-		const normalized = new Headers(headers);
-		const sanitized: Record<string, string> = {};
-		const redactedHeaders = new Set(
-			Array.from(extraRedactedHeaders ?? [], (header) => header.toLowerCase())
-		);
-
-		for (const [key, value] of normalized.entries()) {
-			const normalizedKey = key.toLowerCase();
-			sanitized[key] =
-				this.REDACTED_HEADERS.has(normalizedKey) || redactedHeaders.has(normalizedKey)
-					? this.redactHeaderValue(normalizedKey, value)
-					: value;
-		}
-
-		return sanitized;
-	}
-
-	private static getRequestUrl(input: RequestInfo | URL): string {
-		if (typeof input === 'string') {
-			return input;
-		}
-
-		if (input instanceof URL) {
-			return input.href;
-		}
-
-		return input.url;
-	}
-
-	private static getRequestMethod(
-		input: RequestInfo | URL,
-		init?: RequestInit,
-		baseInit?: RequestInit
-	): string {
-		if (init?.method) {
-			return init.method;
-		}
-
-		if (typeof Request !== 'undefined' && input instanceof Request) {
-			return input.method;
-		}
-
-		return baseInit?.method ?? 'GET';
-	}
-
-	private static getRequestBody(
-		input: RequestInfo | URL,
-		init?: RequestInit
-	): BodyInit | null | undefined {
-		if (init?.body !== undefined) {
-			return init.body;
-		}
-
-		if (typeof Request !== 'undefined' && input instanceof Request) {
-			return input.body;
-		}
-
-		return undefined;
-	}
-
-	private static summarizeRequestBody(body: BodyInit | null | undefined): RequestBodySummary {
-		if (body == null) {
-			return { kind: 'empty' };
-		}
-
-		if (typeof body === 'string') {
-			return { kind: 'string', size: body.length };
-		}
-
-		if (body instanceof Blob) {
-			return { kind: 'blob', size: body.size };
-		}
-
-		if (body instanceof URLSearchParams) {
-			return { kind: 'urlsearchparams', size: body.toString().length };
-		}
-
-		if (body instanceof FormData) {
-			return { kind: 'formdata' };
-		}
-
-		if (body instanceof ArrayBuffer) {
-			return { kind: 'arraybuffer', size: body.byteLength };
-		}
-
-		if (ArrayBuffer.isView(body)) {
-			return { kind: body.constructor.name, size: body.byteLength };
-		}
-
-		return { kind: typeof body };
-	}
-
-	private static formatDiagnosticErrorMessage(error: unknown): string {
-		const message = error instanceof Error ? error.message : String(error);
-
-		return message.includes('Failed to fetch') ? `${message} (check CORS?)` : message;
-	}
-
-	private static extractJsonRpcMethods(body: BodyInit | null | undefined): string[] | undefined {
-		if (typeof body !== 'string') {
-			return undefined;
-		}
-
-		try {
-			const parsed = JSON.parse(body);
-			const messages = Array.isArray(parsed) ? parsed : [parsed];
-			const methods = messages
-				.map((message) =>
-					typeof message?.method === 'string' ? (message.method as string) : undefined
-				)
-				.filter((method): method is string => Boolean(method));
-
-			return methods.length > 0 ? methods : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
 	private static createDiagnosticRequestDetails(
 		input: RequestInfo | URL,
 		init: RequestInit | undefined,
@@ -254,16 +113,16 @@ export class MCPService {
 		requestHeaders: Headers,
 		extraRedactedHeaders?: Iterable<string>
 	): DiagnosticRequestDetails {
-		const body = this.getRequestBody(input, init);
+		const body = getRequestBody(input, init);
 		const details: DiagnosticRequestDetails = {
-			url: this.getRequestUrl(input),
-			method: this.getRequestMethod(input, init, baseInit).toUpperCase(),
+			url: getRequestUrl(input),
+			method: getRequestMethod(input, init, baseInit).toUpperCase(),
 			credentials: init?.credentials ?? baseInit.credentials,
 			mode: init?.mode ?? baseInit.mode,
-			headers: this.sanitizeHeaders(requestHeaders, extraRedactedHeaders),
-			body: this.summarizeRequestBody(body)
+			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
+			body: summarizeRequestBody(body)
 		};
-		const jsonRpcMethods = this.extractJsonRpcMethods(body);
+		const jsonRpcMethods = extractJsonRpcMethods(body);
 
 		if (jsonRpcMethods) {
 			details.jsonRpcMethods = jsonRpcMethods;
@@ -430,7 +289,7 @@ export class MCPService {
 									url,
 									status: response.status,
 									statusText: response.statusText,
-									headers: this.sanitizeHeaders(response.headers),
+									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
 									durationMs
 								}
 							}
@@ -444,7 +303,7 @@ export class MCPService {
 					logIfEnabled(
 						this.createLog(
 							MCPConnectionPhase.ERROR,
-							`HTTP ${method} ${url} failed: ${this.formatDiagnosticErrorMessage(error)}`,
+							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
 							MCPLogLevel.ERROR,
 							{
 								serverName,
@@ -751,9 +610,10 @@ export class MCPService {
 							effectiveUrl: url.href,
 							transportType,
 							useProxy: serverConfig.useProxy ?? false,
-							headers: this.sanitizeHeaders(
+							headers: sanitizeHeaders(
 								serverConfig.headers,
-								Object.keys(serverConfig.headers ?? {})
+								Object.keys(serverConfig.headers ?? {}),
+								MCP_PARTIAL_REDACT_HEADERS
 							),
 							credentials: serverConfig.credentials
 						},
