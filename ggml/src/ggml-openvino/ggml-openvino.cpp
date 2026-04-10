@@ -897,7 +897,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             //               op->src[0]->ne[0]);
             return true;
         }
-        if (op->type != GGML_TYPE_F32) {
+        if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) {
             // GGML_LOG_WARN("OpenVINO backend does not support ROPE with type %s\n", ggml_type_name(op->type));
             return true;
         }

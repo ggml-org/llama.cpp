@@ -76,6 +76,11 @@ OutputVector translate_rope(const NodeContext & context) {
         }
     }
 
+    auto output_type = context.get_output_type();
+    if (data_node->get_element_type() != ov::element::f32) {
+        data_node = std::make_shared<ov::op::v0::Convert>(data_node, ov::element::f32);
+    }
+
     if (mode == TYPE_NORMAL) {
         auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
@@ -138,6 +143,10 @@ OutputVector translate_rope(const NodeContext & context) {
         auto add = std::make_shared<ov::op::v1::Add>(mul_c, mul_d);
 
         res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{sub, add}, 3);
+    }
+
+    if (res.get_element_type() != output_type) {
+        res = std::make_shared<ov::op::v0::Convert>(res, output_type);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());

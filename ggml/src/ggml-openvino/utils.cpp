@@ -304,17 +304,23 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     auto & core = ov_singleton_core();
 
     auto get_prefill_chunk_size = [] {
-        const char * chunk_size_str = getenv("GGML_OPENVINO_PREFILL_CHUNK_SIZE");
-        if (chunk_size_str && atoi(chunk_size_str) > 0) {
-            return atoi(chunk_size_str);
+        static int chunk_size = -1;
+        if (chunk_size == -1) {
+            const char * chunk_size_str = getenv("GGML_OPENVINO_PREFILL_CHUNK_SIZE");
+            if (chunk_size_str && atoi(chunk_size_str) > 0) {
+                chunk_size = atoi(chunk_size_str);
+            } else {
+                chunk_size = 256;
+            }
         }
-        return 256;
+        return chunk_size;
     };
 
     static std::string device = "NPU";
     static auto is_static = true;
     static auto stateful = false;
-    static auto prefill_chunk_size = get_prefill_chunk_size();
+
+    auto prefill_chunk_size = get_prefill_chunk_size();
     const auto & config = ggml_openvino_get_compile_config();
 
     if (is_naive(cgraph)) {
@@ -391,6 +397,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         std::shared_ptr<ov::Model> model;
         auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
+        if (m_params.n_heads == -1) {
+            // graph is not a LLM, e.g. context-shift graph
+            prefill_chunk_size = inp_pos->ne[0];
+        }
         auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
                                                                     is_static, stateful, false, true, prefill_chunk_size);
         auto ggml_decoder_decode = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
