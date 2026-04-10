@@ -22,7 +22,8 @@
 			</p>
 		{:else}
 			<p class="text-xs text-muted-foreground">
-				Press <kbd class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{modKey} + Enter</kbd> to send,
+				Press <kbd class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{modKey} + Enter</kbd> to
+				send,
 				<kbd class="rounded bg-muted px-1 py-0.5 font-mono text-xs">Enter</kbd> for new line
 			</p>
 		{/if}
