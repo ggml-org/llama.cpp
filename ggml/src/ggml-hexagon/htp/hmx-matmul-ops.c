@@ -577,6 +577,53 @@ static size_t dequantize_weight_mxfp4_to_fp16_cx4(__fp16 * restrict vtcm_dst,
     return 4;
 }
 
+static void dequantize_weight_mxfp4_to_fp16_cx2(__fp16 * restrict vtcm_dst,
+                                                const uint8_t * restrict vtcm_src,
+                                                const size_t         t,
+                                                const size_t         kt,
+                                                const size_t         ct,
+                                                const size_t         n_cols,
+                                                const size_t         qrow_size,
+                                                const size_t         row_stride,
+                                                const HVX_Vector     vlut_cvt,
+                                                const HVX_Vector     v_scat_base,
+                                                const HVX_Vector     v_scat_step,
+                                                const HVX_VectorPred q_mask64) {
+    const size_t blk_idx      = (kt * 32) / QK_MXFP4x4x2;
+    const size_t sub_blk      = ((kt * 32) % QK_MXFP4x4x2) / 32;
+    const bool   upper        = (sub_blk >= 4);
+    const size_t byte_off     = blk_idx * (QK_MXFP4x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
+    const size_t e8m0_blk_off = qrow_size + blk_idx * HMX_X4X2_MXFP4_EBLK_SIZE;
+
+    __fp16 *   tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
+    HVX_Vector v_off     = v_scat_base;
+    for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
+        int row0 = ct * HMX_FP16_TILE_N_COLS + r;
+        int row1 = row0 + 1;
+
+        const uint8_t * r0 = vtcm_src + row0 * row_stride;
+        const uint8_t * r1 = vtcm_src + row1 * row_stride;
+
+        // Batch-convert all 8 E8M0 scales once per row (stays in HVX register)
+        mxfp4_scales_t r0_e8 = mxfp4_convert_scales(r0 + e8m0_blk_off);
+
+        HVX_Vector v0 = dequantize_x4x2_mxfp4_group_hvx(r0 + byte_off, upper, sub_blk, vlut_cvt, r0_e8);
+        HVX_Vector v1;
+        if (row1 < n_cols) {
+            mxfp4_scales_t r1_e8 = mxfp4_convert_scales(r1 + e8m0_blk_off);
+            v1                   = dequantize_x4x2_mxfp4_group_hvx(r1 + byte_off, upper, sub_blk, vlut_cvt, r1_e8);
+        } else {
+            v1 = Q6_V_vzero();
+        }
+
+        Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+        Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
+        v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+    }
+    (void) *(volatile HVX_Vector *) (tile_base);
+}
+
 // Dequantize a tile range from x4x2 weight data (already in VTCM) to tile-major FP16.
 // Input:  vtcm_src has n_cols rows of x4x2 data, each row_stride bytes.
 // Output: vtcm_dst in tile-major FP16 layout.
@@ -649,15 +696,13 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
 
         // --- Batch-4 fast path for MXFP4: same nibble layout but E8M0 scales ---
         if (weight_type == HTP_TYPE_MXFP4 && (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct)) {
-            t += dequantize_weight_mxfp4_to_fp16_cx4(
-                vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride,
-                vlut_cvt, v_scat_base, v_scat_step, q_mask64
-            );
+            t += dequantize_weight_mxfp4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride,
+                                                     vlut_cvt, v_scat_base, v_scat_step, q_mask64);
             continue;
         }
 
         // --- Single-tile fallback ---
-        __fp16 *tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
+        __fp16 * tile_base = vtcm_dst + t * HMX_FP16_TILE_N_ELMS;
 
         if (is_q4) {
             unsigned blk_idx   = (kt * 32) / QK_Q4_0x4x2;
@@ -687,38 +732,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
             }
             (void) *(volatile HVX_Vector *)(tile_base);
         } else if (weight_type == HTP_TYPE_MXFP4) {
-            int  blk_idx      = (kt * 32) / QK_MXFP4x4x2;
-            int  sub_blk      = ((kt * 32) % QK_MXFP4x4x2) / 32;
-            bool upper        = (sub_blk >= 4);
-            int  byte_off     = blk_idx * (QK_MXFP4x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
-            int  e8m0_blk_off = qrow_size + blk_idx * HMX_X4X2_MXFP4_EBLK_SIZE;
-
-            HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
-                int row0 = ct * HMX_FP16_TILE_N_COLS + r;
-                int row1 = row0 + 1;
-
-                const uint8_t * r0 = vtcm_src + row0 * row_stride;
-                const uint8_t * r1 = vtcm_src + row1 * row_stride;
-
-                // Batch-convert all 8 E8M0 scales once per row (stays in HVX register)
-                mxfp4_scales_t r0_e8 = mxfp4_convert_scales(r0 + e8m0_blk_off);
-
-                HVX_Vector v0 = dequantize_x4x2_mxfp4_group_hvx(r0 + byte_off, upper, sub_blk, vlut_cvt, r0_e8);
-                HVX_Vector v1;
-                if (row1 < n_cols) {
-                    mxfp4_scales_t r1_e8 = mxfp4_convert_scales(r1 + e8m0_blk_off);
-                    v1 = dequantize_x4x2_mxfp4_group_hvx(r1 + byte_off, upper, sub_blk, vlut_cvt, r1_e8);
-                } else {
-                    v1 = Q6_V_vzero();
-                }
-
-                Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-                Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-            }
-            (void) *(volatile HVX_Vector *) (tile_base);
+            dequantize_weight_mxfp4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
+                                                v_scat_base, v_scat_step, q_mask64);
         } else {
             // Q8_0
             int blk_idx  = (kt * 32) / QK_Q8_0x4x2;
