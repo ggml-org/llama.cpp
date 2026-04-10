@@ -38,6 +38,8 @@ static const char * const LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
 static const char * const LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
 static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 
+static const int32_t CONTEXT_LEN = 512;
+
 struct Stats {
     std::vector<float>   values;
     std::vector<int64_t> counts;
@@ -831,7 +833,11 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
             }
         }
     }
-    m_last_chunk = max_count / (m_params.n_ctx / m_params.n_parallel);
+    auto n_ctx = m_params.n_ctx;
+    if (n_ctx == 0) {
+        n_ctx = CONTEXT_LEN;
+    }
+    m_last_chunk = max_count / (n_ctx / m_params.n_parallel);
 
     gguf_free(ctx_gguf);
     ggml_free(ctx);
@@ -1209,7 +1215,7 @@ int main(int argc, char ** argv) {
 
     params.out_file = "imatrix.gguf";
 
-    params.n_ctx = 512;
+    params.n_ctx  = CONTEXT_LEN;
     params.escape = false;
 
     common_init();
