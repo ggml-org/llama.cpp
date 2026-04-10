@@ -106,116 +106,80 @@ pinned_chunk_pool::pinned_chunk_pool(sycl::queue & queue, size_t budget) :
 
 pinned_chunk_pool::~pinned_chunk_pool() {
     std::lock_guard<std::mutex> lock(mutex_);
-    size_t                      chunk_count = chunks_.size();
+    size_t                      chunk_count = chunks_.size() + runtime_chunks_.size();
 
     for (auto & c : chunks_) {
         if (c.base) {
             sycl::free(c.base, queue_);
         }
     }
+    for (auto & c : runtime_chunks_) {
+        if (c.base) {
+            sycl::free(c.base, queue_);
+        }
+    }
     chunks_.clear();
+    runtime_chunks_.clear();
     total_allocated_ = 0;
 
     GGML_LOG_INFO("[SYCL] Pinned chunk pool destroyed, released %zu chunks\n", chunk_count);
 }
 
-void * pinned_chunk_pool::allocate(size_t size, size_t alignment) {
+segmented_buffer pinned_chunk_pool::allocate_segmented(size_t size, size_t alignment) {
     std::lock_guard<std::mutex> lock(mutex_);
+    segmented_buffer            result;
+    result.total_size = size;
 
-    if (zones_configured_) {
-        GGML_LOG_WARN("[SYCL] legacy pinned pool allocate(%zu) after host zones were configured; rejecting\n", size);
-        return nullptr;
-    }
+    size = align_up(size, alignment);
 
-    // Round up size to alignment
-    size              = align_up(size, alignment);
-    size_t guard_size = 0;
-    if (const char * env = std::getenv("GGML_SYCL_HOST_CACHE_GUARD")) {
-        if (std::atoi(env) != 0) {
-            guard_size = 64;
-        }
-    }
-    const size_t alloc_size = size + guard_size;
-    if (pinned_trace_enabled()) {
-        GGML_LOG_INFO("[SYCL] pinned alloc request: size=%zu align=%zu guard=%zu alloc=%zu chunks=%zu used=%.1f GB\n",
-                      size, alignment, guard_size, alloc_size, chunks_.size(),
-                      total_allocated_ / (1024.0 * 1024.0 * 1024.0));
-    }
-
-    // Try existing chunks first
     for (auto & c : chunks_) {
         size_t aligned_offset = (c.used + alignment - 1) & ~(alignment - 1);
-        if (aligned_offset + alloc_size <= c.size) {
+        if (aligned_offset + size <= c.size) {
             void * ptr = static_cast<char *>(c.base) + aligned_offset;
-            c.used     = aligned_offset + alloc_size;
+            c.used     = aligned_offset + size;
             c.alloc_count++;
-            if (guard_size > 0) {
-                std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
-            }
-            return ptr;
+            result.segments.push_back({ ptr, size });
+            return result;
         }
     }
 
-    // Need new chunk - check budget
-    size_t new_chunk_size = std::max(chunk_size_, align_up(alloc_size, DEFAULT_ALIGNMENT));
+    // Need to grow - allocate a new chunk
+    size_t new_chunk_size = std::min(chunk_size_, align_up(size, DEFAULT_ALIGNMENT));
     if (total_allocated_ + new_chunk_size > budget_) {
-        GGML_LOG_WARN("[SYCL] Pinned pool budget exceeded (%.1f GB used, %.1f GB budget)\n",
-                      total_allocated_ / (1024.0 * 1024.0 * 1024.0), budget_ / (1024.0 * 1024.0 * 1024.0));
-        return nullptr;
+        return {};
     }
 
-    if (pinned_trace_enabled()) {
-        GGML_LOG_INFO("[SYCL] pinned pool grow: min=%zu chunk=%zu total=%.1f GB budget=%.1f GB\n", alloc_size,
-                      new_chunk_size, total_allocated_ / (1024.0 * 1024.0 * 1024.0),
-                      budget_ / (1024.0 * 1024.0 * 1024.0));
-    }
-    if (!grow(alloc_size)) {
-        return nullptr;
+    if (!grow_into(chunks_, new_chunk_size, false)) {
+        return {};
     }
 
-    // Allocate from new chunk
     auto & c = chunks_.back();
-    if (alloc_size > c.size) {
-        GGML_LOG_ERROR("[SYCL] Pinned pool allocation %zu exceeds chunk size %zu\n", size, c.size);
-        return nullptr;
+    if (size > c.size) {
+        return {};
     }
     void * ptr = c.base;
-    c.used     = alloc_size;
+    c.used     = size;
     c.alloc_count++;
-    if (guard_size > 0) {
-        std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
-    }
-    return ptr;
+    result.segments.push_back({ ptr, size });
+    return result;
+}
+
+void * pinned_chunk_pool::allocate(size_t size, size_t alignment) {
+    segmented_buffer buf = allocate_segmented(size, alignment);
+    return buf.segments.empty() ? nullptr : buf.segments[0].ptr;
+}
+
+void * pinned_chunk_pool::allocate_runtime(size_t size, size_t alignment) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocate_from_chunks(runtime_chunks_, size, alignment, true);
 }
 
 void pinned_chunk_pool::deallocate(void * ptr, size_t /* size */) {
     std::lock_guard<std::mutex> lock(mutex_);
-
-    if (zones_configured_) {
+    if (deallocate_from_chunks(runtime_chunks_, ptr)) {
         return;
     }
-
-    // Find containing chunk and track outstanding allocations
-    for (auto & c : chunks_) {
-        char * base = static_cast<char *>(c.base);
-        char * p    = static_cast<char *>(ptr);
-        if (p >= base && p < base + c.size) {
-            c.freed++;  // Track number of frees, not bytes (avoids alignment mismatch)
-            // Reclaim chunk when all allocations have been freed.
-            // alloc_count tracks total allocations from this chunk.
-            // When freed == alloc_count, the entire chunk is unused → reset.
-            // This is critical for MoE warmup profiling which stages entire
-            // layers (~538 MB each) through pinned staging buffers. Without
-            // reclamation, 36 layers × 538 MB = 19.4 GB of pinned memory
-            // is allocated and never reused (bump allocator pathology).
-            if (c.freed >= c.alloc_count) {
-                c.used        = 0;
-                c.freed       = 0;
-                c.alloc_count = 0;
-            }
-            return;
-        }
-    }
+    (void) deallocate_from_chunks(chunks_, ptr);
 }
 
 size_t pinned_chunk_pool::pre_allocate(size_t total_bytes) {
@@ -279,20 +243,44 @@ void pinned_chunk_pool::configure_zones(size_t weight_bytes,
     staging_bytes = align_up(staging_bytes, DEFAULT_ALIGNMENT);
     scratch_bytes = align_up(scratch_bytes, DEFAULT_ALIGNMENT);
 
-    flat_spans_.clear();
-    size_t logical_cursor = 0;
-    for (size_t i = 0; i < chunks_.size(); ++i) {
-        const size_t chunk_start = align_up(chunks_[i].used, DEFAULT_ALIGNMENT);
-        if (chunk_start >= chunks_[i].size) {
-            continue;
+    const size_t total_zone_bytes   = weight_bytes + kv_bytes + staging_bytes + scratch_bytes;
+    auto         rebuild_flat_spans = [&]() {
+        flat_spans_.clear();
+        size_t logical_cursor = 0;
+        for (size_t i = 0; i < chunks_.size(); ++i) {
+            const size_t chunk_start = align_up(chunks_[i].used, DEFAULT_ALIGNMENT);
+            if (chunk_start >= chunks_[i].size) {
+                continue;
+            }
+            const size_t span_size = chunks_[i].size - chunk_start;
+            flat_spans_.push_back({ logical_cursor, i, chunk_start, span_size });
+            logical_cursor += span_size;
         }
-        const size_t span_size = chunks_[i].size - chunk_start;
-        flat_spans_.push_back({ logical_cursor, i, chunk_start, span_size });
-        logical_cursor += span_size;
+        return logical_cursor;
+    };
+
+    size_t logical_cursor = rebuild_flat_spans();
+    while (logical_cursor < total_zone_bytes && total_allocated_ + chunk_size_ <= budget_) {
+        if (!grow(chunk_size_)) {
+            break;
+        }
+        logical_cursor = rebuild_flat_spans();
     }
 
-    const size_t total_zone_bytes = weight_bytes + kv_bytes + staging_bytes + scratch_bytes;
-    GGML_ASSERT(total_zone_bytes <= logical_cursor && "host zones exceed pre-allocated pinned pool capacity");
+    if (total_zone_bytes > logical_cursor) {
+        GGML_LOG_WARN(
+            "[HOST-ARENA] pinned pool capacity %.1f MB is below requested zone footprint %.1f MB; "
+            "disabling host zones and falling back to runtime pinned allocations\n",
+            logical_cursor / (1024.0 * 1024.0), total_zone_bytes / (1024.0 * 1024.0));
+        for (auto & zone : zones_) {
+            zone.start = 0;
+            zone.size  = 0;
+            zone.used.store(0, std::memory_order_relaxed);
+        }
+        flat_spans_.clear();
+        zones_configured_ = false;
+        return;
+    }
 
     size_t start    = 0;
     auto   set_zone = [&](host_zone_id zone, size_t size) {
@@ -316,65 +304,91 @@ void pinned_chunk_pool::configure_zones(size_t weight_bytes,
         scratch_bytes / (1024.0 * 1024.0), logical_cursor / (1024.0 * 1024.0));
 }
 
-void * pinned_chunk_pool::zone_alloc(host_zone_id zone, size_t size, size_t alignment) {
-    if (size == 0) {
-        return nullptr;
-    }
+segmented_buffer pinned_chunk_pool::zone_alloc_segmented(host_zone_id zone, size_t size, size_t alignment) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    segmented_buffer            result;
+    result.total_size = size;
 
     const size_t zi = static_cast<size_t>(zone);
     if (zi >= static_cast<size_t>(host_zone_id::COUNT)) {
-        return nullptr;
+        return {};
     }
 
-    const size_t aligned_size = align_up(size, alignment);
-    auto &       z            = zones_[zi];
+    auto & z = zones_[zi];
     if (!zones_configured_ || z.size == 0) {
-        return nullptr;
+        return {};
     }
 
-    while (true) {
+    size_t remaining = size;
+    while (remaining > 0) {
         size_t cur_used  = z.used.load(std::memory_order_relaxed);
         size_t candidate = align_up(cur_used, alignment);
-        if (candidate + aligned_size > z.size) {
-            return nullptr;
+        if (candidate >= z.size) {
+            GGML_LOG_ERROR("[HOST-ZONE] segmented alloc failed: zone=%s exhausted (used=%zu/%zu, remaining=%zu)\n",
+                           host_zone_name(zone), candidate, z.size, remaining);
+            return {};
         }
 
-        const size_t logical_off = z.start + candidate;
+        size_t logical_off = z.start + candidate;
 
+        // Find the span that contains logical_off
         const zone_chunk_span * span = nullptr;
         {
-            // Binary search for the span containing offset
             auto it = std::upper_bound(flat_spans_.begin(), flat_spans_.end(), logical_off,
-                [](size_t off, const zone_chunk_span& s) { return off < s.logical_start; });
+                                       [](size_t off, const zone_chunk_span & s) { return off < s.logical_start; });
             if (it != flat_spans_.begin()) {
                 --it;
                 span = &(*it);
             }
         }
+
         if (span == nullptr || logical_off < span->logical_start) {
-            return nullptr;
+            GGML_LOG_ERROR("[HOST-ZONE] segmented alloc: no span for logical_off=%zu in zone=%s\n", logical_off,
+                           host_zone_name(zone));
+            return {};
         }
 
-        const size_t span_off = logical_off - span->logical_start;
-        if (span_off + aligned_size > span->span_size) {
-            const size_t next_used = (span->logical_start + span->span_size) - z.start;
-            if (z.used.compare_exchange_weak(cur_used, next_used, std::memory_order_relaxed)) {
-                continue;
+        // Calculate how much space is available in this span
+        size_t span_remaining = span->span_size - (logical_off - span->logical_start);
+        if (span_remaining == 0) {
+            // Move to next span - advance used to the start of the next span
+            auto next_it =
+                std::upper_bound(flat_spans_.begin(), flat_spans_.end(), logical_off,
+                                 [](size_t off, const zone_chunk_span & s) { return off < s.logical_start; });
+            if (next_it == flat_spans_.end()) {
+                GGML_LOG_ERROR("[HOST-ZONE] segmented alloc: no more spans for zone=%s (remaining=%zu)\n",
+                               host_zone_name(zone), remaining);
+                return {};
             }
+            size_t next_span_start = next_it->logical_start;
+            size_t new_used        = next_span_start - z.start;
+            z.used.store(new_used, std::memory_order_relaxed);
             continue;
         }
 
-        if (!z.used.compare_exchange_weak(cur_used, candidate + aligned_size, std::memory_order_relaxed)) {
+        // Determine the sub-allocation size: min of remaining request, chunk_size, and span_remaining
+        // Round span_remaining down to alignment to keep sub-allocations aligned
+        size_t max_in_span = span_remaining >= alignment ? (span_remaining / alignment) * alignment : span_remaining;
+        size_t alloc_size  = std::min({ remaining, chunk_size_, max_in_span });
+        size_t aligned_alloc_size = align_up(alloc_size, alignment);
+
+        // Verify it fits in the zone
+        if (candidate + aligned_alloc_size > z.size) {
+            GGML_LOG_ERROR("[HOST-ZONE] segmented alloc failed: zone=%s size=%zu used=%zu/%zu\n", host_zone_name(zone),
+                           alloc_size, candidate + aligned_alloc_size, z.size);
+            return {};
+        }
+
+        if (!z.used.compare_exchange_weak(cur_used, candidate + aligned_alloc_size, std::memory_order_relaxed)) {
             continue;
         }
 
-        auto * ptr = static_cast<uint8_t *>(chunks_[span->chunk_idx].base) + span->chunk_start + span_off;
-        if (host_zone_debug_enabled()) {
-            GGML_LOG_INFO("[HOST-ZONE] alloc zone=%s size=%zu used=%zu/%zu ptr=%p\n", host_zone_name(zone), size,
-                          candidate + aligned_size, z.size, ptr);
-        }
-        return ptr;
+        void * ptr = static_cast<uint8_t *>(chunks_[span->chunk_idx].base) + span->chunk_start +
+                     (logical_off - span->logical_start);
+        result.segments.push_back({ ptr, alloc_size });
+        remaining -= alloc_size;
     }
+    return result;
 }
 
 void pinned_chunk_pool::zone_reset(host_zone_id zone) {
@@ -385,6 +399,24 @@ void pinned_chunk_pool::zone_reset(host_zone_id zone) {
     zones_[zi].used.store(0, std::memory_order_relaxed);
     if (host_zone_debug_enabled()) {
         GGML_LOG_INFO("[HOST-ZONE] reset zone=%s\n", host_zone_name(zone));
+    }
+}
+
+void pinned_chunk_pool::zone_rollback(host_zone_id zone, size_t saved_used) {
+    const size_t zi = static_cast<size_t>(zone);
+    if (zi >= static_cast<size_t>(host_zone_id::COUNT) || !zones_configured_) {
+        return;
+    }
+    auto & z   = zones_[zi];
+    size_t cur = z.used.load(std::memory_order_relaxed);
+    if (saved_used > cur) {
+        GGML_LOG_WARN("[HOST-ZONE] rollback zone=%s: saved_used=%zu > current_used=%zu, skipping\n",
+                      host_zone_name(zone), saved_used, cur);
+        return;
+    }
+    z.used.store(saved_used, std::memory_order_relaxed);
+    if (host_zone_debug_enabled()) {
+        GGML_LOG_INFO("[HOST-ZONE] rollback zone=%s used %zu -> %zu\n", host_zone_name(zone), cur, saved_used);
     }
 }
 
@@ -404,6 +436,64 @@ size_t pinned_chunk_pool::zone_capacity(host_zone_id zone) const {
     return zones_[zi].size;
 }
 
+bool pinned_chunk_pool::grow_zone(host_zone_id zone, size_t additional_bytes) {
+    const size_t zi = static_cast<size_t>(zone);
+    if (zi >= static_cast<size_t>(host_zone_id::COUNT) || !zones_configured_) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Calculate how many chunks we need to add
+    size_t chunks_needed = (additional_bytes + chunk_size_ - 1) / chunk_size_;
+    if (chunks_needed == 0) {
+        return true;
+    }
+
+    // Check budget before allocating
+    if (total_allocated_ + chunks_needed * chunk_size_ > budget_) {
+        GGML_LOG_WARN(
+            "[SYCL] Pinned pool grow_zone: budget exhausted for zone %zu "
+            "(need %zu chunks, budget=%.1f GB, used=%.1f GB)\n",
+            zi, chunks_needed, budget_ / (1024.0 * 1024.0 * 1024.0), total_allocated_ / (1024.0 * 1024.0 * 1024.0));
+        return false;
+    }
+
+    // Record the old end of the pool (where new chunks will start)
+    size_t old_chunk_count = chunks_.size();
+
+    // Allocate new chunks
+    for (size_t i = 0; i < chunks_needed; i++) {
+        if (!grow(chunk_size_)) {
+            GGML_LOG_WARN("[SYCL] Pinned pool grow_zone: grow failed at chunk %zu/%zu\n", i, chunks_needed);
+            break;
+        }
+    }
+
+    size_t new_chunks_added = chunks_.size() - old_chunk_count;
+    if (new_chunks_added == 0) {
+        return false;
+    }
+
+    // Extend the zone's span to include the new chunks
+    size_t additional_capacity = new_chunks_added * chunk_size_;
+    zones_[zi].size += additional_capacity;
+
+    // Update flat_spans_ to include the new chunks in this zone
+    // Compute logical cursor: zone start + old zone size (before growth)
+    size_t logical_cursor = zones_[zi].start + (zones_[zi].size - additional_capacity);
+    for (size_t i = old_chunk_count; i < chunks_.size(); i++) {
+        flat_spans_.push_back({ logical_cursor, i, 0ULL, chunks_[i].size });
+        logical_cursor += chunks_[i].size;
+    }
+
+    GGML_LOG_INFO(
+        "[SYCL] Pinned pool grow_zone: zone %zu grown by %.1f MB "
+        "(%zu new chunks, zone now %.1f MB)\n",
+        zi, additional_capacity / (1024.0 * 1024.0), new_chunks_added, zones_[zi].size / (1024.0 * 1024.0));
+    return true;
+}
+
 bool pinned_chunk_pool::contains(const void * ptr) const {
     if (!ptr) {
         return false;
@@ -411,6 +501,12 @@ bool pinned_chunk_pool::contains(const void * ptr) const {
     std::lock_guard<std::mutex> lock(mutex_);
     const char *                p = static_cast<const char *>(ptr);
     for (const auto & c : chunks_) {
+        const char * base = static_cast<const char *>(c.base);
+        if (p >= base && p < base + c.size) {
+            return true;
+        }
+    }
+    for (const auto & c : runtime_chunks_) {
         const char * base = static_cast<const char *>(c.base);
         if (p >= base && p < base + c.size) {
             return true;
@@ -426,12 +522,105 @@ size_t pinned_chunk_pool::allocated() const {
 
 size_t pinned_chunk_pool::chunk_count() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return chunks_.size();
+    return chunks_.size() + runtime_chunks_.size();
 }
 
 bool pinned_chunk_pool::grow(size_t min_size) {
+    return grow_into(chunks_, min_size, false);
+}
+
+void * pinned_chunk_pool::allocate_from_chunks(std::vector<chunk> & chunks,
+                                               size_t               size,
+                                               size_t               alignment,
+                                               bool                 runtime_pool) {
+    size              = align_up(size, alignment);
+    size_t guard_size = 0;
+    if (const char * env = std::getenv("GGML_SYCL_HOST_CACHE_GUARD")) {
+        if (std::atoi(env) != 0) {
+            guard_size = 64;
+        }
+    }
+    const size_t alloc_size = size + guard_size;
+    if (pinned_trace_enabled()) {
+        GGML_LOG_INFO(
+            "[SYCL] pinned alloc request: size=%zu align=%zu guard=%zu alloc=%zu chunks=%zu used=%.1f GB mode=%s\n",
+            size, alignment, guard_size, alloc_size, chunks.size(), total_allocated_ / (1024.0 * 1024.0 * 1024.0),
+            runtime_pool ? "runtime" : "zone-base");
+    }
+
+    for (auto & c : chunks) {
+        size_t aligned_offset = (c.used + alignment - 1) & ~(alignment - 1);
+        if (aligned_offset + alloc_size <= c.size) {
+            void * ptr = static_cast<char *>(c.base) + aligned_offset;
+            c.used     = aligned_offset + alloc_size;
+            c.alloc_count++;
+            if (guard_size > 0) {
+                std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
+            }
+            return ptr;
+        }
+    }
+
+    size_t new_chunk_size = std::max(chunk_size_, align_up(alloc_size, DEFAULT_ALIGNMENT));
+    if (total_allocated_ + new_chunk_size > budget_) {
+        GGML_LOG_WARN("[SYCL] Pinned pool budget exceeded (%.1f GB used, %.1f GB budget)\n",
+                      total_allocated_ / (1024.0 * 1024.0 * 1024.0), budget_ / (1024.0 * 1024.0 * 1024.0));
+        return nullptr;
+    }
+
+    if (pinned_trace_enabled()) {
+        GGML_LOG_INFO("[SYCL] pinned pool grow: min=%zu chunk=%zu total=%.1f GB budget=%.1f GB mode=%s\n", alloc_size,
+                      new_chunk_size, total_allocated_ / (1024.0 * 1024.0 * 1024.0),
+                      budget_ / (1024.0 * 1024.0 * 1024.0), runtime_pool ? "runtime" : "zone-base");
+    }
+    if (!grow_into(chunks, alloc_size, runtime_pool)) {
+        return nullptr;
+    }
+
+    auto & c = chunks.back();
+    if (alloc_size > c.size) {
+        GGML_LOG_ERROR(
+            "[SYCL] Pinned pool allocation %zu MB exceeds chunk size %zu MB. "
+            "For large allocations, use allocate_segmented() or pre-allocate more chunks.\n",
+            alloc_size / (1024 * 1024), c.size / (1024 * 1024));
+        return nullptr;
+    }
+    void * ptr = c.base;
+    c.used     = alloc_size;
+    c.alloc_count++;
+    if (guard_size > 0) {
+        std::memset(static_cast<uint8_t *>(ptr) + size, k_pinned_guard_pattern, guard_size);
+    }
+    return ptr;
+}
+
+bool pinned_chunk_pool::deallocate_from_chunks(std::vector<chunk> & chunks, void * ptr) {
+    for (auto & c : chunks) {
+        char * base = static_cast<char *>(c.base);
+        char * p    = static_cast<char *>(ptr);
+        if (p >= base && p < base + c.size) {
+            c.freed++;
+            if (c.freed >= c.alloc_count) {
+                c.used        = 0;
+                c.freed       = 0;
+                c.alloc_count = 0;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pinned_chunk_pool::grow_into(std::vector<chunk> & chunks, size_t min_size, bool runtime_pool) {
     void * ptr        = nullptr;
-    size_t chunk_size = std::max(chunk_size_, align_up(min_size, DEFAULT_ALIGNMENT));
+    // Use chunk_size_ as the default, but allow larger chunks when the
+    // allocation exceeds chunk_size_ (e.g., 615 MB reorder buffers for
+    // MoE models).  Level Zero's ~11 GB per-allocation limit is the
+    // real cap, not chunk_size_.
+    size_t chunk_size = align_up(min_size, DEFAULT_ALIGNMENT);
+    if (chunk_size < chunk_size_) {
+        chunk_size = chunk_size_;
+    }
 
     if (alloc_timeout_ms_ > 0) {
         if (pinned_trace_enabled()) {
@@ -485,11 +674,12 @@ bool pinned_chunk_pool::grow(size_t min_size) {
                       chunk_size / (1024.0 * 1024.0));
     }
 
-    chunks_.push_back({ ptr, chunk_size, 0, 0, 0 });
+    chunks.push_back({ ptr, chunk_size, 0, 0, 0 });
     total_allocated_ += chunk_size;
 
-    GGML_LOG_INFO("[SYCL] Allocated pinned chunk %zu (size=%.1f MB, total=%.1f GB)\n", chunks_.size(),
-                  chunk_size / (1024.0 * 1024.0), total_allocated_ / (1024.0 * 1024.0 * 1024.0));
+    GGML_LOG_INFO("[SYCL] Allocated pinned %s chunk %zu (size=%.1f MB, total=%.1f GB)\n",
+                  runtime_pool ? "runtime" : "base", chunks.size(), chunk_size / (1024.0 * 1024.0),
+                  total_allocated_ / (1024.0 * 1024.0 * 1024.0));
 
     return true;
 }
