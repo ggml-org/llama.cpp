@@ -14,7 +14,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 #ifndef MIN
@@ -43,10 +43,10 @@ struct htp_binary_context {
     bool split_at_ne02;
 };
 
-#define htp_binary_preamble                       \
-    const struct htp_tensor * src0 = &octx->src0; \
-    const struct htp_tensor * src1 = &octx->src1; \
-    struct htp_tensor *       dst  = &octx->dst;  \
+#define htp_binary_preamble                        \
+    const struct htp_tensor * src0 = octx->src[0]; \
+    const struct htp_tensor * src1 = octx->src[1]; \
+    const struct htp_tensor * dst  = octx->dst;    \
                                        \
     const uint32_t ne00 = src0->ne[0]; \
     const uint32_t ne01 = src0->ne[1]; \
@@ -181,7 +181,7 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
@@ -274,7 +274,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row = bctx->nrows_per_thread * ith;
@@ -374,7 +374,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t src0_type  = octx->src0.type;
+    const uint32_t src0_type  = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row  = bctx->nrows_per_thread * ith;
@@ -455,7 +455,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
     const uint32_t total_rows = ne01 * ne02 * ne03;
     const uint32_t start_row  = bctx->nrows_per_thread * ith;
@@ -540,7 +540,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     const uint32_t elem_size_bytes = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const uint32_t row_size_bytes = ne00 * elem_size_bytes;;
     const uint32_t total_rows = ne01 * ne02 * ne03;
@@ -629,10 +629,10 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
     struct htp_binary_context * bctx = (struct htp_binary_context *) data;
     struct htp_ops_context * octx = bctx->octx;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * src2 = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * src2 = octx->src[2];
+    const struct htp_tensor * dst  = octx->dst;
 
     const uint32_t ne00 = src0->ne[0];
     const uint32_t ne01 = src0->ne[1];
@@ -723,15 +723,15 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
 }
 
 static int execute_op_binary(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     // Use packed row sizes for VTCM allocation
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     const size_t elem_size = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const size_t src0_row_size = src0->ne[0] * elem_size;
     const size_t src1_row_size = src1->ne[0] * elem_size;
@@ -799,9 +799,9 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size; octx->dst_spad.src  = NULL;
 
     if ((octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         return HTP_STATUS_OK;
@@ -857,12 +857,12 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 int op_binary(struct htp_ops_context * octx) {
 
     // Does not support permutations of src1
-    const struct htp_tensor * src1 = &octx->src1;
+    const struct htp_tensor * src1 = octx->src[1];
     if (src1->nb[1] < src1->nb[0]) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t src0_type = octx->src0.type;
+    const uint32_t src0_type = octx->src[0]->type;
     if ((src0_type == HTP_TYPE_F32) || (src0_type == HTP_TYPE_F16)) {
         return execute_op_binary(octx);
     }

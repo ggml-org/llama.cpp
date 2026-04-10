@@ -14,59 +14,42 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
-#define htp_act_preamble3              \
-    const uint32_t ne00 = src0->ne[0]; \
-    const uint32_t ne01 = src0->ne[1]; \
-    const uint32_t ne02 = src0->ne[2]; \
-    const uint32_t ne03 = src0->ne[3]; \
-                                       \
-    const uint32_t ne10 = src1->ne[0]; \
-    const uint32_t ne11 = src1->ne[1]; \
-    const uint32_t ne12 = src1->ne[2]; \
-    const uint32_t ne13 = src1->ne[3]; \
-                                       \
-    const uint32_t ne0 = dst->ne[0];   \
-    const uint32_t ne1 = dst->ne[1];   \
-    const uint32_t ne2 = dst->ne[2];   \
-    const uint32_t ne3 = dst->ne[3];   \
-                                       \
-    const uint32_t nb00 = src0->nb[0]; \
-    const uint32_t nb01 = src0->nb[1]; \
-    const uint32_t nb02 = src0->nb[2]; \
-    const uint32_t nb03 = src0->nb[3]; \
-                                       \
-    const uint32_t nb10 = src1->nb[0]; \
-    const uint32_t nb11 = src1->nb[1]; \
-    const uint32_t nb12 = src1->nb[2]; \
-    const uint32_t nb13 = src1->nb[3]; \
-                                       \
-    const uint32_t nb0 = dst->nb[0];   \
-    const uint32_t nb1 = dst->nb[1];   \
-    const uint32_t nb2 = dst->nb[2];   \
-    const uint32_t nb3 = dst->nb[3];
-
-#define htp_act_preamble2              \
-    const uint32_t ne00 = src0->ne[0]; \
-    const uint32_t ne01 = src0->ne[1]; \
-    const uint32_t ne02 = src0->ne[2]; \
-    const uint32_t ne03 = src0->ne[3]; \
-                                       \
-    const uint32_t ne0 = dst->ne[0];   \
-    const uint32_t ne1 = dst->ne[1];   \
-    const uint32_t ne2 = dst->ne[2];   \
-    const uint32_t ne3 = dst->ne[3];   \
-                                       \
-    const uint32_t nb00 = src0->nb[0]; \
-    const uint32_t nb01 = src0->nb[1]; \
-    const uint32_t nb02 = src0->nb[2]; \
-    const uint32_t nb03 = src0->nb[3]; \
-                                       \
-    const uint32_t nb0 = dst->nb[0];   \
-    const uint32_t nb1 = dst->nb[1];   \
-    const uint32_t nb2 = dst->nb[2];   \
+#define htp_act_preamble                                 \
+    const struct htp_tensor * src0 = actx->octx->src[0]; \
+    const struct htp_tensor * src1 = actx->octx->src[1]; \
+    const struct htp_tensor * dst  = actx->octx->dst;    \
+                                                         \
+    const uint32_t ne00 = src0->ne[0];                   \
+    const uint32_t ne01 = src0->ne[1];                   \
+    const uint32_t ne02 = src0->ne[2];                   \
+    const uint32_t ne03 = src0->ne[3];                   \
+                                                         \
+    const uint32_t nb00 = src0->nb[0];                   \
+    const uint32_t nb01 = src0->nb[1];                   \
+    const uint32_t nb02 = src0->nb[2];                   \
+    const uint32_t nb03 = src0->nb[3];                   \
+                                                         \
+    const uint32_t ne10 = src1 ? src1->ne[0] : 0;        \
+    const uint32_t ne11 = src1 ? src1->ne[1] : 0;        \
+    const uint32_t ne12 = src1 ? src1->ne[2] : 0;        \
+    const uint32_t ne13 = src1 ? src1->ne[3] : 0;        \
+                                                         \
+    const uint32_t nb10 = src1 ? src1->nb[0] : 0;        \
+    const uint32_t nb11 = src1 ? src1->nb[1] : 0;        \
+    const uint32_t nb12 = src1 ? src1->nb[2] : 0;        \
+    const uint32_t nb13 = src1 ? src1->nb[3] : 0;        \
+                                                         \
+    const uint32_t ne0 = dst->ne[0];                     \
+    const uint32_t ne1 = dst->ne[1];                     \
+    const uint32_t ne2 = dst->ne[2];                     \
+    const uint32_t ne3 = dst->ne[3];                     \
+                                                         \
+    const uint32_t nb0 = dst->nb[0];                     \
+    const uint32_t nb1 = dst->nb[1];                     \
+    const uint32_t nb2 = dst->nb[2];                     \
     const uint32_t nb3 = dst->nb[3];
 
 struct htp_act_context {
@@ -97,10 +80,7 @@ struct htp_act_context {
 
 static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     size_t src0_row_size = actx->src0_row_size;
     size_t src1_row_size = actx->src1_row_size;
@@ -207,10 +187,7 @@ static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -332,9 +309,7 @@ static void glu_swiglu_oai_f32_per_thread(unsigned int nth, unsigned int ith, vo
 
 static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * dst  = &actx->octx->dst;
-    htp_act_preamble2;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -433,9 +408,7 @@ static void unary_gelu_f32_per_thread(unsigned int nth, unsigned int ith, void *
 
 static void unary_silu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * dst  = &actx->octx->dst;
-    htp_act_preamble2;
+    htp_act_preamble;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -533,10 +506,7 @@ static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
 static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
-    const struct htp_tensor * src0 = &actx->octx->src0;
-    const struct htp_tensor * src1 = &actx->octx->src1;
-    const struct htp_tensor * dst  = &actx->octx->dst;
-    htp_act_preamble3;
+    htp_act_preamble;
 
     size_t src0_row_size = actx->src0_row_size;
     size_t src1_row_size = actx->src1_row_size;
@@ -652,9 +622,9 @@ static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 }
 
 static int execute_op_activations_f32(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     if (((src0->ne[0] * SIZEOF_FP32) != src0->nb[1]) || ((dst->ne[0] * SIZEOF_FP32) != dst->nb[1])) {
         FARF(ERROR, "Non-contiguous tensors are not supported at this time \n");
@@ -697,25 +667,20 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     size_t src0_row_size = src0->nb[1];
-    size_t src1_row_size = src1->nb[1]; // zero bytes if src1 is not used
+    size_t src1_row_size = src1 ? src1->nb[1] : src0->nb[1];
     size_t dst_row_size  = dst->nb[1];
-
-    const bool src1_valid = src1->ne[0];
-    if (!src1_valid) {
-        src1_row_size = src0_row_size;
-    }
 
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
     const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
+
     // VTCM scratchpads for all tensors
     // N rows per thread, padded to HVX vector size
-
     size_t spad_size_per_row   = (src0_row_size_aligned + src1_row_size_aligned) + dst_row_size_aligned;
     size_t vtcm_row_per_thread = (octx->ctx->vtcm_size)/ (n_threads* spad_size_per_row);
 
     // Make sure the reserved vtcm size is sufficient
-    if(vtcm_row_per_thread ==0){
+    if (vtcm_row_per_thread == 0) {
         FARF(ERROR, "act-%s : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", op_type, octx->ctx->vtcm_size,
              spad_size_per_row * n_threads);
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -733,7 +698,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
 
-    if (src1->ne[0]) {
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
+
+    if (src1) {
         FARF(HIGH, "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n",
              op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
              src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], octx->src0_spad.size, octx->src1_spad.size,
@@ -773,9 +742,9 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 
     // Pointers and GLU logic
     const uint8_t * data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * data_src1 = (const uint8_t *) src1->data;
+    const uint8_t * data_src1 = src1 ? (const uint8_t *) src1->data : NULL;
 
-    if (!src1_valid && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
+    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
          const int32_t swapped = octx->op_params[1];
          data_src1 = data_src0;
          actx.src1_row_size = actx.src0_row_size;
@@ -799,7 +768,7 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 int op_activations(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_activations_f32(octx);
             break;

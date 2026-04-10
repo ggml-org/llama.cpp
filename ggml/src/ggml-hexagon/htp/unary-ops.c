@@ -16,7 +16,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 struct htp_unary_context {
@@ -267,8 +267,8 @@ static void softplus_f32(const float * restrict src,
 static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
-    const struct htp_tensor * src = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     htp_unary_preamble;
 
@@ -387,8 +387,8 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 static int execute_op_unary_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
     const char * op_type = NULL;
 
@@ -490,7 +490,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 int op_unary(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_unary_f32(octx);
             break;

@@ -20,7 +20,7 @@
 #include "hvx-dump.h"
 #include "worker-pool.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 
 #include "hmx-utils.h"
 #include "hmx-ops.h"
@@ -821,7 +821,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
     // and each q_head is computed individually to avoid tile-major packing
     // issues.  m_chunk_n_rows is always a multiple of 32 (from
     // hmx_compute_chunks), so per-head tile arrays don't overlap.
-    const size_t vtcm_budget  = ctx->vtcm_scratch_size;
+    const size_t vtcm_budget  = ctx->vtcm_size;
     const size_t vec_dot_size = params->k * sizeof(__fp16);
 
     // When the activation has a large stride (e.g. permuted Q tensor with
@@ -998,7 +998,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
     }
 
     // --- Dynamic VTCM layout ---
-    const size_t vtcm_budget  = ctx->vtcm_scratch_size;
+    const size_t vtcm_budget  = ctx->vtcm_size;
     const size_t vec_dot_size = k * sizeof(__fp16);
 
     // DMA-based activation gather for strided tensors (see batched path comment).
@@ -1182,7 +1182,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     FARF(MEDIUM, "hmx_matmul_qk: STANDARD path m=%d k=%d n=%d type=%d", m, k, n, weight_type);
 
     // --- Dynamic VTCM layout ---
-    const size_t vtcm_budget   = ctx->vtcm_scratch_size;
+    const size_t vtcm_budget   = ctx->vtcm_size;
     const size_t vec_dot_size  = k * sizeof(__fp16);
     const bool   use_pipeline  = (m >= 128) && (k <= n);
 
@@ -1273,9 +1273,6 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
             void *buf_curr = vtcm_scratch0;
             void *buf_next = vtcm_scratch1;
 
-            // issue async DDR data transfer for the first weight chunk
-            // NOTE: use 2D DMA (n_cols rows x row_stride bytes) instead of 1D
-            // because UDMA roiwidth is 16-bit and total size can exceed 65535.
             {
                 const size_t n_cols_first = hex_smin(n, n_chunk_n_cols);
                 dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
@@ -1533,20 +1530,15 @@ void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *dst, co
     worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_worker_fn, &state, ctx->n_threads);
 }
 
-int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict out, const float *restrict x, const uint8_t *restrict w, int m,
-                                       int k, int n, int weight_type) {
-    // Runtime check -- k >= 16384 exceeds 2D DMA limit
-    if (k >= 16384) {
-        FARF(HIGH, "%s: k=%d exceeds 2D DMA limit", __func__, k);
-        return -1;
-    }
+int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict out, const float *restrict x, const uint8_t *restrict w,
+                                       int m, int k, int n, int weight_type) {
     // assume k % 32 == 0 && n % 32 == 0
     const size_t row_stride = get_x4x2_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
     }
 
-    const size_t vtcm_budget = ctx->vtcm_scratch_size;
+    const size_t vtcm_budget = ctx->vtcm_size;
 
     const size_t M_BLOCK_SIZE = 512;
     const size_t N_BLOCK_SIZE = 512;
@@ -1576,8 +1568,7 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
     assert((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) <= vtcm_budget);
 
-    FARF(MEDIUM, "%s: m=%d k=%d n=%d wtype=%d vtcm=%zu/%zu",
-         __func__, m, k, n, weight_type,
+    FARF(MEDIUM, "%s: m=%d k=%d n=%d wtype=%d vtcm=%zu/%zu", __func__, m, k, n, weight_type,
          (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
 
     // initialize eye tile (32x32 identity matrix)

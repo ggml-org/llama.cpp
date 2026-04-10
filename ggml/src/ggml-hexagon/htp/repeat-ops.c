@@ -12,7 +12,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 struct htp_repeat_context {
@@ -32,8 +32,8 @@ struct htp_repeat_context {
 static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_repeat_context * rctx = (const struct htp_repeat_context *) data;
     struct htp_ops_context * octx = rctx->octx;
-    const struct htp_tensor * src = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     const uint32_t ne00 = src->ne[0];
     const uint32_t ne01 = src->ne[1];
@@ -98,8 +98,8 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
 }
 
 int op_repeat(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
     // Validate that dst dims are multiples of src dims
     if (dst->ne[0] % src0->ne[0] != 0 ||
