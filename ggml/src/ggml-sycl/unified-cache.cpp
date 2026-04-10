@@ -50,14 +50,24 @@ static std::atomic<size_t> g_runtime_reserved_host_bytes{};
 static std::atomic<size_t> g_runtime_host_cat_bytes[static_cast<int>(runtime_category::COUNT)]{};
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_managed_reserved_bytes{};
 static std::atomic<size_t>                                    g_runtime_managed_reserved_host_bytes{};
-static std::atomic<bool>     g_atexit_registered{ false };  // Ensure atexit handler registered once
-static std::atomic<int>      g_host_cache_guard_errors{ 0 };
-static std::atomic<int>      g_host_cache_guard_enabled{ -1 };
-static constexpr size_t      k_host_cache_guard_bytes   = 64;
-static constexpr uint8_t     k_host_cache_guard_pattern = 0xA5;
-static std::atomic<int>      g_cache_assert_enabled{ -1 };
-static std::atomic<int>      g_copy_trace_enabled{ -1 };
-static std::atomic<bool>     g_graph_compute_active{ false };
+static std::atomic<bool> g_atexit_registered{ false };  // Ensure atexit handler registered once
+static std::atomic<int>  g_host_cache_guard_errors{ 0 };
+static std::atomic<int>  g_host_cache_guard_enabled{ -1 };
+static constexpr size_t  k_host_cache_guard_bytes   = 64;
+static constexpr uint8_t k_host_cache_guard_pattern = 0xA5;
+static std::atomic<int>  g_cache_assert_enabled{ -1 };
+static std::atomic<int>  g_copy_trace_enabled{ -1 };
+static std::atomic<bool> g_graph_compute_active{ false };
+
+static bool unified_cache_legacy_prestage_enabled() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_LEGACY_PRESTAGE");
+        cached           = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
 static std::mutex            g_runtime_alloc_mutex;
 static std::atomic<uint64_t> g_runtime_alloc_id{ 1 };
 
@@ -65,6 +75,7 @@ struct runtime_alloc_record {
     alloc_handle  handle{};
     sycl::queue * queue            = nullptr;
     bool          uses_pinned_pool = false;
+    bool          zone_managed     = false;
     bool          from_arena       = false;  // True if sub-allocated from arena (KV zone)
     std::string   cohort_id;
 };
@@ -297,9 +308,28 @@ void offload_stats_set_phase(offload_phase phase) {
     g_offload_phase.store(static_cast<int>(phase), std::memory_order_relaxed);
 }
 
+const char * offload_phase_name(offload_phase phase) {
+    switch (phase) {
+        case offload_phase::LOAD:
+            return "load";
+        case offload_phase::WARMUP:
+            return "warmup";
+        case offload_phase::PP:
+            return "pp";
+        case offload_phase::TG:
+            return "tg";
+        default:
+            return "unknown";
+    }
+}
+
 offload_phase offload_stats_phase() {
     const int phase = g_offload_phase.load(std::memory_order_relaxed);
     switch (phase) {
+        case static_cast<int>(offload_phase::LOAD):
+            return offload_phase::LOAD;
+        case static_cast<int>(offload_phase::WARMUP):
+            return offload_phase::WARMUP;
         case static_cast<int>(offload_phase::PP):
             return offload_phase::PP;
         case static_cast<int>(offload_phase::TG):
@@ -312,6 +342,10 @@ offload_phase offload_stats_phase() {
 static inline offload_phase offload_stats_current_phase() {
     const int phase = g_offload_phase.load(std::memory_order_relaxed);
     switch (phase) {
+        case static_cast<int>(offload_phase::LOAD):
+            return offload_phase::LOAD;
+        case static_cast<int>(offload_phase::WARMUP):
+            return offload_phase::WARMUP;
         case static_cast<int>(offload_phase::PP):
             return offload_phase::PP;
         case static_cast<int>(offload_phase::TG):
@@ -545,9 +579,21 @@ void offload_stats_log_summary(const char * tag, int device) {
     if (!offload_stats_enabled()) {
         return;
     }
-    const offload_stats_snapshot s     = offload_stats_get();
-    const offload_phase          phase = offload_stats_current_phase();
-    const char * phase_name = phase == offload_phase::PP ? "pp" : phase == offload_phase::TG ? "tg" : "unknown";
+    const offload_stats_snapshot s          = offload_stats_get();
+    const offload_phase          phase      = offload_stats_current_phase();
+    const char *                 phase_name = offload_phase_name(phase);
+
+    static const bool zero_alloc_check = (std::getenv("GGML_SYCL_ZERO_ALLOC_CHECK") != nullptr);
+    if (zero_alloc_check && (phase == offload_phase::PP || phase == offload_phase::TG)) {
+        const size_t runtime_bytes = unified_cache_get_runtime_bytes(device);
+        if (runtime_bytes > 0) {
+            GGML_LOG_WARN(
+                "[SYCL-ZERO-ALLOC-CHECK] %s: runtime allocation detected during %s phase: %.1f MB. "
+                "Expected zero new allocations during steady-state inference.\n",
+                tag ? tag : "graph", phase_name, runtime_bytes / (1024.0 * 1024.0));
+        }
+    }
+
     fprintf(
         stderr,
         "[SYCL-OFFLOAD-STATS] tag=%s device=%d wait_count=%llu wait_count_forced=%llu "
@@ -936,6 +982,8 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         size_t onednn_zone = 256 * 1024 * 1024;
 
         // Runtime zone: 512 MB default for KV buffers, staging, MoE pools.
+        // When the planner queries compute buffer sizes from the scheduler,
+        // the runtime zone is grown via arena_reserve() to accommodate them.
         size_t runtime_zone = 512 * 1024 * 1024;
         if (const char * env = std::getenv("GGML_SYCL_RUNTIME_ARENA_MB")) {
             runtime_zone = static_cast<size_t>(std::max(0, std::atoi(env))) * 1024 * 1024;
@@ -1156,7 +1204,17 @@ unified_cache::~unified_cache() {
     }
 
     // Free DMA staging buffers
-    for (void * ptr : dma_staging_buffers_) {
+    for (size_t i = 0; i < dma_staging_buffers_.size(); ++i) {
+        if (i < dma_staging_allocs_.size() && dma_staging_allocs_[i].ptr != nullptr) {
+            alloc_handle handle{};
+            handle.ptr      = dma_staging_allocs_[i].ptr;
+            handle.size     = dma_staging_allocs_[i].size;
+            handle.device   = dma_staging_allocs_[i].device;
+            handle.alloc_id = dma_staging_allocs_[i].alloc_id;
+            unified_free(handle);
+            continue;
+        }
+        void * ptr = dma_staging_buffers_[i];
         if (!ptr) {
             continue;
         }
@@ -1165,6 +1223,7 @@ unified_cache::~unified_cache() {
         } catch (...) {
         }
     }
+    dma_staging_allocs_.clear();
     dma_staging_buffers_.clear();
 
     // Free reusable host-pinned async copy staging slots.
@@ -1363,10 +1422,10 @@ host_cache::host_cache(sycl::queue & queue, size_t budget_bytes) :
 
     // Create pinned pool with capped budget.
     // Without the cap, the pool inherits the full host memory budget (~227 GB)
-    // and grows unboundedly during MoE warmup profiling (36 layers × 538 MB
-    // = 19.4 GB of pinned host memory).  Cap at 4 GB — enough for working set
-    // of 2-3 layers of expert staging plus CPU dispatch buffers.
-    const size_t pinned_cap    = size_t(16) << 30;  // 16 GB
+    // and grows unboundedly during MoE warmup profiling. Cap at 128 GB for 120B-class
+    // models: ~60GB weights + ~16GB expert SOA cache + buffer headroom. For smaller
+    // models, std::min ensures we don't waste memory.
+    const size_t pinned_cap    = size_t(128) << 30;  // 128 GB
     const size_t pinned_budget = std::min(budget_bytes, pinned_cap);
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] DEBUG: Creating pinned pool\n");
     pinned_pool_ = std::make_unique<pinned_chunk_pool>(queue_, pinned_budget);
@@ -1434,30 +1493,58 @@ void * host_cache::allocate_pinned_runtime(size_t size, size_t alignment) {
     if (!pinned_pool_) {
         return nullptr;
     }
-    if (pinned_pool_->zones_configured()) {
-        return nullptr;
-    }
-    return pinned_pool_->allocate(size, alignment);
+    // Use the runtime chunk pool (separate from zone-managed chunks) so that
+    // large contiguous allocations (e.g., 615 MB reorder buffers) don't
+    // conflict with the zone layout.  Runtime chunks are not part of any
+    // zone and can be larger than the 256 MB zone chunk size.
+    return pinned_pool_->allocate_runtime(size, alignment);
 }
 
 void host_cache::free_pinned_runtime(void * ptr, size_t size) {
     if (!pinned_pool_ || !ptr || size == 0) {
         return;
     }
-    if (pinned_pool_->zones_configured()) {
-        return;
-    }
     pinned_pool_->deallocate(ptr, size);
 }
 
-void * host_cache::host_zone_alloc(host_zone_id zone, size_t size, size_t alignment) {
+segmented_buffer host_cache::host_zone_alloc_segmented(host_zone_id zone, size_t size, size_t alignment) {
     if (!pinned_pool_) {
-        return nullptr;
+        return {};
     }
     if (!pinned_pool_->zones_configured()) {
-        return allocate_pinned_runtime(size, alignment);
+        // Fallback to runtime segmented allocation if zones not configured
+        return pinned_pool_->allocate_segmented(size, alignment);
     }
-    return pinned_pool_->zone_alloc(zone, size, alignment);
+    return pinned_pool_->zone_alloc_segmented(zone, size, alignment);
+}
+
+void * host_cache::host_zone_alloc(host_zone_id zone, size_t size, size_t alignment) {
+    // Save the zone's current used offset so we can roll back if the
+    // allocation spans multiple segments (non-contiguous).  Rolling back
+    // to the saved position preserves earlier allocations in the zone,
+    // unlike zone_reset() which would corrupt them.
+    const size_t saved_used = pinned_pool_ ? pinned_pool_->zone_used(zone) : 0;
+
+    segmented_buffer buf = host_zone_alloc_segmented(zone, size, alignment);
+    if (buf.segments.empty()) {
+        return nullptr;
+    }
+    // Contiguous allocations (single pointer) require all data in one segment.
+    // If the allocation crossed a chunk boundary, it was split into multiple
+    // segments — the first segment alone is insufficient for DMA/copy operations
+    // that need contiguous memory.  Return nullptr so callers fall back to
+    // runtime allocation for large contiguous buffers.
+    if (buf.segments.size() > 1) {
+        // Multi-segment: the zone bump pointer was already advanced.
+        // For contiguous-only callers, this allocation is unusable.
+        // Roll back to saved position instead of resetting the entire zone
+        // to avoid corrupting earlier allocations (especially in WEIGHT zone).
+        if (pinned_pool_ && pinned_pool_->zones_configured()) {
+            pinned_pool_->zone_rollback(zone, saved_used);
+        }
+        return nullptr;
+    }
+    return buf.segments[0].ptr;
 }
 
 void host_cache::host_zone_reset(host_zone_id zone) {
@@ -1492,6 +1579,15 @@ void host_cache::configure_host_zones(size_t weight_bytes,
 
 bool host_cache::host_zones_configured() const {
     return pinned_pool_ && pinned_pool_->zones_configured();
+}
+
+void host_cache::grow_scratch_zone(size_t additional_bytes) {
+    if (!pinned_pool_ || !pinned_pool_->zones_configured() || additional_bytes == 0) {
+        return;
+    }
+    pinned_pool_->grow_zone(host_zone_id::SCRATCH, additional_bytes);
+    GGML_LOG_INFO("[HOST-ARENA] SCRATCH zone grown by %.1f MB for compute buffers\n",
+                  additional_bytes / (1024.0 * 1024.0));
 }
 
 bool host_cache::contains_pinned(const void * ptr) const {
@@ -2913,6 +3009,12 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
     }
     if (!queue) {
         GGML_LOG_ERROR("[DIRECT-STAGE] null queue for expert staging\n");
+        return result;
+    }
+    if (has_placement_plan() && unified_cache_is_graph_compute_active() && !unified_cache_legacy_prestage_enabled()) {
+        GGML_LOG_ERROR(
+            "[DIRECT-STAGE] inference-time expert staging is forbidden when placement-plan preload is active\n");
+        GGML_ASSERT(false && "direct_stage_expert called during inference with placement plan");
         return result;
     }
 
@@ -5176,6 +5278,34 @@ void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free: ptr=%p size=%zu\n", ptr, size);
 }
 
+void unified_cache::enqueue_deferred_free(const managed_alloc_ref & handle) {
+    if (handle.ptr == nullptr || handle.size == 0) {
+        return;
+    }
+
+    if (vram_owns(handle.ptr)) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping deferred free for arena-owned managed ptr=%p size=%zu\n", handle.ptr,
+                        handle.size);
+        return;
+    }
+
+    deferred_free_entry entry{};
+    entry.ptr     = handle.ptr;
+    entry.size    = handle.size;
+    entry.handle  = handle;
+    entry.managed = true;
+    try {
+        entry.event     = submit_barrier_all();
+        entry.has_event = true;
+    } catch (...) {
+        entry.has_event = false;
+    }
+
+    deferred_frees_.push_back(entry);
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred managed free: ptr=%p size=%zu alloc_id=%llu\n", handle.ptr, handle.size,
+                    static_cast<unsigned long long>(handle.alloc_id));
+}
+
 void unified_cache::enqueue_deferred_host_free(void * ptr, size_t size, const sycl::event & event) {
     if (!ptr) {
         return;
@@ -5216,6 +5346,13 @@ void unified_cache::process_deferred_frees() {
             if (is_arena) {
                 // Arena entries: just remove from deferred list, no sycl::free needed.
                 GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free skip arena ptr=%p size=%zu\n", it->ptr, it->size);
+            } else if (it->managed) {
+                alloc_handle handle{};
+                handle.ptr      = it->handle.ptr;
+                handle.size     = it->handle.size;
+                handle.device   = it->handle.device;
+                handle.alloc_id = it->handle.alloc_id;
+                unified_free(handle);
             } else if (!is_pool) {
                 if (!it->has_event) {
                     // Instead of queue_.wait() under rw_mutex_ (deadlock risk),
@@ -5532,67 +5669,72 @@ bool unified_cache::get_dma_staging_buffers(size_t slice_bytes, size_t count, dm
         GGML_SYCL_DEBUG(
             "[UNIFIED-CACHE] DMA staging pool mismatch: have=%zu x %.1f MB, need=%zu x %.1f MB; reallocating\n",
             dma_buffer_count_, dma_slice_bytes_ / (1024.0 * 1024.0), count, slice_bytes / (1024.0 * 1024.0));
-        for (void * ptr : dma_staging_buffers_) {
+        for (size_t i = 0; i < dma_staging_buffers_.size(); ++i) {
+            if (i < dma_staging_allocs_.size() && dma_staging_allocs_[i].ptr != nullptr) {
+                enqueue_deferred_free(dma_staging_allocs_[i]);
+                continue;
+            }
+            void * ptr = dma_staging_buffers_[i];
             if (!ptr) {
                 continue;
             }
-            // Avoid blocking frees while DMA ops may still be in-flight.
             enqueue_deferred_free(ptr, dma_slice_bytes_);
         }
+        dma_staging_allocs_.clear();
         dma_staging_buffers_.clear();
         dma_slice_bytes_  = 0;
         dma_buffer_count_ = 0;
     }
 
-    const int    device_id    = get_device_id_from_queue(queue_);
     const size_t old_reserved = dma_reserved_bytes_;
     const size_t new_reserved = slice_bytes * count;
-    if (new_reserved > old_reserved && device_id >= 0 && device_id < GGML_SYCL_MAX_DEVICES) {
-        unified_cache_add_runtime_bytes(device_id, new_reserved - old_reserved);
-        dma_reserved_bytes_ = new_reserved;
-    }
 
+    dma_staging_allocs_.assign(count, {});
     dma_staging_buffers_.resize(count, nullptr);
     size_t allocated = 0;
     for (size_t i = 0; i < count; ++i) {
-        void * ptr = nullptr;
-        try {
-            ptr = ggml_sycl_malloc_device_raw(slice_bytes, queue_, "unified_cache:dma_stage");
-        } catch (const sycl::exception & e) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging malloc_device failed: %s\n", e.what());
-            ptr = nullptr;
-        }
-        if (!ptr) {
+        alloc_request req{};
+        req.queue                          = &queue_;
+        req.device                         = get_device_id_from_queue(queue_);
+        req.size                           = slice_bytes;
+        req.intent.role                    = alloc_role::STAGING;
+        req.intent.category                = runtime_category::STAGING;
+        req.intent.constraints.must_device = true;
+
+        alloc_handle handle{};
+        if (!unified_alloc(req, &handle) || handle.ptr == nullptr) {
             break;
         }
-        dma_staging_buffers_[i] = ptr;
+        dma_staging_allocs_[i]  = { handle.ptr, handle.size, handle.device, handle.alloc_id };
+        dma_staging_buffers_[i] = handle.ptr;
         allocated++;
     }
 
     if (allocated != count) {
-        for (void * ptr : dma_staging_buffers_) {
-            if (!ptr) {
+        for (auto & handle : dma_staging_allocs_) {
+            if (handle.ptr == nullptr) {
                 continue;
             }
-            try {
-                sycl::free(ptr, queue_);
-            } catch (...) {
-            }
+            alloc_handle managed{};
+            managed.ptr      = handle.ptr;
+            managed.size     = handle.size;
+            managed.device   = handle.device;
+            managed.alloc_id = handle.alloc_id;
+            unified_free(managed);
         }
+        dma_staging_allocs_.clear();
         dma_staging_buffers_.clear();
-        dma_slice_bytes_  = 0;
-        dma_buffer_count_ = 0;
-        if (dma_reserved_bytes_ != old_reserved && device_id >= 0 && device_id < GGML_SYCL_MAX_DEVICES) {
-            unified_cache_sub_runtime_bytes(device_id, dma_reserved_bytes_ - old_reserved);
-            dma_reserved_bytes_ = old_reserved;
-        }
+        dma_slice_bytes_    = 0;
+        dma_buffer_count_   = 0;
+        dma_reserved_bytes_ = old_reserved;
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging pool allocation failed (need=%zu x %.1f MB)\n", count,
                         slice_bytes / (1024.0 * 1024.0));
         return false;
     }
 
-    dma_slice_bytes_  = slice_bytes;
-    dma_buffer_count_ = count;
+    dma_reserved_bytes_ = new_reserved;
+    dma_slice_bytes_    = slice_bytes;
+    dma_buffer_count_   = count;
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging pool allocated: %zu x %.1f MB\n", count,
                     slice_bytes / (1024.0 * 1024.0));
     out.buffers     = dma_staging_buffers_.data();
@@ -6316,6 +6458,34 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
         if (rec.from_arena) {
             return true;
         }
+
+        // Handle segmented allocations: release all segments
+        if (!rec.handle.all_segments.empty()) {
+            if (rec.uses_pinned_pool) {
+                // Return all segments to the pinned pool
+                if (auto * hcache = try_get_host_cache()) {
+                    for (const auto & seg : rec.handle.all_segments) {
+                        if (!rec.zone_managed) {
+                            hcache->free_pinned_runtime(seg.ptr, seg.size);
+                        }
+                        // Zone-managed segments are reclaimed by zone reset or pool destruction
+                    }
+                }
+            } else {
+                // Non-pinned pool: free each segment individually
+                for (const auto & seg : rec.handle.all_segments) {
+                    if (rec.queue != nullptr && seg.ptr != nullptr) {
+                        sycl::free(seg.ptr, *rec.queue);
+                    } else if (seg.ptr != nullptr && rec.handle.device >= 0 &&
+                               rec.handle.device < GGML_SYCL_MAX_DEVICES) {
+                        auto & q = ggml_sycl_get_device(rec.handle.device).default_queue();
+                        sycl::free(seg.ptr, q);
+                    }
+                }
+            }
+            return ok;
+        }
+
         // Check if this pointer was allocated via regular malloc (pinned cap overflow).
         // The alloc_registry tracks these as MMAP type.  Using sycl::free on them
         // would crash, so use ::free instead.
@@ -6326,6 +6496,11 @@ static bool unified_free_record(const runtime_alloc_record & rec) {
             return true;
         }
         if (rec.uses_pinned_pool) {
+            if (!rec.zone_managed) {
+                if (auto * hcache = try_get_host_cache()) {
+                    hcache->free_pinned_runtime(rec.handle.ptr, rec.handle.size);
+                }
+            }
             // Zone-managed host allocations are reclaimed by zone reset or pool
             // destruction, not individual free().
         } else if (rec.queue != nullptr && rec.handle.ptr != nullptr) {
@@ -6389,6 +6564,36 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
         return false;
     }
 
+    // Phase gate: block new unified_alloc() calls during steady-state inference.
+    // All memory must be pre-allocated during LOAD/WARMUP phases.
+    // Zone sub-allocations (arena_alloc, zone_alloc) are still permitted.
+    {
+        static std::atomic<int> s_phase_gate_mode{ -1 };
+        int mode = s_phase_gate_mode.load(std::memory_order_relaxed);
+        if (mode < 0) {
+            const char * env = std::getenv("GGML_SYCL_ALLOC_PHASE_GATE");
+            mode = (env != nullptr) ? std::atoi(env) : 0;  // Default OFF for now (0=off, 1=warn, 2=assert)
+            s_phase_gate_mode.store(mode, std::memory_order_relaxed);
+        }
+        if (mode > 0) {
+            const offload_phase phase = offload_stats_phase();
+            if (phase == offload_phase::PP || phase == offload_phase::TG) {
+                if (mode >= 2) {
+                    GGML_LOG_ERROR(
+                        "[UNIFIED-ALLOC] PHASE GATE: unified_alloc() called during %s phase "
+                        "(size=%zu, device=%d, role=%d). All memory must be pre-allocated.\n",
+                        offload_phase_name(phase), req_in.size, req_in.device,
+                        static_cast<int>(req_in.intent.role));
+                    GGML_ASSERT(false && "unified_alloc called during PP/TG inference phase");
+                } else {
+                    GGML_LOG_WARN(
+                        "[UNIFIED-ALLOC] PHASE GATE WARNING: unified_alloc() during %s (size=%zu, device=%d)\n",
+                        offload_phase_name(phase), req_in.size, req_in.device);
+                }
+            }
+        }
+    }
+
     runtime_category cat =
         req.intent.category == runtime_category::OTHER ? category_from_role(req.intent.role) : req.intent.category;
     alloc_tier tier = unified_select_tier(req);
@@ -6408,6 +6613,7 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     bool         reserve_host   = (tier == alloc_tier::HOST_PINNED);
 
     bool   uses_pinned_pool = false;
+    bool   zone_managed     = false;
     bool   from_arena       = false;
     bool   kv_spill_to_host = false;
     void * ptr              = nullptr;
@@ -6498,21 +6704,51 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     if (!ptr && (tier == alloc_tier::HOST_PINNED || kv_spill_to_host)) {
         // Always try the pre-allocated pinned chunk pool first (lock-free path).
         if (auto * hcache = try_get_host_cache()) {
-            if (hcache->host_zones_configured()) {
-                const host_zone_id zone =
-                    (kv_spill_to_host || req.intent.role == alloc_role::KV) ? host_zone_id::KV : host_zone_id::STAGING;
-                ptr = hcache->host_zone_alloc(zone, alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+            if (req.intent.constraints.use_pinned_pool) {
+                // Use segmented allocation for large requests - transparently handles
+                // allocations larger than the chunk size (8GB).
+                segmented_buffer segs = hcache->host_zone_alloc_segmented(host_zone_id::STAGING, alloc_size,
+                                                                          pinned_chunk_pool::DEFAULT_ALIGNMENT);
+                if (!segs.segments.empty()) {
+                    ptr               = segs.segments[0].ptr;
+                    // Store all segments in the handle for proper cleanup
+                    out->all_segments = std::move(segs.segments);
+                }
+            } else if (hcache->host_zones_configured()) {
+                host_zone_id zone = host_zone_id::STAGING;
+                if (kv_spill_to_host || req.intent.role == alloc_role::KV) {
+                    zone = host_zone_id::KV;
+                } else if (req.intent.role == alloc_role::WEIGHT) {
+                    zone = host_zone_id::WEIGHT;
+                }
+                // Use segmented allocation for zone-managed allocations
+                segmented_buffer segs =
+                    hcache->host_zone_alloc_segmented(zone, alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+                if (!segs.segments.empty()) {
+                    ptr               = segs.segments[0].ptr;
+                    out->all_segments = std::move(segs.segments);
+                }
+                zone_managed = (ptr != nullptr);
             } else {
+                // Fallback: direct runtime allocation (may fail for large requests)
                 ptr = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
             }
             uses_pinned_pool = (ptr != nullptr);
         }
         if (!ptr) {
-            GGML_LOG_WARN(
-                "[UNIFIED-ALLOC] pinned pool exhausted for %zu bytes, "
-                "falling back to malloc_host\n",
-                alloc_size);
-            ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:host");
+            // Fallback to malloc_host for model loading only.
+            // Inference allocations MUST go through the zone system.
+            // This fallback will be removed once all inference paths use zones.
+            if (req.intent.role == alloc_role::WEIGHT) {
+                ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:weight");
+            } else {
+                GGML_LOG_ERROR(
+                    "[UNIFIED-ALLOC] allocation failed: %zu bytes, tier=%s. "
+                    "All inference allocations must go through the unified cache zone system. "
+                    "Consider increasing host zone budgets or enabling dynamic pool growth.\n",
+                    alloc_size, alloc_tier_name(tier));
+                return false;
+            }
         }
     }
 
@@ -6543,8 +6779,10 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     rec.handle.role      = req.intent.role;
     rec.handle.category  = cat;
     rec.handle.alloc_id  = g_runtime_alloc_id.fetch_add(1, std::memory_order_relaxed);
+    // all_segments is already populated by the segmented allocation path above
     rec.queue            = req.queue;
     rec.uses_pinned_pool = uses_pinned_pool;
+    rec.zone_managed     = zone_managed;
     rec.from_arena       = from_arena;
     if (req.intent.cohort_id && req.intent.cohort_id[0] != '\0') {
         rec.cohort_id = req.intent.cohort_id;
@@ -6564,7 +6802,11 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
                 unified_cache_sub_runtime_host_bytes(alloc_size);
                 unified_managed_sub_host_bytes(alloc_size);
             }
-            if (uses_pinned_pool) {
+            if (uses_pinned_pool && !zone_managed) {
+                if (auto * hcache = try_get_host_cache()) {
+                    hcache->free_pinned_runtime(ptr, alloc_size);
+                }
+            } else if (uses_pinned_pool) {
                 // Zone-managed host allocations are released by zone reset.
             } else {
                 sycl::free(ptr, *req.queue);
@@ -7628,125 +7870,52 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
         return result;
     }
 
-    // Step 2: Check cache hits and build list of experts to stage
-    std::vector<int32_t> experts_to_stage;
-    experts_to_stage.reserve(result.n_unique);
-
-    for (int32_t expert_id : unique_experts) {
-        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key =
-            make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id, tensor_type, ne0, ne1);
-
-        // Check if already cached (any layout)
-        if (!cache->is_cached_any(key)) {
-            experts_to_stage.push_back(expert_id);
-        }
-    }
-
-    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: %zu cache hits, %zu to stage\n", layer_id,
-                    unique_experts.size() - experts_to_stage.size(), experts_to_stage.size());
-
-    // Use queue_ptr for async staging — submit H2D transfers on the caller's
-    // queue instead of the cache's internal queue for better pipelining.
-    sycl::queue * staging_queue = static_cast<sycl::queue *>(queue_ptr);
-
-    // Step 3: Stage missing experts via direct_stage_expert to get fill events.
-    // CRITICAL: If the cache is near capacity, staging triggers eviction which
-    // calls enqueue_deferred_free. Drain ALL queues (compute,
-    // cache, BCS) before staging so no stale pointers are freed while kernels run.
-    if (!experts_to_stage.empty() && cache->budget_utilization() > 0.5f) {
-        GGML_LOG_INFO(
-            "[PRESTAGE-DRAIN] Layer %d: draining queues before staging %zu experts "
-            "(utilization=%.1f%%)\n",
-            layer_id, experts_to_stage.size(), cache->budget_utilization() * 100.0f);
-        try {
-            cache->get_queue().wait();
-        } catch (...) {
-        }
-        if (staging_queue) {
-            try {
-                staging_queue->wait();
-            } catch (...) {
-            }
-        }
-        try {
-            cache->get_bcs_queue().wait();
-        } catch (...) {
-        }
-        // Deferred frees are processed by process_deferred_frees_public()
-        // which checks g_graph_compute_active.  During inference it will
-        // correctly skip the free — deferred frees drain later in
-        // ggml_backend_sycl_synchronize() after all GPU work completes.
-    }
-
-    // Yield every 4 experts to drain all queues (CCS + BCS + staging) and
-    // prevent xe driver GT engine resets from unbounded command list growth
-    // during inference dispatch.  The direct_stage_expert path submits
-    // zone_alloc + fill_fn + H2D memcpy per expert -- without periodic
-    // draining, a layer with many cache-miss experts (e.g. 120B model cold
-    // start) can accumulate >10s of non-preemptible work.
-    // Yield every 2 experts to stay well under the xe driver's 10s job timeout.
-    // Previous value of 4 could accumulate >10s of non-preemptible work on cold
-    // start (all experts miss → eviction cascades + H2D + CCS reorder per expert).
-    constexpr int PRESTAGE_YIELD_BATCH = 2;
-    int           experts_staged_count = 0;
-    for (int32_t expert_id : experts_to_stage) {
-        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key =
-            make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id, tensor_type, ne0, ne1);
-
-        direct_stage_result stage_result = cache->direct_stage_expert(key, expert_ptr, expert_size, expert_size,
-                                                                      GGML_LAYOUT_AOS, nullptr, nullptr, staging_queue);
-
-        if (stage_result.ok && stage_result.ptr) {
-            result.n_staged++;
-            result.staging_events.push_back(stage_result.event);
-        } else {
-            GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Failed to stage expert %d\n", layer_id, expert_id);
-        }
-
-        // Periodic yield: drain all queues to prevent engine reset
-        experts_staged_count++;
-        if (experts_staged_count % PRESTAGE_YIELD_BATCH == 0) {
-            try {
-                cache->get_queue().wait();      // CCS compute queue
-                cache->get_dma_queue().wait();  // DMA reorder queue
-                cache->get_bcs_queue().wait();  // BCS copy queue
-                if (staging_queue) {
-                    staging_queue->wait();      // caller's staging queue
-                }
-                cache->process_deferred_frees_public();
-            } catch (...) {
-            }
-        }
-    }
-
-    // Final flush after staging loop: drain any remaining in-flight work
-    if (experts_staged_count > 0 && (experts_staged_count % PRESTAGE_YIELD_BATCH) != 0) {
-        try {
-            cache->get_queue().wait();
-            cache->get_dma_queue().wait();
-            cache->get_bcs_queue().wait();
-            if (staging_queue) {
-                staging_queue->wait();
-            }
-        } catch (...) {
-        }
-    }
-
-    // Step 4: Pin all unique experts (including those already cached)
+    // Runtime prestage is lookup-only. Every routed expert must already be present either
+    // in the device cache or in the host expert registry established at model load.
+    static constexpr ggml_layout_mode pin_layouts[] = {
+        GGML_LAYOUT_AOS,
+        GGML_LAYOUT_SOA,
+        GGML_LAYOUT_COALESCED,
+        GGML_LAYOUT_XMX_TILED,
+    };
+    int unresolved = 0;
     for (int32_t expert_id : unique_experts) {
         ggml_sycl_cache_id key =
             make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id, tensor_type, ne0, ne1);
 
-        cache->pin(key, GGML_LAYOUT_AOS);
-        result.n_pinned++;
+        bool resolved = false;
+        for (ggml_layout_mode layout : pin_layouts) {
+            if (cache->lookup(key, layout)) {
+                cache->pin(key, layout);
+                result.n_staged++;
+                resolved = true;
+                break;
+            }
+        }
+
+        if (resolved) {
+            continue;
+        }
+
+        if (const weight_entry * host_entry = cache->lookup_expert(key);
+            host_entry && host_entry->ptr && host_entry->location != cache_location::DEVICE) {
+            result.n_pinned++;
+            continue;
+        }
+
+        unresolved++;
+        GGML_LOG_WARN("[PRESTAGE] Layer %d expert %d unresolved during lookup-only prestage\n", layer_id, expert_id);
     }
 
-    result.success = true;
+    GGML_UNUSED(queue_ptr);
+    GGML_UNUSED(weight_base_ptr);
+    GGML_UNUSED(expert_stride);
+    GGML_UNUSED(expert_size);
 
-    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Completed - staged=%d, pinned=%d, unique=%d, async_events=%zu\n", layer_id,
-                    result.n_staged, result.n_pinned, result.n_unique, result.staging_events.size());
+    result.success = (unresolved == 0);
+
+    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Completed - device_ready=%d, host_ready=%d, unique=%d, unresolved=%d\n",
+                    layer_id, result.n_staged, result.n_pinned, result.n_unique, unresolved);
 
     return result;
 }
@@ -9189,6 +9358,13 @@ void unified_cache_reset_scratch_pool(int device_id) {
     }
 }
 
+void unified_cache_grow_host_scratch_zone(size_t additional_bytes) {
+    auto * hcache = try_get_host_cache();
+    if (hcache) {
+        hcache->grow_scratch_zone(additional_bytes);
+    }
+}
+
 void * unified_cache_host_zone_alloc(host_zone_id zone, size_t size) {
     auto * hcache = try_get_host_cache();
     if (!hcache) {
@@ -9946,6 +10122,10 @@ static void populate_host_zone_sizing(placement_plan &                          
     plan.host_zone_kv_bytes = std::max<size_t>(k_min_zone_bytes, plan.kv_host_bytes);
     plan.host_zone_staging_bytes =
         std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes * 2 + k_tp_staging_headroom);
+    // SCRATCH zone: sized by max_tensor + headroom. The actual compute buffer needs
+    // are discovered after the ggml scheduler is created and fed back via
+    // unified_cache_grow_host_scratch_zone(). This baseline covers oneDNN scratch
+    // and single-tensor staging needs.
     plan.host_zone_scratch_bytes = std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes + k_scratch_headroom);
 }
 
