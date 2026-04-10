@@ -1226,9 +1226,8 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         ">>>all",
     };
 
-    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
-    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Functionary v3.2 format:
@@ -1296,10 +1295,6 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1332,10 +1327,9 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         "</think>",
     };
 
-    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
-    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
     const std::string SECTION_END   = "<|tool_calls_section_end|>";
@@ -1422,10 +1416,6 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1459,10 +1449,9 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         "</think>",
     };
 
-    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
-    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string TOOL_CALL_START = "<|tool_call_start|>";
     const std::string TOOL_CALL_END   = "<|tool_call_end|>";
@@ -1507,10 +1496,6 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1541,10 +1526,9 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
         "</think>",
     };
 
-    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
-    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar      = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
@@ -1586,10 +1570,6 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
         foreach_function(inputs.tools, [&](const json & tool) {
@@ -1615,9 +1595,8 @@ static common_chat_params common_chat_params_init_gigachat_v3(
         "<|role_sep|>\n",
     };
 
-    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
-    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     const auto *tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
@@ -1665,10 +1644,6 @@ static common_chat_params common_chat_params_init_gigachat_v3(
                 auto schema = function.at("parameters");
                 builder.resolve_refs(schema);
             });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
