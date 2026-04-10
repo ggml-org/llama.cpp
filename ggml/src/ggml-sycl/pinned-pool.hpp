@@ -34,6 +34,22 @@ struct host_zone {
     std::atomic<size_t> used{ 0 };
 };
 
+// Segment of a pinned buffer.
+struct buffer_segment {
+    void * ptr  = nullptr;
+    size_t size = 0;
+};
+
+// A buffer that may consist of one or more non-contiguous pinned segments.
+struct segmented_buffer {
+    std::vector<buffer_segment> segments;
+    size_t                      total_size = 0;
+
+    void * contiguous_ptr() const { return segments.size() == 1 ? segments[0].ptr : nullptr; }
+
+    bool is_contiguous() const { return segments.size() <= 1; }
+};
+
 // Pool allocator for pinned host memory using multiple chunks.
 // Bypasses Intel Level Zero's ~11GB per-allocation limit by using
 // multiple 8GB malloc_host allocations.
@@ -57,9 +73,20 @@ class pinned_chunk_pool {
     pinned_chunk_pool(pinned_chunk_pool &&)                  = delete;
     pinned_chunk_pool & operator=(pinned_chunk_pool &&)      = delete;
 
-    // Allocate from pool. Returns nullptr if over budget or allocation fails.
-    // All allocations are aligned to DEFAULT_ALIGNMENT (64 bytes).
-    void * allocate(size_t size, size_t alignment = DEFAULT_ALIGNMENT);
+    // Allocate from pool. Returns a segmented_buffer containing one or more pinned segments.
+    // All segments are aligned to DEFAULT_ALIGNMENT (64 bytes).
+    segmented_buffer allocate_segmented(size_t size, size_t alignment = DEFAULT_ALIGNMENT);
+
+    // Legacy wrapper: returns first segment's pointer. For large allocations, use allocate_segmented().
+    [[deprecated("use allocate_segmented() for large allocations")]] void * allocate(
+        size_t size,
+        size_t alignment = DEFAULT_ALIGNMENT);
+
+    // Runtime allocation: uses a separate pool of chunks that are not part of
+    // the zone layout.  Suitable for large contiguous allocations (e.g., 615 MB
+    // reorder buffers) that don't fit within a single 256 MB zone chunk.
+    // Falls back to growing the runtime pool if no existing chunk has space.
+    void * allocate_runtime(size_t size, size_t alignment = DEFAULT_ALIGNMENT);
 
     // Mark allocation as free. Note: bump allocator - individual deallocations
     // are tracked but memory is only reclaimed when the pool is destroyed.
@@ -80,14 +107,24 @@ class pinned_chunk_pool {
     // Must be called after pre-allocation and before any zone_alloc().
     void configure_zones(size_t weight_bytes, size_t kv_bytes, size_t staging_bytes, size_t scratch_bytes);
 
-    // Allocate from a specific host zone. Returns nullptr if the zone is full.
-    void * zone_alloc(host_zone_id zone, size_t size, size_t alignment = DEFAULT_ALIGNMENT);
+    // Allocate from a specific host zone. Returns a segmented_buffer.
+    segmented_buffer zone_alloc_segmented(host_zone_id zone, size_t size, size_t alignment = DEFAULT_ALIGNMENT);
 
     // Reset a zone's bump pointer. Callers must ensure no outstanding users remain.
     void zone_reset(host_zone_id zone);
 
+    // Roll back a zone's bump pointer to a previously saved position.
+    // Unlike zone_reset (which sets used=0), this restores to a specific
+    // offset, preserving earlier allocations in the zone.
+    void zone_rollback(host_zone_id zone, size_t saved_used);
+
     size_t zone_used(host_zone_id zone) const;
     size_t zone_capacity(host_zone_id zone) const;
+
+    // Grow a zone by allocating additional chunks and extending the zone's span.
+    // Used when compute buffer needs exceed the initially planned SCRATCH zone.
+    // Returns true if the zone was successfully grown.
+    bool grow_zone(host_zone_id zone, size_t additional_bytes);
 
     bool zones_configured() const { return zones_configured_; }
 
@@ -116,6 +153,10 @@ class pinned_chunk_pool {
         size_t span_size     = 0;
     };
 
+    void * allocate_from_chunks(std::vector<chunk> & chunks, size_t size, size_t alignment, bool runtime_pool);
+    bool   deallocate_from_chunks(std::vector<chunk> & chunks, void * ptr);
+    bool   grow_into(std::vector<chunk> & chunks, size_t min_size, bool runtime_pool);
+
     // Allocate a new chunk (>= min_size). Returns false if over budget or allocation fails.
     bool grow(size_t min_size);
 
@@ -125,6 +166,7 @@ class pinned_chunk_pool {
     size_t                                                          chunk_size_       = CHUNK_SIZE;
     size_t                                                          alloc_timeout_ms_ = 0;
     std::vector<chunk>                                              chunks_;
+    std::vector<chunk>                                              runtime_chunks_;
     std::array<host_zone, static_cast<size_t>(host_zone_id::COUNT)> zones_{};
     bool                                                            zones_configured_ = false;
     std::vector<zone_chunk_span>                                    flat_spans_;

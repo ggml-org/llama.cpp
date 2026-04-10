@@ -57,8 +57,7 @@ void ExpertPrefetcher::init(sycl::queue & compute_q) {
     }
 
     initialized_ = true;
-    GGML_LOG_INFO("[SYCL] Expert prefetcher initialized (depth=%d, dynamic pool)\n",
-                  prefetch_depth_);
+    GGML_LOG_INFO("[SYCL] Expert prefetcher initialized (depth=%d, dynamic pool)\n", prefetch_depth_);
 }
 
 void ExpertPrefetcher::shutdown() {
@@ -68,8 +67,7 @@ void ExpertPrefetcher::shutdown() {
 
     cancel_all();
     initialized_ = false;
-    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d)\n",
-                  completed_count_);
+    GGML_LOG_INFO("[SYCL] Expert prefetcher shut down (prefetched=%d)\n", completed_count_);
 
     // Print final MoE dispatch statistics
     if (MoeDispatchStats::enabled()) {
@@ -128,9 +126,13 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     void * cached_ptr = cache->lookup(info.cache_key, info.layout);
     if (cached_ptr) {
         completed_count_++;
-        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: already cached in unified cache, ptr=%p\n",
-                        layer_idx, expert_idx, cached_ptr);
+        GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: already cached in unified cache, ptr=%p\n", layer_idx, expert_idx,
+                        cached_ptr);
         return true;
+    }
+
+    if (cache->has_placement_plan()) {
+        return false;
     }
 
     // Step 3: Build reorder context on the stack.
@@ -153,9 +155,8 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
 
     direct_stage_result sr;
     try {
-        sr = cache->direct_stage_expert(
-            info.cache_key, info.src_ptr, info.src_size, info.dst_size,
-            info.layout, fill_reordered_host, &rctx, bcs_q);
+        sr = cache->direct_stage_expert(info.cache_key, info.src_ptr, info.src_size, info.dst_size, info.layout,
+                                        fill_reordered_host, &rctx, bcs_q);
     } catch (...) {
         return false;
     }
@@ -177,8 +178,8 @@ bool ExpertPrefetcher::hint_locked(int layer_idx, int expert_idx) {
     req.expert_id  = info.expert_id;
 
     inflight_[key] = std::move(req);
-    GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: async DMA submitted, dev=%d ptr=%p\n",
-                    layer_idx, expert_idx, device_id_, sr.ptr);
+    GGML_SYCL_DEBUG("[PREFETCH] hint L%d E%d: async DMA submitted, dev=%d ptr=%p\n", layer_idx, expert_idx, device_id_,
+                    sr.ptr);
     return true;
 }
 
@@ -197,11 +198,9 @@ void ExpertPrefetcher::hint_batch(int layer_idx, const std::vector<int> & expert
 // Adaptive prefetch: first N experts get DMA, rest dispatched to CPU
 // ============================================================================
 
-std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
-    int layer_idx,
-    const std::vector<int> & expert_indices,
-    int n_miss_total)
-{
+std::vector<int> ExpertPrefetcher::hint_batch_adaptive(int                      layer_idx,
+                                                       const std::vector<int> & expert_indices,
+                                                       int                      n_miss_total) {
     std::vector<int> cpu_dispatch;
 
     if (!initialized_ || !dma_queue_ || prefetch_disabled_) {
@@ -214,7 +213,7 @@ std::vector<int> ExpertPrefetcher::hint_batch_adaptive(
 
     gc_completed();
     int max_dma = max_concurrent_dma_;
-    int budget = max_dma - static_cast<int>(inflight_.size());
+    int budget  = max_dma - static_cast<int>(inflight_.size());
 
     int scheduled = 0;
     for (int eid : expert_indices) {
@@ -268,8 +267,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         try {
             ev_copy.wait();
         } catch (const sycl::exception & e) {
-            GGML_LOG_WARN("[SYCL] Prefetch await failed for L%d E%d: %s\n",
-                          layer_idx, expert_idx, e.what());
+            GGML_LOG_WARN("[SYCL] Prefetch await failed for L%d E%d: %s\n", layer_idx, expert_idx, e.what());
             std::lock_guard<std::mutex> lock(mutex_);
             inflight_.erase(key);
             return nullptr;
@@ -278,7 +276,7 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
 
     // Phase 3: Re-acquire lock, finalize cache entry, and update state.
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = inflight_.find(key);
+    auto                        it = inflight_.find(key);
     if (it == inflight_.end()) {
         return nullptr;
     }
@@ -291,8 +289,8 @@ void * ExpertPrefetcher::await(int layer_idx, int expert_idx) {
         // direct_stage_expert() and findable via lookup_expert().
         // No register_ready() call needed.
 
-        GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n",
-                        layer_idx, expert_idx, it->second.device_ptr);
+        GGML_SYCL_DEBUG("[PREFETCH] await L%d E%d: DMA complete, device_ptr=%p\n", layer_idx, expert_idx,
+                        it->second.device_ptr);
     }
 
     return it->second.device_ptr;
@@ -362,6 +360,10 @@ void * ExpertPrefetcher::demand_load(int layer_idx, int expert_idx) {
         return nullptr;
     }
 
+    if (unified_cache * cache = get_unified_cache_for_device(device_id_); cache && cache->has_placement_plan()) {
+        return get_cached_ptr(layer_idx, expert_idx);
+    }
+
     // Submit DMA via unified cache (hint_locked checks cache first).
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -378,7 +380,7 @@ void * ExpertPrefetcher::demand_load(int layer_idx, int expert_idx) {
 
 int ExpertPrefetcher::pending_count() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    int pending = 0;
+    int                         pending = 0;
     for (const auto & [key, req] : inflight_) {
         if (!req.completed) {
             pending++;
@@ -445,8 +447,8 @@ void ExpertPrefetcher::preload_experts(int layer_idx, const std::vector<int> & e
     }
 
     if (preloaded > 0) {
-        GGML_LOG_INFO("[SYCL] Preloaded %d experts for layer %d into VRAM (SOA via unified cache)\n",
-                      preloaded, layer_idx);
+        GGML_LOG_INFO("[SYCL] Preloaded %d experts for layer %d into VRAM (SOA via unified cache)\n", preloaded,
+                      layer_idx);
     }
 }
 
@@ -495,7 +497,7 @@ void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
     accuracy_ring_.resize(ACCURACY_WINDOW);
     accuracy_ring_pos_ = 0;
     accuracy_hits_     = 0;
-    window_total_    = 0;
+    window_total_      = 0;
 
     // Read prediction depth from environment
     const char * depth_env = std::getenv("GGML_SYCL_EXPERT_PREDICT_DEPTH");
@@ -507,8 +509,8 @@ void ExpertPredictor::init(int n_layers, int n_experts, int n_experts_used) {
     }
 
     initialized_ = true;
-    GGML_LOG_INFO("[SYCL] Expert predictor initialized (layers=%d, experts=%d, top_k=%d, depth=%d)\n",
-                  n_layers, n_experts, n_experts_used, predict_depth_);
+    GGML_LOG_INFO("[SYCL] Expert predictor initialized (layers=%d, experts=%d, top_k=%d, depth=%d)\n", n_layers,
+                  n_experts, n_experts_used, predict_depth_);
 }
 
 // ============================================================================
@@ -563,7 +565,9 @@ std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_
     if (static_cast<int>(predicted.size()) < n_experts_used_) {
         for (int prev = layer_idx - 1; prev >= 0 && prev >= layer_idx - 4; prev--) {
             const auto & prev_layer = last_experts_[prev];
-            if (prev_layer.empty()) continue;
+            if (prev_layer.empty()) {
+                continue;
+            }
             for (int eidx : prev_layer) {
                 if (static_cast<int>(predicted.size()) >= n_experts_used_) {
                     break;
@@ -571,7 +575,10 @@ std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_
                 // Skip duplicates (already predicted by Heuristic 1)
                 bool dup = false;
                 for (int p : predicted) {
-                    if (p == eidx) { dup = true; break; }
+                    if (p == eidx) {
+                        dup = true;
+                        break;
+                    }
                 }
                 if (!dup) {
                     predicted.push_back(eidx);
@@ -584,7 +591,7 @@ std::vector<int> ExpertPredictor::predict(int layer_idx, const float * /*hidden_
     // Heuristic 3: Fill remaining slots from global frequency table.
     // Picks the most commonly activated experts (excluding already-predicted ones).
     if (static_cast<int>(predicted.size()) < n_experts_used_) {
-        int remaining = n_experts_used_ - static_cast<int>(predicted.size());
+        int  remaining = n_experts_used_ - static_cast<int>(predicted.size());
         auto freq_fill = top_k_by_freq(layer_idx, predicted, remaining);
         predicted.insert(predicted.end(), freq_fill.begin(), freq_fill.end());
     }
@@ -647,8 +654,7 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
 
         // Hit if we predicted at least half of the actual experts
         // (integer division: lenient for odd sizes).
-        bool sample_hit = (hits > 0 && !actual_experts.empty() &&
-                           hits >= static_cast<int>(actual_experts.size()) / 2);
+        bool sample_hit = (hits > 0 && !actual_experts.empty() && hits >= static_cast<int>(actual_experts.size()) / 2);
 
         // Update rolling window
         if (window_total_ >= ACCURACY_WINDOW) {
@@ -670,24 +676,26 @@ void ExpertPredictor::record_actual(int layer_idx, const std::vector<int> & actu
         static constexpr float DISABLE_THRESHOLD = 0.3f;
         if (window_total_ >= ACCURACY_WINDOW && accuracy_ring_pos_ == 0) {
             float rate = static_cast<float>(accuracy_hits_) / static_cast<float>(window_total_);
-            GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (hits=%d, window=%d)\n",
-                          rate * 100.0f, accuracy_hits_, window_total_);
+            GGML_LOG_INFO("[EXPERT-PREDICT] accuracy=%.1f%% (hits=%d, window=%d)\n", rate * 100.0f, accuracy_hits_,
+                          window_total_);
 
             // Disable prefetching when prediction accuracy drops below 30%.
             // At this accuracy, most prefetches are wasted DMA bandwidth.
             if (!prefetch_disabled_ && rate < DISABLE_THRESHOLD) {
                 prefetch_disabled_ = true;
-                GGML_LOG_WARN("[EXPERT-PREDICT] hit rate %.1f%% below threshold %.0f%% — "
-                              "prefetching disabled\n",
-                              rate * 100.0f, DISABLE_THRESHOLD * 100.0f);
+                GGML_LOG_WARN(
+                    "[EXPERT-PREDICT] hit rate %.1f%% below threshold %.0f%% — "
+                    "prefetching disabled\n",
+                    rate * 100.0f, DISABLE_THRESHOLD * 100.0f);
             } else if (prefetch_disabled_ && rate >= DISABLE_THRESHOLD) {
                 // Re-enable prefetching if accuracy recovers above threshold.
                 // This handles the case where cold-start disabled prefetch but
                 // the predictor later achieves good accuracy after warmup.
                 prefetch_disabled_ = false;
-                GGML_LOG_INFO("[EXPERT-PREDICT] hit rate %.1f%% recovered above threshold "
-                              "(hits=%d, window=%d) — prefetching re-enabled\n",
-                              rate * 100.0f, accuracy_hits_, window_total_);
+                GGML_LOG_INFO(
+                    "[EXPERT-PREDICT] hit rate %.1f%% recovered above threshold "
+                    "(hits=%d, window=%d) — prefetching re-enabled\n",
+                    rate * 100.0f, accuracy_hits_, window_total_);
             }
         }
     }
@@ -720,21 +728,18 @@ std::vector<std::pair<int, uint32_t>> ExpertPredictor::get_frequency_ranking(int
     if (!initialized_ || layer_idx < 0 || layer_idx >= n_layers_) {
         return {};
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex>           lock(mutex_);
     std::vector<std::pair<int, uint32_t>> ranked;
     for (int e = 0; e < n_experts_; e++) {
         if (freq_table_[layer_idx][e] > 0) {
-            ranked.push_back({e, freq_table_[layer_idx][e]});
+            ranked.push_back({ e, freq_table_[layer_idx][e] });
         }
     }
-    std::sort(ranked.begin(), ranked.end(),
-              [](const auto & a, const auto & b) { return a.second > b.second; });
+    std::sort(ranked.begin(), ranked.end(), [](const auto & a, const auto & b) { return a.second > b.second; });
     return ranked;
 }
 
-std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,
-                                                 const std::vector<int> & exclude,
-                                                 int k) const {
+std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx, const std::vector<int> & exclude, int k) const {
     // Called with mutex_ held.
     if (layer_idx < 0 || layer_idx >= n_layers_ || k <= 0) {
         return {};
@@ -746,10 +751,8 @@ std::vector<int> ExpertPredictor::top_k_by_freq(int layer_idx,
     std::vector<int> indices(n_experts_);
     std::iota(indices.begin(), indices.end(), 0);
 
-    std::partial_sort(indices.begin(),
-                      indices.begin() + std::min(k + static_cast<int>(exclude.size()), n_experts_),
-                      indices.end(),
-                      [&freq](int a, int b) { return freq[a] > freq[b]; });
+    std::partial_sort(indices.begin(), indices.begin() + std::min(k + static_cast<int>(exclude.size()), n_experts_),
+                      indices.end(), [&freq](int a, int b) { return freq[a] > freq[b]; });
 
     // Pick top-k that aren't in the exclude set
     std::vector<int> result;
@@ -919,11 +922,9 @@ std::vector<int> ExpertPredictor::predict_pregate(int           next_layer_idx,
 // ExpertPredictor: multi-layer lookahead prediction
 // ============================================================================
 
-std::vector<std::pair<int, std::vector<int>>> ExpertPredictor::predict_multi_layer(
-    int current_seq_layer,
-    const void * hidden_state,
-    sycl::queue & compute_q)
-{
+std::vector<std::pair<int, std::vector<int>>> ExpertPredictor::predict_multi_layer(int           current_seq_layer,
+                                                                                   const void *  hidden_state,
+                                                                                   sycl::queue & compute_q) {
     std::vector<std::pair<int, std::vector<int>>> results;
 
     for (int depth = 1; depth <= predict_depth_; depth++) {
@@ -975,7 +976,7 @@ bool ggml_sycl_expert_predict_enabled() {
     if (cached < 0) {
         const char * env = std::getenv("GGML_SYCL_EXPERT_PREDICT");
         // Default: ON (1) unless explicitly set to 0
-        cached = (!env || std::atoi(env) != 0) ? 1 : 0;
+        cached           = (!env || std::atoi(env) != 0) ? 1 : 0;
     }
     return cached != 0;
 }
@@ -989,13 +990,12 @@ bool MoeDispatchStats::enabled() {
     if (cached < 0) {
         const char * env = std::getenv("GGML_SYCL_MOE_STATS");
         // Default: ON (1) when expert prediction is active, unless explicitly 0
-        cached = (!env || std::atoi(env) != 0) ? 1 : 0;
+        cached           = (!env || std::atoi(env) != 0) ? 1 : 0;
     }
     return cached != 0;
 }
 
-void MoeDispatchStats::record_dispatch(int n_vram, int n_host, int n_staging,
-                                        int n_miss, int n_prefetched) {
+void MoeDispatchStats::record_dispatch(int n_vram, int n_host, int n_staging, int n_miss, int n_prefetched) {
     const int total = n_vram + n_host + n_staging + n_miss;
     total_experts_dispatched.fetch_add(total, std::memory_order_relaxed);
     total_vram_hits.fetch_add(n_vram, std::memory_order_relaxed);
@@ -1012,8 +1012,7 @@ void MoeDispatchStats::record_dispatch(int n_vram, int n_host, int n_staging,
     interval_cpu_fallbacks.fetch_add(n_miss, std::memory_order_relaxed);
 }
 
-void MoeDispatchStats::record_prediction_accuracy(const std::vector<int> & predicted,
-                                                   const std::vector<int> & actual) {
+void MoeDispatchStats::record_prediction_accuracy(const std::vector<int> & predicted, const std::vector<int> & actual) {
     if (predicted.empty() || actual.empty()) {
         return;
     }
@@ -1062,28 +1061,24 @@ void MoeDispatchStats::print_summary(const char * tag) const {
         return;
     }
 
-    float vram_pct    = dispatched > 0 ? 100.0f * static_cast<float>(vram) / static_cast<float>(dispatched) : 0.0f;
-    float host_pct    = dispatched > 0 ? 100.0f * static_cast<float>(host) / static_cast<float>(dispatched) : 0.0f;
-    float staging_pct = dispatched > 0 ? 100.0f * static_cast<float>(staging) / static_cast<float>(dispatched) : 0.0f;
-    float pred_pct    = p_total > 0 ? 100.0f * static_cast<float>(p_correct) / static_cast<float>(p_total) : 0.0f;
+    float vram_pct     = dispatched > 0 ? 100.0f * static_cast<float>(vram) / static_cast<float>(dispatched) : 0.0f;
+    float host_pct     = dispatched > 0 ? 100.0f * static_cast<float>(host) / static_cast<float>(dispatched) : 0.0f;
+    float staging_pct  = dispatched > 0 ? 100.0f * static_cast<float>(staging) / static_cast<float>(dispatched) : 0.0f;
+    float pred_pct     = p_total > 0 ? 100.0f * static_cast<float>(p_correct) / static_cast<float>(p_total) : 0.0f;
     float pcie_per_tok = tokens > 0 ? static_cast<float>(host + staging) / static_cast<float>(tokens) : 0.0f;
 
     GGML_LOG_INFO("\n[MOE-STATS %s] ===== MoE Dispatch Statistics =====\n", tag);
-    GGML_LOG_INFO("[MOE-STATS %s] Tokens: %lld, Layers: %lld, Experts: %lld\n", tag,
-                  (long long) tokens, (long long) layers, (long long) dispatched);
-    GGML_LOG_INFO("[MOE-STATS %s] VRAM hits:  %lld (%.1f%%) - fast, no PCIe\n",
-                  tag, (long long) vram, vram_pct);
-    GGML_LOG_INFO("[MOE-STATS %s] Host hits:  %lld (%.1f%%) - PCIe streaming\n",
-                  tag, (long long) host, host_pct);
-    GGML_LOG_INFO("[MOE-STATS %s] Staging:    %lld (%.1f%%) - fresh upload\n",
-                  tag, (long long) staging, staging_pct);
-    GGML_LOG_INFO("[MOE-STATS %s] CPU miss:   %lld (%.0f%%) - fallback\n",
-                  tag, (long long) cpu,
+    GGML_LOG_INFO("[MOE-STATS %s] Tokens: %lld, Layers: %lld, Experts: %lld\n", tag, (long long) tokens,
+                  (long long) layers, (long long) dispatched);
+    GGML_LOG_INFO("[MOE-STATS %s] VRAM hits:  %lld (%.1f%%) - fast, no PCIe\n", tag, (long long) vram, vram_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] Host hits:  %lld (%.1f%%) - PCIe streaming\n", tag, (long long) host, host_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] Staging:    %lld (%.1f%%) - fresh upload\n", tag, (long long) staging, staging_pct);
+    GGML_LOG_INFO("[MOE-STATS %s] CPU miss:   %lld (%.0f%%) - fallback\n", tag, (long long) cpu,
                   dispatched > 0 ? 100.0f * static_cast<float>(cpu) / static_cast<float>(dispatched) : 0.0f);
     GGML_LOG_INFO("[MOE-STATS %s] PCIe experts/token: %.1f (host + staging)\n", tag, pcie_per_tok);
     GGML_LOG_INFO("[MOE-STATS %s] Prefetch: %lld DMA-awaited\n", tag, (long long) prefetch);
-    GGML_LOG_INFO("[MOE-STATS %s] Prediction: %lld/%lld correct (%.1f%%) across %lld layers\n",
-                  tag, (long long) p_correct, (long long) p_total, pred_pct, (long long) p_layers);
+    GGML_LOG_INFO("[MOE-STATS %s] Prediction: %lld/%lld correct (%.1f%%) across %lld layers\n", tag,
+                  (long long) p_correct, (long long) p_total, pred_pct, (long long) p_layers);
     GGML_LOG_INFO("[MOE-STATS %s] ================================\n\n", tag);
 }
 
@@ -1102,16 +1097,16 @@ void MoeDispatchStats::print_interval() {
         return;
     }
 
-    float vram_pct = i_experts > 0 ? 100.0f * static_cast<float>(i_vram) / static_cast<float>(i_experts) : 0.0f;
-    float host_pct = i_experts > 0 ? 100.0f * static_cast<float>(i_host) / static_cast<float>(i_experts) : 0.0f;
+    float vram_pct     = i_experts > 0 ? 100.0f * static_cast<float>(i_vram) / static_cast<float>(i_experts) : 0.0f;
+    float host_pct     = i_experts > 0 ? 100.0f * static_cast<float>(i_host) / static_cast<float>(i_experts) : 0.0f;
     float pcie_per_tok = i_tok > 0 ? static_cast<float>(i_host + i_staging) / static_cast<float>(i_tok) : 0.0f;
-    float pred_pct  = i_pt > 0 ? 100.0f * static_cast<float>(i_pc) / static_cast<float>(i_pt) : 0.0f;
+    float pred_pct     = i_pt > 0 ? 100.0f * static_cast<float>(i_pc) / static_cast<float>(i_pt) : 0.0f;
 
-    GGML_LOG_INFO("[MOE-STATS T%lld] vram=%.1f%% host=%.1f%% miss=%lld (%lld/%lld) "
-                  "pcie/tok=%.1f pred=%.1f%% (%lld tok)\n",
-                  (long long) tok_total, vram_pct, host_pct, (long long) i_cpu,
-                  (long long) (i_vram + i_host + i_staging), (long long) i_experts,
-                  pcie_per_tok, pred_pct, (long long) i_tok);
+    GGML_LOG_INFO(
+        "[MOE-STATS T%lld] vram=%.1f%% host=%.1f%% miss=%lld (%lld/%lld) "
+        "pcie/tok=%.1f pred=%.1f%% (%lld tok)\n",
+        (long long) tok_total, vram_pct, host_pct, (long long) i_cpu, (long long) (i_vram + i_host + i_staging),
+        (long long) i_experts, pcie_per_tok, pred_pct, (long long) i_tok);
 }
 
 MoeDispatchStats & get_moe_dispatch_stats(int device) {

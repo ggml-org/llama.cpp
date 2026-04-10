@@ -41,6 +41,7 @@ extern "C" {
     GGML_API size_t                ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
     GGML_API bool                  ggml_backend_buft_is_host       (ggml_backend_buffer_type_t buft);
     GGML_API ggml_backend_dev_t    ggml_backend_buft_get_device    (ggml_backend_buffer_type_t buft);
+    GGML_API uint32_t              ggml_backend_buft_get_caps      (ggml_backend_buffer_type_t buft);
 
     //
     // Backend buffer
@@ -52,8 +53,17 @@ extern "C" {
         GGML_BACKEND_BUFFER_USAGE_COMPUTE = 2,
     };
 
+    enum ggml_backend_buffer_caps {
+        GGML_BACKEND_BUFFER_CAP_NONE               = 0,
+        GGML_BACKEND_BUFFER_CAP_STABLE_BASE        = 1u << 0,
+        GGML_BACKEND_BUFFER_CAP_HOST_DIRECT_ACCESS = 1u << 1,
+        GGML_BACKEND_BUFFER_CAP_RELOCATABLE        = 1u << 2,
+    };
+
     GGML_API const char *                   ggml_backend_buffer_name          (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
+    // Returns the stable base pointer for legacy contiguous buffers.
+    // Returns NULL for relocatable/logical buffers that do not expose a stable base address.
     GGML_API void *                         ggml_backend_buffer_get_base      (ggml_backend_buffer_t buffer);
     GGML_API size_t                         ggml_backend_buffer_get_size      (ggml_backend_buffer_t buffer);
     GGML_API enum ggml_status               ggml_backend_buffer_init_tensor   (ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
@@ -67,6 +77,13 @@ extern "C" {
     GGML_API bool                           ggml_backend_buffer_is_valid      (ggml_backend_buffer_t buffer);
     GGML_API ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
+    GGML_API uint32_t                       ggml_backend_buffer_get_caps      (ggml_backend_buffer_t buffer);
+    GGML_API bool                           ggml_backend_buft_has_cap        (ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_caps cap);
+    GGML_API bool                           ggml_backend_buffer_has_cap      (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_caps cap);
+    GGML_API bool                           ggml_backend_buffer_has_stable_base(ggml_backend_buffer_t buffer);
+    GGML_API bool                           ggml_backend_buffer_is_relocatable(ggml_backend_buffer_t buffer);
+    GGML_API bool                           ggml_backend_tensor_has_storage  (const struct ggml_tensor * tensor);
+    GGML_API size_t                         ggml_backend_tensor_get_buffer_offset(const struct ggml_tensor * tensor);
 
     // tensor copy between different backends
     GGML_API void ggml_backend_tensor_copy(struct ggml_tensor * src, struct ggml_tensor * dst);
@@ -399,6 +416,7 @@ GGML_API bool ggml_backend_sched_is_profiling_enabled(ggml_backend_sched_t sched
 
     // Tensor initialization
     GGML_API enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr);
+    GGML_API enum ggml_status ggml_backend_tensor_alloc_offset(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, size_t offset);
     GGML_API enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor);
 
     // CPU buffer types are always available

@@ -762,6 +762,7 @@ struct ggml_tensor {
     // source tensor and offset for views
     struct ggml_tensor * view_src;
     size_t               view_offs;
+    size_t               buffer_offs;  // logical offset within backend buffer storage
 
     void * data;
 
@@ -770,7 +771,7 @@ struct ggml_tensor {
     void *                      extra;   // extra things e.g. for ggml-cuda.cu
     struct ggml_tensor_layout * layout;  // backend-managed layout descriptor (optional)
 
-    char padding[GGML_MEM_ALIGN];
+    char padding[GGML_MEM_ALIGN + sizeof(size_t)];
 };
 
 static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);

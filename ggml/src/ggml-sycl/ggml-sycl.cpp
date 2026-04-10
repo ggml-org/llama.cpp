@@ -19440,24 +19440,32 @@ inline void ggml_sycl_op_mul_mat_sycl(ggml_backend_sycl_context & ctx,
                         const size_t                    weights_bytes = packed.s4.size();
                         const size_t                    scales_bytes  = packed.scales.size() * sizeof(float);
                         const size_t                    zp_bytes      = packed.zero_points.size() * sizeof(int8_t);
-                        ggml_sycl::scoped_unified_alloc weights_alloc;
-                        ggml_sycl::scoped_unified_alloc scales_alloc;
-                        ggml_sycl::scoped_unified_alloc zp_alloc;
-                        ggml_sycl::alloc_request        dev_req{};
-                        dev_req.queue                          = stream;
-                        dev_req.device                         = ctx.device;
-                        dev_req.intent.role                    = ggml_sycl::alloc_role::COMPUTE;
-                        dev_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-                        dev_req.intent.constraints.must_device = true;
-                        dev_req.size                           = weights_bytes;
-                        (void) weights_alloc.allocate(dev_req);
-                        dev_req.size = scales_bytes;
-                        (void) scales_alloc.allocate(dev_req);
-                        dev_req.size = zp_bytes;
-                        (void) zp_alloc.allocate(dev_req);
-                        void *   weights_dev = weights_alloc.get();
-                        float *  scales_dev  = static_cast<float *>(scales_alloc.get());
-                        int8_t * zp_dev      = static_cast<int8_t *>(zp_alloc.get());
+                        // Arena bump-allocate staging buffers (freed automatically at arena_reset).
+                        // Fall back to scoped_unified_alloc when arena is unavailable.
+                        ggml_sycl::scoped_unified_alloc weights_fallback;
+                        ggml_sycl::scoped_unified_alloc scales_fallback;
+                        ggml_sycl::scoped_unified_alloc zp_fallback;
+                        void *   weights_dev = ggml_sycl::unified_cache_arena_alloc(ctx.device, weights_bytes);
+                        float *  scales_dev  = static_cast<float *>(ggml_sycl::unified_cache_arena_alloc(ctx.device, scales_bytes));
+                        int8_t * zp_dev      = static_cast<int8_t *>(ggml_sycl::unified_cache_arena_alloc(ctx.device, zp_bytes));
+                        if (!weights_dev || !scales_dev || !zp_dev) {
+                            // Arena exhausted — fall back to unified_alloc
+                            ggml_sycl::alloc_request dev_req{};
+                            dev_req.queue                          = stream;
+                            dev_req.device                         = ctx.device;
+                            dev_req.intent.role                    = ggml_sycl::alloc_role::COMPUTE;
+                            dev_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
+                            dev_req.intent.constraints.must_device = true;
+                            dev_req.size                           = weights_bytes;
+                            (void) weights_fallback.allocate(dev_req);
+                            dev_req.size = scales_bytes;
+                            (void) scales_fallback.allocate(dev_req);
+                            dev_req.size = zp_bytes;
+                            (void) zp_fallback.allocate(dev_req);
+                            weights_dev = weights_fallback.get();
+                            scales_dev  = static_cast<float *>(scales_fallback.get());
+                            zp_dev      = static_cast<int8_t *>(zp_fallback.get());
+                        }
                         if (weights_dev && scales_dev && zp_dev) {
                             stream->memcpy(weights_dev, packed.s4.data(), weights_bytes);
                             stream->memcpy(scales_dev, packed.scales.data(), scales_bytes);
@@ -23680,25 +23688,32 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
         const size_t total_bytes           = src1_float_slice_size + src1_q8_size + dst_size;
         ggml_sycl_set_device(device);
         queue_ptr                       stream = ctx.stream(device, 0);
-        // Allocate buffers on target device
-        ggml_sycl::scoped_unified_alloc src1_ddf_alloc;
-        ggml_sycl::scoped_unified_alloc src1_ddq_alloc;
-        ggml_sycl::scoped_unified_alloc partial_out_alloc;
-        ggml_sycl::alloc_request        row_req{};
-        row_req.queue                          = stream;
-        row_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
-        row_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-        row_req.intent.constraints.must_device = true;
-        row_req.size                           = src1_float_slice_size;
-        const bool src1_ddf_ok                 = src1_ddf_alloc.allocate(row_req);
-        row_req.size                           = src1_q8_size;
-        const bool src1_ddq_ok                 = src1_ddq_alloc.allocate(row_req);
-        row_req.size                           = dst_size;
-        const bool partial_ok                  = partial_out_alloc.allocate(row_req);
-        float *    src1_ddf_dev                = static_cast<float *>(src1_ddf_alloc.get());
-        char *     src1_ddq_dev                = static_cast<char *>(src1_ddq_alloc.get());
-        float *    partial_out                 = static_cast<float *>(partial_out_alloc.get());
-        if (!src1_ddf_ok || !src1_ddq_ok || !partial_ok || !src1_ddf_dev || !src1_ddq_dev || !partial_out) {
+        // Arena bump-allocate buffers on target device (freed automatically at arena_reset).
+        // Fall back to scoped_unified_alloc when arena is unavailable.
+        ggml_sycl::scoped_unified_alloc src1_ddf_fallback;
+        ggml_sycl::scoped_unified_alloc src1_ddq_fallback;
+        ggml_sycl::scoped_unified_alloc partial_out_fallback;
+        float * src1_ddf_dev = static_cast<float *>(ggml_sycl::unified_cache_arena_alloc(device, src1_float_slice_size));
+        char *  src1_ddq_dev = static_cast<char *>(ggml_sycl::unified_cache_arena_alloc(device, src1_q8_size));
+        float * partial_out  = static_cast<float *>(ggml_sycl::unified_cache_arena_alloc(device, dst_size));
+        if (!src1_ddf_dev || !src1_ddq_dev || !partial_out) {
+            // Arena exhausted — fall back to unified_alloc
+            ggml_sycl::alloc_request row_req{};
+            row_req.queue                          = stream;
+            row_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
+            row_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
+            row_req.intent.constraints.must_device = true;
+            row_req.size                           = src1_float_slice_size;
+            (void) src1_ddf_fallback.allocate(row_req);
+            row_req.size = src1_q8_size;
+            (void) src1_ddq_fallback.allocate(row_req);
+            row_req.size = dst_size;
+            (void) partial_out_fallback.allocate(row_req);
+            src1_ddf_dev = static_cast<float *>(src1_ddf_fallback.get());
+            src1_ddq_dev = static_cast<char *>(src1_ddq_fallback.get());
+            partial_out  = static_cast<float *>(partial_out_fallback.get());
+        }
+        if (!src1_ddf_dev || !src1_ddq_dev || !partial_out) {
             fprintf(stderr, "SYCL TP: ERROR - failed to allocate temp buffers on device %d\n", device);
             ggml_sycl_set_device(main_device);
             continue;

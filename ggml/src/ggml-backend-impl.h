@@ -26,6 +26,8 @@ extern "C" {
         size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
         bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
+        // (optional) describe buffer behavior (defaults to STABLE_BASE plus HOST_DIRECT_ACCESS when is_host is true)
+        uint32_t              (*get_caps)      (ggml_backend_buffer_type_t buft);
     };
 
     struct ggml_backend_buffer_type {
@@ -55,6 +57,8 @@ extern "C" {
         void         (*clear)        (ggml_backend_buffer_t buffer, uint8_t value);
         // (optional) reset any internal state due to tensor initialization, such as tensor extras
         void         (*reset)        (ggml_backend_buffer_t buffer);
+        // (optional) describe buffer behavior; defaults to the parent buffer type caps
+        uint32_t     (*get_caps)     (ggml_backend_buffer_t buffer);
     };
 
     struct ggml_backend_buffer {

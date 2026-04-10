@@ -280,6 +280,7 @@ static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_
     strcpy(new_tensor->name, tensor->name);
     new_tensor->data = tensor->data;
     new_tensor->buffer = tensor->buffer;
+    new_tensor->buffer_offs = tensor->buffer_offs;
     new_tensor->extra = tensor->extra;
     new_tensor->view_offs = tensor->view_offs;
     new_tensor->view_src = map_tensor(tensor_map, ctx, tensor->view_src);
