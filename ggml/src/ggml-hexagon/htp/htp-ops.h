@@ -86,7 +86,7 @@ enum htp_op_code {
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
-#define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS 
+#define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    256

@@ -1608,7 +1608,7 @@ struct ggml_hexagon_opbatch {
 
     ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t max_batch) {
         name = sess->c_name();
-     
+
         n_bufs_max = HTP_OP_MAX_BUFS;
         n_ops_max  = max_batch;
         n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;

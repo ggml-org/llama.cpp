@@ -3059,7 +3059,7 @@ int op_matmul(struct htp_ops_context * octx) {
 
     // --- Phase 2: HVX on the remaining m_tail rows ---
     if (m_tail > 0) {
-        // copy of src1 and dst 
+        // copy of src1 and dst
         struct htp_tensor src1_tail = *src1;
         struct htp_tensor dst_tail  = *dst;
 
