@@ -638,7 +638,7 @@ sycl::queue * ggml_sycl_get_cpu_queue();
 struct cpu_dispatch_buffers {
     std::vector<uint8_t> src1_q;      // Quantization buffer: max M * max_q_row_size
     std::vector<float>   accs;        // Accumulator buffer: reused as __m256* via reinterpret_cast
-    std::vector<float>   weight_deq_buf; // Weight dequantization buffer: max N * K
+    std::vector<float>   scratch_nk; // Weight dequantization buffer: max N * K
     // Note: accs is reinterpreted as __m256 array. Since we only use _mm256_setzero_ps()
     // and array indexing (no aligned load/store), alignment is not critical.
 
@@ -647,7 +647,7 @@ struct cpu_dispatch_buffers {
         src1_q.resize(max_m * max_q_row_size);
         // __m256 is 32 bytes = 8 floats; allocate for max chunk4 (256 + max_m) accumulators
         accs.resize((256 + max_m) * 8);  // Conservative upper bound: 256 stack + max_m heap
-        weight_deq_buf.resize(max_n * max_k);
+        scratch_nk.resize(max_n * max_k);
     }
 };
 
