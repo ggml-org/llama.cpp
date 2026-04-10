@@ -7265,6 +7265,12 @@ void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors, 
         dag_state_.successor_list =
             static_cast<int *>(pinned_alloc(pinned_dag_successor_list_bytes_, queue_, pinned_pool_dag_));
         dag_state_.n_tiles = static_cast<int *>(pinned_alloc(pinned_dag_n_tiles_bytes_, queue_, pinned_pool_dag_));
+        if (!dag_state_.successor_offset || !dag_state_.successor_list || !dag_state_.n_tiles) {
+            GGML_LOG_WARN("[PERSISTENT-TG] DAG pinned_alloc failed — persistent DAG kernel disabled\n");
+            dag_pool_n_ops_   = 0;
+            dag_pool_n_edges_ = 0;
+            return;
+        }
         dag_state_.completed_count =
             static_cast<int *>(device_alloc_persistent(1 * sizeof(int), queue_, device_id_, arena_tmp));
         if (arena_tmp) {
@@ -7429,6 +7435,12 @@ void UnifiedKernel::build_phase_schedule(const std::vector<std::vector<int>> & s
             static_cast<int *>(pinned_alloc(pinned_phase_tiles_bytes_, queue_, pinned_pool_phase_));
         phase_schedule_.phase_type =
             static_cast<int *>(pinned_alloc(pinned_phase_type_bytes_, queue_, pinned_pool_phase_));
+        if (!phase_schedule_.entries || !phase_schedule_.phase_offset || !phase_schedule_.phase_tiles) {
+            GGML_LOG_WARN("[PERSISTENT-TG] Phase pinned_alloc failed — persistent phase kernel disabled\n");
+            phase_pool_n_ops_    = 0;
+            phase_pool_n_phases_ = 0;
+            return;
+        }
         phase_pool_n_ops_    = alloc_ops;
         phase_pool_n_phases_ = alloc_phases;
     }

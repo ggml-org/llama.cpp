@@ -4873,14 +4873,9 @@ void * unified_cache::promote_to_device(const unified_cache_key & key, size_t si
             return nullptr;
         }
     } else {
-        try {
-            device_ptr = sycl::malloc_device(size, queue_);
-        } catch (...) {
-            return nullptr;
-        }
-        if (device_ptr) {
-            used_.fetch_add(size, std::memory_order_relaxed);
-        }
+        // Arena must be active during inference weight promotion.
+        // Raw sycl::malloc_device violates the zero-runtime-alloc contract.
+        GGML_ABORT("promote_to_device: arena inactive — arena must be active during inference");
     }
 
     if (!device_ptr) {
@@ -8163,25 +8158,13 @@ bool unified_cache::reserve_reorder_temp(size_t size_bytes) {
                       size_bytes / (1024.0f * 1024.0f));
         return true;
     }
-    try {
-        reorder_temp_buffer_ = sycl::malloc_device(size_bytes, queue_);
-        if (!reorder_temp_buffer_) {
-            GGML_LOG_WARN("[UNIFIED-CACHE] Failed to allocate reorder temp buffer (%.1f MB)\n",
-                          size_bytes / (1024.0f * 1024.0f));
-            return false;
-        }
-        reorder_temp_size_ = size_bytes;
-        used_.fetch_add(size_bytes, std::memory_order_relaxed);
-        const int dev_id = ggml_sycl_get_device_id_from_queue(queue_);
-        alloc_registry::instance().register_alloc(reorder_temp_buffer_, size_bytes, dev_id, alloc_type::DEVICE);
-        GGML_LOG_INFO("[UNIFIED-CACHE] Reserved GPU reorder temp buffer: %.1f MB\n", size_bytes / (1024.0f * 1024.0f));
-        return true;
-    } catch (const sycl::exception & e) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] Reorder temp buffer allocation failed: %s\n", e.what());
-        reorder_temp_buffer_ = nullptr;
-        reorder_temp_size_   = 0;
-        return false;
-    }
+    // Arena is not active — cannot allocate reorder temp buffer.
+    // This is acceptable at early model-load before arena is configured;
+    // the reorder path will be disabled for this invocation.
+    GGML_LOG_WARN("[UNIFIED-CACHE] reserve_reorder_temp: arena inactive, cannot allocate "
+                  "%.1f MB reorder temp buffer — reorder path disabled\n",
+                  size_bytes / (1024.0f * 1024.0f));
+    return false;
 }
 
 // Global scratch buffer state for lock management
