@@ -6231,17 +6231,20 @@ void ggml_backend_sycl_notify_compute_buffer_sizes(ggml_backend_t backend, const
     GGML_LOG_INFO("[SYCL-PLAN] Compute buffer sizes notified: %.1f MB total (%d backends)\n",
                   total_bytes / (1024.0 * 1024.0), n_sizes);
 
-    // Feed the actual VRAM compute requirement to the RUNTIME zone.
-    // unified_cache_reserve_compute_arena will no-op if the zone is already
-    // large enough, and will grow it when the scheduler-derived size exceeds
-    // the heuristic pre-reservation made at model load time.
+    // Pre-size the VRAM compute arena and host SCRATCH zone using the actual
+    // scheduler-derived sizes, replacing the heuristic defaults set at model
+    // load time.  VRAM arena zones are a single pre-allocated device block
+    // with fixed zone boundaries — they cannot grow after creation.  This
+    // notification must be called BEFORE the arena is frozen (i.e. before
+    // the first graph_compute call) so the correct sizes are locked in.
+    //
+    // unified_cache_reserve_compute_arena: no-op if arena already has enough
+    // capacity; otherwise records the updated reservation for zone layout.
+    // unified_cache_grow_host_scratch_zone: extends the host pinned SCRATCH
+    // zone to accommodate host-side compute buffers (oneDNN reorder workspace,
+    // CPU-offload staging) beyond what the planner estimated at load time.
     if (ggml_sycl::unified_cache_enabled()) {
         ggml_sycl::unified_cache_reserve_compute_arena(device, total_bytes);
-
-        // Also grow the host SCRATCH zone so host-pinned compute buffers
-        // (oneDNN reorder workspace, CPU-offload staging) have room.
-        // This activates unified_cache_grow_host_scratch_zone which was
-        // previously dead code — called here for the first time.
         ggml_sycl::unified_cache_grow_host_scratch_zone(total_bytes);
     }
 }
@@ -21183,66 +21186,37 @@ static void tp_device1_worker_thread_func() {
         // Get dimensions
         const int64_t N_hidden_shard        = gate_extra->tp_local_ne[1];
         const int64_t N_out                 = down_extra->tp_local_ne[1];
-        // Allocate buffers on device 1
-        const size_t  q8_1_ts               = sizeof(block_q8_1);
-        const size_t  q8_1_bs               = QK8_1;
         const int64_t K_full_padded         = GGML_PAD(work.K_full, MATRIX_ROW_PADDING);
         const int64_t N_hidden_shard_padded = GGML_PAD(N_hidden_shard, MATRIX_ROW_PADDING);
-        const size_t  input_q8_size         = work.batch * K_full_padded * q8_1_ts / q8_1_bs;
         const size_t  hidden_size           = N_hidden_shard * work.batch * sizeof(float);
-        const size_t  hidden_q8_size        = work.batch * N_hidden_shard_padded * q8_1_ts / q8_1_bs;
         const size_t  output_size           = N_out * work.batch * sizeof(float);
-        if (g_ggml_sycl_tp_debug) {
-            fprintf(stderr, "SYCL TP WORKER: Allocating buffers for layer %d (input_q8=%zu, hidden=%zu, output=%zu)\n",
-                    work.layer, input_q8_size, hidden_size, output_size);
-        }
-        ggml_sycl::scoped_unified_alloc input_q8_alloc;
-        ggml_sycl::scoped_unified_alloc gate_out_alloc;
-        ggml_sycl::scoped_unified_alloc up_out_alloc;
-        ggml_sycl::scoped_unified_alloc hidden_out_alloc;
-        ggml_sycl::scoped_unified_alloc hidden_q8_alloc;
-        ggml_sycl::scoped_unified_alloc partial_out_alloc;
-        ggml_sycl::alloc_request        dev_req{};
-        dev_req.queue                          = stream;
-        dev_req.size                           = 0;
-        dev_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
-        dev_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-        dev_req.intent.constraints.must_device = true;
+
+        // Use persistent FFN buffers (allocated once per layer, reused each token).
+        tp_ffn_compute_buffers * bufs =
+            ggml_sycl_tp_ensure_ffn_buffers(work.layer, device, stream, K_full_padded, N_hidden_shard_padded,
+                                            work.batch, N_out);
+        char *  input_q8_dev  = bufs ? bufs->input_q8_dev  : nullptr;
+        float * gate_out      = bufs ? bufs->gate_out      : nullptr;
+        float * up_out        = bufs ? bufs->up_out        : nullptr;
+        float * hidden_out    = bufs ? bufs->hidden_out    : nullptr;
+        char *  hidden_q8_dev = bufs ? bufs->hidden_q8_dev : nullptr;
+        float * partial_out   = bufs ? bufs->partial_out   : nullptr;
 
         ggml_sycl::alloc_handle result_alloc{};
-
-        dev_req.size            = input_q8_size;
-        const bool input_ok     = input_q8_alloc.allocate(dev_req);
-        dev_req.size            = hidden_size;
-        const bool gate_ok      = gate_out_alloc.allocate(dev_req);
-        const bool up_ok        = up_out_alloc.allocate(dev_req);
-        const bool hidden_ok    = hidden_out_alloc.allocate(dev_req);
-        dev_req.size            = hidden_q8_size;
-        const bool hidden_q8_ok = hidden_q8_alloc.allocate(dev_req);
-        dev_req.size            = output_size;
-        const bool partial_ok   = partial_out_alloc.allocate(dev_req);
-
         const bool result_ok =
             ggml_sycl_tp_alloc_tmp(output_size, *stream, ggml_sycl::alloc_role::TP_TMP,
                                    ggml_sycl::runtime_category::HOST_COMPUTE, false, true, true, &result_alloc);
 
-        char *  input_q8_dev  = static_cast<char *>(input_q8_alloc.get());
-        float * gate_out      = static_cast<float *>(gate_out_alloc.get());
-        float * up_out        = static_cast<float *>(up_out_alloc.get());
-        float * hidden_out    = static_cast<float *>(hidden_out_alloc.get());
-        char *  hidden_q8_dev = static_cast<char *>(hidden_q8_alloc.get());
-        float * partial_out   = static_cast<float *>(partial_out_alloc.get());
-        float * result_buf    = static_cast<float *>(result_alloc.ptr);
+        float * result_buf = static_cast<float *>(result_alloc.ptr);
         if (g_ggml_sycl_tp_debug) {
             fprintf(
                 stderr,
-                "SYCL TP WORKER: Buffers allocated: input_q8=%p, gate=%p, up=%p, hidden=%p, partial=%p, result=%p\n",
+                "SYCL TP WORKER: Buffers: input_q8=%p, gate=%p, up=%p, hidden=%p, partial=%p, result=%p\n",
                 (void *) input_q8_dev, (void *) gate_out, (void *) up_out, (void *) hidden_out, (void *) partial_out,
-
                 (void *) result_buf);
         }
-        if (!input_ok || !gate_ok || !up_ok || !hidden_ok || !hidden_q8_ok || !partial_ok || !result_ok ||
-            !input_q8_dev || !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out || !result_buf) {
+        if (!bufs || !input_q8_dev || !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out ||
+            !result_ok || !result_buf) {
             fprintf(stderr, "SYCL TP WORKER: Buffer allocation failed for layer %d\n", work.layer);
             if (result_alloc.ptr != nullptr) {
                 (void) ggml_sycl::unified_free(result_alloc);
@@ -22224,47 +22198,28 @@ void ggml_sycl_tp_launch_async_ffn(ggml_backend_sycl_context & ctx,
     const int64_t K_full_padded         = GGML_PAD(K_full, MATRIX_ROW_PADDING);
     const int64_t N_hidden_shard_padded = GGML_PAD(N_hidden_shard, MATRIX_ROW_PADDING);
 
-    const size_t input_q8_size  = batch * K_full_padded * q8_1_ts / q8_1_bs;
-    const size_t hidden_size    = N_hidden_shard * batch * sizeof(float);
-    const size_t hidden_q8_size = batch * N_hidden_shard_padded * q8_1_ts / q8_1_bs;
+    const size_t hidden_size  = N_hidden_shard * batch * sizeof(float);
+    const size_t output_size  = N_out * batch * sizeof(float);
 
-    const size_t                    output_size = N_out * batch * sizeof(float);
-    ggml_sycl::scoped_unified_alloc input_q8_alloc;
-    ggml_sycl::scoped_unified_alloc gate_out_alloc;
-    ggml_sycl::scoped_unified_alloc up_out_alloc;
-    ggml_sycl::scoped_unified_alloc hidden_out_alloc;
-    ggml_sycl::scoped_unified_alloc hidden_q8_alloc;
-    ggml_sycl::scoped_unified_alloc partial_out_alloc;
-    ggml_sycl::alloc_request        dev_req{};
-    dev_req.queue                          = stream;
-    dev_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
-    dev_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-    dev_req.intent.constraints.must_device = true;
-    dev_req.size                           = input_q8_size;
-    const bool input_ok                    = input_q8_alloc.allocate(dev_req);
-    dev_req.size                           = hidden_size;
-    const bool gate_ok                     = gate_out_alloc.allocate(dev_req);
-    const bool up_ok                       = up_out_alloc.allocate(dev_req);
-    const bool hidden_ok                   = hidden_out_alloc.allocate(dev_req);
-    dev_req.size                           = hidden_q8_size;
-    const bool hidden_q8_ok                = hidden_q8_alloc.allocate(dev_req);
-    dev_req.size                           = output_size;
-    const bool              partial_ok     = partial_out_alloc.allocate(dev_req);
-    char *                  input_q8_dev   = static_cast<char *>(input_q8_alloc.get());
-    float *                 gate_out       = static_cast<float *>(gate_out_alloc.get());
-    float *                 up_out         = static_cast<float *>(up_out_alloc.get());
-    float *                 hidden_out     = static_cast<float *>(hidden_out_alloc.get());
-    char *                  hidden_q8_dev  = static_cast<char *>(hidden_q8_alloc.get());
-    float *                 partial_out    = static_cast<float *>(partial_out_alloc.get());
-    // Allocate DEDICATED result buffer for this async job (not shared!)
-    // Each layer needs its own buffer to avoid races between concurrent async jobs
+    // Use persistent FFN buffers (allocated once per layer, reused each token).
+    tp_ffn_compute_buffers * bufs =
+        ggml_sycl_tp_ensure_ffn_buffers(layer, device, stream, K_full_padded, N_hidden_shard_padded, batch, N_out);
+    char *  input_q8_dev = bufs ? bufs->input_q8_dev : nullptr;
+    float * gate_out     = bufs ? bufs->gate_out     : nullptr;
+    float * up_out       = bufs ? bufs->up_out       : nullptr;
+    float * hidden_out   = bufs ? bufs->hidden_out   : nullptr;
+    char *  hidden_q8_dev = bufs ? bufs->hidden_q8_dev : nullptr;
+    float * partial_out   = bufs ? bufs->partial_out  : nullptr;
+
+    // Allocate DEDICATED result buffer for this async job (not shared!).
+    // Each layer needs its own buffer to avoid races between concurrent async jobs.
     ggml_sycl::alloc_handle result_alloc{};
     const bool              result_ok =
         ggml_sycl_tp_alloc_tmp(output_size, *stream, ggml_sycl::alloc_role::TP_TMP,
                                ggml_sycl::runtime_category::HOST_COMPUTE, false, true, true, &result_alloc);
     float * result_buf = static_cast<float *>(result_alloc.ptr);
-    if (!input_ok || !gate_ok || !up_ok || !hidden_ok || !hidden_q8_ok || !partial_ok || !result_ok || !input_q8_dev ||
-        !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out || !result_buf) {
+    if (!bufs || !input_q8_dev || !gate_out || !up_out || !hidden_out || !hidden_q8_dev || !partial_out ||
+        !result_ok || !result_buf) {
         GGML_SYCL_DEBUG("SYCL TP ASYNC: Buffer allocation failed for layer %d\n", layer);
         if (result_alloc.ptr != nullptr) {
             (void) ggml_sycl::unified_free(result_alloc);

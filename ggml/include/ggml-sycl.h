@@ -198,9 +198,12 @@ GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend)
 
 // Feed actual compute buffer sizes (from ggml_backend_sched_get_buffer_size) back to
 // the unified cache zone planner.  Call once per context, after graph_reserve() completes
-// and backend_buf_exp_size[] has been populated.
-// - Resizes the VRAM RUNTIME zone if the scheduler requested more than was pre-reserved.
-// - Grows the host SCRATCH zone to accommodate host-side compute buffers.
+// and backend_buf_exp_size[] has been populated, but BEFORE the first graph_compute call.
+// VRAM arena zones are a fixed pre-allocated block — they cannot grow after creation.
+// This function pre-sizes the compute arena and host SCRATCH zone using the true
+// scheduler-derived sizes, replacing the heuristic defaults set at model load time.
+// - Updates the VRAM compute arena reservation with the actual scheduler requirement.
+// - Grows the host pinned SCRATCH zone for host-side compute buffers (oneDNN reorder, etc.).
 // sizes[i] is the compute buffer size for backend i; n_sizes is the length of sizes[].
 // NULL sizes or n_sizes == 0 is a no-op.
 GGML_BACKEND_API void ggml_backend_sycl_notify_compute_buffer_sizes(
