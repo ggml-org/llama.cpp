@@ -48,7 +48,6 @@ static int    opt_etm          = 0;
 static int    opt_verbose      = 0;
 static int    opt_profile      = 0;
 static int    opt_hostbuf      = 1; // hostbuf ON by default
-static int    opt_experimental = 0;
 static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
 
 // Enable all stages by default
@@ -2144,7 +2143,7 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
 
     if (dst->ne[2] != 1 || dst->ne[3] != 1) {
         // FA during prompt still needs work
-        return opt_experimental;
+        return false;
     }
 
     return true;
@@ -3305,7 +3304,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                   "please update hexagon_type to match ggml_type");
 
-    const char * str_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL");
     const char * str_verbose = getenv("GGML_HEXAGON_VERBOSE");
     const char * str_hostbuf = getenv("GGML_HEXAGON_HOSTBUF");
     const char * str_opmask  = getenv("GGML_HEXAGON_OPMASK");
@@ -3322,7 +3320,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     auto RE_ICASE = std::regex_constants::icase;
 
-    opt_experimental = str_experimental ? atoi(str_experimental) : 0;
     opt_opfilter     = str_opfilter     ? new std::regex(str_opfilter, RE_ICASE) : NULL;
     opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
     opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
