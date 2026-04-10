@@ -10250,14 +10250,17 @@ static void populate_host_zone_sizing(placement_plan &                          
                          plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes +
                              plan.tp_staging_buffer_bytes);
     // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder, MoE Q8_1 workspace,
-    // and MoE routing buffers (routing IDs + expert pointer tables).
+    // MoE routing buffers (routing IDs + expert pointer tables), and TP compute buffers.
+    // Both moe_vram_runtime_bytes and tp_vram_runtime_bytes are folded here as conservative
+    // host-scratch accounting — they are VRAM RUNTIME allocations whose sizes are documented
+    // in the plan fields for secondary-device planners but counted here for zone budgeting.
     // Actual compute buffer needs are fed back via unified_cache_grow_host_scratch_zone()
     // after the ggml scheduler is created.
     plan.host_zone_scratch_bytes =
         std::max<size_t>(k_min_zone_bytes,
                          plan.max_tensor_bytes + k_scratch_headroom +
                          plan.onednn_reorder_bytes + plan.moe_q8_workspace_bytes +
-                         plan.moe_vram_runtime_bytes);
+                         plan.moe_vram_runtime_bytes + plan.tp_vram_runtime_bytes);
 }
 
 placement_plan compute_placement_plan(const std::vector<std::pair<std::string, size_t>> & tensor_inventory,

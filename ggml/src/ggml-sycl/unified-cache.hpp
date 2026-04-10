@@ -229,8 +229,9 @@ struct placement_plan {
     size_t tp_attn_buffer_bytes    = 0;  // Zone: RUNTIME (device VRAM, per secondary device)
     // Host staging for TP input copies (D2H of activations before H2D to secondary device).
     size_t tp_staging_buffer_bytes = 0;  // Zone: STAGING (host pinned)
-    // Combined VRAM RUNTIME reservation for all TP compute buffers (tp_ffn + tp_attn).
-    // Consumed by arena_reserve_compute() for secondary TP devices. 0 when TP is disabled.
+    // Combined VRAM RUNTIME estimate for all TP compute buffers (tp_ffn + tp_attn).
+    // Folded into host_zone_scratch_bytes for zone budgeting; also available to
+    // secondary-device planners as a sizing reference. 0 when TP is disabled.
     size_t tp_vram_runtime_bytes   = 0;  // Zone: RUNTIME (device VRAM)
 
     // Per-device VRAM usage (multi-device only, indexed by position in devices vector)
