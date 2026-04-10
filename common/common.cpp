@@ -1452,7 +1452,8 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
 
     for (auto & la: lora) {
         loras.push_back(la.ptr);
-        scales.push_back(la.scale);
+        // set scale to 0 if disabled
+        scales.push_back(la.enabled ? la.scale : 0.0);
     }
 
     llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());

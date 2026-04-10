@@ -45,6 +45,9 @@ struct common_adapter_lora_info {
 
     struct llama_adapter_lora * ptr;
 
+    // used to toggle on/off programmatically without changing scale
+    bool enabled;
+
     // Multi-Modal LoRA activation (MMLoRA)
     // Empty vector = not an MMLoRA adapter (always active)
     // Non-empty = MMLoRA adapter (activates if ANY specified modality present - OR logic)
