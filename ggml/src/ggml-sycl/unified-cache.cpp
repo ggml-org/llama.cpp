@@ -10110,7 +10110,10 @@ static void populate_host_zone_sizing(placement_plan &                          
     plan.onednn_reorder_bytes = plan.max_tensor_bytes;
 
     // 2. MoE Q8_1 workspace: n_expert_used activation rows quantized to Q8_1 for batched dispatch.
-    //    Per-expert row cost uses max_tensor_bytes / n_experts as a conservative expert_ffn_size.
+    //    Coarse heuristic: estimate Q8_1 workspace from weight tensor size.
+    //    The actual Q8_1 row size depends on the activation K dimension (ne10),
+    //    not weight bytes. This over-estimates because quantized weight bytes
+    //    exceed the raw K dimension, making the sizing conservative.
     //    1.1x headroom covers QK8_1 alignment padding.  Zero for dense models.
     if (n_experts > 0 && n_expert_used > 0) {
         const size_t expert_ffn_bytes = plan.max_tensor_bytes / static_cast<size_t>(n_experts);
