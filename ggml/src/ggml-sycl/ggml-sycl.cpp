@@ -23145,53 +23145,29 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                         const size_t q8_1_ts = sizeof(block_q8_1);
                         const size_t q8_1_bs = QK8_1;
 
-                        const int64_t n_embd_padded = GGML_PAD(n_embd, MATRIX_ROW_PADDING);
-                        // Input quantization buffer
-
-                        const size_t  input_q8_size         = batch * n_embd_padded * q8_1_ts / q8_1_bs;
-                        const size_t  q_out_size            = n_embd_q_shard * batch * sizeof(float);
-                        const size_t  k_out_size            = n_embd_k_shard * batch * sizeof(float);
-                        const size_t  v_out_size            = n_embd_v_shard * batch * sizeof(float);
+                        const int64_t n_embd_padded         = GGML_PAD(n_embd, MATRIX_ROW_PADDING);
                         const int64_t n_embd_q_shard_padded = GGML_PAD(n_embd_q_shard, MATRIX_ROW_PADDING);
-                        const size_t  attn_q8_size          = batch * n_embd_q_shard_padded * q8_1_ts / q8_1_bs;
-                        ggml_sycl::scoped_unified_alloc input_q8_alloc;
-                        ggml_sycl::scoped_unified_alloc q_out_alloc;
-                        ggml_sycl::scoped_unified_alloc k_out_alloc;
-                        ggml_sycl::scoped_unified_alloc v_out_alloc;
-                        ggml_sycl::scoped_unified_alloc attn_out_alloc;
-                        ggml_sycl::scoped_unified_alloc attn_q8_alloc;
-                        ggml_sycl::scoped_unified_alloc partial_out_alloc;
-                        ggml_sycl::alloc_request        attn_req{};
-                        attn_req.queue                          = stream;
-                        attn_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
-                        attn_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-                        attn_req.intent.constraints.must_device = true;
-                        attn_req.size                           = input_q8_size;
-                        const bool input_q8_ok                  = input_q8_alloc.allocate(attn_req);
-                        attn_req.size                           = q_out_size;
-                        const bool q_out_ok                     = q_out_alloc.allocate(attn_req);
-                        attn_req.size                           = k_out_size;
-                        const bool k_out_ok                     = k_out_alloc.allocate(attn_req);
-                        attn_req.size                           = v_out_size;
-                        const bool v_out_ok                     = v_out_alloc.allocate(attn_req);
-                        attn_req.size                           = q_out_size;
-                        const bool attn_out_ok                  = attn_out_alloc.allocate(attn_req);
-                        attn_req.size                           = attn_q8_size;
-                        const bool attn_q8_ok                   = attn_q8_alloc.allocate(attn_req);
-                        attn_req.size                           = dst_size;
-                        const bool partial_ok                   = partial_out_alloc.allocate(attn_req);
-                        char *     input_q8_dev                 = static_cast<char *>(input_q8_alloc.get());
-                        float *    q_out                        = static_cast<float *>(q_out_alloc.get());
-                        float *    k_out                        = static_cast<float *>(k_out_alloc.get());
-                        float *    v_out                        = static_cast<float *>(v_out_alloc.get());
-                        float *    attn_out                     = static_cast<float *>(attn_out_alloc.get());
-                        char *     attn_q8_dev                  = static_cast<char *>(attn_q8_alloc.get());
-                        float *    partial_out                  = static_cast<float *>(partial_out_alloc.get());
 
-                        if (!input_q8_ok || !q_out_ok || !k_out_ok || !v_out_ok || !attn_out_ok || !attn_q8_ok ||
-                            !partial_ok || !input_q8_dev || !q_out || !k_out || !v_out || !attn_out || !attn_q8_dev ||
+                        // Pre-allocated buffers (fixed dimensions per layer, allocated once at warmup)
+                        tp_attn_compute_buffers * attn_bufs =
+                            ggml_sycl_tp_ensure_attn_buffers(layer, device, stream,
+                                                             n_embd, n_embd_q_shard, n_embd_k_shard, n_embd_v_shard,
+                                                             N_out, batch, /*kv_seq_len=*/0);
+                        char *       input_q8_dev = attn_bufs ? attn_bufs->input_q8_dev : nullptr;
+                        float *      q_out        = attn_bufs ? attn_bufs->q_out        : nullptr;
+                        float *      k_out        = attn_bufs ? attn_bufs->k_out        : nullptr;
+                        float *      v_out        = attn_bufs ? attn_bufs->v_out        : nullptr;
+                        float *      attn_out     = attn_bufs ? attn_bufs->attn_out     : nullptr;
+                        char *       attn_q8_dev  = attn_bufs ? attn_bufs->attn_q8_dev  : nullptr;
+                        float *      partial_out  = attn_bufs ? attn_bufs->partial_out  : nullptr;
+                        // Actual per-token sizes (batch may be smaller than batch_max in the buffer)
+                        const size_t q_out_size   = (size_t) n_embd_q_shard * batch * sizeof(float);
+                        const size_t k_out_size   = (size_t) n_embd_k_shard * batch * sizeof(float);
+                        const size_t v_out_size   = (size_t) n_embd_v_shard * batch * sizeof(float);
+
+                        if (!attn_bufs || !input_q8_dev || !q_out || !k_out || !v_out || !attn_out || !attn_q8_dev ||
                             !partial_out) {
-                            fprintf(stderr, "SYCL TP: ERROR - failed to allocate attention buffers on device %d\n",
+                            fprintf(stderr, "SYCL TP: ERROR - failed to get attention buffers on device %d\n",
                                     device);
                         } else {
                             // Step 1: Quantize attention input to Q8_1
@@ -23356,18 +23332,13 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             //             (long long)q_start_pos, (void*)k_cache);
                             // }
 
-                            // Allocate attention scores buffer [n_heads_q, n_query_tokens, kv_seq_len]
-                            const size_t scores_size = n_heads_q * n_query_tokens * kv_seq_len * sizeof(float);
-                            ggml_sycl::scoped_unified_alloc attn_scores_alloc;
-                            ggml_sycl::alloc_request        scores_req{};
-                            scores_req.queue                          = stream;
-                            scores_req.size                           = scores_size;
-                            scores_req.intent.role                    = ggml_sycl::alloc_role::TP_TMP;
-                            scores_req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
-                            scores_req.intent.constraints.must_device = true;
-                            const bool scores_ok                      = attn_scores_alloc.allocate(scores_req);
-                            float *    attn_scores                    = static_cast<float *>(attn_scores_alloc.get());
-                            if (scores_ok && attn_scores && k_cache && v_cache && kv_seq_len > 0) {
+                            // Grow-on-demand attention scores buffer [n_heads_q, n_query_tokens, kv_seq_len]
+                            // kv_seq_len increases every token; ensure_attn_buffers grows capacity as needed.
+                            ggml_sycl_tp_ensure_attn_buffers(layer, device, stream,
+                                                             n_embd, n_embd_q_shard, n_embd_k_shard, n_embd_v_shard,
+                                                             N_out, batch, kv_seq_len);
+                            float * attn_scores = attn_bufs ? attn_bufs->attn_scores : nullptr;
+                            if (attn_scores && k_cache && v_cache && kv_seq_len > 0) {
                                 // Compute attention scores: Q @ K^T / sqrt(head_dim) with GQA
                                 // Q comes from q_out (current batch), K comes from cache (full sequence)
                                 stream

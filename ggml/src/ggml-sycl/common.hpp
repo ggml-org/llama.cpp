@@ -1517,6 +1517,89 @@ tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(int       layer,
 void ggml_sycl_tp_free_ffn_buffers();
 
 // =============================================================================
+// Persistent attention compute buffers for TP mode
+// Pre-allocate fixed-dimension buffers once per layer.
+// attn_scores grows on demand (kv_seq_len expands each token).
+// =============================================================================
+
+struct tp_attn_compute_buffers {
+    // Input quantization buffer: [batch, n_embd_padded] in Q8_1
+    char * input_q8_dev;
+    size_t input_q8_size;
+
+    // Q/K/V projection outputs (float)
+    float * q_out;
+    float * k_out;
+    float * v_out;
+    size_t  q_out_size;  // n_embd_q_shard * batch_max * sizeof(float)
+    size_t  k_out_size;  // n_embd_k_shard * batch_max * sizeof(float)
+    size_t  v_out_size;  // n_embd_v_shard * batch_max * sizeof(float)
+
+    // Attention output: [batch, n_embd_q_shard] (float) — same layout as q_out
+    float * attn_out;
+    size_t  attn_out_size;
+
+    // Attention output quantization buffer for O projection
+    char * attn_q8_dev;
+    size_t attn_q8_size;
+
+    // O projection partial output
+    float * partial_out;
+    size_t  partial_size;
+
+    // Attention scores [n_heads_q, batch, kv_seq_len] — grows with context
+    float * attn_scores;
+    size_t  attn_scores_size;  // current capacity in bytes
+
+    // Track allocated dimensions (for resize detection)
+    int64_t n_embd_padded;
+    int64_t n_embd_q_shard_padded;
+    int64_t n_embd_q_shard;
+    int64_t n_embd_k_shard;
+    int64_t n_embd_v_shard;
+    int64_t N_out;
+    int64_t batch_max;
+
+    // Flag indicating if fixed buffers are allocated
+    bool allocated;
+
+    // Device ID
+    int device_id;
+
+    // Managed allocation handles
+    ggml_sycl::alloc_handle input_q8_alloc;
+    ggml_sycl::alloc_handle q_out_alloc;
+    ggml_sycl::alloc_handle k_out_alloc;
+    ggml_sycl::alloc_handle v_out_alloc;
+    ggml_sycl::alloc_handle attn_out_alloc;
+    ggml_sycl::alloc_handle attn_q8_alloc;
+    ggml_sycl::alloc_handle partial_out_alloc;
+    ggml_sycl::alloc_handle attn_scores_alloc;  // grow-on-demand
+};
+
+// Global map of persistent attention buffers indexed by layer
+extern std::unordered_map<int, tp_attn_compute_buffers> g_tp_attn_buffers;
+extern std::mutex                                       g_tp_attn_buffers_mutex;
+
+// Ensure persistent attention buffers are allocated for a layer.
+// Fixed buffers: input_q8, q_out, k_out, v_out, attn_out, attn_q8, partial_out.
+// attn_scores: grows when kv_seq_len exceeds current capacity.
+// Returns pointer to buffers, nullptr on allocation failure.
+tp_attn_compute_buffers * ggml_sycl_tp_ensure_attn_buffers(int       layer,
+                                                           int       device,
+                                                           queue_ptr stream,
+                                                           int64_t   n_embd,
+                                                           int64_t   n_embd_q_shard,
+                                                           int64_t   n_embd_k_shard,
+                                                           int64_t   n_embd_v_shard,
+                                                           int64_t   N_out,
+                                                           int64_t   batch,
+                                                           int64_t   kv_seq_len);
+
+// Free all persistent attention buffers (called during cleanup)
+void ggml_sycl_tp_free_attn_buffers();
+
+// =============================================================================
 // Persistent host staging buffer for TP input copies
 // =============================================================================
 
