@@ -14,7 +14,10 @@
 // Parallelization strategy (non-cache-coherent processor, 64B cache lines):
 // - Cache-aligned rows (ne00 aligned to dst cache line): distribute cache
 //   lines across threads. Each thread owns complete cache lines, no conflicts.
-// - Non-aligned rows: distribute rows across threads, use atomic global
+// - Stride-aligned rows (nb1 % 64 == 0, e.g. padded tensors): compute
+//   lcm(ne00, cache_line_elems) to group rows into cache-line-aligned
+//   units and distribute cache lines across threads with normal stores.
+// - Unaligned fallback: distribute rows across threads, use atomic global
 //   stores (amoswapg.w / shg) which bypass local caches.
 //
 // Features supported:
@@ -35,6 +38,11 @@
 #define CACHE_LINE_SIZE_BYTES  64
 #define CACHE_LINE_F32_ELEMS  16   // 64 / 4
 #define CACHE_LINE_F16_ELEMS  32   // 64 / 2
+
+static int64_t gcd64(int64_t a, int64_t b) {
+    while (b) { int64_t t = b; b = a % b; a = t; }
+    return a;
+}
 
 struct ggml_et_set_rows_params {
     struct ggml_tensor src0;     // F32 source data tensor
@@ -217,9 +225,95 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
                 copy_cache_aligned_f16(dst_ptr, src_ptr);
             }
         }
+    } else if (nb1 % CACHE_LINE_SIZE_BYTES == 0) {
+        // LCM-aligned path: destination row stride is cache-line-aligned, so
+        // scattered rows never share a cache line even though ne00 doesn't
+        // fill complete cache lines.  Group rows via lcm(ne00, dst_cl_elems)
+        // and distribute cache lines across threads — each thread exclusively
+        // owns its cache lines, so normal stores are safe (no atomics needed).
+        const int64_t g              = gcd64(ne00, dst_cl_elems);
+        const int64_t rows_per_group = dst_cl_elems / g;   // lcm / ne00
+        const int64_t cls_per_group  = ne00 / g;            // lcm / dst_cl_elems
+
+        const int64_t total_groups   = (total_rows + rows_per_group - 1) / rows_per_group;
+        const int64_t total_cls      = total_groups * cls_per_group;
+        const int64_t cls_per_thread = (total_cls + num_threads - 1) / num_threads;
+        const int64_t my_start       = thread_id * cls_per_thread;
+        int64_t       my_end         = my_start + cls_per_thread;
+        if (my_end > total_cls) my_end = total_cls;
+        if (my_start >= total_cls) return 0;
+
+        for (int64_t cl = my_start; cl < my_end; cl++) {
+            const int64_t group_idx   = cl / cls_per_group;
+            const int64_t cl_in_group = cl % cls_per_group;
+
+            // Element range [elem_start, elem_end) within the flattened group
+            const int64_t elem_start = cl_in_group * dst_cl_elems;
+            const int64_t elem_end   = elem_start + dst_cl_elems;
+
+            // Which row(s) inside this group does the cache line touch?
+            const int64_t r_first = elem_start / ne00;
+            const int64_t r_last  = (elem_end - 1) / ne00;
+
+            for (int64_t r = r_first; r <= r_last; r++) {
+                const int64_t row_flat = group_idx * rows_per_group + r;
+                if (row_flat >= total_rows) break;
+
+                // Column range within this row
+                int64_t col_begin = (r == r_first) ? (elem_start - r * ne00) : 0;
+                int64_t col_end   = (r == r_last)  ? (elem_end   - r * ne00) : ne00;
+                if (col_end > ne00) col_end = ne00;
+
+                // Decompose flat row -> (i03, i02, i01)
+                const int64_t i01 = row_flat % ne01;
+                const int64_t tmp = row_flat / ne01;
+                const int64_t i02 = tmp % ne02;
+                const int64_t i03 = tmp / ne02;
+
+                // Look up destination row index
+                const int64_t i12 = i03 % ne12;
+                const int64_t i11 = i02 % ne11;
+                const int64_t i10 = i01;
+                const int64_t index_byte_offset = i10*nb10 + i11*nb11 + i12*nb12;
+                const int64_t dst_row_index = *(int64_t*)((char*)src1_data + index_byte_offset);
+
+                if (dst_row_index < 0 || dst_row_index >= ne_dst1) {
+                    return -1;
+                }
+
+                const float* src_row = (const float*)((char*)src0_data + i01*nb01 + i02*nb02 + i03*nb03);
+                char* dst_row_base = (char*)dst_data + dst_row_index*nb1 + i02*nb2 + i03*nb3;
+
+                // nb1 is cache-line-aligned, so dst_row_base is too.
+                // Use aligned copy when the column range fills a complete
+                // cache line at a cache-line-aligned offset within the row.
+                const bool full_cl = (col_begin % dst_cl_elems == 0)
+                                  && (col_end - col_begin == dst_cl_elems);
+
+                if (dst->type == GGML_TYPE_F32) {
+                    float* dp = (float*)dst_row_base;
+                    if (full_cl) {
+                        copy_cache_aligned_f32(dp + col_begin, src_row + col_begin);
+                    } else {
+                        for (int64_t i = col_begin; i < col_end; i++) {
+                            dp[i] = src_row[i];
+                        }
+                    }
+                } else {
+                    uint16_t* dp = (uint16_t*)dst_row_base;
+                    if (full_cl) {
+                        copy_cache_aligned_f16(dp + col_begin, src_row + col_begin);
+                    } else {
+                        for (int64_t i = col_begin; i < col_end; i++) {
+                            dp[i] = fp32_to_fp16(src_row[i]);
+                        }
+                    }
+                }
+            }
+        }
     } else {
-        // Non-aligned path: distribute rows across threads, atomic stores
-        // amoswapg.w / shg bypass local caches -> safe on non-coherent HW
+        // Fallback: nb1 not cache-line-aligned, so scattered destination rows
+        // may share a cache line.  Use atomic global stores to bypass L1D.
         for (int64_t row_flat = thread_id; row_flat < total_rows; row_flat += num_threads) {
             const int64_t i01 = row_flat % ne01;
             const int64_t tmp = row_flat / ne01;
