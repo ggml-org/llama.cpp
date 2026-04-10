@@ -2353,7 +2353,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs (pipelined)\n"
         "- row: split weight across GPUs by rows (parallelized)\n"
-        "- tensor: split weights and KV across GPUs (parallelized)",
+        "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
                 params.split_mode = LLAMA_SPLIT_MODE_NONE;
