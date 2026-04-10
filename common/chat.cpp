@@ -930,8 +930,8 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1069,8 +1069,8 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1201,8 +1201,8 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1297,8 +1297,8 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1423,8 +1423,8 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1508,8 +1508,8 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1587,8 +1587,8 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
@@ -1666,8 +1666,8 @@ static common_chat_params common_chat_params_init_gigachat_v3(
                 builder.resolve_refs(schema);
             });
             if (has_response_format) {
-                auto schema_copy = inputs.json_schema;
-                builder.resolve_refs(schema_copy);
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
         });
