@@ -97,6 +97,14 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* End Constants */
 
+static inline wgpu::CallbackMode ggml_webgpu_callback_mode() {
+#ifdef __EMSCRIPTEN__
+    return wgpu::CallbackMode::AllowProcessEvents;
+#else
+    return wgpu::CallbackMode::AllowSpontaneous;
+#endif
+}
+
 // This is a "fake" base pointer, since WebGPU buffers do not have pointers to
 // their locations.
 static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
@@ -474,7 +482,7 @@ static void ggml_backend_webgpu_wait_queue(webgpu_global_context & ctx) {
 
     const wgpu::WaitStatus wait_status = ctx->instance.WaitAny(
         ctx->queue.OnSubmittedWorkDone(
-            wgpu::CallbackMode::AllowSpontaneous,
+            ggml_webgpu_callback_mode(),
             [&callback_status, &callback_message](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
                 callback_status  = status;
                 callback_message = std::string(message);
@@ -494,7 +502,7 @@ static void ggml_backend_webgpu_map_buffer(webgpu_global_context & ctx,
     std::string          callback_message;
 
     const wgpu::WaitStatus wait_status = ctx->instance.WaitAny(
-        buffer.MapAsync(mode, offset, size, wgpu::CallbackMode::AllowSpontaneous,
+        buffer.MapAsync(mode, offset, size, ggml_webgpu_callback_mode(),
                         [&callback_status, &callback_message](wgpu::MapAsyncStatus status, wgpu::StringView message) {
                             callback_status  = status;
                             callback_message = std::string(message);
@@ -526,7 +534,11 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
     encoder.CopyBufferToBuffer(ctx->debug_dev_buf, 0, ctx->debug_host_buf, 0, ctx->debug_host_buf.GetSize());
     wgpu::CommandBuffer commands = encoder.Finish();
     ctx->queue.Submit(1, &commands);
-    ggml_backend_webgpu_map_buffer(ctx, ctx->debug_host_buf, wgpu::MapMode::Read, 0, ctx->debug_host_buf.GetSize());
+    if (!ggml_backend_webgpu_map_buffer(ctx, ctx->debug_host_buf, wgpu::MapMode::Read, 0,
+                                        ctx->debug_host_buf.GetSize())) {
+        GGML_LOG_ERROR("ggml_webgpu: Debug buffer map failed\n");
+        return;
+    }
     const float * debug_data = (const float *) ctx->debug_host_buf.GetConstMappedRange();
     std::cout << "debug[0]: " << debug_data[0] << "\n";
     ctx->debug_host_buf.Unmap();
@@ -542,7 +554,7 @@ static void ggml_backend_webgpu_collect_profile_futures(webgpu_global_context & 
         auto ts_bufs = command.timestamp_query_bufs;
 
         wgpu::Future f = ts_bufs.host_buf.MapAsync(
-            wgpu::MapMode::Read, 0, ts_bufs.host_buf.GetSize(), wgpu::CallbackMode::AllowSpontaneous,
+            wgpu::MapMode::Read, 0, ts_bufs.host_buf.GetSize(), ggml_webgpu_callback_mode(),
             [ctx, ts_bufs, label](wgpu::MapAsyncStatus status, wgpu::StringView message) {
                 if (status != wgpu::MapAsyncStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to map timestamp buffer: %s\n", std::string(message).c_str());
@@ -3420,7 +3432,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     ctx->webgpu_global_ctx->instance.WaitAny(
         ctx->webgpu_global_ctx->instance.RequestAdapter(
-            &options, wgpu::CallbackMode::AllowSpontaneous,
+            &options, ggml_webgpu_callback_mode(),
             [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
                 if (status != wgpu::RequestAdapterStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
@@ -3491,8 +3503,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     dev_desc.requiredFeatures     = required_features.data();
     dev_desc.requiredFeatureCount = required_features.size();
     dev_desc.SetDeviceLostCallback(
-        wgpu::CallbackMode::AllowSpontaneous,
-        [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+        ggml_webgpu_callback_mode(),
+        [ctx](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
             if (reason == wgpu::DeviceLostReason::Destroyed) {
                 return;
             }
@@ -3525,7 +3537,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     ctx->webgpu_global_ctx->instance.WaitAny(
         ctx->webgpu_global_ctx->adapter.RequestDevice(
-            &dev_desc, wgpu::CallbackMode::AllowSpontaneous,
+            &dev_desc, ggml_webgpu_callback_mode(),
             [ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
                 if (status != wgpu::RequestDeviceStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", std::string(message).c_str());
@@ -4046,6 +4058,13 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.name         = GGML_WEBGPU_NAME;
     ctx.device_count = 0;
 
+    // Keep one Dawn/WebGPU instance alive for the lifetime of the static backend
+    // registry. Recreating it on repeated registry lookups can invalidate
+    // adapter/device references that are still held by the backend/device layer.
+    if (ctx.webgpu_global_ctx != nullptr && ctx.webgpu_global_ctx->instance != nullptr) {
+        return &reg;
+    }
+
     wgpu::InstanceDescriptor               instance_descriptor{};
     std::vector<wgpu::InstanceFeatureName> instance_features = { wgpu::InstanceFeatureName::TimedWaitAny };
     instance_descriptor.requiredFeatures                     = instance_features.data();
@@ -4063,11 +4082,11 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.webgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
     ctx.webgpu_global_ctx->instance = std::move(inst);
 
+    // Probe for adapter support
     wgpu::Adapter adapter;
     if (ctx.webgpu_global_ctx->instance != nullptr) {
         wgpu::RequestAdapterOptions options = {};
 
-        // probe for adapter support
         ctx.webgpu_global_ctx->instance.WaitAny(
             ctx.webgpu_global_ctx->instance.RequestAdapter(
                 &options, wgpu::CallbackMode::AllowSpontaneous,

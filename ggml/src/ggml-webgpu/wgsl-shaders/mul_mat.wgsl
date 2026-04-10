@@ -20,11 +20,12 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef Q4_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block_q4_0 = src0[src0_idx_base + offset];
-    let d = f32(block_q4_0.d);
+    let block_byte_base = (src0_idx_base + offset) * 18; // Block stride: 18 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var sum: f32 = 0.0;
     for (var j: u32 = 0; j < 4; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q4_0.qs[2 * j], block_q4_0.qs[2 * j + 1]));
+        let q_byte_offset = block_byte_base + 2 + j * 4;
+        let q_packed = load_u32_at(&src0, q_byte_offset);
         for (var k: u32 = 0; k < 4; k++) {
             let q_byte = get_byte(q_packed, k);
             let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0f) * d;
@@ -61,12 +62,13 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef Q5_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block_q5_0 = src0[src0_idx_base + offset];
-    let d = f32(block_q5_0.d);
+    let block_byte_base = (src0_idx_base + offset) * 22; // Block stride: 22 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var sum: f32 = 0.0;
-    let qh_packed = bitcast<u32>(vec2(block_q5_0.qh[0], block_q5_0.qh[1]));
+    let qh_packed = load_u32_at(&src0, block_byte_base + 2);
     for (var j: u32 = 0; j < 4; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q5_0.qs[2 * j], block_q5_0.qs[2 * j + 1]));
+        let q_byte_offset = block_byte_base + 6 + j * 4;
+        let q_packed = load_u32_at(&src0, q_byte_offset);
         for (var k: u32 = 0; k < 4; k++) {
             let q_byte = get_byte(q_packed, k);
             let qh_hi = (qh_packed >> (j * 4 + k + 12)) & 0x10;
@@ -107,12 +109,13 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef Q8_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block_q8_0 = src0[src0_idx_base + offset];
-    let d = f32(block_q8_0.d);
+    let block_byte_base = (src0_idx_base + offset) * 34; // Block stride: 34 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var sum: f32 = 0.0;
     for (var j: u32 = 0; j < 8; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q8_0.qs[2 * j], block_q8_0.qs[2 * j + 1]));
-        for (var k: u32 = 0; k < 4; k++) {
+        let q_byte_offset = block_byte_base + 2 + j * 4;
+        let q_packed = load_u32_at(&src0, q_byte_offset);
+        for (var k: u32 = 0u; k < 4u; k++) {
             let q_byte = get_byte_i32(q_packed, k);
             let q_val = f32(q_byte) * d;
             let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
@@ -178,31 +181,37 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 #ifdef Q3_K
 // 16 blocks of 16 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 110; // Block stride: 110 bytes
+
+    // Bytes 108-109: f16 scale 'd'
+    let d = load_f16_as_f32_at(&src0, block_byte_base + 108);
 
     // extract 6-bit scales, which consist of 4-bits from first 8 bytes of scale,
     // and 2-bits from the last 4 bytes
+    // Bytes 96-107: 12 bytes of scales (3 u32s)
     let kmask1: u32 = 0x03030303;
     let kmask2: u32 = 0x0f0f0f0f;
     var scale_vals: array<u32, 4>;
-    for (var i: u32 = 0; i < 4; i++) {
-        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
-    }
+    scale_vals[0] = load_u32_at(&src0, block_byte_base + 96);
+    scale_vals[1] = load_u32_at(&src0, block_byte_base + 100);
+    scale_vals[2] = load_u32_at(&src0, block_byte_base + 104);
+
     var tmp: u32 = scale_vals[2];
     scale_vals[2] = ((scale_vals[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
     scale_vals[3] = ((scale_vals[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
     scale_vals[0] = (scale_vals[0] & kmask2) | ((tmp & kmask1) << 4);
     scale_vals[1] = (scale_vals[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
 
-    // convert arrays of f16 -> u32
+    // Bytes 0-31: 32 bytes of hmask (8 u32s)
     var hmask_vals: array<u32, 8>;
     for (var i: u32 = 0; i < 8; i++) {
-        hmask_vals[i] = bitcast<u32>(vec2(block.hmask[2 * i], block.hmask[2 * i + 1]));
+        hmask_vals[i] = load_u32_at(&src0, block_byte_base + i * 4);
     }
+
+    // Bytes 32-95: 64 bytes of qs (16 u32s)
     var qs_vals: array<u32, 16>;
-    for (var i: u32 = 0; i < 16; i++) {
-        qs_vals[i] = bitcast<u32>(vec2(block.qs[2 * i], block.qs[2 * i + 1]));
+    for (var i: u32 = 0u; i < 16; i++) {
+        qs_vals[i] = load_u32_at(&src0, block_byte_base + 32 + i * 4);
     }
 
     var sum = 0.0;
@@ -301,21 +310,27 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 #ifdef Q6_K
 // 16 blocks of 16 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 210; // Block stride: 210 bytes
 
-    // convert arrays of f16 -> u32
+    // Bytes 208-209: f16 scale 'd'
+    let d = load_f16_as_f32_at(&src0, block_byte_base + 208);
+
+    // Bytes 0-127: 128 bytes of ql (32 u32s)
     var ql_vals: array<u32, 32>;
     for (var i: u32 = 0; i < 32; i++) {
-        ql_vals[i] = bitcast<u32>(vec2(block.ql[2 * i], block.ql[2 * i + 1]));
+        ql_vals[i] = load_u32_at(&src0, block_byte_base + i * 4);
     }
+
+    // Bytes 128-191: 64 bytes of qh (16 u32s)
     var qh_vals: array<u32, 16>;
     for (var i: u32 = 0; i < 16; i++) {
-        qh_vals[i] = bitcast<u32>(vec2(block.qh[2 * i], block.qh[2 * i + 1]));
+        qh_vals[i] = load_u32_at(&src0, block_byte_base + 128 + i * 4);
     }
+
+    // Bytes 192-207: 16 bytes of scales (4 u32s)
     var scale_vals: array<u32, 4>;
     for (var i: u32 = 0; i < 4; i++) {
-        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
+        scale_vals[i] = load_u32_at(&src0, block_byte_base + 192 + i * 4);
     }
 
     var sum = 0.0;
@@ -358,13 +373,15 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ2_XXS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 66; // Block stride: 66 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 32; ib += 4) {
-        let aux0 = bitcast<u32>(vec2(block.qs[ib], block.qs[ib + 1]));
-        let aux1 = bitcast<u32>(vec2(block.qs[ib + 2], block.qs[ib + 3]));
+        let aux0_offset = block_byte_base + 2 + ib * 2;
+        let aux1_offset = block_byte_base + 2 + (ib + 2) * 2;
+        let aux0 = load_u32_at(&src0, aux0_offset);
+        let aux1 = load_u32_at(&src0, aux1_offset);
         let db = d * (0.5 + f32(aux1 >> 28)) * 0.25;
         for (var l: u32 = 0; l < 4; l++) {
             let ig = get_byte(aux0, l) * 8;
@@ -384,13 +401,15 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ2_XS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 74; // Block stride: 74 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
+
     var scale_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.scales[0], block.scales[1])),
-        bitcast<u32>(vec2(block.scales[2], block.scales[3]))
+        load_u32_at(&src0, block_byte_base + 66),
+        load_u32_at(&src0, block_byte_base + 70)
     );
+
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 32; ib += 4) {
         let s = get_byte(scale_vals[ib / 16], (ib % 16) / 4);
@@ -399,7 +418,8 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
             d * (0.5 + f32(s >> 4)) * 0.25
         );
         for (var l: u32 = 0; l < 4; l++) {
-            let qs_val = bitcast<u32>(vec2(block.qs[ib + l], 0.0));
+            let qs_offset = block_byte_base + 2 + (ib + l) * 2;
+            let qs_val = load_u32_at(&src0, qs_offset) & 0xFFFF;
             let ig = (qs_val & 511) * 8;
             let is = qs_val >> 9;
             let signs = get_byte(ksigns_iq2xs[is / 4], is % 4);
@@ -418,21 +438,23 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ2_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 82; // Block stride: 82 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
+
     var qs_vals : array<u32, 16>;
     for (var i: u32 = 0; i < 16; i++) {
-        qs_vals[i] = bitcast<u32>(vec2(block.qs[i * 2], block.qs[i * 2 + 1]));
+        qs_vals[i] = load_u32_at(&src0, block_byte_base + 2 + i * 4);
     }
-    var qh_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.qh[0], block.qh[1])),
-        bitcast<u32>(vec2(block.qh[2], block.qh[3]))
-    );
-    var scale_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.scales[0], block.scales[1])),
-        bitcast<u32>(vec2(block.scales[2], block.scales[3]))
-    );
+
+    var qh_vals: array<u32, 2>;
+    qh_vals[0] = load_u32_at(&src0, block_byte_base + 66);
+    qh_vals[1] = load_u32_at(&src0, block_byte_base + 70);
+
+    var scale_vals: array<u32, 2>;
+    scale_vals[0] = load_u32_at(&src0, block_byte_base + 74);
+    scale_vals[1] = load_u32_at(&src0, block_byte_base + 78);
+
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 8; ib ++) {
         let s = get_byte(scale_vals[ib / 4], ib % 4);
@@ -460,17 +482,18 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ3_XXS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 98; // Block stride: 98 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 16; ib += 2) {
-        let sc_sign = bitcast<u32>(vec2(block.qs[ib + 32], block.qs[ib + 33]));
+        let sc_sign_offset = block_byte_base + 2 + (ib + 32) * 2;
+        let sc_sign = load_u32_at(&src0, sc_sign_offset);
         let db = d * (0.5 + f32(sc_sign >> 28)) * 0.5;
         for (var l: u32 = 0; l < 4; l++) {
             let is = (sc_sign >> (7 * l)) & 127;
             let signs = get_byte(ksigns_iq2xs[is / 4], is % 4);
-            let ig_val = bitcast<u32>(vec2(block.qs[ib * 2 + l], 0.0));
+            let ig_val = load_u32_at(&src0, block_byte_base + 2 + (ib * 2 + l) * 2) & 0xFFFF;
             let ig1 = get_byte(ig_val, 0);
             let ig2 = get_byte(ig_val, 1);
             for (var j: u32 = 0; j < 4; j++) {
@@ -491,18 +514,22 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ3_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 110; // Block stride: 110 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
+
     var qh_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.qh[0], block.qh[1])),
-        bitcast<u32>(vec2(block.qh[2], block.qh[3]))
+        load_u32_at(&src0, block_byte_base + 66),
+        load_u32_at(&src0, block_byte_base + 70)
     );
+
     var sign_vals: array<u32, 8>;
     for (var i: u32 = 0; i < 8; i++) {
-        sign_vals[i] = bitcast<u32>(vec2(block.signs[i * 2], block.signs[i * 2 + 1]));
+        sign_vals[i] = load_u32_at(&src0, block_byte_base + 74 + i * 4);
     }
-    var scale_vals = bitcast<u32>(vec2(block.scales[0], block.scales[1]));
+
+    var scale_vals = load_u32_at(&src0, block_byte_base + 106);
+
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 4; ib++) {
         let s = get_byte(scale_vals, ib);
@@ -516,7 +543,7 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
             let sign_w = sign_vals[ib * 2 + k];
             for (var l: u32 = 0; l < 4; l++) {
                 let signs = get_byte(sign_w, l);
-                let ig_val = bitcast<u32>(vec2(block.qs[ib * 8 + k * 4 + l], 0.0));
+                let ig_val = load_u32_at(&src0, block_byte_base + 2 + (ib * 8 + k * 4 + l) * 2) & 0xFFFF;
                 let ig1 = get_byte(ig_val, 0) | ((qh_byte << ((8 - (2 * l)))) & 256);
                 let ig2 = get_byte(ig_val, 1) | ((qh_byte << ((7 - (2 * l)))) & 256);
                 for (var j: u32 = 0; j < 4; j++) {
@@ -538,15 +565,15 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ1_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 50; // Block stride: 50 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 256;
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 8; ib++) {
-        let qh = bitcast<u32>(vec2(block.qh[ib], 0.0));
-        let dl = d * (2 * f32((qh >> 12) & 7) + 1);
+        let qh = load_u32_at(&src0, block_byte_base + 34 + ib * 2) & 0xFFFF;
+        let dl = d * (2.0 * f32((qh >> 12) & 7) + 1.0);
         let delta = select(IQ1_DELTA, -IQ1_DELTA, (qh & 0x8000) != 0);
-        let qs_w = bitcast<u32>(vec2(block.qs[ib * 2], block.qs[ib * 2 + 1]));
+        let qs_w = load_u32_at(&src0, block_byte_base + 2 + ib * 4);
         for (var l: u32 = 0; l < 4; l++) {
             let ig = (get_byte(qs_w, l) | (((qh >> (3 * l)) & 7) << 8)) * 8;
             for (var j: u32 = 0; j < 8; j++) {
@@ -610,13 +637,13 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 
 #ifdef IQ4_NL
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src0_idx_base + offset) * 18; // Block stride: 18 bytes
+    let d = load_f16_as_f32_at(&src0, block_byte_base);
     var src1_i = src1_idx_base + offset * 32;
     var sum = 0.0;
     var qs: array<u32, 4>;
     for (var i: u32 = 0; i < 4; i++) {
-        qs[i] = bitcast<u32>(vec2(block.qs[i * 2], block.qs[i * 2 + 1]));
+        qs[i] = load_u32_at(&src0, block_byte_base + 2 + i * 4);
     }
     for (var j: u32 = 0; j < 16; j++) {
         let qsb = get_byte(qs[j / 4], j % 4);
@@ -631,8 +658,8 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 #ifdef IQ4_XS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
-    let d = f32(block.d);
-    let scales_h = bitcast<u32>(vec2(block.scales_h, 0.0));
+    let d = unpack2x16float(block.d_scales_h)[0];
+    let scales_h = block.d_scales_h >> 16;
     var src1_i = src1_idx_base + offset * 256;
     var sum = 0.0;
     for (var ib: u32 = 0; ib < 8; ib++) {

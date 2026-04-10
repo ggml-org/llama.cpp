@@ -84,11 +84,11 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
-            let d = load_src0_f16_at(block_byte_base);
+            let d = load_f16_at(&src0, block_byte_base);
 
             for (var j = 0u; j < F16_PER_THREAD; j += 2) {
                 let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
                 for (var k = 0u; k < 4u; k++) {
                     let q_byte = get_byte(q_packed, k);
                     let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
@@ -125,12 +125,12 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
-            let d = load_src0_f16_at(block_byte_base);
-            let m = load_src0_f16_at(block_byte_base + 2u);
+            let d = load_f16_at(&src0, block_byte_base);
+            let m = load_f16_at(&src0, block_byte_base + 2u);
 
             for (var j = 0u; j < F16_PER_THREAD; j += 2) {
                 let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
                 for (var k = 0u; k < 4u; k++) {
                     let q_byte = get_byte(q_packed, k);
                     let q_lo = f16(q_byte & 0xF) * d + m;
@@ -171,12 +171,12 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
             let src0_idx  = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-            let d  = load_src0_f16_at(block_byte_base);
-            let qh_packed = load_src0_u32_at(block_byte_base + 2u);
+            let d  = load_f16_at(&src0, block_byte_base);
+            let qh_packed = load_u32_at(&src0, block_byte_base + 2u);
 
             for (var j = 0u; j < 2; j++) {
                 let q_byte_offset = block_byte_base + 6u + 2u * (block_offset + j * 2u);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
 
                 let j_adjusted = j + (block_offset / 2u);
 
@@ -225,14 +225,14 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
             let src0_idx  = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-            let d  = load_src0_f16_at(block_byte_base);
-            let m = load_src0_f16_at(block_byte_base + 2u);
-            let qh_packed = load_src0_u32_at(block_byte_base + 4u);
+            let d  = load_f16_at(&src0, block_byte_base);
+            let m = load_f16_at(&src0, block_byte_base + 2u);
+            let qh_packed = load_u32_at(&src0, block_byte_base + 4u);
 
             for (var j = 0u; j < 2; j++) {
 
                 let q_byte_offset = block_byte_base + 8u + 2u * (block_offset + j * 2u);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
 
                 let j_adjusted = j + (block_offset / 2u);
 
@@ -277,11 +277,11 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
-            let d = load_src0_f16_at(block_byte_base);
+            let d = load_f16_at(&src0, block_byte_base);
 
             for (var j = 0u; j < F16_PER_THREAD; j+=2) {
                 let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
                 for (var k = 0u; k < 4u; k++) {
                     let q_byte = get_byte_i32(q_packed, k);
 
@@ -317,12 +317,12 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
             let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
-            let d = load_src0_f16_at(block_byte_base);
-            let m = load_src0_f16_at(block_byte_base + 2u);
+            let d = load_f16_at(&src0, block_byte_base);
+            let m = load_f16_at(&src0, block_byte_base + 2u);
 
             for (var j = 0u; j < F16_PER_THREAD; j+=2) {
                 let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
-                let q_packed = load_src0_u32_at(q_byte_offset);
+                let q_packed = load_u32_at(&src0, q_byte_offset);
                 for (var k = 0u; k < 4u; k++) {
                     let q_byte = get_byte_i32(q_packed, k);
 
@@ -359,8 +359,8 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
         let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-        let d = load_src0_f16_at(block_byte_base + 80u);
-        let dmin = load_src0_f16_at(block_byte_base + 82u);
+        let d = load_f16_at(&src0, block_byte_base + 80u);
+        let dmin = load_f16_at(&src0, block_byte_base + 82u);
 
         // Decode the element at position k_in_block
         let block_of_32 = k_in_block / 32u;
@@ -373,14 +373,14 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
         let is = k_in_block / 16u;
 
-        let sc_packed = load_src0_u32_at(block_byte_base + 4u * (is / 4u));
+        let sc_packed = load_u32_at(&src0, block_byte_base + 4u * (is / 4u));
         let sc = get_byte(sc_packed, is % 4u);
 
         let dl = d * f16(sc & 0xFu);
         let ml = dmin * f16(sc >> 4u);
 
         let q_idx = q_b_idx + k + l;
-        let q_packed = load_src0_u32_at(block_byte_base + 16u + 4u * (q_idx / 4u));
+        let q_packed = load_u32_at(&src0, block_byte_base + 16u + 4u * (q_idx / 4u));
         let q_byte = get_byte(q_packed, q_idx % 4u);
         let qs_val = (q_byte >> shift) & 3u;
 
@@ -413,7 +413,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
         let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-        let d = load_src0_f16_at(block_byte_base + 108u);
+        let d = load_f16_at(&src0, block_byte_base + 108u);
 
         // Load and unpack scales
         let kmask1: u32 = 0x03030303u;
@@ -421,7 +421,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
         var scale_vals: array<u32, 4>;
         for (var i: u32 = 0u; i < 4u; i++) {
-            scale_vals[i] = load_src0_u32_at(block_byte_base + 96u + 4u * i);
+            scale_vals[i] = load_u32_at(&src0, block_byte_base + 96u + 4u * i);
         }
 
         var tmp: u32 = scale_vals[2];
@@ -433,12 +433,12 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         // Load hmask and qs arrays
         var hmask_vals: array<u32, 8>;
         for (var i: u32 = 0u; i < 8u; i++) {
-            hmask_vals[i] = load_src0_u32_at(block_byte_base + 4u * i);
+            hmask_vals[i] = load_u32_at(&src0, block_byte_base + 4u * i);
         }
 
         var qs_vals: array<u32, 16>;
         for (var i: u32 = 0u; i < 16u; i++) {
-            qs_vals[i] = load_src0_u32_at(block_byte_base + 32u + 4u * i);
+            qs_vals[i] = load_u32_at(&src0, block_byte_base + 32u + 4u * i);
         }
 
         let half = k_in_block / 128u;           // 0 or 1
@@ -499,13 +499,13 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
         let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-        let d = load_src0_f16_at(block_byte_base);
-        let dmin = load_src0_f16_at(block_byte_base + 2u);
+        let d = load_f16_at(&src0, block_byte_base);
+        let dmin = load_f16_at(&src0, block_byte_base + 2u);
 
         // Load packed scales
         var scale_vals: array<u32, 3>;
         for (var i: u32 = 0u; i < 3u; i++) {
-            scale_vals[i] = load_src0_u32_at(block_byte_base + 4u + 4u * i);
+            scale_vals[i] = load_u32_at(&src0, block_byte_base + 4u + 4u * i);
         }
 
         // Map k_in_block to loop structure:
@@ -541,7 +541,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let ml = dmin * f16(mn);
 
         let q_idx = q_b_idx + l;
-        let q_packed = load_src0_u32_at(block_byte_base + 16u + 4u * (q_idx / 4u));
+        let q_packed = load_u32_at(&src0, block_byte_base + 16u + 4u * (q_idx / 4u));
 
         let q_byte = get_byte(q_packed, q_idx % 4u);
         let qs_val = (q_byte >> shift) & 0xFu;
@@ -575,13 +575,13 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
         let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
 
-        let d = load_src0_f16_at(block_byte_base);
-        let dmin = load_src0_f16_at(block_byte_base + 2u);
+        let d = load_f16_at(&src0, block_byte_base);
+        let dmin = load_f16_at(&src0, block_byte_base + 2u);
 
         // Load packed scales
         var scale_vals: array<u32, 3>;
         for (var i: u32 = 0u; i < 3u; i++) {
-            scale_vals[i] = load_src0_u32_at(block_byte_base + 4u + 4u * i);
+            scale_vals[i] = load_u32_at(&src0, block_byte_base + 4u + 4u * i);
         }
 
         // The original loop processes elements in groups of 64
@@ -621,11 +621,11 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let ml = dmin * f16(mn);
 
         let q_idx = q_b_idx + l;
-        let q_packed = load_src0_u32_at(block_byte_base + 48u + 4u * (q_idx / 4u));
+        let q_packed = load_u32_at(&src0, block_byte_base + 48u + 4u * (q_idx / 4u));
 
         let q_byte = get_byte(q_packed, q_idx % 4u);
 
-        let qh_packed = load_src0_u32_at(block_byte_base + 16u + 4u * (l / 4u));
+        let qh_packed = load_u32_at(&src0, block_byte_base + 16u + 4u * (l / 4u));
 
         let qh_byte = get_byte(qh_packed, l % 4u);
 
@@ -673,17 +673,17 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
         // Load only ql13 word needed
         let ql13_flat = ql_b_idx + l;
-        let ql13 = load_src0_u32_at(block_byte_base + ql13_flat);
+        let ql13 = load_u32_at(&src0, block_byte_base + ql13_flat);
         let ql13_b = get_byte(ql13, 0u);
 
         // Load only ql24 word needed
         let ql24_flat = ql_b_idx + l + 32u;
-        let ql24 = load_src0_u32_at(block_byte_base + ql24_flat);
+        let ql24 = load_u32_at(&src0, block_byte_base + ql24_flat);
         let ql24_b = get_byte(ql24, 0u);
 
         // Load only qh word needed
         let qh_flat = qh_b_idx + l;
-        let qh = load_src0_u32_at(block_byte_base + 128u + qh_flat);
+        let qh = load_u32_at(&src0, block_byte_base + 128u + qh_flat);
         let qh_b = get_byte(qh, 0u);
 
         let q1 = f16((ql13_b & 0xFu) | ((qh_b & 3u) << 4u)) - f16(32.0);
@@ -694,10 +694,10 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         // Load only the scale word needed
         let is = l / 16u;
         let sc_idx = sc_b_idx + is + quarter * 2u;
-        let sc = load_src0_u32_at(block_byte_base + 192u + sc_idx);
+        let sc = load_u32_at(&src0, block_byte_base + 192u + sc_idx);
         let sc_val = get_byte_i32(sc, 0u);
 
-        let d = load_src0_f16_at(block_byte_base + 208u);
+        let d = load_f16_at(&src0, block_byte_base + 208u);
 
         var q_val: f16;
         if (quarter == 0u) {
