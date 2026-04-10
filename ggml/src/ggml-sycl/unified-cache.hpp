@@ -209,6 +209,13 @@ struct placement_plan {
     size_t moe_q8_workspace_bytes  = 0;  // Zone: SCRATCH (device VRAM)
     // Expert bias D2H copy: float bias tensors staged to host for gate computation.
     size_t expert_bias_bytes       = 0;  // Zone: STAGING (host pinned)
+    // MoE routing: per-batch expert ID staging buffer (n_expert * max_batch_tokens * sizeof(int32_t)).
+    size_t moe_routing_ids_bytes   = 0;  // Zone: RUNTIME (device VRAM)
+    // MoE expert pointer tables: void* per expert per MoE layer (MAX_EXPERTS * n_moe_layers * sizeof(void*)).
+    size_t moe_expert_ptrs_bytes   = 0;  // Zone: RUNTIME (device VRAM)
+    // Combined VRAM RUNTIME reservation for MoE routing buffers (routing_ids + expert_ptrs).
+    // 0 when model has no MoE layers.
+    size_t moe_vram_runtime_bytes  = 0;  // Zone: RUNTIME (device VRAM)
     // CPU quantization temp buffers: pre-allocated by T1 cpu_dispatch_buffers.
     size_t cpu_quant_buffer_bytes  = 0;  // Zone: HOST (system heap)
     // Graph metadata: layer classification vectors and MoE routing tables.

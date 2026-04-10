@@ -10125,7 +10125,7 @@ static void populate_host_zone_sizing(placement_plan &                          
         plan.moe_q8_workspace_bytes = 0;
     }
 
-    // 3. Expert bias D2H: float32 bias per expert across all MoE layers, staged to host.
+    // 3. Expert bias D2H + MoE routing buffers: computed from MoE layer count.
     //    Count MoE layers from plan entries (expert_id >= 0) to avoid needing n_layer separately.
     if (n_experts > 0) {
         int max_layer_id = 0;
@@ -10134,11 +10134,34 @@ static void populate_host_zone_sizing(placement_plan &                          
                 max_layer_id = entry.layer_id;
             }
         }
-        const int n_moe_layers  = max_layer_id + 1;
-        plan.expert_bias_bytes  = static_cast<size_t>(n_experts) * sizeof(float) *
-                                  static_cast<size_t>(n_moe_layers);
+        const int n_moe_layers = max_layer_id + 1;
+
+        // 3a. Expert bias D2H: float32 bias per expert across all MoE layers, staged to host.
+        plan.expert_bias_bytes = static_cast<size_t>(n_experts) * sizeof(float) *
+                                 static_cast<size_t>(n_moe_layers);
+
+        // 3b. MoE routing IDs: per-batch expert assignment buffer on device.
+        //     n_expert rows × max_batch_tokens cols, each entry is int32_t.
+        //     planner_n_ctx is the maximum context length = conservative max batch size.
+        const size_t max_batch_tokens = static_cast<size_t>(std::max<uint32_t>(plan.planner_n_ctx, 1));
+        plan.moe_routing_ids_bytes    = static_cast<size_t>(n_experts) * sizeof(int32_t) * max_batch_tokens;
+
+        // 3c. MoE expert pointer tables: one void* per expert per MoE layer, pre-allocated
+        //     for graph recording (fixed addresses required).
+        //     MAX_EXPERTS (256) is used for the pre-allocation size regardless of n_experts.
+        constexpr int k_max_experts_prealloc = 256;  // moe_tile_mapping_state::MAX_EXPERTS
+        plan.moe_expert_ptrs_bytes           = static_cast<size_t>(k_max_experts_prealloc) *
+                                               sizeof(void *) * static_cast<size_t>(n_moe_layers);
+
+        GGML_LOG_INFO("[SYCL-PLAN] MoE routing buffer sizing: n_experts=%d n_moe_layers=%d "
+                      "max_batch=%zu routing_ids=%.2f MB expert_ptrs=%.2f MB\n",
+                      n_experts, n_moe_layers, max_batch_tokens,
+                      plan.moe_routing_ids_bytes / (1024.0 * 1024.0),
+                      plan.moe_expert_ptrs_bytes / (1024.0 * 1024.0));
     } else {
-        plan.expert_bias_bytes = 0;
+        plan.expert_bias_bytes     = 0;
+        plan.moe_routing_ids_bytes = 0;
+        plan.moe_expert_ptrs_bytes = 0;
     }
 
     // 4. CPU quantization temp buffers: 3 pre-allocated slots (cpu_dispatch_buffers) each
@@ -10212,6 +10235,10 @@ static void populate_host_zone_sizing(placement_plan &                          
     // reservation. 0 when TP disabled (both components are 0).
     plan.tp_vram_runtime_bytes = plan.tp_ffn_buffer_bytes + plan.tp_attn_buffer_bytes;
 
+    // Aggregate MoE routing buffers into a single VRAM RUNTIME reservation field.
+    // 0 for dense models (both components are 0 when n_experts == 0).
+    plan.moe_vram_runtime_bytes = plan.moe_routing_ids_bytes + plan.moe_expert_ptrs_bytes;
+
     // --- Host zone sizing (uses inference category fields computed above) ---
 
     plan.host_zone_weight_bytes =
@@ -10222,13 +10249,15 @@ static void populate_host_zone_sizing(placement_plan &                          
         std::max<size_t>(k_min_zone_bytes,
                          plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes +
                              plan.tp_staging_buffer_bytes);
-    // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder and MoE Q8_1 workspace.
+    // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder, MoE Q8_1 workspace,
+    // and MoE routing buffers (routing IDs + expert pointer tables).
     // Actual compute buffer needs are fed back via unified_cache_grow_host_scratch_zone()
     // after the ggml scheduler is created.
     plan.host_zone_scratch_bytes =
         std::max<size_t>(k_min_zone_bytes,
                          plan.max_tensor_bytes + k_scratch_headroom +
-                         plan.onednn_reorder_bytes + plan.moe_q8_workspace_bytes);
+                         plan.onednn_reorder_bytes + plan.moe_q8_workspace_bytes +
+                         plan.moe_vram_runtime_bytes);
 }
 
 placement_plan compute_placement_plan(const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
