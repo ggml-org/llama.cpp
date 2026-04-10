@@ -1916,7 +1916,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 
     // Gemma4 format detection
     if (src.find("'<|tool_call>call:'") != std::string::npos) {
-        workaround::convert_tool_responses_gemma4(params.messages);
+        if (src.find("{#- OpenAI Chat Completions:") == std::string::npos) {
+            // apply workarounds if using the older gemma4 templates
+            LOG_WRN("%s: detected an outdated gemma4 chat template, applying compatibility workarounds. "
+                    "Consider updating to the official template.\n", __func__);
+            workaround::convert_tool_responses_gemma4(params.messages);
+        }
         return common_chat_params_init_gemma4(tmpl, params);
     }
 
