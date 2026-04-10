@@ -1952,6 +1952,9 @@ json server_task_result_get_lora::to_json() {
             entry["alora_invocation_string"] = lora.alora_invocation_string;
             entry["alora_invocation_tokens"] = lora.alora_invocation_tokens;
         }
+        if (!lora.info.mmlora_modality_types.empty()) {
+            entry["mmlora_modality_types"] = lora.info.mmlora_modality_types;
+        }
         result.push_back(std::move(entry));
     }
     return result;
