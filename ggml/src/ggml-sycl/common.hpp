@@ -634,6 +634,31 @@ inline bool ggml_sycl_host_task_stable_for_queue(const sycl::queue & q) {
 bool          ggml_sycl_cpu_offload_available();
 sycl::queue * ggml_sycl_get_cpu_queue();
 
+// CPU dispatch buffer pool: pre-allocated quantization buffers to eliminate per-token resize()
+struct cpu_dispatch_buffers {
+    std::vector<uint8_t> src1_q;         // Quantization buffer: max M * max_q_row_size
+    std::vector<float>   accs;           // Accumulator buffer: max chunk4 * 32 bytes (__m256)
+    std::vector<float>   silu_temp;      // SILU/MUL fusion temp: max N * K
+
+    // Initialize buffers based on model dimensions
+    void init(size_t max_m, size_t max_n, size_t max_k, size_t max_q_row_size) {
+        src1_q.resize(max_m * max_q_row_size);
+        // __m256 is 32 bytes = 8 floats; allocate for max chunk4 (256 + max_m) accumulators
+        accs.resize((256 + max_m) * 8);  // Conservative upper bound: 256 stack + max_m heap
+        silu_temp.resize(max_n * max_k);
+    }
+};
+
+// Per-thread buffer pool for CPU dispatch quantization
+// Declared here, defined in cpu-dispatch.cpp to avoid ODR violations
+extern thread_local cpu_dispatch_buffers g_cpu_dispatch_buffers;
+
+// Forward declare ggml_model (defined in ggml.h)
+struct ggml_model;
+
+// Initialize CPU dispatch buffers at model load time
+void ggml_sycl_cpu_dispatch_buffers_init(const ggml_model * model);
+
 // Forward declaration — defined later in this header after MoE helpers.
 inline bool is_coalesced_supported(ggml_type type);
 
@@ -1130,13 +1155,18 @@ size_t ggml_sycl_tp_get_shard_size(const ggml_tensor * tensor, int rank, int wor
 // =============================================================================
 
 struct ggml_sycl_tp_quant_comm_buffers {
-    int16_t * dev_q[GGML_SYCL_MAX_DEVICES];       // INT16 device buffers (2 bytes per element)
-    float *   dev_minmax[GGML_SYCL_MAX_DEVICES];  // [min, max] per device
-    int16_t * host_q0;                            // Host buffer for device 0 INT16
-    int16_t * host_q1;                            // Host buffer for device 1 INT16
-    float *   host_result;                        // Host buffer for FP32 result
-    size_t    capacity;                           // Current allocation size (elements)
-    bool      allocated;
+    int16_t *               dev_q[GGML_SYCL_MAX_DEVICES];       // INT16 device buffers (2 bytes per element)
+    float *                 dev_minmax[GGML_SYCL_MAX_DEVICES];  // [min, max] per device
+    int16_t *               host_q0;                            // Host buffer for device 0 INT16
+    int16_t *               host_q1;                            // Host buffer for device 1 INT16
+    float *                 host_result;                        // Host buffer for FP32 result
+    size_t                  capacity;                           // Current allocation size (elements)
+    bool                    allocated;
+    ggml_sycl::alloc_handle dev_q_alloc[GGML_SYCL_MAX_DEVICES];
+    ggml_sycl::alloc_handle dev_minmax_alloc[GGML_SYCL_MAX_DEVICES];
+    ggml_sycl::alloc_handle host_q0_alloc;
+    ggml_sycl::alloc_handle host_q1_alloc;
+    ggml_sycl::alloc_handle host_result_alloc;
 };
 
 // Check if quantized AllReduce is enabled via GGML_SYCL_QUANT_ALLREDUCE env var
@@ -1175,8 +1205,9 @@ struct ggml_sycl_pp_config {
     int  devices[GGML_SYCL_MAX_DEVICES]           = { 0 };  // Device IDs in PP order
 
     // Inter-stage buffers (malloc_shared for Intel Arc without P2P)
-    void * stage_output_buf[GGML_SYCL_MAX_DEVICES] = { nullptr };
-    size_t stage_output_size                       = 0;  // Current buffer size per stage
+    void *                  stage_output_buf[GGML_SYCL_MAX_DEVICES] = { nullptr };
+    size_t                  stage_output_size                       = 0;  // Current buffer size per stage
+    ggml_sycl::alloc_handle stage_output_alloc[GGML_SYCL_MAX_DEVICES];
 
     // Synchronization events for pipelining
     sycl::event stage_complete[GGML_SYCL_MAX_DEVICES];
@@ -1230,12 +1261,6 @@ sycl::event ggml_sycl_pp_stage_transfer(int          src_device,
                                         queue_ptr    src_queue,
                                         queue_ptr    dst_queue);
 
-// Wait for a stage to complete (blocking)
-void ggml_sycl_pp_sync_stage(int stage);
-
-// Wait for all stages to complete
-void ggml_sycl_pp_sync_all();
-
 // Check if PP is enabled
 bool ggml_sycl_pp_enabled();
 
@@ -1263,11 +1288,13 @@ void ggml_sycl_pp_reset_stats();
 // FFN norm cache for TP: stores FFN norm output immediately after MUL to prevent buffer aliasing
 // The GGML scheduler may reuse the FFN norm buffer before TP can use it on device 1
 struct ffn_norm_cache_entry {
-    void *  data;       // Cached FFN norm output on main device (device 0)
-    void *  data_dev1;  // Copy on device 1 for its computation
-    int64_t ne0, ne1;   // Dimensions
-    size_t  size;       // Buffer size in bytes
-    int     pass_id;    // Which compute pass this cache is for (to detect staleness)
+    void *                  data;       // Cached FFN norm output on main device (device 0)
+    void *                  data_dev1;  // Copy on device 1 for its computation
+    int64_t                 ne0, ne1;   // Dimensions
+    size_t                  size;       // Buffer size in bytes
+    int                     pass_id;    // Which compute pass this cache is for (to detect staleness)
+    ggml_sycl::alloc_handle data_alloc;
+    ggml_sycl::alloc_handle data_dev1_alloc;
 };
 
 // Global FFN norm cache indexed by layer number
@@ -1291,9 +1318,10 @@ void ggml_sycl_tp_new_pass();
 // FFN input storage: stores the input to FFN column-parallel layers on device 1
 // This is needed so that row-parallel (ffn_down) can compute device 1's contribution
 struct ffn_input_storage {
-    void *  data;      // Buffer on device 1
-    int64_t ne0, ne1;  // Dimensions
-    size_t  size;      // Buffer size
+    void *                  data;      // Buffer on device 1
+    int64_t                 ne0, ne1;  // Dimensions
+    size_t                  size;      // Buffer size
+    ggml_sycl::alloc_handle alloc;
 };
 
 extern std::unordered_map<int, ffn_input_storage> g_tp_ffn_inputs;  // Key: layer number
@@ -1311,9 +1339,10 @@ extern std::mutex                               g_tp_ffn_weight_mutex;
 
 // Attention input storage: stores the input to attention column-parallel layers on device 1
 struct attn_input_storage {
-    void *  data;      // Buffer on device 1
-    int64_t ne0, ne1;  // Dimensions
-    size_t  size;      // Buffer size
+    void *                  data;      // Buffer on device 1
+    int64_t                 ne0, ne1;  // Dimensions
+    size_t                  size;      // Buffer size
+    ggml_sycl::alloc_handle alloc;
 };
 
 extern std::unordered_map<int, attn_input_storage> g_tp_attn_inputs;  // Key: layer number
@@ -1333,12 +1362,13 @@ extern std::mutex                                g_tp_attn_weight_mutex;
 // Async FFN job structure: tracks an in-flight FFN computation on device 1
 // This allows device 1 to compute while device 0 continues with other work
 struct tp_async_ffn_job {
-    int         layer;             // Layer number
-    sycl::event completion_event;  // Event signaling computation complete
-    float *     result_buf;        // Result buffer (in pinned host memory)
-    int64_t     ne0, ne1;          // Output dimensions [N_out, batch]
-    size_t      result_size;       // Result buffer size in bytes
-    bool        valid;             // Job is valid and pending
+    int                     layer;             // Layer number
+    sycl::event             completion_event;  // Event signaling computation complete
+    float *                 result_buf;        // Result buffer (in pinned host memory)
+    int64_t                 ne0, ne1;          // Output dimensions [N_out, batch]
+    size_t                  result_size;       // Result buffer size in bytes
+    bool                    valid;             // Job is valid and pending
+    ggml_sycl::alloc_handle result_alloc;
 };
 
 extern std::unordered_map<int, tp_async_ffn_job> g_tp_async_ffn_jobs;  // Key: layer number
@@ -1346,12 +1376,13 @@ extern std::mutex                                g_tp_async_ffn_mutex;
 
 // Async attention job structure: tracks an in-flight attention computation on device 1
 struct tp_async_attn_job {
-    int         layer;             // Layer number
-    sycl::event completion_event;  // Event signaling computation complete
-    float *     result_buf;        // Result buffer (in pinned host memory)
-    int64_t     ne0, ne1;          // Output dimensions
-    size_t      result_size;       // Result buffer size in bytes
-    bool        valid;             // Job is valid and pending
+    int                     layer;             // Layer number
+    sycl::event             completion_event;  // Event signaling computation complete
+    float *                 result_buf;        // Result buffer (in pinned host memory)
+    int64_t                 ne0, ne1;          // Output dimensions
+    size_t                  result_size;       // Result buffer size in bytes
+    bool                    valid;             // Job is valid and pending
+    ggml_sycl::alloc_handle result_alloc;
 };
 
 extern std::unordered_map<int, tp_async_attn_job> g_tp_async_attn_jobs;  // Key: layer number
@@ -1381,11 +1412,12 @@ struct tp_ffn_work_item {
 
 // FFN result: result of a completed FFN computation
 struct tp_ffn_result {
-    int     layer;        // Layer number
-    float * result_buf;   // Result buffer (host-pinned memory)
-    int64_t ne0, ne1;     // Output dimensions
-    size_t  result_size;  // Result size in bytes
-    bool    valid;        // Result is valid and ready to consume
+    int                     layer;        // Layer number
+    float *                 result_buf;   // Result buffer (host-pinned memory)
+    int64_t                 ne0, ne1;     // Output dimensions
+    size_t                  result_size;  // Result size in bytes
+    bool                    valid;        // Result is valid and ready to consume
+    ggml_sycl::alloc_handle result_alloc;
 };
 
 // Device 1 worker thread: processes FFN jobs independently from main thread
@@ -1458,6 +1490,14 @@ struct tp_ffn_compute_buffers {
 
     // Device ID these buffers are allocated on
     int device_id;
+
+    // Managed allocation handles
+    ggml_sycl::alloc_handle input_q8_alloc;
+    ggml_sycl::alloc_handle gate_out_alloc;
+    ggml_sycl::alloc_handle up_out_alloc;
+    ggml_sycl::alloc_handle hidden_out_alloc;
+    ggml_sycl::alloc_handle hidden_q8_alloc;
+    ggml_sycl::alloc_handle partial_out_alloc;
 };
 
 // Global map of persistent FFN buffers indexed by layer
@@ -1482,9 +1522,10 @@ void ggml_sycl_tp_free_ffn_buffers();
 // =============================================================================
 
 struct tp_host_staging_buffer {
-    float * buf;
-    size_t  size;
-    size_t  capacity;
+    float *                 buf;
+    size_t                  size;
+    size_t                  capacity;
+    ggml_sycl::alloc_handle alloc;
 };
 
 extern tp_host_staging_buffer g_tp_host_staging;
@@ -1507,6 +1548,9 @@ struct ggml_sycl_pool {
 bool   ggml_sycl_alloc_trace_enabled();
 void   ggml_sycl_alloc_trace_dump(const char * reason);
 void   ggml_sycl_alloc_trace_record(const char * kind, size_t size, const char * tag);
+// Diagnostics for legacy direct allocations that bypass unified_cache.
+// GGML_SYCL_DIRECT_ALLOC_GUARD=1 warns once per (api, tag, phase), =2 aborts.
+void   ggml_sycl_note_direct_allocation(const char * api, size_t size, const char * tag = nullptr);
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
 // Bypass unified cache budget routing — use when the caller manages its own
 // budget tracking (e.g., _tracked_ variants, cache internals).
@@ -1686,10 +1730,25 @@ struct staging_buffer_pool {
         {
             auto * hcache = ggml_sycl::try_get_host_cache();
             if (hcache) {
-                ptr       = hcache->host_zones_configured() ?
-                                hcache->host_zone_alloc(ggml_sycl::host_zone_id::STAGING, needed, 64) :
-                                hcache->allocate_pinned_runtime(needed, 64);
-                from_pool = (ptr != nullptr);
+                if (hcache->host_zones_configured()) {
+                    ptr = hcache->host_zone_alloc(ggml_sycl::host_zone_id::STAGING, needed, 64);
+                    // Zone allocation may return nullptr when:
+                    // 1) The allocation is larger than a single chunk (256 MB),
+                    //    since zones span multiple chunks but contiguous allocations
+                    //    cannot cross chunk boundaries.
+                    // 2) The STAGING zone is exhausted.
+                    // For case 1, fall back to runtime pinned allocation which
+                    // directly calls sycl::malloc_host (bypassing the pool).
+                    if (!ptr) {
+                        ptr       = hcache->allocate_pinned_runtime(needed, 64);
+                        from_pool = (ptr != nullptr);
+                    } else {
+                        from_pool = true;
+                    }
+                } else {
+                    ptr       = hcache->allocate_pinned_runtime(needed, 64);
+                    from_pool = (ptr != nullptr);
+                }
             }
         }
         if (!ptr) {
@@ -1839,13 +1898,14 @@ template <typename T> struct ggml_sycl_pool_alloc {
 // backend interface
 
 struct ggml_tensor_extra_gpu {
-    std::atomic<int>      refcount{ 1 };
-    uint64_t              cache_uuid = 0;                                   // Monotonic cache identity for weights
-    uint64_t              model_id   = 0;                                   // Model identifier for cache keys
-    void *                data_device[GGML_SYCL_MAX_DEVICES];               // 1 pointer for each device for split
-                                                                            // tensors (legacy — use data_handle)
-    ggml_sycl::mem_handle data_handle[GGML_SYCL_MAX_DEVICES];               // Smart handles (P12 migration)
-    size_t                data_device_size[GGML_SYCL_MAX_DEVICES] = { 0 };  // Allocation sizes for data_device
+    std::atomic<int>        refcount{ 1 };
+    uint64_t                cache_uuid = 0;                      // Monotonic cache identity for weights
+    uint64_t                model_id   = 0;                      // Model identifier for cache keys
+    void *                  data_device[GGML_SYCL_MAX_DEVICES];  // 1 pointer for each device for split
+                                                                 // tensors (legacy — use data_handle)
+    ggml_sycl::mem_handle   data_handle[GGML_SYCL_MAX_DEVICES];  // Smart handles (P12 migration)
+    ggml_sycl::alloc_handle data_alloc[GGML_SYCL_MAX_DEVICES];   // Owning handle when data_device is managed
+    size_t                  data_device_size[GGML_SYCL_MAX_DEVICES] = { 0 };  // Allocation sizes for data_device
 
     // Compatibility shim: resolve data_handle if set, else fall back to raw data_device.
     // Use this instead of data_device[dev] directly for incremental migration.
@@ -1889,13 +1949,15 @@ struct ggml_tensor_extra_gpu {
     int     tp_world_size     = 1;      // Total number of ranks
 
     // XMX tile-aligned MXFP4 layout (cached at first use)
-    void * xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES]       = { nullptr };
-    size_t xmx_mxfp4_tiled_size                         = 0;
-    bool   xmx_mxfp4_tiled_owned[GGML_SYCL_MAX_DEVICES] = { false };
+    void *                  xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES]       = { nullptr };
+    size_t                  xmx_mxfp4_tiled_size                         = 0;
+    bool                    xmx_mxfp4_tiled_owned[GGML_SYCL_MAX_DEVICES] = { false };
+    ggml_sycl::alloc_handle xmx_mxfp4_tiled_alloc[GGML_SYCL_MAX_DEVICES];
 
     // Temporary AoS staging for MXFP4 tiled conversion (host -> device)
-    void * xmx_mxfp4_tiled_aos_staging[GGML_SYCL_MAX_DEVICES]      = { nullptr };
-    size_t xmx_mxfp4_tiled_aos_staging_size[GGML_SYCL_MAX_DEVICES] = { 0 };
+    void *                  xmx_mxfp4_tiled_aos_staging[GGML_SYCL_MAX_DEVICES]      = { nullptr };
+    size_t                  xmx_mxfp4_tiled_aos_staging_size[GGML_SYCL_MAX_DEVICES] = { 0 };
+    ggml_sycl::alloc_handle xmx_mxfp4_tiled_aos_staging_alloc[GGML_SYCL_MAX_DEVICES];
 
     // Track async tile conversion completion for graph compatibility
     sycl::event xmx_mxfp4_tiled_conversion_evt[GGML_SYCL_MAX_DEVICES];
@@ -1909,10 +1971,11 @@ struct ggml_tensor_extra_gpu {
     int moe_expert_id = -1;
 
     // MoE expert pointer table (device + host staging) for per-expert layout access
-    void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES]        = { nullptr };
-    size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]          = { 0 };
-    bool                moe_expert_ptrs_from_prealloc[GGML_SYCL_MAX_DEVICES] = { false };
-    std::vector<void *> moe_expert_ptrs_host[GGML_SYCL_MAX_DEVICES];
+    void *                  moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
+    size_t                  moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
+    ggml_sycl::alloc_handle moe_expert_ptrs_alloc[GGML_SYCL_MAX_DEVICES];
+    bool                    moe_expert_ptrs_from_prealloc[GGML_SYCL_MAX_DEVICES] = { false };
+    std::vector<void *>     moe_expert_ptrs_host[GGML_SYCL_MAX_DEVICES];
 
     // MoE compact pointer list (row-major by id) and missing flag
     void * moe_expert_ptrs_compact_device[GGML_SYCL_MAX_DEVICES]   = { nullptr };
@@ -2364,6 +2427,75 @@ inline ggml_sycl::memory_location resolve_allocation(const ggml_tensor * tensor,
     return loc;
 }
 
+enum class ggml_sycl_planned_weight_residency : uint8_t {
+    UNKNOWN = 0,
+    DEVICE  = 1,
+    HOST    = 2,
+};
+
+inline ggml_sycl_planned_weight_residency ggml_sycl_get_planned_weight_residency(const ggml_tensor * tensor,
+                                                                                 int                 device) {
+    if (!tensor || !ggml_sycl_tensor_is_weight(tensor) || !tensor->name || tensor->name[0] == '\0') {
+        return ggml_sycl_planned_weight_residency::UNKNOWN;
+    }
+
+    auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+    if (!cache || !cache->has_placement_plan()) {
+        return ggml_sycl_planned_weight_residency::UNKNOWN;
+    }
+
+    const auto & plan     = cache->get_placement_plan();
+    const int    layer_id = ggml_sycl::extract_layer_id(tensor->name);
+    if (layer_id >= 0) {
+        auto it = plan.layer_device.find(layer_id);
+        if (it != plan.layer_device.end()) {
+            if (it->second < 0) {
+                return ggml_sycl_planned_weight_residency::HOST;
+            }
+            if (!plan.multi_device || it->second == device) {
+                return ggml_sycl_planned_weight_residency::DEVICE;
+            }
+            return ggml_sycl_planned_weight_residency::UNKNOWN;
+        }
+    }
+
+    const std::string name(tensor->name);
+    if (!plan.has_dense_entry(name)) {
+        return ggml_sycl_planned_weight_residency::UNKNOWN;
+    }
+
+    if (!plan.multi_device) {
+        return plan.is_on_device(name) ? ggml_sycl_planned_weight_residency::DEVICE :
+                                         ggml_sycl_planned_weight_residency::HOST;
+    }
+
+    const int target = plan.get_target_device(name);
+    if (target < 0) {
+        return ggml_sycl_planned_weight_residency::HOST;
+    }
+    if (target == device) {
+        return ggml_sycl_planned_weight_residency::DEVICE;
+    }
+    return ggml_sycl_planned_weight_residency::UNKNOWN;
+}
+
+inline bool ggml_sycl_weight_is_planned_on_host(const ggml_tensor * tensor, int device) {
+    return ggml_sycl_get_planned_weight_residency(tensor, device) == ggml_sycl_planned_weight_residency::HOST;
+}
+
+inline bool ggml_sycl_weight_is_planned_on_device(const ggml_tensor * tensor, int device) {
+    return ggml_sycl_get_planned_weight_residency(tensor, device) == ggml_sycl_planned_weight_residency::DEVICE;
+}
+
+inline bool ggml_sycl_planner_authoritative_residency_active(int device) {
+    if (device < 0) {
+        return false;
+    }
+
+    auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+    return cache != nullptr && cache->has_placement_plan();
+}
+
 // Legacy name — redirects to resolve_tensor_ptr which handles both
 // weight tensors (layout resolution) and non-weight tensors (KV cache,
 // activations) transparently.  All callers get correct behavior for
@@ -2407,6 +2539,14 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
     }
 
     if (ggml_sycl_tensor_is_weight(tensor)) {
+        if (ggml_sycl_planner_authoritative_residency_active(device) &&
+            ggml_sycl_weight_is_planned_on_host(tensor, device)) {
+            if (out_source) {
+                *out_source = "planned_host_weight_cpu";
+            }
+            return nullptr;
+        }
+
         const bool unified_aos_request = ggml_sycl_unified_dispatch_env_enabled() &&
                                          ggml_sycl_should_use_unified_type(tensor->type) && target == GGML_LAYOUT_AOS;
 
@@ -2611,13 +2751,15 @@ struct ggml_backend_sycl_context {
     int                                  moe_layer_count = 0;
 
     struct moe_ids_cache_entry {
-        uint64_t             hash = 0;
-        std::vector<int32_t> host_ids;
-        void *               device_ids    = nullptr;
-        size_t               device_bytes  = 0;
-        void *               staging_ids   = nullptr;  // Pinned host staging for non-USM sources
-        size_t               staging_bytes = 0;
-        bool                 from_prealloc = false;    // true if device_ids came from Phase 4 pre-allocation
+        uint64_t                hash = 0;
+        std::vector<int32_t>    host_ids;
+        void *                  device_ids   = nullptr;
+        size_t                  device_bytes = 0;
+        ggml_sycl::alloc_handle device_alloc;
+        ggml_sycl::alloc_handle staging_alloc;
+        void *                  staging_ids   = nullptr;  // Pinned host staging for non-USM sources
+        size_t                  staging_bytes = 0;
+        bool                    from_prealloc = false;    // true if device_ids came from Phase 4 pre-allocation
     };
 
     std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> moe_ids_cache;
@@ -2954,8 +3096,9 @@ struct ggml_backend_sycl_context {
         std::vector<size_t> src1_ddq_sizes;
 
         // Bulk allocation (single contiguous block for all sub-buffers)
-        void * bulk_ptr  = nullptr;
-        size_t bulk_size = 0;
+        void *                  bulk_ptr   = nullptr;
+        size_t                  bulk_size  = 0;
+        ggml_sycl::alloc_handle bulk_alloc = {};  // Owning handle (mubmt.12)
 
         // Buffer usage tracking
         int  current_buffer_idx = 0;
@@ -2979,8 +3122,14 @@ struct ggml_backend_sycl_context {
 
         void free_buffers(queue_ptr stream) {
             int device_id = ggml_sycl_get_device_id_from_queue(*stream);
-            if (bulk_ptr) {
-                // Bulk allocation: free the single block
+            if (bulk_alloc.ptr) {
+                // Bulk allocation via unified-cache (mubmt.12)
+                ggml_sycl::unified_free(bulk_alloc);
+                bulk_alloc = {};
+                bulk_ptr   = nullptr;
+                bulk_size  = 0;
+            } else if (bulk_ptr) {
+                // Legacy fallback
                 ggml_sycl::unified_cache_sub_runtime_bytes(device_id, bulk_size);
                 sycl::free(bulk_ptr, *stream);
                 bulk_ptr  = nullptr;
@@ -3029,6 +3178,9 @@ struct ggml_backend_sycl_context {
         // Pre-allocated for graph recording (fixed addresses required)
         int32_t * expert_tile_offsets = nullptr;  // [MAX_EXPERTS + 1] prefix sum of tiles per expert
         int32_t * total_tiles         = nullptr;  // [1] scalar: total work tiles across all experts
+
+        // Owning handles for unified-cache allocation (mubmt.12)
+        ggml_sycl::alloc_handle tile_mapping_alloc[2] = {};
 
         // Maximum supported experts for pre-allocation.
         // Must be >= n_expert for the model (GPT-OSS 120B has 128).
@@ -3087,23 +3239,34 @@ struct ggml_backend_sycl_context {
         // Called once during initialization - enables graph recording with fixed addresses
         void allocate_tile_mapping(sycl::queue & q) {
             if (!expert_tile_offsets) {
-                expert_tile_offsets = ggml_sycl_malloc_device_t<int32_t>(MAX_EXPERTS + 1, q, "moe_tile_mapping");
-                total_tiles         = ggml_sycl_malloc_device_t<int32_t>(1, q, "moe_tile_mapping");
+                const int                device = ggml_sycl_get_device_id_from_queue(q);
+                ggml_sycl::alloc_request req{};
+                req.queue       = &q;
+                req.device      = device;
+                req.size        = (MAX_EXPERTS + 1) * sizeof(int32_t);
+                req.intent.role = ggml_sycl::alloc_role::STAGING;
+                if (ggml_sycl::unified_alloc(req, &tile_mapping_alloc[0]) && tile_mapping_alloc[0].ptr) {
+                    expert_tile_offsets = static_cast<int32_t *>(tile_mapping_alloc[0].ptr);
+                }
+
+                req.size = sizeof(int32_t);
+                if (ggml_sycl::unified_alloc(req, &tile_mapping_alloc[1]) && tile_mapping_alloc[1].ptr) {
+                    total_tiles = static_cast<int32_t *>(tile_mapping_alloc[1].ptr);
+                }
             }
         }
 
         // Free tile mapping buffers
         void free_tile_mapping(sycl::queue & q) {
-            if (expert_tile_offsets) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(q),
-                                                           (MAX_EXPERTS + 1) * sizeof(int32_t));
-                sycl::free(expert_tile_offsets, q);
-                expert_tile_offsets = nullptr;
+            if (tile_mapping_alloc[0].ptr) {
+                ggml_sycl::unified_free(tile_mapping_alloc[0]);
+                tile_mapping_alloc[0] = {};
+                expert_tile_offsets   = nullptr;
             }
-            if (total_tiles) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(q), sizeof(int32_t));
-                sycl::free(total_tiles, q);
-                total_tiles = nullptr;
+            if (tile_mapping_alloc[1].ptr) {
+                ggml_sycl::unified_free(tile_mapping_alloc[1]);
+                tile_mapping_alloc[1] = {};
+                total_tiles           = nullptr;
             }
         }
 
@@ -3219,14 +3382,16 @@ struct ggml_backend_sycl_context {
     // Persistent staging buffer for get_tensor_async readback.
     // Avoids per-call USM host alloc/free overhead for logits readback (~128KB/token).
     // Tracked via host memory tracking (ggml_sycl_malloc_host_tracked_bytes).
-    void * readback_staging      = nullptr;
-    size_t readback_staging_size = 0;
+    void *                  readback_staging      = nullptr;
+    size_t                  readback_staging_size = 0;
+    ggml_sycl::alloc_handle readback_staging_alloc;
 
     // Reusable device buffer for BLAS fallback (MXFP4 -> F16 dequantization).
     // Allocated lazily on first BLAS fallback, registered with unified cache budget.
-    void * staging_buffer_        = nullptr;
-    size_t staging_buffer_size_   = 0;
-    int    staging_buffer_device_ = -1;
+    void *                  staging_buffer_        = nullptr;
+    size_t                  staging_buffer_size_   = 0;
+    int                     staging_buffer_device_ = -1;
+    ggml_sycl::alloc_handle staging_buffer_alloc_;
 
     // Get or allocate staging buffer for BLAS fallback.
     // Returns {pointer, size} or {nullptr, 0} if allocation fails.
