@@ -277,6 +277,18 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant 4-bit: PolarQuant with 16 optimal centroids + WHT rotation
+// Block size = 128 (one block per rotation group = head_dim)
+// Per block: norm(fp16) + rnorm(fp16, reserved) + 4-bit indices (64 bytes)
+// = 68 bytes per 128 values = 4.25 bits/value -> 3.8x compression vs fp16
+#define QK_TURBO4 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected L2 norm
+    ggml_half  rnorm;                   //  2 bytes: reserved (zero)
+    uint8_t    qs[QK_TURBO4 / 2];      // 64 bytes: 4-bit PolarQuant indices (nibble packed)
+} block_turbo4_0;                       // 68 bytes total
+static_assert(sizeof(block_turbo4_0) == 68, "wrong turbo4_0 block size");
+
 //
 // Super-block quantization structures
 //
