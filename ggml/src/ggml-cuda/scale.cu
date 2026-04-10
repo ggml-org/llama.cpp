@@ -3,6 +3,7 @@
 #define MAX_GRIDDIM_X 0x7FFFFFFF
 
 static __global__ void scale_f32(const float * x, float * dst, const float scale, const float bias, const int64_t nelements) {
+    GGML_CUDA_PDL_LC(); // SCALE try 1; on maxq
     int64_t tid = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
 

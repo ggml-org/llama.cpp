@@ -25,6 +25,7 @@ gated_delta_net_cuda(const float * q,
                                      const uint3   neqk1_magic,
                                      const uint3   rq3_magic,
                                      float         scale) {
+    // GGML_CUDA_PDL_LC(); // GATED_DELTA_NET try 1; always followed by memcpy on qwen3.5, no benefit
     const uint32_t h_idx    = blockIdx.x;
     const uint32_t sequence = blockIdx.y;
     // each warp owns one column, using warp-level primitives to reduce across rows

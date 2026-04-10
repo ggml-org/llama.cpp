@@ -204,6 +204,7 @@ static __global__ void rope_multi(const T *            x,
                                   const float *        freq_factors,
                                   const mrope_sections sections,
                                   const bool           is_imrope) {
+    // GGML_CUDA_PDL_LC(); // ROPE_MULTI try 1; on maxq
     const int i0 = 2 * (blockDim.y * blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
@@ -253,6 +254,7 @@ static __global__ void rope_multi(const T *            x,
             theta_base = pos[i2 + ne02 * 3] * powf(theta_scale, i0 / 2.0f);
         }
     }
+    // GGML_CUDA_PDL_LC(); // ROPE_MULTI try 2; on maxq
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
 
@@ -261,6 +263,7 @@ static __global__ void rope_multi(const T *            x,
 
     rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, i0, ext_factor, attn_factor, cos_theta, sin_theta);
 
+    // GGML_CUDA_PDL_LC(); // ROPE_MULTI try 3; on maxq
     const float x0 = x[ix + 0];
     const float x1 = x[ix + n_dims/2];
 
