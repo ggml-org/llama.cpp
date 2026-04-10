@@ -686,9 +686,9 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
     // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
     // Each int32 element holds a K-row-pair (2 adjacent fp16 values).  word[i] at offset i*128
     // maps to K-rows 2i and 2i+1.  Column offset (n*4) added per row.
-    const HVX_Vector v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
-    const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
-    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
+    const HVX_Vector     v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
+    const HVX_Vector     v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
+    const HVX_VectorPred q_mask64    = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 
     unsigned ct = (unsigned)start_tile / n_k_tiles;  // column tile index
     unsigned kt = (unsigned)start_tile % n_k_tiles;  // K tile index
