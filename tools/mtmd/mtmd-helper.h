@@ -89,6 +89,16 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+// Convert modality type enum to string
+MTMD_API const char * mtmd_modality_type_to_str(enum mtmd_input_chunk_type type);
+
+// Convert string to modality type enum
+// Returns MTMD_INPUT_CHUNK_TYPE_TEXT on invalid input
+MTMD_API enum mtmd_input_chunk_type mtmd_modality_type_from_str(const char * str);
+
+// Validate if string is a valid modality type (image or audio)
+MTMD_API bool mtmd_is_valid_modality_str(const char * str);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

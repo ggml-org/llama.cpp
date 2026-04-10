@@ -535,3 +535,26 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
 
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
 }
+
+// Modality type string↔enum conversion functions
+const char * mtmd_modality_type_to_str(enum mtmd_input_chunk_type type) {
+    switch (type) {
+        case MTMD_INPUT_CHUNK_TYPE_IMAGE: return "image";
+        case MTMD_INPUT_CHUNK_TYPE_AUDIO: return "audio";
+        case MTMD_INPUT_CHUNK_TYPE_TEXT:  return "text";
+        default: return "unknown";
+    }
+}
+
+enum mtmd_input_chunk_type mtmd_modality_type_from_str(const char * str) {
+    if (strcmp(str, "image") == 0) {
+        return MTMD_INPUT_CHUNK_TYPE_IMAGE;
+    } else if (strcmp(str, "audio") == 0) {
+        return MTMD_INPUT_CHUNK_TYPE_AUDIO;
+    }
+    return MTMD_INPUT_CHUNK_TYPE_TEXT; // default/invalid
+}
+
+bool mtmd_is_valid_modality_str(const char * str) {
+    return str && (strcmp(str, "image") == 0 || strcmp(str, "audio") == 0);
+}
