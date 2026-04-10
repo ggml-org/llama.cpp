@@ -574,14 +574,24 @@ void offload_stats_log_summary(const char * tag, int device) {
     const offload_phase          phase      = offload_stats_current_phase();
     const char *                 phase_name = offload_phase_name(phase);
 
-    static const bool zero_alloc_check = (std::getenv("GGML_SYCL_ZERO_ALLOC_CHECK") != nullptr);
-    if (zero_alloc_check && (phase == offload_phase::PP || phase == offload_phase::TG)) {
+    // GGML_SYCL_ZERO_ALLOC_CHECK: 0=off, 1=warn (default), 2=abort
+    static const int zero_alloc_mode = []() {
+        const char * env = std::getenv("GGML_SYCL_ZERO_ALLOC_CHECK");
+        if (env) {
+            return std::atoi(env);
+        }
+        return 1;  // Default ON (warn mode)
+    }();
+    if (zero_alloc_mode > 0 && (phase == offload_phase::PP || phase == offload_phase::TG)) {
         const size_t runtime_bytes = unified_cache_get_runtime_bytes(device);
         if (runtime_bytes > 0) {
             GGML_LOG_WARN(
                 "[SYCL-ZERO-ALLOC-CHECK] %s: runtime allocation detected during %s phase: %.1f MB. "
                 "Expected zero new allocations during steady-state inference.\n",
                 tag ? tag : "graph", phase_name, runtime_bytes / (1024.0 * 1024.0));
+            if (zero_alloc_mode >= 2) {
+                GGML_ASSERT(false && "ZERO_ALLOC_CHECK: runtime allocation during inference");
+            }
         }
     }
 
