@@ -39,6 +39,9 @@ struct server_context_meta {
     llama_token fim_rep_token;
     llama_token fim_sep_token;
 
+    // sampling
+    std::vector<llama_logit_bias> logit_bias_eog;
+
     // model meta
     enum llama_vocab_type model_vocab_type;
     int32_t model_vocab_n_tokens;
@@ -56,7 +59,7 @@ struct server_context {
 
     // load the model and initialize llama_context
     // returns true on success
-    bool load_model(const common_params & params);
+    bool load_model(common_params & params);
 
     // this function will block main thread until termination
     void start_loop();

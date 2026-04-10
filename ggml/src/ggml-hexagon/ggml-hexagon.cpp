@@ -1406,6 +1406,13 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
             repack_q8_0_q8x4x2(tensor, data, size);
             break;
 
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            // IQ4_NL has identical block layout to Q4_0 (ggml_half d + uint8_t qs[16])
+            repack_q4_0_q4x4x2(tensor, data, size);
+            break;
+
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -1440,6 +1447,12 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8x4x2_q8_0(data, tensor, size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4x4x2_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
@@ -1478,6 +1491,8 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_hexagon_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_hexagon_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_hexagon_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_hexagon_buffer_clear,
     /* .reset           = */ NULL,
@@ -1819,6 +1834,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if (src0->ne[0] % 32) {
                 return false;
@@ -1868,6 +1884,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
             if ((src0->ne[0] % 32)) {
                 return false;
@@ -2216,6 +2233,22 @@ static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * 
     return true;
 }
 
+static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 enum dspqbuf_type {
     DSPQBUF_TYPE_DSP_WRITE_CPU_READ = 0,
     DSPQBUF_TYPE_CPU_WRITE_DSP_READ,
@@ -2376,6 +2409,16 @@ static inline size_t init_cont_req(htp_general_req * req, dspqueue_buffer * bufs
 
 static inline size_t init_repeat_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     req->op = HTP_OP_REPEAT;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_cumsum_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_CUMSUM;
 
     size_t n_bufs = 0;
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
@@ -2596,8 +2639,26 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     delete backend;
 }
 
+// Map weight type to its activation quantization family.
+// Types in the same family produce identical Q8 formats in VTCM and can
+// safely share quantized activation data via SKIP_QUANTIZE.
+// When adding a new quantized type, assign it the correct family here.
+static inline int act_quant_family(enum ggml_type wtype) {
+    switch (wtype) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+            return 1;  // Q8x4x2
+        default:
+            return 0;  // unknown / not quantized
+    }
+}
+
 static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type));
+    return (op0 && op0->src[1] == op1->src[1] &&
+            act_quant_family(op0->src[0]->type) == act_quant_family(op1->src[0]->type) &&
+            act_quant_family(op0->src[0]->type) != 0);
 }
 
 static inline bool is_compute_op(ggml_tensor *node)
@@ -2745,6 +2806,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_SSM_CONV:
                 ggml_hexagon_dispatch_op<init_ssm_conv_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_CUMSUM:
+                ggml_hexagon_dispatch_op<init_cumsum_req>(sess, node, flags);
                 break;
 
             default:
@@ -2939,6 +3004,8 @@ static struct ggml_backend_i hexagon_backend_i = {
     /* .free                    = */ ggml_backend_hexagon_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_hexagon_synchronize,
     /* .graph_plan_create       = */ NULL,
@@ -3221,6 +3288,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             supp = ggml_hexagon_supported_ssm_conv(sess, op);
             break;
 
+        case GGML_OP_CUMSUM:
+            supp = ggml_hexagon_supported_cumsum(sess, op);
+            break;
+
         default:
             break;
     }
@@ -3363,6 +3434,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_Q8_0 == (unsigned int) GGML_TYPE_Q8_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_MXFP4 == (unsigned int) GGML_TYPE_MXFP4,
+                  "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                   "please update hexagon_type to match ggml_type");
 
     const char * str_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL");

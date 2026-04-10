@@ -1,16 +1,11 @@
 <script lang="ts">
 	import { Settings } from '@lucide/svelte';
-	import { DialogChatSettings } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
+	import { getChatSettingsDialogContext } from '$lib/contexts';
 
 	const sidebar = useSidebar();
-
-	let settingsOpen = $state(false);
-
-	function toggleSettings() {
-		settingsOpen = true;
-	}
+	const chatSettingsDialog = getChatSettingsDialogContext();
 </script>
 
 <header
@@ -22,12 +17,10 @@
 		<Button
 			variant="ghost"
 			size="icon-lg"
-			onclick={toggleSettings}
+			onclick={() => chatSettingsDialog.open()}
 			class="rounded-full backdrop-blur-lg"
 		>
 			<Settings class="h-4 w-4" />
 		</Button>
 	</div>
 </header>
-
-<DialogChatSettings open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />

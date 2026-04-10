@@ -10,9 +10,9 @@
 		ModelsSelector,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-	import { DialogChatSettings } from '$lib/components/app/dialogs';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
@@ -62,10 +62,14 @@
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 
+	let lastSyncedConversationModel: string | null = null;
+
 	$effect(() => {
-		if (conversationModel) {
+		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
+			lastSyncedConversationModel = conversationModel;
 			modelsStore.selectModelByName(conversationModel);
 		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+			lastSyncedConversationModel = null;
 			// auto-select the first loaded model only when nothing is selected yet
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
 			if (first) modelsStore.selectModelById(first.id);
@@ -169,7 +173,7 @@
 		selectorModelRef?.open();
 	}
 
-	let showChatSettingsDialogWithMcpSection = $state(false);
+	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -197,7 +201,7 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 			/>
 		{:else}
 			<ChatFormActionAttachmentsDropdown
@@ -210,13 +214,13 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 			/>
 		{/if}
 
 		<McpServersSelector
 			{disabled}
-			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+			onSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 		/>
 	</div>
 
@@ -265,9 +269,3 @@
 		/>
 	{/if}
 </div>
-
-<DialogChatSettings
-	open={showChatSettingsDialogWithMcpSection}
-	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
-	initialSection={SETTINGS_SECTION_TITLES.MCP}
-/>

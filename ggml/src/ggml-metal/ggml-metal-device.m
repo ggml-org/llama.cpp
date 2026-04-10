@@ -690,7 +690,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto tB = B.slice((int)tgid.x, 0); \n"
                     " \n"
                     "    matmul2d< \n"
-                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
                     "        execution_simdgroups<4>> mm; \n"
                     " \n"
                     "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
@@ -740,7 +740,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto tB = B.slice((int)tgid.x, 0); \n"
                     " \n"
                     "    matmul2d< \n"
-                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
                     "        execution_simdgroups<4>> mm; \n"
                     " \n"
                     "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
@@ -1184,6 +1184,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                            case GGML_TYPE_F16:
                            case GGML_TYPE_BF16:
                            case GGML_TYPE_Q8_0:
+                           case GGML_TYPE_Q1_0:
                            case GGML_TYPE_Q4_0:
                            case GGML_TYPE_Q4_1:
                            case GGML_TYPE_Q5_0:
@@ -1210,6 +1211,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                             default:
                                 return false;
                         }
+                    case GGML_TYPE_Q1_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:

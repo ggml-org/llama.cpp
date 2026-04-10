@@ -860,6 +860,41 @@ static void proc_ssm_conv_req(struct htp_context * ctx, struct htp_general_req *
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
+static void proc_cumsum_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
+    struct dspqueue_buffer rsp_bufs[1];
+
+    // We've written to the output buffer, we'd also need to flush it
+    rsp_bufs[0].fd     = bufs[1].fd;
+    rsp_bufs[0].ptr    = bufs[1].ptr;
+    rsp_bufs[0].offset = bufs[1].offset;
+    rsp_bufs[0].size   = bufs[1].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+
+    // Setup Op context
+    struct htp_ops_context octx = { 0 };
+    octx.ctx       = ctx;
+    octx.src0      = req->src0;
+    octx.dst       = req->dst;
+    octx.flags     = req->flags;
+    octx.op        = req->op;
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.dst.data  = (uint32_t) bufs[1].ptr;
+    octx.n_threads = ctx->n_threads;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_cumsum(&octx);
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
 static void proc_activations_req(struct htp_context *     ctx,
                                  struct htp_general_req * req,
                                  struct dspqueue_buffer * bufs,
@@ -1114,14 +1149,12 @@ static void proc_hmx_matmul_req(struct htp_context *     ctx,
         return;
     }
 
-    // HMX only supports F16, Q4_0, Q8_0, IQ4_NL weights.
-    // Other types (e.g. MXFP4) fall back to HVX.
+    // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
+    // Other types fall back to HVX.
     {
         uint32_t wtype = req->src0.type;
-        if (wtype != HTP_TYPE_F16  &&
-            wtype != HTP_TYPE_Q4_0 &&
-            wtype != HTP_TYPE_Q8_0 &&
-            wtype != HTP_TYPE_IQ4_NL) {
+        if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL &&
+            wtype != HTP_TYPE_MXFP4) {
             proc_matmul_req(ctx, req, bufs, n_bufs);
             return;
         }
@@ -1474,6 +1507,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     continue;
                 }
                 proc_ssm_conv_req(ctx, &req, bufs);
+                break;
+
+            case HTP_OP_CUMSUM:
+                if (n_bufs != 2) {
+                    FARF(ERROR, "Bad cumsum-req buffer list");
+                    continue;
+                }
+                proc_cumsum_req(ctx, &req, bufs);
                 break;
 
             default:

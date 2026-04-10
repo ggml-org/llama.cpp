@@ -37,6 +37,8 @@ llama-server -hf ggml-org/gemma-3-4b-it-GGUF --no-mmproj-offload
 > - PaddleOCR-VL: https://github.com/ggml-org/llama.cpp/pull/18825
 > - GLM-OCR: https://github.com/ggml-org/llama.cpp/pull/19677
 > - Deepseek-OCR: https://github.com/ggml-org/llama.cpp/pull/17400
+> - Dots.OCR: https://github.com/ggml-org/llama.cpp/pull/17575
+> - HunyuanOCR: https://github.com/ggml-org/llama.cpp/pull/21395
 
 ## Pre-quantized models
 
