@@ -11314,7 +11314,7 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
 static void ggml_sycl_preload_model_weights() {
     // Initialize CPU dispatch buffers once at model load time
     // This eliminates per-token resize() calls during inference
-    ggml_sycl_cpu_dispatch_buffers_init(nullptr);
+    ggml_sycl_cpu_dispatch_buffers_init();
 
     if (!ggml_backend_sycl_weights_evictable() || !ggml_sycl::unified_cache_enabled()) {
         return;

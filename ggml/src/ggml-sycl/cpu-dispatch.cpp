@@ -135,19 +135,18 @@ thread_local cpu_dispatch_buffers g_cpu_dispatch_buffers;
 
 // Initialize CPU dispatch buffers with reasonable max sizes
 // Called once at model load time to avoid per-token resize() calls
-void ggml_sycl_cpu_dispatch_buffers_init(const ggml_model * model) {
-    GGML_UNUSED(model);
-
-    // Conservative max sizes based on typical model dimensions:
+void ggml_sycl_cpu_dispatch_buffers_init() {
+    // Reasonable max sizes for typical model dimensions:
     // - Max batch size for TG: 16 tokens
-    // - Max n_embd (embedding dimension): 6K covers Mistral/Llama/GPT models
-    // - Max n_ff (feedforward hidden): 24K for large models
+    // - Max n_embd (embedding dimension): 4096 (typical 7B/13B models)
+    // - Max n_ff (feedforward hidden): 14336 (typical 7B; ~3.5x n_embd)
     // - Max quantized row size (Q8_0): ~128 bytes per 256 elements
     // - Max accumulator: 256 stack + 16 heap = 272 __m256 values = 8704 floats
+    // Total per-thread: ~224 MB (much more reasonable than 576 MB)
 
     static constexpr size_t MAX_M         = 16;              // batch size (TG)
-    static constexpr size_t MAX_N         = 6 * 1024;        // n_embd (conservative)
-    static constexpr size_t MAX_K         = 24 * 1024;       // n_ff (conservative)
+    static constexpr size_t MAX_N         = 4096;            // n_embd (typical 7B)
+    static constexpr size_t MAX_K         = 14336;           // n_ff (typical 7B; ~3.5x n_embd)
     static constexpr size_t MAX_Q_SIZE    = (MAX_K / 32 + 1) * 128;  // Safe upper bound for any quant type
 
     g_cpu_dispatch_buffers.init(MAX_M, MAX_N, MAX_K, MAX_Q_SIZE);
@@ -3898,12 +3897,12 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
 
         // Dequant/conversion buffer for non-F32 weights (only for GEMM fallback path)
-        // Pre-allocated buffer via g_cpu_dispatch_buffers.silu_temp
+        // Pre-allocated buffer via g_cpu_dispatch_buffers.weight_deq_buf
         float * src0_f32_buf = nullptr;
         if (src0_quantized && !use_vec_dot) {
             const size_t buf_size = static_cast<size_t>(N) * K;
-            GGML_ASSERT(buf_size <= g_cpu_dispatch_buffers.silu_temp.size());
-            src0_f32_buf = g_cpu_dispatch_buffers.silu_temp.data();
+            GGML_ASSERT(buf_size <= g_cpu_dispatch_buffers.weight_deq_buf.size());
+            src0_f32_buf = g_cpu_dispatch_buffers.weight_deq_buf.data();
         }
 
         for (int64_t i13 = 0; i13 < ne13; i13++) {
@@ -6050,13 +6049,13 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
             return false;
         }
 
-        // Pre-allocated weight dequantization buffer via g_cpu_dispatch_buffers.silu_temp
+        // Pre-allocated weight dequantization buffer via g_cpu_dispatch_buffers.weight_deq_buf
         const size_t buf_size = static_cast<size_t>(N) * K;
-        GGML_ASSERT(buf_size <= g_cpu_dispatch_buffers.silu_temp.size());
+        GGML_ASSERT(buf_size <= g_cpu_dispatch_buffers.weight_deq_buf.size());
 
         for (int64_t row = 0; row < N; row++) {
             const void * row_data = weight_bytes + row * nb01;
-            type_traits->to_float(row_data, g_cpu_dispatch_buffers.silu_temp.data() + row * K, K);
+            type_traits->to_float(row_data, g_cpu_dispatch_buffers.weight_deq_buf.data() + row * K, K);
         }
 
         dnnl_status_t status = dnnl_sgemm('T', 'N',
@@ -6064,7 +6063,7 @@ bool ggml_sycl_cpu_pp_gemm(ggml_type weight_type,
                                            static_cast<dnnl_dim_t>(M),
                                            static_cast<dnnl_dim_t>(K),
                                            1.0f,
-                                           g_cpu_dispatch_buffers.silu_temp.data(), static_cast<dnnl_dim_t>(K),
+                                           g_cpu_dispatch_buffers.weight_deq_buf.data(), static_cast<dnnl_dim_t>(K),
                                            src1_host, static_cast<dnnl_dim_t>(K),
                                            0.0f,
                                            dst_host, static_cast<dnnl_dim_t>(ldc));

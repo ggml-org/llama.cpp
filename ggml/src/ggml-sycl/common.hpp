@@ -636,16 +636,18 @@ sycl::queue * ggml_sycl_get_cpu_queue();
 
 // CPU dispatch buffer pool: pre-allocated quantization buffers to eliminate per-token resize()
 struct cpu_dispatch_buffers {
-    std::vector<uint8_t> src1_q;         // Quantization buffer: max M * max_q_row_size
-    std::vector<float>   accs;           // Accumulator buffer: max chunk4 * 32 bytes (__m256)
-    std::vector<float>   silu_temp;      // SILU/MUL fusion temp: max N * K
+    std::vector<uint8_t> src1_q;      // Quantization buffer: max M * max_q_row_size
+    std::vector<float>   accs;        // Accumulator buffer: reused as __m256* via reinterpret_cast
+    std::vector<float>   weight_deq_buf; // Weight dequantization buffer: max N * K
+    // Note: accs is reinterpreted as __m256 array. Since we only use _mm256_setzero_ps()
+    // and array indexing (no aligned load/store), alignment is not critical.
 
     // Initialize buffers based on model dimensions
     void init(size_t max_m, size_t max_n, size_t max_k, size_t max_q_row_size) {
         src1_q.resize(max_m * max_q_row_size);
         // __m256 is 32 bytes = 8 floats; allocate for max chunk4 (256 + max_m) accumulators
         accs.resize((256 + max_m) * 8);  // Conservative upper bound: 256 stack + max_m heap
-        silu_temp.resize(max_n * max_k);
+        weight_deq_buf.resize(max_n * max_k);
     }
 };
 
@@ -653,11 +655,8 @@ struct cpu_dispatch_buffers {
 // Declared here, defined in cpu-dispatch.cpp to avoid ODR violations
 extern thread_local cpu_dispatch_buffers g_cpu_dispatch_buffers;
 
-// Forward declare ggml_model (defined in ggml.h)
-struct ggml_model;
-
 // Initialize CPU dispatch buffers at model load time
-void ggml_sycl_cpu_dispatch_buffers_init(const ggml_model * model);
+void ggml_sycl_cpu_dispatch_buffers_init();
 
 // Forward declaration — defined later in this header after MoE helpers.
 inline bool is_coalesced_supported(ggml_type type);
