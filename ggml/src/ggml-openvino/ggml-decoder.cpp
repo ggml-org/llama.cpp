@@ -256,7 +256,7 @@ int extract_layer_from_name(const std::string & name) {
     return layer;
 }
 
-std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static) {
+std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static, std::optional<ComputeParams> old_c_params) {
     ModelParams model_params;
     ComputeParams compute_params;
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -267,6 +267,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             model_params.n_heads_kv = node->src[1]->ne[2];
             model_params.head_size = node->src[0]->ne[0];
             compute_params.input_len = node->src[0]->ne[1];
+
+            const auto old_c_prefill_chunk_max = old_c_params.has_value() ? old_c_params.value().prefill_chunk_max : 1;
+            compute_params.prefill_chunk_max = std::max(static_cast<int>(old_c_prefill_chunk_max), static_cast<int>(compute_params.input_len));
 
             auto * cache_k_perm = node->src[1];
             if (cache_k_perm->op == GGML_OP_CPY) {
@@ -354,10 +357,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, 1, prefill_upper};
         } else {
-            // NOTE: AFAICT PartialShape with min_dim == max_dim is not valid, Shape must be used.
-            // Updating callsites to return some Shape optional to allow 1,1,1,1
-            // might materially improve things
-            input_shape = ov::PartialShape{1, 1, 1, ov::Dimension(1, m_prefill_chunk_size)};
+            input_shape = ov::PartialShape{1, 1, 1, ov::Dimension(1, m_compute_params.prefill_chunk_max)};
         }
 
     } else if (is_output_idx(input, op)) {

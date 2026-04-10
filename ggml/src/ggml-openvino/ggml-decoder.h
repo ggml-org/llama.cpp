@@ -47,6 +47,28 @@ struct ComputeParams {
     int token_len_per_seq = -1;
     int past_kv_len = -1;
     int output_len = 1;
+
+    // Batch size is provided as a PartialShape since it can vary from call
+    // to call. There *is* a maximum value, but it isn't easy to pull that
+    // at this point, so we track the current maximum we've seen so far.
+    // This is the upper bound on the PartialShape (lower bound is 1), so
+    // we re-build in cases where the maximum has been exceeded (and the value
+    // is saved for the next iteration, the cycle repeats)
+    //
+    // There is an implicit re-build done within OpenVINO for cases where the
+    // current batch size is within the range from minimum to maximum, so we only
+    // care about growing the bounds.
+    int prefill_chunk_max = 1;
+
+    bool can_reuse_dynamically(const ComputeParams & other) const {
+        GGML_ASSERT(other.prefill_chunk_max >= 1);
+        return prefill_chunk_max >= other.prefill_chunk_max;
+    }
+
+    bool can_reuse_statically(const ComputeParams & other) const {
+        GGML_ASSERT(other.prefill_chunk_max >= 1);
+        return prefill_chunk_max >= other.prefill_chunk_max;
+    }
 };
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
@@ -68,9 +90,9 @@ public:
                   ComputeParams & compute_params,
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
-                  bool is_stateful = false,
-                  bool is_prefill = false,
-                  int prefill_chunk_size = 256);
+                  bool is_stateful,
+                  bool is_prefill,
+                  int prefill_chunk_size);
 
     // Naive graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights);
@@ -190,7 +212,7 @@ public:
 
     void clear_model_weights() { m_model_weights.clear(); }
 
-    static std::pair<ModelParams, ComputeParams> compute_llm_params(ggml_cgraph * cgraph, bool is_static);
+    static std::pair<ModelParams, ComputeParams> compute_llm_params(ggml_cgraph * cgraph, bool is_static, std::optional<ComputeParams> old_c_params);
 
     ModelParams get_model_params() const { return m_model_params; }
 

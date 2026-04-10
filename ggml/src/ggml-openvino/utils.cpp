@@ -83,6 +83,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     const auto & config = ggml_openvino_get_compile_config();
     auto device = r_ctx->device;
     bool stateful = r_ctx->stateful;
+    bool prefill = false;
+    bool prefill_chunk_size = 256; // TODO: fix me
     static auto is_static = false;
 
     if (is_naive(cgraph)) {
@@ -95,7 +97,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     std::shared_ptr<ov::InferRequest> infer_request;
     ModelParams m_params;
     ComputeParams c_params;
-    std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
+    std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static, std::optional<ComputeParams>());
 
     graph_key key(cgraph);
     bool cache_hit;
@@ -112,10 +114,12 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
         cache_hit = it != r_ctx->decoder_cache.end();
         ModelParams old_m_params;
+        ComputeParams old_c_params;
         if (cache_hit) {
             ggml_decoder = it->second;
             old_m_params = ggml_decoder->get_model_params();
-            cache_hit = old_m_params.can_reuse_dynamically(m_params);
+            old_c_params = ggml_decoder->get_compute_params();
+            cache_hit = old_m_params.can_reuse_dynamically(m_params) && old_c_params.can_reuse_dynamically(c_params);
         }
 
         if (cache_hit) {
@@ -175,7 +179,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
-            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful, prefill, prefill_chunk_size);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -294,7 +298,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     std::shared_ptr<ov::InferRequest> infer_request;
     ModelParams m_params;
     ComputeParams c_params;
-    std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
+    std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static, std::optional<ComputeParams>());
 
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
@@ -310,10 +314,12 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
     cache_hit = it != r_ctx->decoder_cache.end();
     ModelParams old_m_params;
+    ComputeParams old_c_params;
     if (cache_hit) {
         ggml_decoder = it->second;
         old_m_params = ggml_decoder->get_model_params();
-        cache_hit = old_m_params.can_reuse_statically(m_params);
+        old_c_params = ggml_decoder->get_compute_params();
+        cache_hit = old_m_params.can_reuse_statically(m_params) && old_c_params.can_reuse_statically(c_params);
     }
 
     if (cache_hit) {
