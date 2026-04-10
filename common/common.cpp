@@ -1513,10 +1513,21 @@ void common_batch_add(
                           llama_pos   pos,
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits) {
+    common_batch_add(batch,id,pos,0,seq_ids,logits);
+}
+
+void common_batch_add(
+    struct llama_batch & batch,
+    llama_token   id,
+    llama_pos   pos,
+    int32_t token_type,
+    const std::vector<llama_seq_id> & seq_ids,
+    bool   logits) {
     GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
 
     batch.token   [batch.n_tokens] = id;
     batch.pos     [batch.n_tokens] = pos;
+    batch.token_type[batch.n_tokens] = token_type;
     batch.n_seq_id[batch.n_tokens] = seq_ids.size();
     for (size_t i = 0; i < seq_ids.size(); ++i) {
         batch.seq_id[batch.n_tokens][i] = seq_ids[i];
@@ -1525,7 +1536,6 @@ void common_batch_add(
 
     batch.n_tokens++;
 }
-
 //
 // Vocab utils
 //

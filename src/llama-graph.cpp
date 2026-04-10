@@ -126,6 +126,17 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_token_type::set_input(const llama_ubatch * ubatch) {
+    if (ubatch->token_type && type) {
+        const int64_t n_tokens = ubatch->n_tokens;
+        ggml_backend_tensor_set(type, ubatch->token_type, 0, n_tokens*ggml_element_size(type));
+    }
+}
+
+bool llm_graph_input_token_type::can_reuse(const llm_graph_params & params) {
+    return type->ne[0] == params.ubatch.n_tokens;
+}
+
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -1716,6 +1727,15 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
 
     res->add_input(std::move(inp));
 
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_token_type() const {
+    auto inp = std::make_unique<llm_graph_input_token_type>();
+    auto & cur = inp->type;
+    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)n_tokens);
+    ggml_set_input(cur);
+    res->add_input(std::move(inp));
     return cur;
 }
 

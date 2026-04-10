@@ -122,6 +122,7 @@ struct decode_embd_batch {
     std::vector<llama_pos>      pos;
     std::vector<llama_pos>      pos_view; // used by mrope
     std::vector<int32_t>        n_seq_id;
+    std::vector<int32_t>        token_type_ids;
     std::vector<llama_seq_id>   seq_id_0;
     std::vector<llama_seq_id *> seq_ids;
     std::vector<int8_t>         logits;
@@ -129,6 +130,8 @@ struct decode_embd_batch {
     decode_embd_batch(float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd) : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd) {
         GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
         pos     .resize(n_tokens * n_pos_per_embd);
+        token_type_ids.resize(n_tokens);
+        std::fill(token_type_ids.begin(),token_type_ids.end(),0);
         n_seq_id.resize(n_tokens);
         seq_ids .resize(n_tokens + 1);
         logits  .resize(n_tokens);
@@ -139,6 +142,7 @@ struct decode_embd_batch {
             /*tokens         =*/ nullptr,
             /*embd           =*/ embd,
             /*pos            =*/ pos.data(),
+            /*token_type=    =*/ token_type_ids.data(),
             /*n_seq_id       =*/ n_seq_id.data(),
             /*seq_id         =*/ seq_ids.data(),
             /*logits         =*/ logits.data(),
@@ -221,6 +225,7 @@ struct decode_embd_batch {
             /*tokens         =*/ nullptr,
             /*embd           =*/ batch.embd     + offset * n_mmproj_embd,
             /*pos            =*/ pos_ptr,
+            /*token_type     =*/ batch.token_type + offset,
             /*n_seq_id       =*/ batch.n_seq_id + offset,
             /*seq_id         =*/ batch.seq_id   + offset,
             /*logits         =*/ batch.logits   + offset,

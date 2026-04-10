@@ -874,6 +874,14 @@ void common_batch_add(
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits);
 
+void common_batch_add(
+    struct llama_batch & batch,
+    llama_token   id,
+    llama_pos   pos,
+    int32_t token_type,
+    const std::vector<llama_seq_id> & seq_ids,
+    bool   logits);
+
 // decodes a single batch of tokens for a prompt and manages session tokens
 //
 // Note: We save state before the last token so that we can replay it to ensure
