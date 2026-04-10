@@ -2504,7 +2504,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
             for (const auto & item : parse_csv_row(value)) {
-                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr });
+                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr, {} });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
@@ -2519,11 +2519,60 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 if (parts.size() != 2) {
                     throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
                 }
-                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr });
+                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr, {} });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
+    add_opt(common_arg(
+        {"--lora-modality"}, "INDEX:MODALITY[,MODALITY...]",
+        "Bind LoRA adapter to modality type(s). Adapter activates when any specified modality is present.\n"
+        "INDEX is the 0-based adapter index (order of --lora arguments).\n"
+        "MODALITY can be: image, audio (comma-separated for multiple).\n"
+        "Example: --lora-modality 0:image,audio",
+        [](common_params & params, const std::string & value) {
+            // Parse "INDEX:MODALITY[,MODALITY...]"
+            size_t colon_pos = value.find(':');
+            if (colon_pos == std::string::npos) {
+                throw std::invalid_argument("Invalid format for --lora-modality. Expected INDEX:MODALITY");
+            }
+
+            // Parse the index value
+            std::string index_str = value.substr(0, colon_pos);
+            const auto start_index = index_str.find_first_not_of(" \t\r\n");
+            if (start_index != std::string::npos) {
+                const auto end_index = index_str.find_last_not_of(" \t\r\n");
+                index_str = index_str.substr(start_index, end_index - start_index + 1);
+            }
+
+            int adapter_idx = std::stoi(index_str);
+            if (adapter_idx < 0 || adapter_idx >= (int)params.lora_adapters.size()) {
+                throw std::invalid_argument("Invalid adapter index: " + index_str);
+            }
+
+            // Parse comma-separated modalities
+            std::string modalities_str = value.substr(colon_pos + 1);
+            std::vector<std::string> modality_strs = string_split<std::string>(modalities_str, ',');
+
+            // Validate and store modality strings
+            auto & lora_info = params.lora_adapters[adapter_idx];
+            lora_info.mmlora_modality_types.clear();
+
+            for (auto mod_str : modality_strs) {
+                // Strip whitespace
+                const auto start_index = mod_str.find_first_not_of(" \t\r\n");
+                if (start_index != std::string::npos) {
+                    auto end_index = mod_str.find_last_not_of(" \t\r\n");
+                    mod_str = mod_str.substr(start_index, end_index - start_index + 1);
+                }
+                // Validate the string (simple string validation, enum conversion happens later)
+                if (mod_str != "image" && mod_str != "audio") {
+                    throw std::invalid_argument("Invalid modality type: " + mod_str + " (must be 'image' or 'audio')");
+                }
+                lora_info.mmlora_modality_types.push_back(mod_str);
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--control-vector"}, "FNAME",
         "add a control vector\nnote: use comma-separated values to add multiple control vectors",

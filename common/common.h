@@ -44,6 +44,15 @@ struct common_adapter_lora_info {
     std::string prompt_prefix;
 
     struct llama_adapter_lora * ptr;
+
+    // Multi-Modal LoRA activation (MMLoRA)
+    // Empty vector = not an MMLoRA adapter (always active)
+    // Non-empty = MMLoRA adapter (activates if ANY specified modality present - OR logic)
+    // Modality types stored as strings: "image", "audio"
+    std::vector<std::string> mmlora_modality_types;
+
+    // Helper to check if this is an MMLoRA adapter
+    bool is_mmlora() const { return !mmlora_modality_types.empty(); }
 };
 
 using llama_tokens = std::vector<llama_token>;
