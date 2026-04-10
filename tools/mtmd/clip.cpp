@@ -2331,16 +2331,9 @@ struct clip_model_loader {
         }
 
         // Fix swapped conv norm tensors in Gemma 4 audio GGUFs.
-        //
-        // The upstream tensor_mapping.py maps gemma4 HF tensors to GGUF names
-        // with conv_norm and norm_conv swapped:
-        //   HF lconv1d.pre_layer_norm -> GGUF a.blk.{bid}.conv_norm (should be norm_conv)
-        //   HF lconv1d.conv_norm      -> GGUF a.blk.{bid}.norm_conv (should be conv_norm)
-        //
-        // All publicly released Gemma 4 mmproj GGUFs have this issue. Rather
-        // than changing the Python mapping (which would break gemma3n compat),
-        // we swap the tensor pointers after loading so they match their
-        // semantic usage: norm_conv_w = pre-conv norm, conv_norm_w = post-conv norm.
+        // The upstream tensor_mapping.py maps these with conv_norm and norm_conv swapped:
+        //   HF lconv1d.pre_layer_norm -> GGUF conv_norm (should be norm_conv)
+        //   HF lconv1d.conv_norm      -> GGUF norm_conv (should be conv_norm)
         if (model.proj_type == PROJECTOR_TYPE_GEMMA4A && hparams.n_layer > 0) {
             for (int il = 0; il < hparams.n_layer; ++il) {
                 std::swap(model.layers[il].conv_norm_w, model.layers[il].norm_conv_w);
