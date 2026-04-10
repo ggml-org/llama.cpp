@@ -10150,15 +10150,71 @@ static void populate_host_zone_sizing(placement_plan &                          
     plan.graph_metadata_bytes = k_graph_metadata_base +
                                 static_cast<size_t>(std::max(n_experts, 0)) * 32 * sizeof(int);
 
+    // 6. Tensor Parallelism buffer estimates (only when TP is active with >1 device).
+    //    TP FFN compute buffers live on secondary device VRAM; sized conservatively from
+    //    max_tensor_bytes since we cannot recover exact n_embd/n_ff from quantized byte counts
+    //    without knowing the quant type.  The constants below bound the Q8_1-quantized inputs,
+    //    intermediate float buffers, and partial-result buffers computed by
+    //    ggml_sycl_tp_ensure_ffn_buffers().
+    //
+    //    TP host staging is a single persistent float32 buffer holding one copy of the
+    //    n_embd-wide activation row (≤16 MB for any current model at max PP batch).
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+        // Find the largest FFN and attention weight tensor byte counts.
+        // FFN gate/up/down tensors: size ≈ n_embd × n_ff × bytes_per_quant_elem
+        // Attention q/k/v/o tensors: size ≈ n_embd × (n_embd or n_kv_heads×head_dim) × ...
+        size_t max_ffn_weight_bytes  = 0;
+        size_t max_attn_weight_bytes = 0;
+        for (const auto & [name, sz] : tensor_inventory) {
+            const tensor_usage usage = infer_tensor_usage(name.c_str());
+            if (usage == tensor_usage::FFN_WEIGHT) {
+                max_ffn_weight_bytes = std::max(max_ffn_weight_bytes, sz);
+            } else if (usage == tensor_usage::ATTENTION_WEIGHT) {
+                max_attn_weight_bytes = std::max(max_attn_weight_bytes, sz);
+            }
+        }
+        // TP FFN device buffers: input Q8_1 + 3× hidden float + hidden Q8_1 + partial float.
+        // At max PP batch (512) these scale as O(batch × n_embd_or_n_ff).
+        // Conservative bound: use 4× the float32-equivalent of the largest FFN weight.
+        // Float32 equivalent ≈ weight_bytes × (32 / QK4_0) = weight_bytes × 2 (for Q4_0).
+        // Multiply by 4 to cover all intermediate buffers at max batch.
+        constexpr int k_tp_ffn_float_scale = 8;  // float32_equiv × buffer_count
+        plan.tp_ffn_buffer_bytes = (max_ffn_weight_bytes > 0)
+                                       ? max_ffn_weight_bytes * k_tp_ffn_float_scale
+                                       : plan.max_tensor_bytes * k_tp_ffn_float_scale;
+
+        // TP attention device buffers: QKV projections similarly sized.
+        constexpr int k_tp_attn_float_scale = 4;
+        plan.tp_attn_buffer_bytes = (max_attn_weight_bytes > 0)
+                                        ? max_attn_weight_bytes * k_tp_attn_float_scale
+                                        : plan.max_tensor_bytes * k_tp_attn_float_scale;
+
+        // TP host staging: single buffer for activation D2H/H2D copies.
+        // Bounded by n_embd × max_batch × sizeof(float) ≤ k_tp_staging_headroom.
+        plan.tp_staging_buffer_bytes = k_tp_staging_headroom;
+
+        GGML_LOG_INFO("[SYCL-PLAN] TP buffer sizing: world_size=%d "
+                      "ffn=%.1f MB attn=%.1f MB staging=%.1f MB\n",
+                      g_sycl_tp_config.world_size,
+                      plan.tp_ffn_buffer_bytes / (1024.0 * 1024.0),
+                      plan.tp_attn_buffer_bytes / (1024.0 * 1024.0),
+                      plan.tp_staging_buffer_bytes / (1024.0 * 1024.0));
+    } else {
+        plan.tp_ffn_buffer_bytes     = 0;
+        plan.tp_attn_buffer_bytes    = 0;
+        plan.tp_staging_buffer_bytes = 0;
+    }
+
     // --- Host zone sizing (uses inference category fields computed above) ---
 
     plan.host_zone_weight_bytes =
         static_cast<size_t>(static_cast<double>(plan.weight_host_bytes) * k_weight_headroom_ratio);
     plan.host_zone_kv_bytes = std::max<size_t>(k_min_zone_bytes, plan.kv_host_bytes);
-    // Staging zone: baseline (2x max tensor + headroom) plus expert bias D2H buffer.
+    // Staging zone: baseline (2x max tensor + headroom) plus expert bias D2H and TP staging.
     plan.host_zone_staging_bytes =
         std::max<size_t>(k_min_zone_bytes,
-                         plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes);
+                         plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes +
+                             plan.tp_staging_buffer_bytes);
     // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder and MoE Q8_1 workspace.
     // Actual compute buffer needs are fed back via unified_cache_grow_host_scratch_zone()
     // after the ggml scheduler is created.

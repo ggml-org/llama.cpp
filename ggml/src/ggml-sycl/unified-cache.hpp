@@ -214,6 +214,15 @@ struct placement_plan {
     // Graph metadata: layer classification vectors and MoE routing tables.
     size_t graph_metadata_bytes    = 0;  // Zone: HOST (system heap)
 
+    // --- Tensor Parallelism buffer estimates (0 when TP is disabled) ---
+    // Per-layer FFN compute buffers on secondary TP devices (device VRAM).
+    // Sized from n_embd / n_ff heuristics derived from FFN tensor inventory.
+    size_t tp_ffn_buffer_bytes     = 0;  // Zone: RUNTIME (device VRAM, per secondary device)
+    // Per-layer attention compute buffers on secondary TP devices (device VRAM).
+    size_t tp_attn_buffer_bytes    = 0;  // Zone: RUNTIME (device VRAM, per secondary device)
+    // Host staging for TP input copies (D2H of activations before H2D to secondary device).
+    size_t tp_staging_buffer_bytes = 0;  // Zone: STAGING (host pinned)
+
     // Per-device VRAM usage (multi-device only, indexed by position in devices vector)
     std::vector<int>    devices;          // Device IDs participating in this plan
     std::vector<size_t> per_device_vram;  // VRAM bytes used per device
