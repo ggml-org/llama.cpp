@@ -13,6 +13,18 @@ float16_t dequantFuncF32(const in decodeBufF32 bl, const in uint blockCoords[2],
     return vf16[idx];
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ1_0 {
+   block_q1_0 block;
+};
+
+float16_t dequantFuncQ1_0(const in decodeBufQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint bit = (uint(bl.block.qs[(idx & 0x78) >> 3]) >> (idx & 0x7)) & 1u;
+    return bit != 0u ? d : -d;
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ4_0 {
    block_q4_0_packed16 block;
 };
@@ -685,7 +697,9 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
 }
 #endif
 
-#if defined(DATA_A_Q4_0)
+#if defined(DATA_A_Q1_0)
+#define dequantFuncA dequantFuncQ1_0
+#elif defined(DATA_A_Q4_0)
 #define dequantFuncA dequantFuncQ4_0
 #elif defined(DATA_A_Q4_1)
 #define dequantFuncA dequantFuncQ4_1

@@ -184,6 +184,31 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
+#if defined(DATA_A_Q1_0)
+void quantize(uint dst_idx, uint src_idx)
+{
+    float sum_abs = 0.0;
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q1_0; j++) {
+        sum_abs += abs(data_s[src_idx + j]);
+    }
+
+    const float d = sum_abs / QUANT_K_Q1_0;
+
+    data_q[dst_idx].d = float16_t(d);
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q1_0 / 8; ++j) {
+        data_q[dst_idx].qs[j] = uint8_t(0);
+    }
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q1_0; ++j) {
+        if (data_s[src_idx + j] >= 0.0) {
+            data_q[dst_idx].qs[j / 8] |= uint8_t(1 << (j % 8));
+        }
+    }
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 uint best_index(float x) {
     if (x <= kvalues_iq4nl[0]) return 0;
