@@ -6282,6 +6282,11 @@ struct mmq_stream_ctx {
     size_t              row_total_bytes      = 0;
     int                 segment_count        = 0;
     mmq_stream_segment  segments[4]          = {};
+    // Persistent host-pinned staging buffer (owned by ggml_backend_sycl_context).
+    void *              host_staging         = nullptr;
+    size_t              host_staging_size    = 0;
+    mutable sycl::event prev_staging_evt     = {};
+    mutable bool        has_prev_staging_evt = false;
 };
 
 static bool mmq_parse_env_mb_value(const char * name, size_t & out_mb) {
@@ -6710,11 +6715,21 @@ static sycl::event mmq_stream_copy(sycl::queue &                    queue,
 
     const sycl::usm::alloc src_alloc = ggml_sycl_get_alloc_type(ctx->src_base);
     if (src_alloc != sycl::usm::alloc::device) {
-        uint8_t * host_slice =
-            static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmq:host_stage"));
-        if (!host_slice) {
-            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
-                                  "MMQ stream: host staging allocation failed");
+        uint8_t * host_slice     = nullptr;
+        bool      use_persistent = (ctx->host_staging != nullptr && ctx->host_staging_size >= slice_bytes);
+        if (use_persistent) {
+            if (ctx->has_prev_staging_evt) {
+                ctx->prev_staging_evt.wait();
+                ctx->has_prev_staging_evt = false;
+            }
+            host_slice = static_cast<uint8_t *>(ctx->host_staging);
+        } else {
+            host_slice = static_cast<uint8_t *>(
+                ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmq:host_stage"));
+            if (!host_slice) {
+                throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                      "MMQ stream: host staging allocation failed");
+            }
         }
         size_t dst_offset = 0;
         for (int i = 0; i < ctx->segment_count; ++i) {
@@ -6729,7 +6744,10 @@ static sycl::event mmq_stream_copy(sycl::queue &                    queue,
         }
         GGML_ASSERT(dst_offset == slice_bytes);
         sycl::event evt = queue.memcpy(device_slice, host_slice, slice_bytes, deps);
-        if (auto * cache = ggml_sycl::get_unified_cache(queue)) {
+        if (use_persistent) {
+            ctx->prev_staging_evt     = evt;
+            ctx->has_prev_staging_evt = true;
+        } else if (auto * cache = ggml_sycl::get_unified_cache(queue)) {
             cache->defer_host_free(host_slice, slice_bytes, evt);
         } else {
             if (!ggml_sycl_graph_recording_active()) {
@@ -7051,6 +7069,11 @@ void ggml_sycl_op_mul_mat_q(
             if (total_bytes <= slice_bytes * 2) {
                 slice_bytes = total_bytes;
             }
+        }
+        if (custom_copy && slice_bytes > 0) {
+            void * stg = ctx.ensure_mmvq_host_staging(slice_bytes, *stream);
+            stream_ctx.host_staging      = stg;
+            stream_ctx.host_staging_size = stg ? slice_bytes : 0;
         }
         std::vector<sycl::event> deps;
         if (!stream->has_property<sycl::property::queue::in_order>()) {

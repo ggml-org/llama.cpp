@@ -18347,6 +18347,14 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
         readback_staging_size = 0;
     }
 
+    // Free persistent MMVQ/DMMV/MMQ host staging buffer
+    if (mmvq_host_staging_alloc.ptr) {
+        (void) ggml_sycl::unified_free(mmvq_host_staging_alloc);
+        mmvq_host_staging_alloc = {};
+    }
+    mmvq_host_staging      = nullptr;
+    mmvq_host_staging_size = 0;
+
     // Free BLAS fallback staging buffer
     try {
         free_staging_buffer();
@@ -18415,6 +18423,35 @@ void ggml_backend_sycl_context::free_staging_buffer() {
     staging_buffer_        = nullptr;
     staging_buffer_size_   = 0;
     staging_buffer_device_ = -1;
+}
+
+void * ggml_backend_sycl_context::ensure_mmvq_host_staging(size_t needed, sycl::queue & queue) {
+    if (mmvq_host_staging && mmvq_host_staging_size >= needed) {
+        return mmvq_host_staging;
+    }
+    // Free previous allocation if too small
+    if (mmvq_host_staging_alloc.ptr) {
+        (void) ggml_sycl::unified_free(mmvq_host_staging_alloc);
+        mmvq_host_staging_alloc = {};
+    }
+    mmvq_host_staging      = nullptr;
+    mmvq_host_staging_size = 0;
+
+    ggml_sycl::alloc_request req{};
+    req.queue                                 = &queue;
+    req.device                                = device;
+    req.size                                  = needed;
+    req.intent.role                           = ggml_sycl::alloc_role::STAGING;
+    req.intent.category                       = ggml_sycl::runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned  = true;
+    req.intent.constraints.use_pinned_pool   = true;
+    if (!ggml_sycl::unified_alloc(req, &mmvq_host_staging_alloc) || mmvq_host_staging_alloc.ptr == nullptr) {
+        mmvq_host_staging_alloc = {};
+        return nullptr;
+    }
+    mmvq_host_staging      = mmvq_host_staging_alloc.ptr;
+    mmvq_host_staging_size = needed;
+    return mmvq_host_staging;
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {

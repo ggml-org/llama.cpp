@@ -3382,6 +3382,19 @@ struct ggml_backend_sycl_context {
     size_t                  readback_staging_size = 0;
     ggml_sycl::alloc_handle readback_staging_alloc;
 
+    // Persistent host-pinned staging buffer for MMVQ/DMMV/MMQ weight streaming.
+    // Eliminates per-token sycl::malloc_host in the mmap-source scatter-gather path.
+    // Shared across all three kernel paths (only one runs at a time per context).
+    // Grows on first use (or when a larger slice is needed), then stays persistent.
+    void *                  mmvq_host_staging      = nullptr;
+    size_t                  mmvq_host_staging_size = 0;
+    ggml_sycl::alloc_handle mmvq_host_staging_alloc;
+
+    // Ensure mmvq_host_staging is at least `needed` bytes.
+    // Allocates on first call, grows if needed (rare after warmup).
+    // Returns the staging pointer, or nullptr on allocation failure.
+    void * ensure_mmvq_host_staging(size_t needed, sycl::queue & queue);
+
     // Reusable device buffer for BLAS fallback (MXFP4 -> F16 dequantization).
     // Allocated lazily on first BLAS fallback, registered with unified cache budget.
     void *                  staging_buffer_        = nullptr;
