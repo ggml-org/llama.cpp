@@ -1083,7 +1083,9 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
-    data.supports_thinking = true;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<|channel>thought";
+    data.thinking_end_tag   = "<channel|>";
 
     data.preserved_tokens = {
         "<|channel>",
@@ -1102,9 +1104,9 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought\n") + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought\n") + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
         }
 
         auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));

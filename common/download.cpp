@@ -174,7 +174,7 @@ public:
         }
         int lines_up = max_line - lines[this];
 
-        size_t bar = 55 - len;
+        size_t bar = (55 - len) * 2;
         size_t pct = (100 * current) / total;
         size_t pos = (bar * current) / total;
 
@@ -183,8 +183,8 @@ public:
         }
         std::cout << '\r' << "Downloading " << filename << " ";
 
-        for (size_t i = 0; i < bar; ++i) {
-            std::cout << (i < pos ? "—" : " ");
+        for (size_t i = 0; i < bar; i += 2) {
+            std::cout << (i + 1 < pos ? "─" : (i < pos ? "╴" : " "));
         }
         std::cout << std::setw(4) << pct << "%\033[K";
 
