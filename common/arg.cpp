@@ -291,14 +291,16 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    const bool offline = params.offline;
     std::string model_endpoint = get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
     auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
     auto preset_path = fs_get_cache_file(preset_fname);
-    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    common_download_opts opts;
+    opts.bearer_token = params.hf_token;
+    opts.offline = params.offline;
+    const int status = common_download_file_single(preset_url, preset_path, opts);
     const bool has_preset = status >= 200 && status < 400;
 
     // remote preset is optional, so we don't error out if not found
@@ -341,10 +343,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.hf_file = model.path;
             model.path = "";
         }
-        common_download_model_opts opts;
-        opts.download_mmproj = true;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts, true);
 
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from Hugging Face\n");
@@ -365,9 +367,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
 
-        common_download_model_opts opts;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
