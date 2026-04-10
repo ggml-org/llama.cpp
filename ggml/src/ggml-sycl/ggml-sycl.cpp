@@ -6389,7 +6389,9 @@ static ggml_sycl::mem_handle make_data_ptr_handle(const ggml_tensor * tensor, in
             return ggml_sycl::mem_handle::from_cache_id(key, device);
         }
     }
-    return ggml_sycl::mem_handle::from_direct(ptr, GGML_LAYOUT_AOS, true);
+    const bool on_device = (ptr != nullptr) &&
+                           (ggml_sycl_get_alloc_type(ptr) == sycl::usm::alloc::device);
+    return ggml_sycl::mem_handle::from_direct(ptr, GGML_LAYOUT_AOS, on_device);
 }
 
 // ---------------------------------------------------------------------------
