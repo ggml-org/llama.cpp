@@ -6428,21 +6428,6 @@ struct moe_ids_cache_entry {
 // Keyed by the ggml_tensor pointer (avoids unnecessary device round-trips).
 static thread_local std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> g_moe_ids_d2h_cache;
 
-// Counter incremented at each graph boundary so that thread-local caches
-// (activation pointer type, etc.) can detect stale entries without a
-// function call into the thread-local storage from graph_compute_impl.
-static std::atomic<uint64_t> g_moe_graph_epoch{ 0 };
-
-static void ggml_sycl_moe_ids_cache_new_graph() {
-    // Wait for any in-flight async D2H before destroying the host vectors
-    // that the OOQ memcpy is writing into.
-    for (auto & [key, entry] : g_moe_ids_d2h_cache) {
-        entry.wait();
-    }
-    g_moe_ids_d2h_cache.clear();
-    g_moe_graph_epoch.fetch_add(1, std::memory_order_relaxed);
-}
-
 // ---------------------------------------------------------------------------
 // Per-layer IDs D2H + expert pointer cache for MoE sub-op batching (Task 1E).
 // Gate/Up/Down sub-ops within the same MoE block share the same expert IDs.
@@ -6450,13 +6435,13 @@ static void ggml_sycl_moe_ids_cache_new_graph() {
 // redundant D2H copies and placement table lookups.
 // ---------------------------------------------------------------------------
 struct moe_layer_ids_cache_entry {
-    std::vector<int32_t> ids_host;     // Expert IDs (copied D2H once at GATE)
-    uint64_t             graph_epoch;  // Graph epoch for staleness detection
+    std::vector<int32_t> ids_host;  // Expert IDs (copied D2H once at GATE)
     // Task 1E: Pre-resolved expert pointers from GATE, reused at UP/DOWN.
     // Avoids redundant placement table lookups, cache queries, and stats tracking.
     // mem_handle instead of void* so that resolve() auto-revalidates on cache eviction.
+    // graph_epoch and ptrs_valid removed — cache is cleared each graph boundary, and
+    // mem_handle::resolve() returns nullptr on eviction (auto-staleness via generation counter).
     std::vector<ggml_sycl::mem_handle> expert_ptrs;                    // Resolved expert pointer handles (indexed by expert_id)
-    bool                               ptrs_valid  = false;            // Set after GATE resolves all pointers (null-safe flag)
     layout_mode                        ptrs_layout = GGML_LAYOUT_AOS;  // Layout used when pointers were cached
 
     // Task 1E: Cached expert partitioning from first sub-op for fusion path reuse.
@@ -6476,8 +6461,21 @@ struct moe_layer_ids_cache_entry {
     } partition;
 };
 
-// Keyed by block-number layer_id (parsed from tensor name). Cleared each graph epoch.
+// Keyed by block-number layer_id (parsed from tensor name). Cleared each graph boundary.
 static thread_local std::unordered_map<int, moe_layer_ids_cache_entry> g_moe_layer_ids_cache;
+
+static void ggml_sycl_moe_ids_cache_new_graph() {
+    // Wait for any in-flight async D2H before destroying the host vectors
+    // that the OOQ memcpy is writing into.
+    for (auto & [key, entry] : g_moe_ids_d2h_cache) {
+        entry.wait();
+    }
+    g_moe_ids_d2h_cache.clear();
+    // Clear the per-layer IDs cache so stale entries from the previous graph
+    // are never reused.  graph_epoch was removed — clearing is simpler and
+    // removes the epoch bookkeeping entirely.
+    g_moe_layer_ids_cache.clear();
+}
 
 // Task 1E helper: re-resolve a secondary expert's device_ptr for the current sub-op's
 // weight tensor.  The cached partition stores the pointer from whichever sub-op first
@@ -26375,14 +26373,13 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             ids_host = *ids_host_override;
         } else {
             // Task 1E: check per-layer IDs cache before D2H copy.
-            // GATE populates the cache; UP/DOWN reuse it within the same graph epoch.
-            const int      blk_id           = parse_layer_id_from_name(src0->name ? src0->name : "");
-            const uint64_t cur_epoch        = g_moe_graph_epoch.load(std::memory_order_relaxed);
-            bool           from_layer_cache = false;
+            // GATE populates the cache; UP/DOWN reuse it within the same graph
+            // (cache is cleared each graph boundary in ggml_sycl_moe_ids_cache_new_graph).
+            const int blk_id           = parse_layer_id_from_name(src0->name ? src0->name : "");
+            bool      from_layer_cache = false;
             if (blk_id >= 0) {
                 auto it = g_moe_layer_ids_cache.find(blk_id);
-                if (it != g_moe_layer_ids_cache.end() && it->second.graph_epoch == cur_epoch &&
-                    !it->second.ids_host.empty()) {
+                if (it != g_moe_layer_ids_cache.end() && !it->second.ids_host.empty()) {
                     ids_host         = it->second.ids_host;
                     from_layer_cache = true;
                     GGML_SYCL_DEBUG("[MOE-PTR-1E] Reusing cached IDs for layer %d (%s)\n", blk_id,
@@ -26390,29 +26387,37 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                     // Task 1E: If pointers were also cached at GATE, short-circuit
                     // the entire function — skip placement table lookups, cache queries,
                     // stats tracking, prediction, and hotset updates.
-                    if (it->second.ptrs_valid && it->second.ptrs_layout == layout &&
+                    // mem_handle::resolve() auto-detects staleness via generation counter;
+                    // any nullptr result falls through to full resolution below.
+                    if (it->second.ptrs_layout == layout &&
                         it->second.expert_ptrs.size() == static_cast<size_t>(n_experts)) {
-                        auto & cached_ptrs = it->second.expert_ptrs;
+                        auto & cached_ptrs  = it->second.expert_ptrs;
+                        bool   all_resolved = true;
                         // Resolve each mem_handle — auto-revalidates if cache evicted/relocated
                         for (size_t ei = 0; ei < cached_ptrs.size(); ++ei) {
-                            auto rp           = cached_ptrs[ei].resolve();
-                            host_ptrs[ei]     = rp.ptr;
-                        }
-                        // H2D memcpy of the pointer table.
-                        // No fill events needed here: the GATE call that populated
-                        // this cache already chained fill events into its table_deps
-                        // and submitted the ptr-table H2D on the same in-order stream.
-                        // Subsequent UP/DOWN sub-ops are implicitly ordered after GATE.
-                        if (!skip_device_copy && extra->moe_expert_ptrs_device[device] != nullptr) {
-                            sycl::event ev = stream->memcpy(extra->moe_expert_ptrs_device[device], host_ptrs.data(),
-                                                            host_ptrs.size() * sizeof(void *));
-                            if (out_event) {
-                                *out_event = ev;
+                            auto rp       = cached_ptrs[ei].resolve();
+                            host_ptrs[ei] = rp.ptr;
+                            if (!rp.ptr) {
+                                all_resolved = false;
                             }
                         }
-                        GGML_SYCL_DEBUG("[MOE-PTR-1E] Fast-path: reused cached ptrs for layer %d (%s)\n", blk_id,
-                                        src0->name ? src0->name : "?");
-                        return true;
+                        if (all_resolved) {
+                            // H2D memcpy of the pointer table.
+                            // No fill events needed here: the GATE call that populated
+                            // this cache already chained fill events into its table_deps
+                            // and submitted the ptr-table H2D on the same in-order stream.
+                            // Subsequent UP/DOWN sub-ops are implicitly ordered after GATE.
+                            if (!skip_device_copy && extra->moe_expert_ptrs_device[device] != nullptr) {
+                                sycl::event ev = stream->memcpy(extra->moe_expert_ptrs_device[device], host_ptrs.data(),
+                                                                host_ptrs.size() * sizeof(void *));
+                                if (out_event) {
+                                    *out_event = ev;
+                                }
+                            }
+                            GGML_SYCL_DEBUG("[MOE-PTR-1E] Fast-path: reused cached ptrs for layer %d (%s)\n", blk_id,
+                                            src0->name ? src0->name : "?");
+                            return true;
+                        }
                     }
                 }
             }
@@ -26422,9 +26427,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                 }
                 // Cache at GATE for subsequent UP/DOWN sub-ops in same block
                 if (blk_id >= 0 && src0->name && strstr(src0->name, "ffn_gate")) {
-                    auto & entry      = g_moe_layer_ids_cache[blk_id];
-                    entry.ids_host    = ids_host;
-                    entry.graph_epoch = cur_epoch;
+                    auto & entry   = g_moe_layer_ids_cache[blk_id];
+                    entry.ids_host = ids_host;
                 }
             }
         }
@@ -26958,21 +26962,20 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     // and stats tracking for the 2 subsequent sub-ops in this MoE block.
     // Only cache when all needed expert pointers are resolved (no nullptr).
     // OPT-FUSED: SOA/COALESCED layouts may have nullptr entries from deferred
-    // cache fills — don't cache those, as it would poison AOS fallback.
-    if (!need_all_experts && src0->name && strstr(src0->name, "ffn_gate")) {
+    // cache fills — only cache when all experts resolved (stats_miss == 0).
+    // mem_handle::resolve() will return nullptr on eviction, causing the fast path
+    // to fall through automatically on the next token if a weight is evicted.
+    if (!need_all_experts && src0->name && strstr(src0->name, "ffn_gate") && stats_miss == 0) {
         const int blk_id = parse_layer_id_from_name(src0->name);
         if (blk_id >= 0) {
-            // Check for missing pointers among needed experts
-            bool   all_resolved = (stats_miss == 0);
-            auto & entry        = g_moe_layer_ids_cache[blk_id];
+            auto & entry = g_moe_layer_ids_cache[blk_id];
             entry.expert_ptrs.resize(host_ptrs.size());
             for (size_t ei = 0; ei < host_ptrs.size(); ++ei) {
                 entry.expert_ptrs[ei] = ggml_sycl::mem_handle::from_direct(host_ptrs[ei], layout, true);
             }
-            entry.ptrs_valid  = all_resolved;
             entry.ptrs_layout = layout;
-            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d (ptrs_valid=%d, misses=%d, layout=%d)\n",
-                            host_ptrs.size(), blk_id, all_resolved, stats_miss, (int) layout);
+            GGML_SYCL_DEBUG("[MOE-PTR-1E] Cached %zu expert ptrs for layer %d (misses=0, layout=%d)\n",
+                            host_ptrs.size(), blk_id, (int) layout);
         }
     }
 
@@ -33617,11 +33620,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     fusion.reset();
 
                     // Resolve expert IDs -- check per-layer cache first
+                    // (cache is cleared each graph boundary, so any entry found is current)
                     const int32_t * ids_data_f = nullptr;
-                    const uint64_t  cur_epoch  = g_moe_graph_epoch.load(std::memory_order_relaxed);
                     {
                         auto layer_it = g_moe_layer_ids_cache.find(cur_layer_fast);
-                        if (layer_it != g_moe_layer_ids_cache.end() && layer_it->second.graph_epoch == cur_epoch &&
+                        if (layer_it != g_moe_layer_ids_cache.end() &&
                             layer_it->second.ids_host.size() == ids_n_elem) {
                             ids_data_f = layer_it->second.ids_host.data();
                             GGML_SYCL_DEBUG("[MoE-P4] Reusing layer ID cache for layer %d\n", cur_layer_fast);
@@ -33642,7 +33645,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         }
                         auto & lentry = g_moe_layer_ids_cache[cur_layer_fast];
                         lentry.ids_host.assign(ids_data_f, ids_data_f + ids_n_elem);
-                        lentry.graph_epoch = cur_epoch;
                     }
 
                     if (g_moe_profile_enabled) {
@@ -33744,8 +33746,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     bool partition_from_cache = false;
                     {
                         auto part_it = g_moe_layer_ids_cache.find(cur_layer_fast);
-                        if (part_it != g_moe_layer_ids_cache.end() && part_it->second.graph_epoch == cur_epoch &&
-                            part_it->second.partition.valid) {
+                        if (part_it != g_moe_layer_ids_cache.end() && part_it->second.partition.valid) {
                             auto & cp          = part_it->second.partition;
                             fusion.cpu_indices = cp.cpu_indices;
                             fusion.sec_indices.reserve(cp.sec_indices.size());
@@ -33759,8 +33760,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                             }
                             fusion.gpu0_cached_indices = cp.gpu0_cached_indices;
                             partition_from_cache       = true;
-                        } else if (part_it != g_moe_layer_ids_cache.end()) {
-                            part_it->second.partition.valid = false;
                         }
                     }
 
@@ -33825,7 +33824,6 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                         // Cache the partition for reuse
                         auto & lentry                = g_moe_layer_ids_cache[cur_layer_fast];
-                        lentry.graph_epoch           = cur_epoch;
                         lentry.partition.cpu_indices = fusion.cpu_indices;
                         lentry.partition.sec_indices.clear();
                         lentry.partition.sec_indices.reserve(fusion.sec_indices.size());
@@ -34024,10 +34022,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
                     // Re-resolve sec_indices for DOWN weight (different tensor)
                     {
-                        const uint64_t cur_epoch_dn = g_moe_graph_epoch.load(std::memory_order_relaxed);
-                        auto           part_it      = g_moe_layer_ids_cache.find(cur_layer_fast);
-                        if (part_it != g_moe_layer_ids_cache.end() && part_it->second.graph_epoch == cur_epoch_dn &&
-                            part_it->second.partition.valid) {
+                        auto part_it = g_moe_layer_ids_cache.find(cur_layer_fast);
+                        if (part_it != g_moe_layer_ids_cache.end() && part_it->second.partition.valid) {
                             auto & cp = part_it->second.partition;
                             fusion.sec_indices.clear();
                             fusion.sec_indices.reserve(cp.sec_indices.size());
@@ -35316,16 +35312,15 @@ cpu_fallback_fast:
     // Task 1E: Batch IDs D2H across GATE/UP/DOWN sub-ops.
     // Within a MoE block, GATE/UP/DOWN share the same expert IDs.
     // Copy D2H once at GATE and reuse for UP and DOWN.
-    const int      blk_layer_id   = parse_layer_id_from_name(src0->name ? src0->name : "");
-    const bool     is_gate_subop  = src0->name && strstr(src0->name, "ffn_gate");
-    const uint64_t cur_epoch      = g_moe_graph_epoch.load(std::memory_order_relaxed);
-    bool           ids_from_cache = false;
+    const int  blk_layer_id   = parse_layer_id_from_name(src0->name ? src0->name : "");
+    const bool is_gate_subop  = src0->name && strstr(src0->name, "ffn_gate");
+    bool       ids_from_cache = false;
 
     if (blk_layer_id >= 0 && !is_gate_subop) {
         // UP or DOWN: try to reuse cached IDs from GATE
+        // (cache cleared each graph boundary — any entry found is current)
         auto cache_it = g_moe_layer_ids_cache.find(blk_layer_id);
-        if (cache_it != g_moe_layer_ids_cache.end() && cache_it->second.graph_epoch == cur_epoch &&
-            !cache_it->second.ids_host.empty()) {
+        if (cache_it != g_moe_layer_ids_cache.end() && !cache_it->second.ids_host.empty()) {
             ids_host       = cache_it->second.ids_host;
             ids_from_cache = true;
             GGML_SYCL_DEBUG("[MoE-1E] Reusing cached IDs for layer %d (%s), %zu elements\n", blk_layer_id,
@@ -35340,9 +35335,8 @@ cpu_fallback_fast:
         }
         // Cache at GATE for subsequent UP/DOWN reuse
         if (blk_layer_id >= 0 && is_gate_subop) {
-            auto & entry      = g_moe_layer_ids_cache[blk_layer_id];
-            entry.ids_host    = ids_host;
-            entry.graph_epoch = cur_epoch;
+            auto & entry   = g_moe_layer_ids_cache[blk_layer_id];
+            entry.ids_host = ids_host;
             GGML_SYCL_DEBUG("[MoE-1E] Cached IDs for layer %d (GATE), %zu elements\n", blk_layer_id, ids_host.size());
         }
     }
