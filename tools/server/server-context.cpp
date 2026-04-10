@@ -1280,6 +1280,24 @@ private:
             }
         }
 
+        // Handle Multi-Modal LoRA (MMLoRA) activation
+        for (size_t i = 0; i < slot.lora.size(); ++i) {
+            auto & lora = slot.lora[i];
+
+            if (!lora.mmlora_modality_types.empty()) {
+                // Check if request has any of the required modalities (OR logic)
+                const bool has_modality = task.tokens.has_any_modality_type(lora.mmlora_modality_types);
+
+                if (!has_modality) {
+                    SLT_DBG(slot, "MMLoRA %zu requires modality but not found, deactivating\n", i);
+                    lora.enabled = false;
+                } else {
+                    SLT_DBG(slot, "MMLoRA %zu activated (modality present)\n", i);
+                    lora.enabled = true;
+                }
+            }
+        }
+
         if (!task.tokens.validate(ctx)) {
             send_error(task, "Prompt contains invalid tokens", ERROR_TYPE_INVALID_REQUEST);
             return false;
