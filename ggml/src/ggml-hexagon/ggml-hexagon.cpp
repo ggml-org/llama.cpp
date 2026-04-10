@@ -1837,7 +1837,6 @@ void ggml_hexagon_session::flush_pending(bool all) {
         // this->prof_cycles = rsp.prof_cycles;
         // this->prof_pkts   = rsp.prof_pkts;
 
-
         this->op_pending--;  // atomic dec
 
         if (!all) break;
@@ -2143,9 +2142,13 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    return opt_experimental;
-}
+    if (dst->ne[2] != 1 || dst->ne[3] != 1) {
+        // FA during prompt still needs work
+        return opt_experimental;
+    }
 
+    return true;
+}
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
