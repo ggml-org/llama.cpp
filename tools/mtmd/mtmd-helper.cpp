@@ -551,8 +551,10 @@ enum mtmd_input_chunk_type mtmd_modality_type_from_str(const char * str) {
         return MTMD_INPUT_CHUNK_TYPE_IMAGE;
     } else if (strcmp(str, "audio") == 0) {
         return MTMD_INPUT_CHUNK_TYPE_AUDIO;
+    } else if (strcmp(str, "text") == 0) {
+        return MTMD_INPUT_CHUNK_TYPE_TEXT;
     }
-    return MTMD_INPUT_CHUNK_TYPE_TEXT; // default/invalid
+    return MTMD_INPUT_CHUNK_TYPE_UNKNOWN; // default/invalid
 }
 
 bool mtmd_is_valid_modality_str(const char * str) {
