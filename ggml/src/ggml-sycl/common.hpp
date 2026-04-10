@@ -3072,12 +3072,9 @@ struct ggml_backend_sycl_context {
             return q8_1_buffers[current_buffer_idx++];
         }
 
-        void free_buffers(queue_ptr stream) {
-            for (size_t i = 0; i < q8_1_buffers.size(); i++) {
-                if (q8_1_buffers[i]) {
-                    sycl::free(q8_1_buffers[i], *stream);
-                }
-            }
+        void free_buffers(queue_ptr /*stream*/) {
+            // Buffers are sub-allocated from the unified scratch pool —
+            // individual sycl::free is invalid; the pool is reset/destroyed by the cache.
             q8_1_buffers.clear();
             q8_1_sizes.clear();
             initialized        = false;

@@ -3549,16 +3549,14 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
     ctx.moe_buffers.q8_1_sizes.resize(moe_count);
 
     for (int i = 0; i < moe_count; i++) {
-        ctx.moe_buffers.q8_1_buffers[i] = ggml_sycl_malloc_device(buffer_size, *stream, "mmvq_moe_q8");
+        // Allocate from the pre-reserved scratch pool — no raw malloc_device during inference.
+        ctx.moe_buffers.q8_1_buffers[i] = ggml_sycl::unified_cache_get_scratch(ctx.device, buffer_size);
         ctx.moe_buffers.q8_1_sizes[i]   = buffer_size;
 
         if (!ctx.moe_buffers.q8_1_buffers[i]) {
-            GGML_LOG_ERROR("[MOE-GRAPH] Failed to allocate Q8_1 buffer %d\n", i);
-            // Cleanup and abort
-            for (int j = 0; j < i; j++) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ctx.moe_buffers.q8_1_sizes[j]);
-                sycl::free(ctx.moe_buffers.q8_1_buffers[j], *stream);
-            }
+            GGML_LOG_ERROR("[MOE-GRAPH] Failed to allocate Q8_1 buffer %d from scratch pool "
+                           "(pool exhausted or not reserved)\n", i);
+            // Scratch pool allocations are not individually freed — just abort.
             ctx.moe_buffers.q8_1_buffers.clear();
             ctx.moe_buffers.q8_1_sizes.clear();
             return;
@@ -3910,7 +3908,6 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MMVQ] MXFP4 MoE reorder dispatch: layout=%d use_ptr_table=1 for %s\n", (int) layout,
                         src0->name ? src0->name : "?");
     }
-
     // XMX tiled layout is handled by XMX paths, not MMVQ
     if (layout == GGML_LAYOUT_XMX_TILED) {
         GGML_SYCL_DEBUG("[MMVQ] XMX tiled layout for %s, skipping MMVQ\n", src0->name);
@@ -3940,6 +3937,13 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     }
 
     const queue_ptr stream = ctx.stream();
+    auto *          route_cache = ggml_sycl::get_unified_cache(*stream);
+    const bool      placement_plan_active = route_cache && route_cache->has_placement_plan();
+    if (placement_plan_active && use_ptr_table) {
+        GGML_SYCL_DEBUG("[MMVQ] Placement-plan pointer-table path disabled for %s; falling back to hybrid dispatch\n",
+                        src0->name ? src0->name : "?");
+        return false;
+    }
 
     // Quantize src1 to Q8_1 format - need to handle all rows (ne11 * ne12)
     const int64_t ne10_padded   = GGML_PAD(ne10, QK8_1);
@@ -3995,7 +3999,8 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             GGML_SYCL_DEBUG("[MMVQ] About to call ggml_sycl_update_moe_ptr_table layout=%d\n", (int)layout);
             if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts, nullptr,
                                                 /*skip_device_copy=*/false,
-                                                /*force_cache_aos=*/host_weights)) {
+                                                /*force_cache_aos=*/host_weights,
+                                                /*skip_cpu_routed_experts=*/host_weights || placement_plan_active)) {
                 GGML_SYCL_DEBUG("[MMVQ] Failed to update expert pointer table for %s\n", src0->name);
                 return false;
             }
@@ -4003,6 +4008,23 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             has_table_event = true;
             if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
                 expert_ptrs = static_cast<const void * const *>(src0_extra->moe_expert_ptrs_device[ctx.device]);
+                if (placement_plan_active) {
+                    const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
+                    bool         mixed_ptrs = false;
+                    for (const void * ptr : host_ptrs) {
+                        if (ptr && ggml_sycl_get_alloc_type(ptr) != sycl::usm::alloc::device) {
+                            mixed_ptrs = true;
+                            break;
+                        }
+                    }
+                    if (mixed_ptrs) {
+                        GGML_SYCL_DEBUG(
+                            "[MMVQ] Placement-plan host-routed experts present for %s; "
+                            "falling back from MMVQ to hybrid dispatch\n",
+                            src0->name ? src0->name : "?");
+                        return false;
+                    }
+                }
             }
             if (!expert_ptrs) {
                 GGML_SYCL_DEBUG("[MMVQ] Missing expert pointer table for %s\n", src0->name);

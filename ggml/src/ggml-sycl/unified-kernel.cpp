@@ -4316,8 +4316,12 @@ static void * pinned_alloc(size_t bytes, sycl::queue & queue, bool & from_pool) 
             }
         }
     }
-    // Fallback: direct sycl::malloc_host
-    return sycl::malloc_host(bytes, queue);
+    // No pool available and arena is not active — fail gracefully.
+    // Callers (persistent kernel setup) will handle nullptr by disabling
+    // the persistent kernel path and routing to CPU dispatch.
+    GGML_LOG_WARN("[UNIFIED-KERNEL] pinned_alloc: no host pool available for %zu bytes, "
+                  "persistent kernel disabled\n", bytes);
+    return nullptr;
 }
 
 static void pinned_free(void * ptr, size_t bytes, sycl::queue & queue, bool from_pool) {

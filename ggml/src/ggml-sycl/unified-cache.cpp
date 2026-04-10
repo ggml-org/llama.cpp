@@ -59,15 +59,6 @@ static std::atomic<int>  g_cache_assert_enabled{ -1 };
 static std::atomic<int>  g_copy_trace_enabled{ -1 };
 static std::atomic<bool> g_graph_compute_active{ false };
 
-static bool unified_cache_legacy_prestage_enabled() {
-    static int cached = -1;
-    if (cached < 0) {
-        const char * env = std::getenv("GGML_SYCL_LEGACY_PRESTAGE");
-        cached           = (env && std::atoi(env) != 0) ? 1 : 0;
-    }
-    return cached != 0;
-}
-
 static std::mutex            g_runtime_alloc_mutex;
 static std::atomic<uint64_t> g_runtime_alloc_id{ 1 };
 
@@ -3011,7 +3002,7 @@ direct_stage_result unified_cache::direct_stage_expert(ggml_sycl_cache_id   key,
         GGML_LOG_ERROR("[DIRECT-STAGE] null queue for expert staging\n");
         return result;
     }
-    if (has_placement_plan() && unified_cache_is_graph_compute_active() && !unified_cache_legacy_prestage_enabled()) {
+    if (has_placement_plan() && unified_cache_is_graph_compute_active()) {
         GGML_LOG_ERROR(
             "[DIRECT-STAGE] inference-time expert staging is forbidden when placement-plan preload is active\n");
         GGML_ASSERT(false && "direct_stage_expert called during inference with placement plan");
