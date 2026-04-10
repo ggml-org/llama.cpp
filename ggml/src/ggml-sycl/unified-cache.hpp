@@ -216,6 +216,12 @@ struct placement_plan {
     // Combined VRAM RUNTIME reservation for MoE routing buffers (routing_ids + expert_ptrs).
     // 0 when model has no MoE layers.
     size_t moe_vram_runtime_bytes  = 0;  // Zone: RUNTIME (device VRAM)
+    // DMA staging pool: device-resident double-buffer for host→device weight streaming.
+    // Sized as max_tensor_bytes × k_dma_pipeline_depth (2 buffers). 0 when streaming disabled.
+    size_t dma_staging_pool_bytes  = 0;  // Zone: RUNTIME (device VRAM)
+    // oneDNN scratchpad: workspace for matmul weight reorder (weights) + activation buffer.
+    // Sized as max_tensor_bytes × 2. Must fit within the ONEDNN zone (default 256 MB).
+    size_t onednn_scratchpad_bytes = 0;  // Zone: ONEDNN (device VRAM)
     // CPU quantization temp buffers: pre-allocated by T1 cpu_dispatch_buffers.
     size_t cpu_quant_buffer_bytes  = 0;  // Zone: HOST (system heap)
     // Graph metadata: layer classification vectors and MoE routing tables.

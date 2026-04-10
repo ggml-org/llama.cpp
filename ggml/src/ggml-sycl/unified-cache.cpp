@@ -10239,6 +10239,30 @@ static void populate_host_zone_sizing(placement_plan &                          
     // 0 for dense models (both components are 0 when n_experts == 0).
     plan.moe_vram_runtime_bytes = plan.moe_routing_ids_bytes + plan.moe_expert_ptrs_bytes;
 
+    // 7. DMA staging pool: device-resident double-buffer for host→device weight streaming.
+    //    Two slices, each sized to the largest weight tensor (conservative — actual slice size
+    //    defaults to 1 GB but may be smaller than max_tensor_bytes for small models).
+    //    Only relevant when weight streaming is active; 0 otherwise (streaming not pre-enabled).
+    //    GGML_SYCL_FORCE_STREAMING enables streaming; planner uses a conservative per-model estimate.
+    {
+        constexpr size_t k_dma_pipeline_depth = 2;  // Double-buffer (matches resolve_dma_defaults)
+        plan.dma_staging_pool_bytes = plan.max_tensor_bytes * k_dma_pipeline_depth;
+    }
+
+    // 8. oneDNN scratchpad: ONEDNN zone workspace for weight reorder + activation buffer.
+    //    reserve_onednn_scratch(weights_size, activations_size) sub-allocates from this zone.
+    //    Conservative estimate: max_tensor_bytes for weights reorder + max_tensor_bytes for activations.
+    //    The ONEDNN zone is pre-sized at 256 MB; this estimate validates the zone is adequate.
+    plan.onednn_scratchpad_bytes = plan.max_tensor_bytes * 2;
+
+    constexpr size_t k_onednn_zone_bytes = 256ull * 1024ull * 1024ull;
+    if (plan.onednn_scratchpad_bytes > k_onednn_zone_bytes) {
+        GGML_LOG_WARN("[SYCL-PLAN] oneDNN scratchpad estimate (%.1f MB) exceeds zone (%.1f MB) — "
+                      "oneDNN may fall back to direct alloc\n",
+                      plan.onednn_scratchpad_bytes / (1024.0 * 1024.0),
+                      k_onednn_zone_bytes / (1024.0 * 1024.0));
+    }
+
     // --- Host zone sizing (uses inference category fields computed above) ---
 
     plan.host_zone_weight_bytes =
@@ -10250,17 +10274,21 @@ static void populate_host_zone_sizing(placement_plan &                          
                          plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes +
                              plan.tp_staging_buffer_bytes);
     // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder, MoE Q8_1 workspace,
-    // MoE routing buffers (routing IDs + expert pointer tables), and TP compute buffers.
-    // Both moe_vram_runtime_bytes and tp_vram_runtime_bytes are folded here as conservative
-    // host-scratch accounting — they are VRAM RUNTIME allocations whose sizes are documented
-    // in the plan fields for secondary-device planners but counted here for zone budgeting.
+    // MoE routing buffers (routing IDs + expert pointer tables), TP compute buffers, and
+    // DMA staging pool (device double-buffer for weight streaming).
+    // VRAM RUNTIME fields (moe/tp/dma) are folded here as conservative zone budgeting —
+    // the actual allocations live in the VRAM RUNTIME zone, but the host SCRATCH zone
+    // grows proportionally to ensure the planner accounts for peak VRAM usage.
     // Actual compute buffer needs are fed back via unified_cache_grow_host_scratch_zone()
     // after the ggml scheduler is created.
+    // Note: onednn_scratchpad_bytes goes to the ONEDNN zone (separate 256 MB allocation),
+    // not counted here.
     plan.host_zone_scratch_bytes =
         std::max<size_t>(k_min_zone_bytes,
                          plan.max_tensor_bytes + k_scratch_headroom +
                          plan.onednn_reorder_bytes + plan.moe_q8_workspace_bytes +
-                         plan.moe_vram_runtime_bytes + plan.tp_vram_runtime_bytes);
+                         plan.moe_vram_runtime_bytes + plan.tp_vram_runtime_bytes +
+                         plan.dma_staging_pool_bytes);
 }
 
 placement_plan compute_placement_plan(const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
