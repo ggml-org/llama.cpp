@@ -2383,7 +2383,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && (src0->type != GGML_TYPE_TQ3_1S || ggml_is_contiguous(src0))
         && (src0->type != GGML_TYPE_TQ3_4S && src0->type != GGML_TYPE_TQ3_4SE && src0->type != GGML_TYPE_TQ3_4SV || ggml_is_contiguous(src0));
     const bool tq3_1s_mmq_ok = src0->type != GGML_TYPE_TQ3_1S
-        && src0->type != GGML_TYPE_TQ3_4S && src0->type != GGML_TYPE_TQ3_4SE && src0->type != GGML_TYPE_TQ3_4SV
+        && src0->type != GGML_TYPE_TQ3_4SE && src0->type != GGML_TYPE_TQ3_4SV
         && src0->type != GGML_TYPE_TQ3_1S_AP1;
     bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && tq3_mmq_ok && tq3_1s_mmq_ok;
