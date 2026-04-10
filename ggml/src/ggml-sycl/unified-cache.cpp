@@ -983,8 +983,10 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
         size_t onednn_zone = 256 * 1024 * 1024;
 
         // Runtime zone: 512 MB default for KV buffers, staging, MoE pools.
-        // When the planner queries compute buffer sizes from the scheduler,
-        // the runtime zone is grown via arena_reserve() to accommodate them.
+        // For TP-enabled models, the placement_plan::tp_vram_runtime_bytes field
+        // documents the additional RUNTIME bytes needed for secondary devices;
+        // the secondary device planner is expected to pass that value here.
+        // Zone size is fixed at arena creation — cannot grow after freezing.
         size_t runtime_zone = 512 * 1024 * 1024;
         if (const char * env = std::getenv("GGML_SYCL_RUNTIME_ARENA_MB")) {
             runtime_zone = static_cast<size_t>(std::max(0, std::atoi(env))) * 1024 * 1024;
@@ -10204,6 +10206,11 @@ static void populate_host_zone_sizing(placement_plan &                          
         plan.tp_attn_buffer_bytes    = 0;
         plan.tp_staging_buffer_bytes = 0;
     }
+
+    // Aggregate TP VRAM compute buffers into a single field consumed by arena_reserve_compute()
+    // for secondary TP devices. Primary device planner uses this to pre-size its RUNTIME zone
+    // reservation. 0 when TP disabled (both components are 0).
+    plan.tp_vram_runtime_bytes = plan.tp_ffn_buffer_bytes + plan.tp_attn_buffer_bytes;
 
     // --- Host zone sizing (uses inference category fields computed above) ---
 
