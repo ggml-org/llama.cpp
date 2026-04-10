@@ -1185,7 +1185,9 @@ struct ggml_cuda_graph {
     bool warmup_complete = false;
     struct node_properties {
         ggml_tensor node;
-        void * node_src_data_ptrs[GGML_MAX_SRC];
+        void *   node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t  node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t   node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
     };
     std::vector<node_properties> node_props;
 
