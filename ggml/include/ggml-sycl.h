@@ -196,6 +196,16 @@ GGML_BACKEND_API size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend
 // Check if the tiered weight placement mode is enabled.
 GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend);
 
+// Feed actual compute buffer sizes (from ggml_backend_sched_get_buffer_size) back to
+// the unified cache zone planner.  Call once per context, after graph_reserve() completes
+// and backend_buf_exp_size[] has been populated.
+// - Resizes the VRAM RUNTIME zone if the scheduler requested more than was pre-reserved.
+// - Grows the host SCRATCH zone to accommodate host-side compute buffers.
+// sizes[i] is the compute buffer size for backend i; n_sizes is the length of sizes[].
+// NULL sizes or n_sizes == 0 is a no-op.
+GGML_BACKEND_API void ggml_backend_sycl_notify_compute_buffer_sizes(
+        ggml_backend_t backend, const size_t * sizes, int n_sizes);
+
 // Get cache hit/miss statistics (stub — returns zeros).
 // hits/misses may be NULL if caller doesn't need that stat.
 GGML_BACKEND_API void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses);

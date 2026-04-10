@@ -6204,6 +6204,48 @@ void ggml_backend_sycl_set_runtime_n_ctx(ggml_backend_t backend, uint32_t n_ctx)
     }
 }
 
+void ggml_backend_sycl_notify_compute_buffer_sizes(ggml_backend_t backend, const size_t * sizes, int n_sizes) {
+    if (!backend || !sizes || n_sizes <= 0) {
+        return;
+    }
+
+    ggml_backend_sycl_context * ctx = (ggml_backend_sycl_context *) backend->context;
+    if (!ctx) {
+        return;
+    }
+
+    const int device = ctx->device;
+
+    // Sum all sizes to get the total compute buffer footprint.
+    // The scheduler may spread compute buffers across multiple backends
+    // (e.g. GPU + CPU-offload), so we accumulate the full requirement.
+    size_t total_bytes = 0;
+    for (int i = 0; i < n_sizes; ++i) {
+        total_bytes += sizes[i];
+    }
+
+    if (total_bytes == 0) {
+        return;
+    }
+
+    GGML_LOG_INFO("[SYCL-PLAN] Compute buffer sizes notified: %.1f MB total (%d backends)\n",
+                  total_bytes / (1024.0 * 1024.0), n_sizes);
+
+    // Feed the actual VRAM compute requirement to the RUNTIME zone.
+    // unified_cache_reserve_compute_arena will no-op if the zone is already
+    // large enough, and will grow it when the scheduler-derived size exceeds
+    // the heuristic pre-reservation made at model load time.
+    if (ggml_sycl::unified_cache_enabled()) {
+        ggml_sycl::unified_cache_reserve_compute_arena(device, total_bytes);
+
+        // Also grow the host SCRATCH zone so host-pinned compute buffers
+        // (oneDNN reorder workspace, CPU-offload staging) have room.
+        // This activates unified_cache_grow_host_scratch_zone which was
+        // previously dead code — called here for the first time.
+        ggml_sycl::unified_cache_grow_host_scratch_zone(total_bytes);
+    }
+}
+
 // Get the total model size from tensor inventory (for budget calculations)
 size_t ggml_sycl_get_model_size() {
     std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);

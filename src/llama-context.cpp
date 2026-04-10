@@ -670,6 +670,21 @@ llama_context::llama_context(
             }
         }
 
+#ifdef GGML_USE_SYCL
+        // Feed actual compute buffer sizes back to the SYCL unified cache zone
+        // planner so it can right-size the RUNTIME and host SCRATCH zones.
+        // Must be done after graph_reserve() populates backend_buf_exp_size[].
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            if (ggml_backend_is_sycl(backend_ptrs[i])) {
+                ggml_backend_sycl_notify_compute_buffer_sizes(
+                        backend_ptrs[i],
+                        backend_buf_exp_size.data(),
+                        (int) backend_buf_exp_size.size());
+                break;  // One call covers all devices (function iterates internals)
+            }
+        }
+#endif
+
         if (n_nodes_pp == n_nodes_tg) {
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
         } else {
@@ -1561,8 +1576,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                         buf_logits_gpu.reset(ggml_backend_buft_alloc_buffer(buft, new_size));
                         if (buf_logits_gpu) {
-                            gpu_logits_accumulated = (float *)ggml_backend_buffer_get_base(buf_logits_gpu.get());
-                            gpu_logits_capacity = required_capacity;
+                            if (!ggml_backend_buffer_has_stable_base(buf_logits_gpu.get())) {
+                                LLAMA_LOG_DEBUG(
+                                    "%s: GPU logits accumulation buffer type %s is relocatable/logical; disabling persistent accumulation\n",
+                                    __func__, ggml_backend_buft_name(buft));
+                                gpu_logits_accumulated = nullptr;
+                                gpu_logits_capacity = 0;
+                            } else {
+                                gpu_logits_accumulated = (float *)ggml_backend_buffer_get_base(buf_logits_gpu.get());
+                                gpu_logits_capacity = required_capacity;
+                            }
                         } else {
                             LLAMA_LOG_ERROR("%s: failed to allocate GPU logits buffer of size %.2f MiB\n",
                                 __func__, new_size / (1024.0 * 1024.0));
@@ -1824,7 +1847,20 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         }
     }
 
+    if (!ggml_backend_buffer_has_stable_base(buf_output.get())) {
+        LLAMA_LOG_ERROR("%s: output buffer type %s does not expose stable host storage\n",
+                __func__, ggml_backend_buffer_name(buf_output.get()));
+        buf_output.reset();
+        return 0;
+    }
+
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
+    if (output_base == nullptr) {
+        LLAMA_LOG_ERROR("%s: failed to resolve output buffer base pointer for %s\n",
+                __func__, ggml_backend_buffer_name(buf_output.get()));
+        buf_output.reset();
+        return 0;
+    }
 
     logits = has_logits ? output_base               : nullptr;
     embd   = has_embd   ? output_base + logits_size : nullptr;
