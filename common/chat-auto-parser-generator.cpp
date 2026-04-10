@@ -69,6 +69,10 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
                 auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
