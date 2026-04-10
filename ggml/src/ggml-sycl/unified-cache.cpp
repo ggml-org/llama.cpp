@@ -10080,7 +10080,9 @@ static int p4_extract_layer_id(const char * name) {
 }
 
 static void populate_host_zone_sizing(placement_plan &                                    plan,
-                                      const std::vector<std::pair<std::string, size_t>> & tensor_inventory) {
+                                      const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
+                                      int                                                 n_experts,
+                                      int                                                 n_expert_used) {
     constexpr size_t k_min_zone_bytes        = 64ull * 1024ull * 1024ull;
     constexpr size_t k_tp_staging_headroom   = 16ull * 1024ull * 1024ull;
     constexpr size_t k_scratch_headroom      = 32ull * 1024ull * 1024ull;
@@ -10091,16 +10093,66 @@ static void populate_host_zone_sizing(placement_plan &                          
         plan.max_tensor_bytes = std::max(plan.max_tensor_bytes, item.second);
     }
 
+    // --- Inference memory category sizing ---
+    // Computed first so zone sizing below can include these costs.
+
+    // 1. oneDNN reorder: one temp buffer sized to the largest weight tensor, reused per layer.
+    plan.onednn_reorder_bytes = plan.max_tensor_bytes;
+
+    // 2. MoE Q8_1 workspace: n_expert_used activation rows quantized to Q8_1 for batched dispatch.
+    //    Per-expert row cost uses max_tensor_bytes / n_experts as a conservative expert_ffn_size.
+    //    1.1x headroom covers QK8_1 alignment padding.  Zero for dense models.
+    if (n_experts > 0 && n_expert_used > 0) {
+        const size_t expert_ffn_bytes = plan.max_tensor_bytes / static_cast<size_t>(n_experts);
+        const size_t q8_1_row_bytes   = static_cast<size_t>(static_cast<double>(expert_ffn_bytes) * 1.1);
+        plan.moe_q8_workspace_bytes   = static_cast<size_t>(n_expert_used) * q8_1_row_bytes;
+    } else {
+        plan.moe_q8_workspace_bytes = 0;
+    }
+
+    // 3. Expert bias D2H: float32 bias per expert across all MoE layers, staged to host.
+    //    Count MoE layers from plan entries (expert_id >= 0) to avoid needing n_layer separately.
+    if (n_experts > 0) {
+        int max_layer_id = 0;
+        for (const auto & entry : plan.entries) {
+            if (entry.expert_id >= 0 && entry.layer_id > max_layer_id) {
+                max_layer_id = entry.layer_id;
+            }
+        }
+        const int n_moe_layers  = max_layer_id + 1;
+        plan.expert_bias_bytes  = static_cast<size_t>(n_experts) * sizeof(float) *
+                                  static_cast<size_t>(n_moe_layers);
+    } else {
+        plan.expert_bias_bytes = 0;
+    }
+
+    // 4. CPU quantization temp buffers: 3 pre-allocated slots (cpu_dispatch_buffers) each
+    //    sized conservatively to max_tensor_bytes to cover any weight's row/col dimensions.
+    constexpr size_t k_cpu_quant_slots = 3;
+    plan.cpu_quant_buffer_bytes        = k_cpu_quant_slots * plan.max_tensor_bytes;
+
+    // 5. Graph metadata: layer classification vectors + MoE routing tables.
+    //    Fixed 4 MB base + per-expert int entries per layer.
+    constexpr size_t k_graph_metadata_base = 4ull * 1024ull * 1024ull;
+    plan.graph_metadata_bytes = k_graph_metadata_base +
+                                static_cast<size_t>(std::max(n_experts, 0)) * 32 * sizeof(int);
+
+    // --- Host zone sizing (uses inference category fields computed above) ---
+
     plan.host_zone_weight_bytes =
         static_cast<size_t>(static_cast<double>(plan.weight_host_bytes) * k_weight_headroom_ratio);
     plan.host_zone_kv_bytes = std::max<size_t>(k_min_zone_bytes, plan.kv_host_bytes);
+    // Staging zone: baseline (2x max tensor + headroom) plus expert bias D2H buffer.
     plan.host_zone_staging_bytes =
-        std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes * 2 + k_tp_staging_headroom);
-    // SCRATCH zone: sized by max_tensor + headroom. The actual compute buffer needs
-    // are discovered after the ggml scheduler is created and fed back via
-    // unified_cache_grow_host_scratch_zone(). This baseline covers oneDNN scratch
-    // and single-tensor staging needs.
-    plan.host_zone_scratch_bytes = std::max<size_t>(k_min_zone_bytes, plan.max_tensor_bytes + k_scratch_headroom);
+        std::max<size_t>(k_min_zone_bytes,
+                         plan.max_tensor_bytes * 2 + k_tp_staging_headroom + plan.expert_bias_bytes);
+    // SCRATCH zone: baseline (max_tensor + headroom) plus oneDNN reorder and MoE Q8_1 workspace.
+    // Actual compute buffer needs are fed back via unified_cache_grow_host_scratch_zone()
+    // after the ggml scheduler is created.
+    plan.host_zone_scratch_bytes =
+        std::max<size_t>(k_min_zone_bytes,
+                         plan.max_tensor_bytes + k_scratch_headroom +
+                         plan.onednn_reorder_bytes + plan.moe_q8_workspace_bytes);
 }
 
 placement_plan compute_placement_plan(const std::vector<std::pair<std::string, size_t>> & tensor_inventory,
@@ -10322,7 +10374,7 @@ placement_plan compute_placement_plan(const std::vector<std::pair<std::string, s
         }
     }
 
-    populate_host_zone_sizing(plan, tensor_inventory);
+    populate_host_zone_sizing(plan, tensor_inventory, n_experts, kv_info.n_expert_used);
 
     // Build the name->index lookup for O(1) queries
     plan.build_index();
@@ -10717,7 +10769,7 @@ placement_plan compute_multi_device_plan(const std::vector<device_budget> &     
         entry.target_device = target;
     }
 
-    populate_host_zone_sizing(plan, tensor_inventory);
+    populate_host_zone_sizing(plan, tensor_inventory, n_experts, kv_info.n_expert_used);
 
     plan.build_index();
 

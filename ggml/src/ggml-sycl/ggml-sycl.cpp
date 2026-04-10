@@ -5895,8 +5895,9 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     }
 
     // Detect MoE expert tensors and store MoE hparams
-    g_moe_n_experts_total    = inventory->n_expert;
-    g_moe_n_experts_used     = inventory->n_expert_used;
+    g_moe_n_experts_total              = inventory->n_expert;
+    g_moe_n_experts_used               = inventory->n_expert_used;
+    g_placement_kv_info.n_expert_used  = inventory->n_expert_used;
     g_moe_expert_total_bytes = 0;
     if (g_moe_n_experts_total > 0) {
         for (const auto & [name, size] : g_tensor_inventory) {

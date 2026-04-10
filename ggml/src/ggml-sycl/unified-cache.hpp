@@ -139,6 +139,8 @@ struct placement_kv_info {
     uint32_t          n_embd_v_gqa     = 0;
     uint32_t          n_ctx            = 0;
     bool              n_ctx_is_runtime = false;
+    // MoE hyperparameters (0 for dense models)
+    int               n_expert_used    = 0;   // Top-k experts selected per token
     // SWA (Sliding Window Attention) — 0 means all layers use full attention
     uint32_t          n_swa            = 0;
     uint32_t          n_swa_layers     = 0;
@@ -200,6 +202,18 @@ struct placement_plan {
     size_t                       host_zone_scratch_bytes  = 0;
     size_t                       max_tensor_bytes         = 0;
 
+    // --- Inference memory categories (computed by populate_host_zone_sizing) ---
+    // oneDNN reorder: one temp buffer (max weight tensor size) reused per layer.
+    size_t onednn_reorder_bytes    = 0;  // Zone: SCRATCH (device VRAM)
+    // MoE Q8_1 workspace: quantized activations for batched expert dispatch.
+    size_t moe_q8_workspace_bytes  = 0;  // Zone: SCRATCH (device VRAM)
+    // Expert bias D2H copy: float bias tensors staged to host for gate computation.
+    size_t expert_bias_bytes       = 0;  // Zone: STAGING (host pinned)
+    // CPU quantization temp buffers: pre-allocated by T1 cpu_dispatch_buffers.
+    size_t cpu_quant_buffer_bytes  = 0;  // Zone: HOST (system heap)
+    // Graph metadata: layer classification vectors and MoE routing tables.
+    size_t graph_metadata_bytes    = 0;  // Zone: HOST (system heap)
+
     // Per-device VRAM usage (multi-device only, indexed by position in devices vector)
     std::vector<int>    devices;          // Device IDs participating in this plan
     std::vector<size_t> per_device_vram;  // VRAM bytes used per device
@@ -247,6 +261,8 @@ struct placement_plan {
         auto it = name_index_.find(name);
         return it != name_index_.end() && entries[it->second].on_device;
     }
+
+    bool has_dense_entry(const std::string & name) const { return name_index_.find(name) != name_index_.end(); }
 
     // Multi-device query: is this tensor on a specific device?
     // Returns true if the tensor is assigned to device_id.
@@ -726,12 +742,21 @@ class host_cache {
     void * allocate_pinned_runtime(size_t size, size_t alignment = 64);
     [[deprecated("use host_zone_reset() or zone-managed lifetime instead")]] void free_pinned_runtime(void * ptr,
                                                                                                       size_t size);
-    void * host_zone_alloc(host_zone_id zone, size_t size, size_t alignment = 64);
+    // Allocate from a specific host zone. Returns a segmented_buffer.
+    segmented_buffer host_zone_alloc_segmented(host_zone_id zone, size_t size, size_t alignment = 64);
+    // Legacy wrapper: returns first segment's pointer. For large allocations, use host_zone_alloc_segmented().
+    [[deprecated("use host_zone_alloc_segmented() for large allocations")]] void *
+           host_zone_alloc(host_zone_id zone, size_t size, size_t alignment = 64);
     void   host_zone_reset(host_zone_id zone);
     size_t host_zone_used(host_zone_id zone) const;
     size_t host_zone_capacity(host_zone_id zone) const;
     void   configure_host_zones(size_t weight_bytes, size_t kv_bytes, size_t staging_bytes, size_t scratch_bytes);
     bool   host_zones_configured() const;
+
+    // Grow the SCRATCH zone to accommodate compute buffer needs discovered
+    // after the ggml scheduler is created.  This is called when the actual
+    // compute buffer sizes are known (from ggml_backend_sched_get_buffer_size).
+    void grow_scratch_zone(size_t additional_bytes);
 
     size_t pinned_pool_budget() const { return pinned_pool_ ? pinned_pool_->budget() : 0; }
 
@@ -1761,11 +1786,20 @@ class unified_cache {
     // Returns true if eviction succeeded, false if all entries are pinned
     size_t evict_one(size_t new_size);
 
+    struct managed_alloc_ref {
+        void *   ptr      = nullptr;
+        size_t   size     = 0;
+        int      device   = -1;
+        uint64_t alloc_id = 0;
+    };
+
     struct deferred_free_entry {
-        void *      ptr       = nullptr;
-        size_t      size      = 0;
-        bool        has_event = false;
-        sycl::event event;
+        void *            ptr  = nullptr;
+        size_t            size = 0;
+        managed_alloc_ref handle{};
+        bool              managed   = false;
+        bool              has_event = false;
+        sycl::event       event;
     };
 
     struct deferred_host_free_entry {
@@ -1799,6 +1833,7 @@ class unified_cache {
     sycl::event submit_barrier_all();
     void        process_deferred_frees();
     void        enqueue_deferred_free(void * ptr, size_t size);
+    void        enqueue_deferred_free(const managed_alloc_ref & handle);
     void        enqueue_deferred_host_free(void * ptr, size_t size, const sycl::event & event);
 
     // Saturating subtract from used_ to prevent underflow to SIZE_MAX.
@@ -1881,11 +1916,12 @@ class unified_cache {
     std::mutex staging_mutex_;
 
     // Device-resident DMA staging buffers (for streaming).
-    std::vector<void *> dma_staging_buffers_;
-    size_t              dma_slice_bytes_    = 0;
-    size_t              dma_buffer_count_   = 0;
-    size_t              dma_reserved_bytes_ = 0;
-    std::mutex          dma_staging_mutex_;
+    std::vector<managed_alloc_ref> dma_staging_allocs_;
+    std::vector<void *>            dma_staging_buffers_;
+    size_t                         dma_slice_bytes_    = 0;
+    size_t                         dma_buffer_count_   = 0;
+    size_t                         dma_reserved_bytes_ = 0;
+    std::mutex                     dma_staging_mutex_;
 
     // Reusable temp VRAM buffer for GPU-side AOS→SOA reorder during MoE prestage.
     // Pre-allocated at cache init to avoid per-expert malloc_device that fails
@@ -2184,13 +2220,19 @@ struct alloc_request {
 };
 
 struct alloc_handle {
-    void *           ptr      = nullptr;
-    size_t           size     = 0;
+    void *           ptr      = nullptr;  // First segment (caller-facing pointer)
+    size_t           size     = 0;        // Total size requested
     int              device   = -1;
     alloc_tier       tier     = alloc_tier::DEVICE_VRAM;
     alloc_role       role     = alloc_role::OTHER;
     runtime_category category = runtime_category::OTHER;
     uint64_t         alloc_id = 0;
+
+    // Internal tracking for segmented allocations.
+    // When a single allocation request exceeds the chunk size, multiple segments
+    // are allocated internally. The caller only sees ptr (first segment), but
+    // unified_free() uses all_segments to release all internal segments.
+    std::vector<buffer_segment> all_segments;
 };
 
 struct offload_buffer_request {
@@ -2306,14 +2348,17 @@ struct offload_stats_snapshot {
 
 enum class offload_phase : uint8_t {
     UNKNOWN = 0,
-    PP      = 1,
-    TG      = 2,
+    LOAD    = 1,
+    WARMUP  = 2,
+    PP      = 3,
+    TG      = 4,
 };
 
 bool                   offload_stats_enabled();
 void                   offload_stats_reset();
 void                   offload_stats_set_phase(offload_phase phase);
 offload_phase          offload_stats_phase();
+const char *           offload_phase_name(offload_phase phase);
 void                   offload_stats_note_wait(bool fallback = false);
 void                   offload_stats_note_alloc(alloc_tier tier);
 void                   offload_stats_note_pool_hit();
@@ -2555,7 +2600,8 @@ struct prestage_result {
 };
 
 // Pre-stage only the experts identified by routing indices.
-// Deduplicates expert IDs, checks cache hits, stages missing experts, and pins all.
+// Deduplicates expert IDs, resolves them from the preloaded placement state, and pins
+// device-resident entries needed by the current dispatch.
 //
 // Parameters:
 //   queue:           SYCL queue for the device (sycl::queue*)
@@ -2569,7 +2615,9 @@ struct prestage_result {
 //   n_experts_total: Total experts for bounds checking (e.g., 128)
 //   device_id:       Device ID for cache lookup
 //
-// Returns: prestage_result with counts and success status
+// Returns: prestage_result with counts and success status.
+// `n_staged` counts device-ready experts found in cache; `n_pinned` counts host-ready
+// experts found in the host expert registry.
 prestage_result prestage_routed_experts(void *          queue,
                                         const int32_t * expert_ids,
                                         int             n_expert_used,
@@ -2693,6 +2741,10 @@ bool unified_cache_reserve_scratch_pool(int device_id, size_t pool_bytes);
 void * unified_cache_get_scratch(int device_id, size_t size);
 void   unified_cache_return_scratch(int device_id, void * ptr, size_t size);
 void   unified_cache_reset_scratch_pool(int device_id);
+
+// Grow the host SCRATCH zone to accommodate compute buffer needs.
+// Called after the ggml scheduler is created and compute buffer sizes are known.
+void unified_cache_grow_host_scratch_zone(size_t additional_bytes);
 
 void * unified_cache_host_zone_alloc(host_zone_id zone, size_t size);
 void   unified_cache_host_zone_reset(host_zone_id zone);
