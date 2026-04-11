@@ -85,7 +85,6 @@ int main(int argc, char ** argv) {
                 batch.token    + i,
                 nullptr,
                 batch.pos      + i,
-                batch.token_type +i,
                 batch.n_seq_id + i,
                 batch.seq_id   + i,
                 batch.logits   + i,

@@ -6416,7 +6416,8 @@ class BertModel(TextModel):
         if name.endswith(".beta"):
             name = name[:-5] + ".bias"
 
-        if name == "embeddings.position_ids":
+        # we are only using BERT for embeddings so we don't need the pooling layer
+        if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
             return # we don't need these
 
         if name.startswith("cls.predictions"):
@@ -6432,12 +6433,6 @@ class BertModel(TextModel):
 
             if name == "classifier.bias":
                 name = "classifier.out_proj.bias"
-
-        if name == "pooler.dense.weight":
-            name = "classifier.weight"
-
-        if name == "pooler.dense.bias":
-            name = "classifier.bias"
 
         yield from super().modify_tensors(data_torch, name, bid)
 

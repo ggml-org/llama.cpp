@@ -27,12 +27,10 @@ static std::vector<std::string> split_lines(const std::string & s, const std::st
     return lines;
 }
 
-static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, const std::vector<int32_t> & token_types ,llama_seq_id seq_id) {
+static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
     size_t n_tokens = tokens.size();
-    bool add_token_type = n_tokens == token_types.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        int32_t token_type =  add_token_type? token_types[i]:0;
-        common_batch_add(batch, tokens[i], i, token_type , { seq_id }, true);
+        common_batch_add(batch, tokens[i], i, { seq_id }, true);
     }
 }
 
@@ -182,57 +180,33 @@ int main(int argc, char ** argv) {
 
     // tokenize the prompts and trim
     std::vector<std::vector<int32_t>> inputs;
-    std::vector<std::vector<int32_t>> token_type_ids;
     for (const auto & prompt : prompts) {
         std::vector<llama_token> inp;
-        std::vector<int32_t> token_type;
 
         // split classification pairs and insert expected separator tokens
         if (pooling_type == LLAMA_POOLING_TYPE_RANK && prompt.find(params.cls_sep) != std::string::npos) {
             std::vector<std::string> pairs = split_lines(prompt, params.cls_sep);
-            const std::string query = pairs[0];
-            const std::string doc = pairs[1];
             if (rerank_prompt != nullptr) {
+                const std::string query = pairs[0];
+                const std::string doc = pairs[1];
                 std::string final_prompt = rerank_prompt;
-                size_t pos = final_prompt.find("{document}");
-                std::string q_prompt = final_prompt.substr(0, pos);
-                std::string d_prompt = final_prompt.substr(pos);
-                string_replace_all(q_prompt, "{query}"   , query);
-                string_replace_all(d_prompt, "{document}", doc  );
-
-                auto inp_q= common_tokenize(vocab, q_prompt, false, true);
-                auto inp_d= common_tokenize(vocab, d_prompt, false, true);
-
-                for(auto token: inp_q){
-                    inp.emplace_back(token);
-                    token_type.emplace_back(0);
-                }
-                for(auto token: inp_d){
-                    inp.emplace_back(token);
-                    token_type.emplace_back(1);
-                }
+                string_replace_all(final_prompt, "{query}"   , query);
+                string_replace_all(final_prompt, "{document}", doc  );
+                inp = common_tokenize(vocab, final_prompt, true, true);
             } else {
-                auto inp_q= common_tokenize(vocab, query, false, false);
-                auto inp_d= common_tokenize(vocab, doc, false, false);
-                inp.emplace_back(llama_vocab_bos(vocab)); //add bos
-                token_type.emplace_back(0);
-                for(auto token: inp_q){ //add seq A
-                    inp.emplace_back(token);
-                    token_type.emplace_back(0);
+                std::string final_prompt;
+                for (size_t i = 0; i < pairs.size(); i++) {
+                    final_prompt += pairs[i];
+                    if (i != pairs.size() - 1) {
+                        if (!added_eos_token.empty()) {
+                            final_prompt += added_eos_token;
+                        }
+                        if (!added_sep_token.empty()) {
+                            final_prompt += added_sep_token;
+                        }
+                    }
                 }
-                inp.emplace_back(llama_vocab_eos(vocab)); //add eos
-                token_type.emplace_back(0);
-
-                inp.emplace_back(llama_vocab_sep(vocab)); //add sep
-                token_type.emplace_back(0);
-
-                for(auto token: inp_d){ //add seq B
-                    inp.emplace_back(token);
-                    token_type.emplace_back(1);
-                }
-
-                inp.emplace_back(llama_vocab_eos(vocab)); //add eos
-                token_type.emplace_back(1);
+                inp = common_tokenize(ctx, final_prompt, true, true);
             }
         } else {
             inp = common_tokenize(ctx, prompt, true, true);
@@ -242,7 +216,6 @@ int main(int argc, char ** argv) {
                     __func__, (long long int) inp.size(), (long long int) n_batch);
             return 1;
         }
-        token_type_ids.push_back(token_type);
         inputs.push_back(inp);
     }
 
@@ -305,7 +278,7 @@ int main(int argc, char ** argv) {
         }
 
         // add to batch
-        batch_add_seq(batch, inp, token_type_ids[k], s);
+        batch_add_seq(batch, inp, s);
         s += 1;
     }
 

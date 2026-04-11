@@ -69,11 +69,6 @@ bool llama_batch_allocr::init(
     //
     // auto-generate missing fields
     //
-    if(!batch.token_type){
-        token_type.resize(batch.n_tokens);
-        std::fill(token_type.begin(),token_type.end(),0);
-        batch.token_type = token_type.data();
-    }
 
     if (!batch.n_seq_id) {
         n_seq_id.resize(batch.n_tokens);
@@ -224,7 +219,6 @@ bool llama_batch_allocr::init(
             /*.token        =*/ batch.token,
             /*.embd         =*/ batch.embd,
             /*.pos          =*/ batch.pos,
-            /*.token_type   =*/ batch.token_type,
             /*.n_seq_id     =*/ batch.n_seq_id,
             /*.seq_id       =*/ batch.seq_id,
             /*.seq_id_unq   =*/ this->seq_id_unq.data(),
@@ -407,7 +401,6 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
     udata->token     .resize(n_tokens);
     udata->embd      .clear();
     udata->pos       .resize(n_pos_all);
-    udata->token_type.resize(n_tokens);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
     udata->seq_id_unq.resize(0);
@@ -430,7 +423,6 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.token        =*/ udata->token.data(),
         /*.embd         =*/ nullptr,
         /*.pos          =*/ udata->pos.data(),
-        /*.token_type   =*/ udata->token_type.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
@@ -666,7 +658,6 @@ void llama_batch_allocr::clear() {
     batch = {};
 
     pos       .clear();
-    token_type.clear();
     n_seq_id  .clear();
     seq_id    .clear();
     seq_id_unq.clear();
@@ -700,7 +691,6 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
     udata->pos       .resize(n_pos_all);
-    udata->token_type.resize(n_tokens);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
     udata->seq_id_unq.resize(0);
@@ -729,7 +719,6 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
             udata->pos[j*n_tokens + i] = batch.pos[src_off + idxs[i]];
         }
 
-        udata->token_type[i] = batch.token_type[idxs[i]];
         udata->n_seq_id[i] = batch.n_seq_id[idxs[i]];
         udata->output[i]   = batch.logits[idxs[i]];
 
@@ -769,7 +758,6 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.token        =*/ batch.token ? udata->token.data() : nullptr,
         /*.embd         =*/ batch.embd ? udata->embd.data() : nullptr,
         /*.pos          =*/ udata->pos.data(),
-        /*token_type    =*/ udata->token_type.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
@@ -819,7 +807,6 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
         LLAMA_LOG_DEBUG("%s:   token      = %p\n", __func__, (void *) ubatch.token);
         LLAMA_LOG_DEBUG("%s:   embd       = %p\n", __func__, (void *) ubatch.embd);
         LLAMA_LOG_DEBUG("%s:   pos        = %p\n", __func__, (void *) ubatch.pos);
-        LLAMA_LOG_DEBUG("%s:   token_type = %p\n", __func__, (void *) ubatch.token_type);
         LLAMA_LOG_DEBUG("%s:   n_seq_id   = %p\n", __func__, (void *) ubatch.n_seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id     = %p\n", __func__, (void *) ubatch.seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id_unq = %s\n", __func__, ss_seq_id_unq.str().c_str());
@@ -856,9 +843,9 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
                 }
 
                 if (ubatch.token) {
-                    LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%16s), pos = %4d, token_type = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
+                    LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%16s), pos = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
                             __func__, i, ubatch.token[i], vocab->token_to_piece(ubatch.token[i]).c_str(),
-                            ubatch.pos[i], ubatch.token_type[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
+                            ubatch.pos[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
                 } else {
                     LLAMA_LOG_DEBUG("%s:  %4d: [embd], pos = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
                             __func__, i, ubatch.pos[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
@@ -881,7 +868,6 @@ struct llama_batch llama_batch_get_one(
         /*tokens   =*/ tokens,
         /*embd     =*/ nullptr,
         /*pos      =*/ nullptr,
-        /*token_type=*/nullptr,
         /*n_seq_id =*/ nullptr,
         /*seq_id   =*/ nullptr,
         /*logits   =*/ nullptr,
@@ -894,7 +880,6 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         /*tokens   =*/ nullptr,
         /*embd     =*/ nullptr,
         /*pos      =*/ nullptr,
-        /*token_type=*/nullptr,
         /*n_seq_id =*/ nullptr,
         /*seq_id   =*/ nullptr,
         /*logits   =*/ nullptr,
@@ -907,7 +892,6 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
     }
 
     batch.pos      = (llama_pos *)     malloc(sizeof(llama_pos)      * n_tokens_alloc);
-    batch.token_type=(int32_t *)       malloc(sizeof(int32_t)        * n_tokens_alloc);
     batch.n_seq_id = (int32_t *)       malloc(sizeof(int32_t)        * n_tokens_alloc);
     batch.seq_id   = (llama_seq_id **) malloc(sizeof(llama_seq_id *) * (n_tokens_alloc + 1));
     for (int i = 0; i < n_tokens_alloc; ++i) {
@@ -924,7 +908,6 @@ void llama_batch_free(struct llama_batch batch) {
     if (batch.token)    free(batch.token);
     if (batch.embd)     free(batch.embd);
     if (batch.pos)      free(batch.pos);
-    if (batch.token_type) free(batch.token_type);
     if (batch.n_seq_id) free(batch.n_seq_id);
     if (batch.seq_id) {
         for (int i = 0; batch.seq_id[i] != nullptr; ++i) {
