@@ -1091,6 +1091,14 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+
+    if (inputs.add_generation_prompt && string_ends_with(data.prompt, "<turn|>\n")) {
+        // This may happen if the model generates content + tool_call, the
+        // template does not add the model's next turn and confuses the model
+        // from emitting its proper reasoning token sequence.
+        data.prompt += "<|turn>model\n";
+    }
+
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
@@ -1182,12 +1190,15 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 /* max = */ inputs.parallel_tool_calls ? -1 : 1
             ));
 
-            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
             auto message = p.rule("message", thought + content);
-            return start + p.zero_or_more(message) + tool_call;
+            return start + p.zero_or_more(message) + p.until("<|tool_call>") + tool_call;
         }
 
-        auto content = p.rule("content", p.content(p.until("<|channel>")));
+        // Gemma 4 may emit an extra <|channel>thought\n<channel|> at the end of the content. It may
+        // also emit a single trailing <channel|> token. Consume all complete reasoning blocks and
+        // then stop at the first unmatched <channel|> token.
+        auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>"})));
         auto message = p.rule("message", thought + content);
         return start + p.one_or_more(message);
     });
