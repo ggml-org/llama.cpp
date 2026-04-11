@@ -123,8 +123,16 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 // [D, H, N] -> pad to S*B -> roll right by P -> cont (materialize)
                 const int64_t pad_kv = S * B - n_pos;
                 t = ggml_pad(ctx0, t, 0, 0, pad_kv, 0);     // [D, H, S*B]
-                t = ggml_roll(ctx0, t, 0, 0, P, 0);          // left-pad by P
-                t = ggml_cont(ctx0, t);                       // materialize roll (removes view offset)
+                // Circular right-shift by P in dim 2 (left-pad by P)
+                // Using view+concat instead of ggml_roll for Metal backend compatibility
+                {
+                    const int64_t n2 = t->ne[2];
+                    auto * tail = ggml_view_3d(ctx0, t, t->ne[0], t->ne[1], P,
+                        t->nb[1], t->nb[2], (n2 - P) * t->nb[2]);
+                    auto * head = ggml_view_3d(ctx0, t, t->ne[0], t->ne[1], n2 - P,
+                        t->nb[1], t->nb[2], 0);
+                    t = ggml_concat(ctx0, tail, head, 2);
+                }
                 // Overlapping view: stride for B dim is C positions, not S
                 // ne = [D, H, S, B], data_size = D*H*S*B*sizeof = source_nbytes (exact fit)
                 // nb1=D*sizeof, nb2=D*H*sizeof, nb3=C*D*H*sizeof (overlap: C < S)
@@ -219,12 +227,18 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
             }
 
-            // Causal depthwise Conv1D via ggml_ssm_conv (pad+roll for left-only padding).
-            // NOTE: ggml_ssm_conv on CUDA only supports kernel sizes 3, 4, 9.
-            // Gemma 4 uses kernel_size=5. This works on CPU and Vulkan backends.
-            // TODO: fix ggml-cuda ssm_conv to support kernel_size=5, or use ggml_conv_1d_dw
+            // Causal depthwise Conv1D via ggml_ssm_conv (pad+shift for left-only padding).
             x = ggml_pad(ctx0, x, 4, 0, 0, 0);
-            x = ggml_roll(ctx0, x, 4, 0, 0, 0);
+            // Circular right-shift by 4 in dim 0 (left-pad for causal conv)
+            // Using view+concat instead of ggml_roll for Metal backend compatibility
+            {
+                const int64_t n0 = x->ne[0];
+                auto * tail = ggml_view_2d(ctx0, x, 4, x->ne[1],
+                    x->nb[1], (n0 - 4) * ggml_element_size(x));
+                auto * head = ggml_view_2d(ctx0, x, n0 - 4, x->ne[1],
+                    x->nb[1], 0);
+                x = ggml_concat(ctx0, tail, head, 0);
+            }
             x = ggml_ssm_conv(ctx0, x, layer.conv_dw_w);
             if (layer.conv_dw_b) {
                 x = ggml_add(ctx0, x, layer.conv_dw_b);
