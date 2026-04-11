@@ -637,22 +637,22 @@ void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const __m256 q = _mm256_cvtepi32_ps(MM256_SET_M128I(sum32_1, sum32_0)); \
             acc_block = _mm256_add_ps(acc_block, _mm256_mul_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y_ptr[(K)].d)), q)); \
         }
-        { \
-            const __m256i bit_mask = bytes_from_bits_32(&x[ib].qs[0]); \
-            const __m128i bit_mask_0 = _mm256_castsi256_si128(bit_mask); \
-            const __m128i bit_mask_1 = _mm256_extractf128_si256(bit_mask, 1); \
-            const __m128i qy_0 = _mm_loadu_si128((const __m128i *) &y_ptr[0].qs[0]); \
-            const __m128i qy_1 = _mm_loadu_si128((const __m128i *) &y_ptr[0].qs[16]); \
-            const __m128i sign_mask_0 = _mm_cmpeq_epi8(bit_mask_0, zero); \
-            const __m128i sign_mask_1 = _mm_cmpeq_epi8(bit_mask_1, zero); \
-            const __m128i sy_0 = _mm_sub_epi8(_mm_xor_si128(qy_0, sign_mask_0), sign_mask_0); \
-            const __m128i sy_1 = _mm_sub_epi8(_mm_xor_si128(qy_1, sign_mask_1), sign_mask_1); \
-            const __m128i sum16_0 = _mm_maddubs_epi16(ones_8, sy_0); \
-            const __m128i sum16_1 = _mm_maddubs_epi16(ones_8, sy_1); \
-            const __m128i sum32_0 = _mm_madd_epi16(sum16_0, ones_16); \
-            const __m128i sum32_1 = _mm_madd_epi16(sum16_1, ones_16); \
-            const __m256 q = _mm256_cvtepi32_ps(MM256_SET_M128I(sum32_1, sum32_0)); \
-            acc_block = _mm256_mul_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y_ptr[0].d)), q); \
+        {
+            const __m256i bit_mask = bytes_from_bits_32(&x[ib].qs[0]);
+            const __m128i bit_mask_0 = _mm256_castsi256_si128(bit_mask);
+            const __m128i bit_mask_1 = _mm256_extractf128_si256(bit_mask, 1);
+            const __m128i qy_0 = _mm_loadu_si128((const __m128i *) &y_ptr[0].qs[0]);
+            const __m128i qy_1 = _mm_loadu_si128((const __m128i *) &y_ptr[0].qs[16]);
+            const __m128i sign_mask_0 = _mm_cmpeq_epi8(bit_mask_0, zero);
+            const __m128i sign_mask_1 = _mm_cmpeq_epi8(bit_mask_1, zero);
+            const __m128i sy_0 = _mm_sub_epi8(_mm_xor_si128(qy_0, sign_mask_0), sign_mask_0);
+            const __m128i sy_1 = _mm_sub_epi8(_mm_xor_si128(qy_1, sign_mask_1), sign_mask_1);
+            const __m128i sum16_0 = _mm_maddubs_epi16(ones_8, sy_0);
+            const __m128i sum16_1 = _mm_maddubs_epi16(ones_8, sy_1);
+            const __m128i sum32_0 = _mm_madd_epi16(sum16_0, ones_16);
+            const __m128i sum32_1 = _mm_madd_epi16(sum16_1, ones_16);
+            const __m256 q = _mm256_cvtepi32_ps(MM256_SET_M128I(sum32_1, sum32_0));
+            acc_block = _mm256_mul_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y_ptr[0].d)), q);
         }
         Q1_AVX_BLOCK(1)
         Q1_AVX_BLOCK(2)
