@@ -7399,6 +7399,44 @@ kernel void kernel_concat(
     }
 }
 
+// circular shift (roll) along all dimensions
+kernel void kernel_roll(
+    constant ggml_metal_kargs_roll & args,
+    device  const char * src0,
+    device        char * dst,
+    uint3   tgpig[[threadgroup_position_in_grid]],
+    ushort3 tpitg[[thread_position_in_threadgroup]],
+    ushort3   ntg[[threads_per_threadgroup]]) {
+
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
+
+    // wrap source indices for dims 1-3
+    int i01 = i1 - args.s1;
+    i01 = i01 < 0 ? i01 + args.ne01 : (i01 >= args.ne01 ? i01 - args.ne01 : i01);
+    int i02 = i2 - args.s2;
+    i02 = i02 < 0 ? i02 + args.ne02 : (i02 >= args.ne02 ? i02 - args.ne02 : i02);
+    int i03 = i3 - args.s3;
+    i03 = i03 < 0 ? i03 + args.ne03 : (i03 >= args.ne03 ? i03 - args.ne03 : i03);
+
+    device const char * src_row = src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01;
+    device       char * dst_row = dst  + i3 *args.nb3  + i2 *args.nb2  + i1 *args.nb1;
+
+    // wrap source index for dim 0
+    int s = -args.s0;
+    s = s < 0 ? s + args.ne00 : (s >= args.ne00 ? s - args.ne00 : s);
+
+    for (int i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        int i00 = i0 + s;
+        if (i00 >= args.ne00) {
+            i00 -= args.ne00;
+        }
+
+        *((device float *)(dst_row + i0*args.nb0)) = *((device const float *)(src_row + i00*args.nb00));
+    }
+}
+
 template<int nr0, typename args_t>
 void kernel_mul_mv_q2_K_f32_impl(
         args_t args,
