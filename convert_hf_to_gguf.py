@@ -11298,20 +11298,25 @@ class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
 
         if name.startswith("speech_encoder."):
             name = name.replace("speech_encoder.", "audio_tower.")
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        suffix = "." + name.rsplit(".", 1)[-1]
 
         if name.startswith("ln_speech."):
-            name = name.replace("ln_speech.", "audio.multi_modal_projector.ln_pre.")
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MM_NORM_PRE, suffix=suffix), data_torch)
+            return
 
         if name.startswith("speech_audio_adapter."):
-            name = name.replace("speech_audio_adapter.", "audio.multi_modal_projector.")
             if ".mlp_adapter.0." in name:
-                name = name.replace(".mlp_adapter.0.", ".linear_0.")
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 0, suffix=suffix), data_torch)
             elif ".gate_proj." in name:
-                name = name.replace(".gate_proj.", ".linear_1.")
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 1, suffix=suffix), data_torch)
             elif ".pool_proj." in name:
-                name = name.replace(".pool_proj.", ".linear_2.")
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 2, suffix=suffix), data_torch)
             elif ".out_proj." in name:
-                name = name.replace(".out_proj.", ".linear_3.")
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 3, suffix=suffix), data_torch)
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 

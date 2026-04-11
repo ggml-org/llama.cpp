@@ -2028,10 +2028,10 @@ struct clip_model_loader {
                     model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
                     model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
                     // MERaLiON adaptor: 4 linear layers + ln_pre
-                    // linear_0 = frame compression (19200→6400) + SiLU
-                    // linear_1 = gate_proj (6400→6400) for GLU
-                    // linear_2 = pool_proj (6400→6400) for GLU
-                    // linear_3 = out_proj  (6400→3584)
+                    // linear_0 = frame compression (19200->6400) + SiLU
+                    // linear_1 = gate_proj (6400->6400) for GLU
+                    // linear_2 = pool_proj (6400->6400) for GLU
+                    // linear_3 = out_proj  (6400->3584)
                     model.mm_0_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
