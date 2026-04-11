@@ -442,24 +442,8 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
             continue;
         }
-        if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ) {
-            continue; // These models don't have usable implementations.
-        }
-        if (arch == LLM_ARCH_CHAMELEON) {
-            continue; // Only half-implemented and to be removed in the future.
-        }
         if (arch == LLM_ARCH_GEMMA4) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
-        }
-        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
-            continue; // FIXME
-        }
-        if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
-                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
-            continue; // TODO vocab
-        }
-        if (arch == LLM_ARCH_PLM) {
-            continue; // TODO tensor shapes
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
@@ -542,33 +526,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
             continue;
         }
-        if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
-            continue; // These models don't have usable implementations.
-        }
-        if (arch == LLM_ARCH_CHAMELEON) {
-            continue; // Only half-implemented and to be removed in the future.
-        }
         if (arch == LLM_ARCH_GEMMA4) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
-        }
-        if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
-            continue; // FIXME CUDA backend crashes.
-        }
-        if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
-            continue; // FIXME Embedding (?) models produce inconsistent results.
-        }
-        if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
-            continue; // FIXME RWKV models hang indefinitely.
-        }
-        if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
-                arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
-            continue; // TODO vocab
-        }
-        if (arch == LLM_ARCH_PLM) {
-            continue; // TODO tensor shapes
-        }
-        if (arch == LLM_ARCH_DEEPSEEK2OCR) {
-            continue; // TODO tensor shapes
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
