@@ -98,8 +98,15 @@ static void hmx_worker_issue(struct hmx_worker_context * ctx,
 // Block until the worker has completed the most recently issued command.
 static void hmx_worker_drain(struct hmx_worker_context * ctx) {
     unsigned int expected = atomic_load_explicit(&ctx->cmd_seqn, memory_order_acquire);
-    while (atomic_load_explicit(&ctx->done_seqn, memory_order_acquire) != expected) {
-        qurt_futex_wait(&ctx->done_seqn, atomic_load_explicit(&ctx->done_seqn, memory_order_relaxed));
+    for (;;) {
+        unsigned int seen = atomic_load_explicit(&ctx->done_seqn, memory_order_acquire);
+        if (seen == expected) {
+            return;
+        }
+        // Pass the same observed value to futex_wait().  If the worker completes
+        // between the load above and the futex call, the value mismatch makes the
+        // wait return immediately instead of sleeping forever on the new seqn.
+        qurt_futex_wait(&ctx->done_seqn, seen);
     }
 }
 
