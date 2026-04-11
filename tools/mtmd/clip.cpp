@@ -2205,14 +2205,16 @@ struct clip_model_loader {
                         layer.attn_k_rel_w     = get_tensor(string_format(TN_A_ATTN_K_REL, prefix, il, "weight"), false);
 
                         // Convolution module
-                        layer.norm_conv_w  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"), false);
-                        layer.norm_conv_b  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
+                        // Note: conv_norm / norm_conv are swapped in GGUF due to
+                        // upstream tensor_mapping.py, so we load them in reverse order
+                        layer.norm_conv_w  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"), false);
+                        layer.norm_conv_b  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"), false);
                         layer.conv_pw1_w   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
                         layer.conv_pw1_b   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"), false);
                         layer.conv_dw_w    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
                         layer.conv_dw_b    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "bias"), false);
-                        layer.conv_norm_w  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"), false);
-                        layer.conv_norm_b  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"), false);
+                        layer.conv_norm_w  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"), false);
+                        layer.conv_norm_b  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
                         layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"), false);
 
@@ -2330,16 +2332,6 @@ struct clip_model_loader {
             LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
         }
 
-        // Fix swapped conv norm tensors in Gemma 4 audio GGUFs.
-        // The upstream tensor_mapping.py maps these with conv_norm and norm_conv swapped:
-        //   HF lconv1d.pre_layer_norm -> GGUF conv_norm (should be norm_conv)
-        //   HF lconv1d.conv_norm      -> GGUF norm_conv (should be conv_norm)
-        if (model.proj_type == PROJECTOR_TYPE_GEMMA4A && hparams.n_layer > 0) {
-            for (int il = 0; il < hparams.n_layer; ++il) {
-                std::swap(model.layers[il].conv_norm_w, model.layers[il].norm_conv_w);
-                std::swap(model.layers[il].conv_norm_b, model.layers[il].norm_conv_b);
-            }
-        }
     }
 
     struct support_info_op {
