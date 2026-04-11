@@ -818,7 +818,7 @@ static __global__ void dequantize_block_tq3_0(const void * __restrict__ vx, dst_
     dst_t * y = yy + i * QK_TQ3_0;
     const int j = threadIdx.x; // 0..31
 
-    // Each thread unpacks its own 3-bit index
+    // No-WHT: direct centroid * d (V-only KV cache, stored without rotation)
     const int g = j / 8;
     const int r = j % 8;
     const uint8_t * qp = x->qs + g * 3;
@@ -833,21 +833,7 @@ static __global__ void dequantize_block_tq3_0(const void * __restrict__ vx, dst_
         case 6: idx = (qp[2] >> 2) & 7; break;
         default: idx = (qp[2] >> 5) & 7; break;
     }
-
-    // Inverse WHT via warp shuffle (no shared memory needed, all 32 threads in one warp)
-    float val = tq3_0_centroids_cuda[idx];
-    for (int step = 1; step < 32; step <<= 1) {
-        float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
-        // Butterfly: even lanes add, odd lanes subtract
-        if (j & step) {
-            val = other - val;
-        } else {
-            val = other + val;
-        }
-    }
-
-    // Normalize + undo signs + scale
-    y[j] = (dst_t)(val * (d / sqrtf(32.0f)) * tq3_0_signs_cuda[j]);
+    y[j] = (dst_t)(tq3_0_centroids_cuda[idx] * d);
 }
 
 template<typename dst_t>

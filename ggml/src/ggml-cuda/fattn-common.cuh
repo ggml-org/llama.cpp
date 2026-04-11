@@ -577,6 +577,62 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
     }
 }
 
+// TQ3_0 KQ dot product for FA: direct centroid * d, no WHT (V-only KV cache).
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tq3_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    static constexpr float tq3_centroids[8] = {
+        -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+         0.230106f,  0.725222f,  1.277503f,  1.988943f
+    };
+    const block_tq3_0 * K_tq3 = (const block_tq3_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+    float sum = 0.0f;
+#pragma unroll
+    for (int k0 = 0; k0 < D/2; k0 += nthreads) {
+        const int k   = k0 + (threadIdx.x % nthreads);
+        const int ib  = (k * 2) / QK_TQ3_0;
+        const int j0  = (k * 2) % QK_TQ3_0;
+        const float d = __half2float(K_tq3[ib].d);
+        const uint8_t * qp = K_tq3[ib].qs + (j0 / 8) * 3;
+        const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
+        const int r0 = j0 % 8;
+        const float v0 = tq3_centroids[(packed >> (3 * r0))       & 7] * d;
+        const float v1 = tq3_centroids[(packed >> (3 * (r0 + 1))) & 7] * d;
+#ifdef V_DOT2_F32_F16_AVAILABLE
+        const float2 qf = __half22float2(((const half2 *) Q_v)[k0/nthreads]);
+        sum += v0 * qf.x + v1 * qf.y;
+#else
+        const float2 qv = ((const float2 *) Q_v)[k0/nthreads];
+        sum += v0 * qv.x + v1 * qv.y;
+#endif
+    }
+    return sum;
+}
+
+// TQ3_0 V dequant for FA: direct centroid * d, no WHT.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_tq3_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    static constexpr float tq3_centroids[8] = {
+        -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+         0.230106f,  0.725222f,  1.277503f,  1.988943f
+    };
+    const block_tq3_0 * x = (const block_tq3_0 *) vx;
+    const int ib = i0 / QK_TQ3_0;
+    const int j0 = i0 % QK_TQ3_0;
+    const float d = __half2float(x[ib].d);
+#pragma unroll
+    for (int l = 0; l < ne; ++l) {
+        const int j = j0 + l;
+        const uint8_t * qp = x[ib].qs + (j / 8) * 3;
+        const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
+        const float val = tq3_centroids[(packed >> (3 * (j % 8))) & 7] * d;
+        if constexpr (std::is_same_v<T, half>) { ((half *)  dst)[l] = __float2half(val); }
+        else                                    { ((float *) dst)[l] = val; }
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -593,6 +649,8 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TQ3_0) {
+        return vec_dot_fattn_vec_KQ_tq3_0<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -615,6 +673,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TQ3_0) {
+        return dequantize_V_tq3_0<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;

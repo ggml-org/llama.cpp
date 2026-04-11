@@ -284,6 +284,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
+    // TQ3_0 V-only KV cache (no WHT): q8_0-K + tq3_0-V or q4_0-K + tq3_0-V
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,  GGML_TYPE_TQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0,  GGML_TYPE_TQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TQ3_0, GGML_TYPE_TQ3_0)
+
     GGML_ABORT("fatal error");
 }
 
@@ -366,7 +371,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
     if (K->type != V->type) {
-        return BEST_FATTN_KERNEL_NONE;
+        // Allow asymmetric K+V: q8_0 or q4_0 K + tq3_0 V
+        const bool asymm_ok = (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+                               V->type == GGML_TYPE_TQ3_0;
+        if (!asymm_ok) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
     }
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
@@ -383,6 +393,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_TQ3_0:
             break;
         default:
             return BEST_FATTN_KERNEL_NONE;
