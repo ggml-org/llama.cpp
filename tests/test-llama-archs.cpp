@@ -439,7 +439,10 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
         }
-        if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
+        if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
+            continue;
+        }
+        if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ) {
             continue; // These models don't have usable implementations.
         }
         if (arch == LLM_ARCH_CHAMELEON) {
