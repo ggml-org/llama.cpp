@@ -514,9 +514,6 @@ class common_peg_parser_builder {
     // the child's grammar. Parsing delegates entirely to the child.
     common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
 
-    // Wraps a child parser but emits nothing in GBNF. Shorthand for gbnf(p, "").
-    common_peg_parser silent(const common_peg_parser & p) { return add(common_peg_gbnf_parser{p, ""}); }
-
     void set_root(const common_peg_parser & p);
 
     common_peg_arena build();
