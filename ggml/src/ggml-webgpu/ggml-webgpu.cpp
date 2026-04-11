@@ -3428,8 +3428,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     }
 #endif
     ctx->webgpu_global_ctx->adapter.GetInfo(&info);
-    ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size(info);
-    ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches(info);
+    ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
+    ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
     wgpu::SupportedFeatures features;
     ctx->webgpu_global_ctx->adapter.GetFeatures(&features);
     // we require f16 support
