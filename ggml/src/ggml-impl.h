@@ -30,6 +30,11 @@ extern "C" {
 
 void ggml_print_backtrace(void);
 
+static inline uint64_t ggml_graph_next_version(void) {
+    static uint64_t counter = 0;
+    return ++counter;
+}
+
 #ifndef MIN
 #    define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
@@ -339,7 +344,7 @@ struct ggml_cgraph {
 
     enum ggml_cgraph_eval_order order;
 
-    bool reused;
+    uint64_t version;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)

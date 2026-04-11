@@ -1892,7 +1892,7 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
     }
 
     for (int i = 0; i < sched->n_splits; i++) {
-        sched->splits[i].graph.reused = graph->reused;
+        sched->splits[i].graph.version = graph->version;
     }
 
     return ggml_backend_sched_compute_splits(sched);
