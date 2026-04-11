@@ -466,6 +466,86 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_mapped(int devi
     return &bufts[device];
 }
 
+// host buffer type: shared-storage Metal buffer that also reports is_host=true.
+// Tensors allocated through this buft can be operated on by both the Metal
+// backend (as a regular MTLBuffer) and the CPU backend (via the host pointer),
+// which lets the scheduler fall back to CPU for ops Metal doesn't support
+// (e.g. SET_ROWS on TurboQuant types) without losing GPU compute for the rest
+// of the graph.
+
+static const char * ggml_backend_metal_buffer_type_host_get_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_metal_buffer_type * ctx = (ggml_backend_metal_buffer_type *)buft->context;
+
+    return ctx->name.c_str();
+}
+
+static ggml_backend_buffer_t ggml_backend_metal_buffer_type_host_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    return ggml_backend_metal_buffer_type_alloc_buffer(buft, size, true);
+}
+
+static size_t ggml_backend_metal_buffer_type_host_get_alignment(ggml_backend_buffer_type_t buft) {
+    return 32;
+
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_metal_buffer_type_host_get_max_size(ggml_backend_buffer_type_t buft) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)buft->device->context;
+
+    return ggml_metal_device_get_props(ctx_dev)->max_buffer_size;
+}
+
+static size_t ggml_backend_metal_buffer_type_host_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    return ggml_backend_metal_buffer_type_get_alloc_size(buft, tensor);
+}
+
+static bool ggml_backend_metal_buffer_type_host_is_host(ggml_backend_buffer_type_t buft) {
+    return true;
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_host(int device) {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    static std::vector<ggml_backend_buffer_type> bufts;
+    static std::vector<ggml_backend_metal_buffer_type_ptr> ctxs;
+
+    static bool initialized = false;
+    if (!initialized) {
+        bufts.reserve(g_devices);
+        ctxs.reserve(g_devices);
+
+        for (int i = 0; i < g_devices; ++i) {
+            ggml_backend_metal_buffer_type * raw_ctx = new ggml_backend_metal_buffer_type{
+                /* .device = */ i,
+                /* .name   = */ GGML_METAL_NAME + std::to_string(i) + "_Host"
+            };
+            ctxs.emplace_back(raw_ctx);
+
+            ggml_backend_buffer_type buft = {
+                /* .iface = */ {
+                    /* .get_name         = */ ggml_backend_metal_buffer_type_host_get_name,
+                    /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_host_alloc_buffer,
+                    /* .get_alignment    = */ ggml_backend_metal_buffer_type_host_get_alignment,
+                    /* .get_max_size     = */ ggml_backend_metal_buffer_type_host_get_max_size,
+                    /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_host_get_alloc_size,
+                    /* .is_host          = */ ggml_backend_metal_buffer_type_host_is_host,
+                },
+                /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_metal_reg(), i),
+                /* .context = */ raw_ctx,
+            };
+
+            bufts.emplace_back(buft);
+        }
+
+        initialized = true;
+    }
+
+    return &bufts[device];
+}
+
 // backend
 
 static const char * ggml_backend_metal_name(ggml_backend_t backend) {
@@ -669,7 +749,7 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
 
     props->caps = {
         /* .async                = */ true,
-        /* .host_buffer          = */ false,
+        /* .host_buffer          = */ true,
         /* .buffer_from_host_ptr = */ true,
         /* .events               = */ true,
     };
@@ -708,6 +788,14 @@ static ggml_backend_buffer_type_t ggml_backend_metal_device_get_buffer_type(ggml
     return props_dev->use_shared_buffers ? ggml_backend_metal_buffer_type_shared(props_dev->device) : ggml_backend_metal_buffer_type_private(props_dev->device);
 }
 
+static ggml_backend_buffer_type_t ggml_backend_metal_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
+
+    return ggml_backend_metal_buffer_type_host(props_dev->device);
+}
+
 static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
@@ -729,7 +817,8 @@ static bool ggml_backend_metal_device_supports_buft(ggml_backend_dev_t dev, ggml
         buft->device == dev && (
         buft->iface.get_name == ggml_backend_metal_buffer_type_shared_get_name ||
         buft->iface.get_name == ggml_backend_metal_buffer_type_private_get_name ||
-        buft->iface.get_name == ggml_backend_metal_buffer_type_mapped_get_name);
+        buft->iface.get_name == ggml_backend_metal_buffer_type_mapped_get_name ||
+        buft->iface.get_name == ggml_backend_metal_buffer_type_host_get_name);
 
     GGML_UNUSED(dev);
 }
@@ -793,7 +882,7 @@ static ggml_backend_device_i ggml_backend_metal_device_i = {
     /* .get_props            = */ ggml_backend_metal_device_get_props,
     /* .init_backend         = */ ggml_backend_metal_device_init_backend,
     /* .get_buffer_type      = */ ggml_backend_metal_device_get_buffer_type,
-    /* .get_host_buffer_type = */ NULL,
+    /* .get_host_buffer_type = */ ggml_backend_metal_device_get_host_buffer_type,
     /* .buffer_from_host_ptr = */ ggml_backend_metal_device_buffer_mapped,
     /* .supports_op          = */ ggml_backend_metal_device_supports_op,
     /* .supports_buft        = */ ggml_backend_metal_device_supports_buft,

@@ -1845,31 +1845,47 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
 
     GGML_ASSERT(ne00 % ggml_blck_size(op->src[0]->type) == 0);
 
+    const bool tbq_src =
+        op->src[0]->type == GGML_TYPE_TBQ3_0 ||
+        op->src[0]->type == GGML_TYPE_TBQ4_0;
+
     int64_t nk0 = ne00;
-    if (ggml_is_quantized(op->src[0]->type)) {
-        nk0 = ne00/16;
-    } else if (ggml_is_quantized(op->type)) {
-        nk0 = ne00/ggml_blck_size(op->type);
-    }
+    int nth    = 0;
+    int nrptg  = 1;
+    int nw0    = 0;
 
-    int nth = std::min<int>(nk0, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    if (tbq_src) {
+        // TurboQuant dequant: one threadgroup per 256-element block,
+        // 128 threads per threadgroup (matches TURBOQ_KV_DIM).
+        nk0   = ne00 / 256;    // number of blocks per row (QK_K=256)
+        nth   = 128;
+        nrptg = 1;
+        nw0   = nk0;           // one threadgroup per block (no thread-wrap)
+    } else {
+        if (ggml_is_quantized(op->src[0]->type)) {
+            nk0 = ne00/16;
+        } else if (ggml_is_quantized(op->type)) {
+            nk0 = ne00/ggml_blck_size(op->type);
+        }
 
-    // when rows are small, we can batch them together in a single threadgroup
-    int nrptg = 1;
+        nth = std::min<int>(nk0, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
-    // TODO: relax this constraint in the future
-    if (ggml_blck_size(op->src[0]->type) == 1 && ggml_blck_size(op->type) == 1) {
-        if (nth > nk0) {
-            nrptg = (nth + nk0 - 1)/nk0;
-            nth   = nk0;
+        // when rows are small, we can batch them together in a single threadgroup
+        // TODO: relax this constraint in the future
+        if (ggml_blck_size(op->src[0]->type) == 1 && ggml_blck_size(op->type) == 1) {
+            if (nth > nk0) {
+                nrptg = (nth + nk0 - 1)/nk0;
+                nth   = nk0;
 
-            if (nrptg*nth > ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
-                nrptg--;
+                if (nrptg*nth > ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+                    nrptg--;
+                }
             }
         }
-    }
 
-    nth = std::min<int>(nth, nk0);
+        nth = std::min<int>(nth, nk0);
+        nw0 = nrptg == 1 ? (int)((nk0 + nth - 1)/nth) : 1;
+    }
 
     ggml_metal_kargs_cpy args = {
         /*.nk0  =*/ nk0,
@@ -1890,8 +1906,6 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
     };
-
-    const int nw0 = nrptg == 1 ? (nk0 + nth - 1)/nth : 1;
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);

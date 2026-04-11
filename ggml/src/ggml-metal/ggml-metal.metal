@@ -9,6 +9,12 @@ __embed_ggml-common.h__
 
 #include <metal_stdlib>
 
+#if defined(GGML_METAL_EMBED_LIBRARY)
+__embed_ggml-metal-turboq-rot.h__
+#else
+#include "ggml-metal-turboq-rot.h"
+#endif
+
 #ifdef GGML_METAL_HAS_TENSOR
 #include <metal_tensor>
 
@@ -7184,6 +7190,181 @@ template [[host_name("kernel_cpy_q4_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_q5_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_cpy_q5_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_cpy_q8_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q8_0, 2, dequantize_q8_0>;
+
+// ---------------------------------------------------------------------------
+// TurboQuant dequant (TBQ3_0 / TBQ4_0) -> F16 / F32
+//
+// Dispatch: one threadgroup per TBQ block, 128 threads per threadgroup.
+//   tgpig[0] = iw0*ne01 + i01  (iw0 = block index within row)
+//   tgpig[1] = i02 ; tgpig[2] = i03
+// Per-block: decode codebook indices, apply inverse rotation via
+//   TURBOQ_QT_128 (Q^T, row-major), norm-correct, write T output.
+// ---------------------------------------------------------------------------
+
+constant float TURBOQ_CB_3BIT[8] = {
+    -2.1520f, -1.3440f, -0.7560f, -0.2451f,
+     0.2451f,  0.7560f,  1.3440f,  2.1520f
+};
+
+constant float TURBOQ_CB_4BIT[16] = {
+    -2.7326f, -2.0690f, -1.6180f, -1.2562f,
+    -0.9424f, -0.6568f, -0.3881f, -0.1284f,
+     0.1284f,  0.3881f,  0.6568f,  0.9424f,
+     1.2562f,  1.6180f,  2.0690f,  2.7326f
+};
+
+// scale_down = 1/sqrt(QK_K) = 1/16
+constant float TURBOQ_SCALE_DOWN = 0.0625f;
+
+template<typename T>
+kernel void kernel_cpy_tbq4_0_t(
+        constant ggml_metal_kargs_cpy & args,
+        device const char * src0,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    constexpr short D   = 128;
+    constexpr short QKK = 256;
+
+    const int i03 = tgpig[2];
+    const int i02 = tgpig[1];
+    const int i01 = tgpig[0] % args.ne01;
+    const int iw0 = tgpig[0] / args.ne01;
+
+    device const block_tbq4_0 * src_row =
+        (device const block_tbq4_0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+    device const block_tbq4_0 * blk = src_row + iw0;
+
+    device T * dst_data = (device T *)(
+        dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1 + (iw0*QKK)*args.nb0);
+
+    threadgroup float rotated [QKK];
+    threadgroup float unit_app[QKK];
+    threadgroup float sg_sums[4];
+
+    const float norm = (float)blk->d;
+
+    // ---- 1. decode 4-bit codebook indices ----
+    for (short s = 0; s < 2; ++s) {
+        const short j = tiitg + s*D;
+        const uchar byte = blk->qs[j >> 1];
+        const uchar idx  = (j & 1) ? (byte >> 4) : (byte & 0x0F);
+        rotated[j] = TURBOQ_CB_4BIT[idx] * TURBOQ_SCALE_DOWN;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- 2. inverse rotation per sub-block: unit = Q^T * rotated ----
+    // Each thread computes one output element i = tiitg for both sub-blocks.
+    {
+        const short i = tiitg;
+        float acc0 = 0.0f;
+        float acc1 = 0.0f;
+        constant float * row = &TURBOQ_QT_128[i*D];
+        for (short j = 0; j < D; ++j) {
+            const float m = row[j];
+            acc0 += m * rotated[j];
+            acc1 += m * rotated[j + D];
+        }
+        unit_app[i      ] = acc0;
+        unit_app[i + D  ] = acc1;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- 3. norm correction (re-normalize to unit length, scale by norm) ----
+    float part = unit_app[tiitg]*unit_app[tiitg] + unit_app[tiitg+D]*unit_app[tiitg+D];
+    float sg_sum = simd_sum(part);
+    if ((tiitg & 31) == 0) {
+        sg_sums[tiitg >> 5] = sg_sum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = sg_sums[0] + sg_sums[1] + sg_sums[2] + sg_sums[3];
+    float recon_scale = (total > 1e-20f) ? (norm * rsqrt(total)) : 0.0f;
+
+    // ---- 4. write output ----
+    dst_data[tiitg    ] = (T)(unit_app[tiitg    ] * recon_scale);
+    dst_data[tiitg + D] = (T)(unit_app[tiitg + D] * recon_scale);
+}
+
+template<typename T>
+kernel void kernel_cpy_tbq3_0_t(
+        constant ggml_metal_kargs_cpy & args,
+        device const char * src0,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    constexpr short D   = 128;
+    constexpr short QKK = 256;
+
+    const int i03 = tgpig[2];
+    const int i02 = tgpig[1];
+    const int i01 = tgpig[0] % args.ne01;
+    const int iw0 = tgpig[0] / args.ne01;
+
+    device const block_tbq3_0 * src_row =
+        (device const block_tbq3_0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+    device const block_tbq3_0 * blk = src_row + iw0;
+
+    device T * dst_data = (device T *)(
+        dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1 + (iw0*QKK)*args.nb0);
+
+    threadgroup float rotated [QKK];
+    threadgroup float unit_app[QKK];
+    threadgroup float sg_sums[4];
+
+    const float norm = (float)blk->d;
+
+    // ---- 1. decode 3-bit codebook indices ----
+    // 8 indices packed into 3 bytes (24 bits). For index j, bit offset = j*3.
+    for (short s = 0; s < 2; ++s) {
+        const short j = tiitg + s*D;
+        const int bit      = j * 3;
+        const int byte_idx = bit >> 3;
+        const int bit_off  = bit & 7;
+        const uint lo = (uint)blk->qs[byte_idx];
+        const uint hi = (byte_idx < (QKK*3/8 - 1)) ? (uint)blk->qs[byte_idx + 1] : 0u;
+        const uint v  = lo | (hi << 8);
+        const uchar idx = (uchar)((v >> bit_off) & 0x7u);
+        rotated[j] = TURBOQ_CB_3BIT[idx] * TURBOQ_SCALE_DOWN;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- 2. inverse rotation ----
+    {
+        const short i = tiitg;
+        float acc0 = 0.0f;
+        float acc1 = 0.0f;
+        constant float * row = &TURBOQ_QT_128[i*D];
+        for (short j = 0; j < D; ++j) {
+            const float m = row[j];
+            acc0 += m * rotated[j];
+            acc1 += m * rotated[j + D];
+        }
+        unit_app[i      ] = acc0;
+        unit_app[i + D  ] = acc1;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- 3. norm correction ----
+    float part = unit_app[tiitg]*unit_app[tiitg] + unit_app[tiitg+D]*unit_app[tiitg+D];
+    float sg_sum = simd_sum(part);
+    if ((tiitg & 31) == 0) {
+        sg_sums[tiitg >> 5] = sg_sum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = sg_sums[0] + sg_sums[1] + sg_sums[2] + sg_sums[3];
+    float recon_scale = (total > 1e-20f) ? (norm * rsqrt(total)) : 0.0f;
+
+    // ---- 4. write output ----
+    dst_data[tiitg    ] = (T)(unit_app[tiitg    ] * recon_scale);
+    dst_data[tiitg + D] = (T)(unit_app[tiitg + D] * recon_scale);
+}
+
+typedef decltype(kernel_cpy_tbq4_0_t<half>) cpy_tbq_t;
+
+template [[host_name("kernel_cpy_tbq4_0_f16")]] kernel cpy_tbq_t kernel_cpy_tbq4_0_t<half>;
+template [[host_name("kernel_cpy_tbq4_0_f32")]] kernel cpy_tbq_t kernel_cpy_tbq4_0_t<float>;
+template [[host_name("kernel_cpy_tbq3_0_f16")]] kernel cpy_tbq_t kernel_cpy_tbq3_0_t<half>;
+template [[host_name("kernel_cpy_tbq3_0_f32")]] kernel cpy_tbq_t kernel_cpy_tbq3_0_t<float>;
 
 kernel void kernel_concat(
     constant ggml_metal_kargs_concat & args,

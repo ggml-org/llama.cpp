@@ -189,7 +189,26 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
-        if (offload) {
+        // TurboQuant (TBQ*) KV types have no Metal SET_ROWS kernel yet.
+        // If the device exposes a host buffer type (e.g. Metal unified memory
+        // on Apple Silicon), allocate the KV cache there: tensors live in a
+        // shared-storage MTLBuffer that is both a real device buffer (so the
+        // Metal backend can claim the TBQ -> F16 dequant cpy) and host-visible
+        // (so the CPU backend can claim SET_ROWS, which is F32 -> TBQ quantize).
+        // If no host buffer type is available, fall back to CPU buffer, keeping
+        // the whole KV path on CPU.
+        const bool tbq_kv =
+            type_k == GGML_TYPE_TBQ3_0 || type_k == GGML_TYPE_TBQ4_0 ||
+            type_v == GGML_TYPE_TBQ3_0 || type_v == GGML_TYPE_TBQ4_0;
+
+        if (tbq_kv) {
+            auto * dev = model.dev_layer(il);
+            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(dev);
+            if (host_buft != nullptr) {
+                buft     = host_buft;
+                dev_name = ggml_backend_dev_name(dev);
+            }
+        } else if (offload) {
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
 
