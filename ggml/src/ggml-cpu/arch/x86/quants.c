@@ -700,39 +700,10 @@ void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = hsum_float_4x4(acc_0, acc_1, acc_2, acc_3);
 #else
-    float sumf = 0.0f;
-
-    for (int ib = 0; ib < nb; ++ib) {
-        const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
-        float sumi = 0.0f;
-
-        for (int k = 0; k < 4; k++) {
-            const block_q8_0 * GGML_RESTRICT yb = &y[ib * 4 + k];
-            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
-            int sumi_block = 0;
-
-            const uint8_t * GGML_RESTRICT bits = &x[ib].qs[k * 4];
-            const int8_t  * GGML_RESTRICT qy   = yb->qs;
-
-            for (int b = 0; b < 4; ++b, qy += 8) {
-                const unsigned mask = bits[b];
-                sumi_block += ((mask & 0x01) ? qy[0] : -qy[0])
-                           +  ((mask & 0x02) ? qy[1] : -qy[1])
-                           +  ((mask & 0x04) ? qy[2] : -qy[2])
-                           +  ((mask & 0x08) ? qy[3] : -qy[3])
-                           +  ((mask & 0x10) ? qy[4] : -qy[4])
-                           +  ((mask & 0x20) ? qy[5] : -qy[5])
-                           +  ((mask & 0x40) ? qy[6] : -qy[6])
-                           +  ((mask & 0x80) ? qy[7] : -qy[7]);
-            }
-
-            sumi += d1 * sumi_block;
-        }
-
-        sumf += d0 * sumi;
-    }
-
-    *s = sumf;
+    UNUSED(nb);
+    UNUSED(x);
+    UNUSED(y);
+    ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 

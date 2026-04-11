@@ -137,13 +137,13 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     float sumf = 0.0;
 
     for (int i = 0; i < nb; i++) {
-        const float d0 = GGML_FP16_TO_FP32(x[i].d);
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
 
         float sumi = 0.0f;
 
         for (int k = 0; k < 4; k++) {
             const block_q8_0 * GGML_RESTRICT yb = &y[i * 4 + k];
-            const float d1 = GGML_FP16_TO_FP32(yb->d);
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
             int sumi_block = 0;
 
             const uint8_t * GGML_RESTRICT bits = &x[i].qs[k * 4];
