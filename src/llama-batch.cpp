@@ -46,14 +46,14 @@ bool llama_batch_allocr::init(
         return false;
     }
 
-    if (batch.token) {
-        for (int32_t i = 0; i < batch.n_tokens; ++i) {
-            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab.n_tokens()) {
-                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
-                return false;
-            }
-        }
-    }
+    // if (batch.token) {
+    //     for (int32_t i = 0; i < batch.n_tokens; ++i) {
+    //         if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab.n_tokens()) {
+    //             LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
+    //             return false;
+    //         }
+    //     }
+    // }
 
     if (batch.seq_id) {
         for (int32_t i = 0; i < batch.n_tokens; ++i) {

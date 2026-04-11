@@ -1633,7 +1633,6 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
     cb(inp->tokens, "inp_tokens", -1);
     ggml_set_input(inp->tokens);
-    res->t_inp_tokens = inp->tokens;
 
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
     cb(inp->embd, "inp_embd", -1);
@@ -1643,6 +1642,17 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
     std::array<ggml_tensor *, 2> inps;
 
+    if (res->remove_token_offset) {
+        auto tokens_f32 = ggml_cast(ctx0, inp->tokens,GGML_TYPE_F32);
+        res->t_token_types =  ggml_scale(ctx0, tokens_f32,1.0f/res->token_offset);
+        res->t_token_types =  ggml_floor_inplace(ctx0, res->t_token_types);
+        inp->tokens =  ggml_sub(ctx0, tokens_f32, ggml_scale(ctx0, res->t_token_types,res->token_offset));
+        inp->tokens =  ggml_cast (ctx0, inp->tokens,GGML_TYPE_I32);
+        res->t_token_types = ggml_cast(ctx0,res->t_token_types,GGML_TYPE_I32);
+        ggml_build_forward_expand(gf, res->t_token_types);
+    }
+
+    res->t_inp_tokens = inp->tokens;
     // token embeddings path (ubatch.token != nullptr)
     {
         auto & cur = inps[0];

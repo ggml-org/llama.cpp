@@ -169,6 +169,7 @@ int main(int argc, char ** argv) {
 
     // split the prompt into lines
     std::vector<std::string> prompts = split_lines(params.prompt, params.embd_sep);
+    int32_t token_type_offset  = llama_vocab_n_tokens(vocab);
 
     // max batch size
     const uint64_t n_batch = params.n_batch;
@@ -186,27 +187,39 @@ int main(int argc, char ** argv) {
         // split classification pairs and insert expected separator tokens
         if (pooling_type == LLAMA_POOLING_TYPE_RANK && prompt.find(params.cls_sep) != std::string::npos) {
             std::vector<std::string> pairs = split_lines(prompt, params.cls_sep);
+            const std::string query = pairs[0];
+            const std::string doc = pairs[1];
             if (rerank_prompt != nullptr) {
-                const std::string query = pairs[0];
-                const std::string doc = pairs[1];
                 std::string final_prompt = rerank_prompt;
-                string_replace_all(final_prompt, "{query}"   , query);
-                string_replace_all(final_prompt, "{document}", doc  );
-                inp = common_tokenize(vocab, final_prompt, true, true);
-            } else {
-                std::string final_prompt;
-                for (size_t i = 0; i < pairs.size(); i++) {
-                    final_prompt += pairs[i];
-                    if (i != pairs.size() - 1) {
-                        if (!added_eos_token.empty()) {
-                            final_prompt += added_eos_token;
-                        }
-                        if (!added_sep_token.empty()) {
-                            final_prompt += added_sep_token;
-                        }
-                    }
+                size_t pos = final_prompt.find("{document}");
+                std::string q_prompt = final_prompt.substr(0, pos);
+                std::string d_prompt = final_prompt.substr(pos);
+                string_replace_all(q_prompt, "{query}"   , query);
+                string_replace_all(d_prompt, "{document}", doc  );
+
+                auto inp_q= common_tokenize(vocab, q_prompt, false, true);
+                auto inp_d= common_tokenize(vocab, d_prompt, false, true);
+
+                for(auto token: inp_q){
+                    inp.emplace_back(token);
+
                 }
-                inp = common_tokenize(ctx, final_prompt, true, true);
+                for(auto token: inp_d){
+                    inp.emplace_back(token + token_type_offset);
+                }
+            } else {
+                auto inp_q= common_tokenize(vocab, query, false, false);
+                auto inp_d= common_tokenize(vocab, doc, false, false);
+                inp.emplace_back(llama_vocab_bos(vocab)); //add bos
+                inp.insert(inp.end(), inp_q.begin(), inp_q.end());//add seq A
+                inp.emplace_back(llama_vocab_eos(vocab)); //add eos
+                inp.emplace_back(llama_vocab_sep(vocab)); //add sep
+
+                for(auto token: inp_d){ //add seq B
+                    inp.emplace_back(token + token_type_offset);
+
+                }
+                inp.emplace_back(llama_vocab_eos(vocab) +token_type_offset); //add eos
             }
         } else {
             inp = common_tokenize(ctx, prompt, true, true);
