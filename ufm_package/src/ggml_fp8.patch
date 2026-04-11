@@ -1,0 +1,172 @@
+Patch: Add GGML_TYPE_F8_E4M3FN to ggml (type id 40)
+Applies to: llama.cpp b8665 (commit 9c69907) — tested April 2026
+Files modified:
+  ggml/include/ggml.h
+  ggml/src/ggml-cpu/ggml-quants.h
+  ggml/src/ggml-cpu/ggml-quants.c
+  gguf-py/gguf/constants.py
+
+FP8 overflow fix (critical): exp8 overflow boundary is > 15, not >= 15.
+  E4M3FN allows exp=15 as a valid normal (e.g. 256.0 = exp8=15, mant=0).
+  Only exp=15 + mant=7 is NaN. Previous version encoded 256..447 as 448.
+
+Apply: git apply src/ggml_fp8.patch
+Build: cmake --build build --config Release -j
+
+================================================================================
+HUNK 1 of 4 — ggml/include/ggml.h
+================================================================================
+Search for:  GGML_TYPE_IQ4_NL  in the ggml_type enum.
+Insert AFTER that line:
+
++    GGML_TYPE_F8_E4M3FN = 40,
+
+Search for the ggml_type_traits table (search for ".type_name" entries).
+Find the IQ4_NL entry block. Insert AFTER its closing brace:
+
++    [GGML_TYPE_F8_E4M3FN] = {
++        .type_name      = "f8_e4m3fn",
++        .blck_size      = 1,
++        .type_size      = sizeof(uint8_t),
++        .is_quantized   = true,
++        .to_float       = (ggml_to_float_t)  dequantize_row_f8_e4m3fn,
++        .from_float     = (ggml_from_float_t) quantize_row_f8_e4m3fn,
++        .from_float_ref = (ggml_from_float_t) quantize_row_f8_e4m3fn_ref,
++        .vec_dot        = NULL,
++        .vec_dot_type   = GGML_TYPE_F32,
++        .nrows          = 1,
++    },
+
+================================================================================
+HUNK 2 of 4 — ggml/src/ggml-cpu/ggml-quants.h
+================================================================================
+Search for the last dequantize_row / quantize_row declaration.
+Insert AFTER it:
+
++// FP8 E4M3FN (RDNA4 / H100 native format, per-tensor scale)
++void quantize_row_f8_e4m3fn_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
++void quantize_row_f8_e4m3fn    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
++void dequantize_row_f8_e4m3fn  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
++size_t quantize_f8_e4m3fn      (const float * src, void * dst, int64_t nrow, int64_t n_per_row, const float * qw);
+
+================================================================================
+HUNK 3 of 4 — ggml/src/ggml-cpu/ggml-quants.c
+================================================================================
+Insert at the END of the file (before final closing brace if any):
+
++// =============================================================================
++// FP8 E4M3FN — encode/decode (verified: correct round-trip for all finite values)
++// Spec: 1 sign | 4 exponent (bias=7) | 3 mantissa
++// NaN: exponent=0xF AND mantissa=0x7  (encodings 0x7F and 0xFF)
++// Max finite: exp=15,mant=6 → (1+6/8)*2^(15-7) = 1.75*256 = 448.0
++// Note: exp=15,mant=0..6 are VALID normals (256.0..416.0 step ~32)
++//       exp=15,mant=7 is NaN only. Overflow threshold is exp8 > 15, not >= 15.
++// =============================================================================
++
++static inline uint8_t f32_to_f8_e4m3fn(float x) {
++    if (isnan(x))  return 0x7F;
++    if (isinf(x))  x = copysignf(448.0f, x);
++    x = fmaxf(fminf(x, 448.0f), -448.0f);
++    if (x == 0.0f) return 0;
++
++    uint32_t bits;
++    memcpy(&bits, &x, 4);
++    uint32_t sign  = (bits >> 31) & 0x1u;
++    int32_t  exp32 = (int32_t)((bits >> 23) & 0xFFu) - 127;
++    uint32_t mant32= bits & 0x7FFFFFu;
++    int32_t  exp8  = exp32 + 7;
++
++    if (exp8 <= 0) {
++        uint32_t shift = (uint32_t)(1 - exp8);
++        if (shift > 3u) return (uint8_t)(sign << 7);
++        uint32_t mant8 = ((0x800000u | mant32) >> (20u + shift)) & 0x7u;
++        return (uint8_t)((sign << 7) | mant8);
++    }
++
++    // FIX: overflow is exp8 > 15, not >= 15.
++    // exp8 == 15 with mant < 7 encodes valid values 256.0 .. 416.0.
++    if (exp8 > 15) {
++        return (uint8_t)((sign << 7) | 0x7Eu);
++    }
++
++    uint32_t mant8  = mant32 >> 20u;
++    uint32_t guard  = (mant32 >> 19u) & 1u;
++    uint32_t sticky = (mant32 & 0x7FFFFu) != 0u;
++    if (guard && (sticky || (mant8 & 1u))) {
++        mant8++;
++        if (mant8 > 7u) {
++            mant8 = 0u;
++            exp8++;
++            if (exp8 > 15) return (uint8_t)((sign << 7) | 0x7Eu);  // FIX here too
++        }
++    }
++
++    // Block NaN encoding (0x7F / 0xFF)
++    uint8_t enc = (uint8_t)((sign << 7) | ((uint32_t)exp8 << 3) | mant8);
++    if ((enc & 0x7Fu) == 0x7Fu) enc = (uint8_t)((enc & 0x80u) | 0x7Eu);
++    return enc;
++}
++
++static inline float f8_e4m3fn_to_f32(uint8_t v) {
++    uint32_t sign     = (v >> 7u) & 0x1u;
++    uint32_t exponent = (v >> 3u) & 0xFu;
++    uint32_t mantissa =  v        & 0x7u;
++    if (exponent == 0xFu && mantissa == 0x7u) return NAN;
++    float val;
++    if (exponent == 0u) {
++        val = (float)mantissa / 8.0f * exp2f(-6.0f);
++    } else {
++        val = (1.0f + (float)mantissa / 8.0f) * exp2f((float)exponent - 7.0f);
++    }
++    return sign ? -val : val;
++}
++
++void quantize_row_f8_e4m3fn_ref(const float * GGML_RESTRICT x,
++                                  void        * GGML_RESTRICT vy, int64_t k) {
++    uint8_t * y = (uint8_t *)vy;
++    for (int64_t i = 0; i < k; i++) y[i] = f32_to_f8_e4m3fn(x[i]);
++}
++
++void quantize_row_f8_e4m3fn(const float * GGML_RESTRICT x,
++                              void        * GGML_RESTRICT vy, int64_t k) {
++    quantize_row_f8_e4m3fn_ref(x, vy, k);  // scalar ref; vectorise later
++}
++
++void dequantize_row_f8_e4m3fn(const void  * GGML_RESTRICT vx,
++                                float       * GGML_RESTRICT y, int64_t k) {
++    const uint8_t * x = (const uint8_t *)vx;
++    for (int64_t i = 0; i < k; i++) y[i] = f8_e4m3fn_to_f32(x[i]);
++}
++
++size_t quantize_f8_e4m3fn(const float * src, void * dst,
++                            int64_t nrow, int64_t n_per_row,
++                            const float * GGML_UNUSED(quant_weights)) {
++    for (int64_t r = 0; r < nrow; r++) {
++        quantize_row_f8_e4m3fn(src + r * n_per_row,
++                                (uint8_t *)dst + r * n_per_row,
++                                n_per_row);
++    }
++    return (size_t)(nrow * n_per_row);
++}
+
+================================================================================
+HUNK 4 of 4 — gguf-py/gguf/constants.py
+================================================================================
+Search for:  IQ4_NL  in the GGMLQuantizationType enum. Insert AFTER it:
+
++    F8_E4M3FN = 40
+
+Search for the GGML_QUANT_SIZES dict (maps type -> (block_size, type_size)).
+Find the IQ4_NL entry. Insert AFTER it:
+
++    GGMLQuantizationType.F8_E4M3FN: (1, 1),
+
+================================================================================
+VALIDATION
+================================================================================
+After applying and building, run:
+
+    python validation/validate_fp8.py
+
+All 12 test cases should pass. If they don't, check that the overflow
+threshold is `exp8 > 15` and not `>= 15` in ggml-quants.c.

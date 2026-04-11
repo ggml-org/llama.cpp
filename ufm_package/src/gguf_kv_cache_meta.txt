@@ -1,0 +1,98 @@
+This is not a code patch — it's a specification for the custom GGUF metadata keys
+used when serialising a session with INT8-quantised KV cache state.
+
+You don't need this for inference. You need it only if you want to save/restore
+a conversation's KV cache to disk (long-running chat sessions, resumable inference).
+
+================================================================================
+KEY DEFINITIONS
+================================================================================
+
+All keys are prefixed "ufm.kvcache." to namespace them away from standard keys.
+
+ufm.kvcache.quantised         BOOL      true if KV cache is INT8-quantised
+ufm.kvcache.stride            UINT32    bytes per KV position = head_dim + 2
+ufm.kvcache.head_dim          UINT32    head dimension (e.g. 128 for Llama)
+ufm.kvcache.n_heads_kv        UINT32    number of KV heads
+ufm.kvcache.n_layers          UINT32    number of transformer layers
+ufm.kvcache.tokens_per_block  UINT32    paged block size (PKV_TOKENS_PER_BLOCK)
+
+================================================================================
+TENSOR NAMING CONVENTION
+================================================================================
+
+When writing KV cache tensors to a GGUF file, name them:
+
+  kvcache.layer_<L>.key    — INT8 quantised K cache for layer L
+                              shape: [n_heads_kv, n_tokens, head_dim + 2]
+                              type:  GGML_TYPE_I8
+                              Layout per position: [head_dim bytes int8] [2 bytes fp16 scale]
+
+  kvcache.layer_<L>.value  — INT8 quantised V cache for layer L
+                              same shape and layout
+
+================================================================================
+C++ CODE TO WRITE KV CACHE METADATA
+================================================================================
+
+// Add to your session save function after gguf_write_header:
+
+void write_kvcache_metadata(gguf_context* ctx,
+                             bool quantised, uint32_t head_dim,
+                             uint32_t n_heads_kv, uint32_t n_layers,
+                             uint32_t tokens_per_block) {
+    gguf_set_val_bool(ctx, "ufm.kvcache.quantised",        quantised);
+    gguf_set_val_u32 (ctx, "ufm.kvcache.stride",           head_dim + 2);
+    gguf_set_val_u32 (ctx, "ufm.kvcache.head_dim",         head_dim);
+    gguf_set_val_u32 (ctx, "ufm.kvcache.n_heads_kv",       n_heads_kv);
+    gguf_set_val_u32 (ctx, "ufm.kvcache.n_layers",         n_layers);
+    gguf_set_val_u32 (ctx, "ufm.kvcache.tokens_per_block", tokens_per_block);
+}
+
+================================================================================
+C++ CODE TO READ KV CACHE METADATA
+================================================================================
+
+struct kvcache_meta_t {
+    bool     quantised;
+    uint32_t stride;
+    uint32_t head_dim;
+    uint32_t n_heads_kv;
+    uint32_t n_layers;
+    uint32_t tokens_per_block;
+};
+
+kvcache_meta_t read_kvcache_metadata(gguf_context* ctx) {
+    kvcache_meta_t m{};
+    auto get_u32 = [&](const char* k, uint32_t def) -> uint32_t {
+        int64_t idx = gguf_find_key(ctx, k);
+        return idx >= 0 ? (uint32_t)gguf_get_val_u32(ctx, idx) : def;
+    };
+    auto get_bool = [&](const char* k) -> bool {
+        int64_t idx = gguf_find_key(ctx, k);
+        return idx >= 0 ? gguf_get_val_bool(ctx, idx) : false;
+    };
+    m.quantised        = get_bool("ufm.kvcache.quantised");
+    m.stride           = get_u32 ("ufm.kvcache.stride",           0);
+    m.head_dim         = get_u32 ("ufm.kvcache.head_dim",         128);
+    m.n_heads_kv       = get_u32 ("ufm.kvcache.n_heads_kv",       8);
+    m.n_layers         = get_u32 ("ufm.kvcache.n_layers",         32);
+    m.tokens_per_block = get_u32 ("ufm.kvcache.tokens_per_block", 16);
+    return m;
+}
+
+================================================================================
+INTEGRATION POINT IN LLAMA.CPP
+================================================================================
+
+In llama.cpp, the function llama_state_save_file() (in src/llama.cpp) is where
+session state is serialised to disk. To add KV cache metadata:
+
+1. Find llama_state_save_file()
+2. After the existing gguf header writes, call write_kvcache_metadata()
+3. For each layer, add the INT8 KV tensor with the naming convention above
+4. In llama_state_load_file(), call read_kvcache_metadata() to detect
+   whether the session was saved with INT8 KV cache and configure accordingly
+
+This is a TODO — full implementation requires wiring into the paged KV cache
+allocator (paged_kv_cache.h) Piece 3.

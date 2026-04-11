@@ -1,0 +1,90 @@
+# sources.yaml — Technical documentation sources for coding RAG
+# Each source has a URL to crawl/fetch, a name, and a priority weight.
+# higher weight = retrieved chunks rank higher when scores are equal.
+# Update URLs when new versions ship. Last updated: April 2026.
+
+sources:
+  # ── ROCm / HIP ─────────────────────────────────────────────────────────────
+  - name: "ROCm 7.2.1 release notes"
+    url: "https://rocm.docs.amd.com/en/latest/about/release-notes.html"
+    weight: 1.5   # high — most likely to contain version-specific gotchas
+    tags: [rocm, hip, windows]
+
+  - name: "HIP Programming Guide"
+    url: "https://rocm.docs.amd.com/projects/HIP/en/latest/programming_guide.html"
+    weight: 1.4
+    tags: [hip, rocm, kernel, memory]
+
+  - name: "ROCm on Radeon and Ryzen"
+    url: "https://rocm.docs.amd.com/en/latest/how_to/rocm_on_radeon.html"
+    weight: 1.8   # highest — this is our exact hardware path
+    tags: [rocm, rdna4, rx9070, windows, gfx1201]
+
+  - name: "HIP API reference"
+    url: "https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/index.html"
+    weight: 1.2
+    tags: [hip, api, rocm]
+
+  - name: "ROCm compatibility matrix"
+    url: "https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html"
+    weight: 1.3
+    tags: [rocm, compatibility, windows, gfx1201]
+
+  # ── Vulkan ──────────────────────────────────────────────────────────────────
+  - name: "Vulkan spec 1.3 (main)"
+    url: "https://registry.khronos.org/vulkan/specs/1.3/html/vkspec.html"
+    weight: 1.2
+    tags: [vulkan, spec, glsl]
+
+  - name: "VK_KHR_cooperative_matrix spec"
+    url: "https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_cooperative_matrix.html"
+    weight: 1.6   # high — core to our WMMA work
+    tags: [vulkan, coopmat, wmma, glsl]
+
+  - name: "GLSL extensions reference"
+    url: "https://github.com/KhronosGroup/GLSL/tree/main/extensions"
+    weight: 1.3
+    tags: [glsl, vulkan, extensions]
+
+  # ── llama.cpp ───────────────────────────────────────────────────────────────
+  - name: "llama.cpp main README"
+    url: "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/README.md"
+    weight: 1.2
+    tags: [llamacpp, build, vulkan, rocm]
+
+  - name: "llama.cpp Vulkan backend docs"
+    url: "https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/VULKAN.md"
+    weight: 1.5
+    tags: [llamacpp, vulkan, backend]
+
+  - name: "ggml-quants.c (Q4_K format)"
+    url: "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/ggml/src/ggml-cpu/ggml-quants.c"
+    weight: 1.7   # highest in this group — we reference this constantly
+    tags: [llamacpp, quantisation, q4k, q8, ggml]
+
+  - name: "ggml.h tensor types"
+    url: "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/ggml/include/ggml.h"
+    weight: 1.4
+    tags: [llamacpp, ggml, types, api]
+
+  # ── RDNA4 / AMD GPU ─────────────────────────────────────────────────────────
+  - name: "RDNA4 WMMA GPUOpen guide"
+    url: "https://gpuopen.com/learn/using_matrix_core_amd_rdna4/"
+    weight: 1.6
+    tags: [rdna4, wmma, gfx1201, matrix_cores]
+
+  - name: "Accelerating GenAI on RDNA4 (GPUOpen)"
+    url: "https://gpuopen.com/learn/accelerating_generative_ai_on_amd_radeon_gpus/"
+    weight: 1.5
+    tags: [rdna4, ai, inference, fp8, wmma]
+
+  # ── Gemma 4 ─────────────────────────────────────────────────────────────────
+  - name: "Gemma 4 model card (HuggingFace)"
+    url: "https://huggingface.co/google/gemma-4-27b-it"
+    weight: 1.3
+    tags: [gemma4, model, gguf, moe]
+
+  - name: "Gemma 4 on Ollama"
+    url: "https://ollama.com/library/gemma4"
+    weight: 1.2
+    tags: [gemma4, ollama, gguf]

@@ -218,3 +218,17 @@ if (Vulkan_FOUND)
 else()
     message(WARNING "Vulkan not found")
 endif()
+
+# UFM custom kernels
+set(UFM_SPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/spv_out")
+if(EXISTS "${UFM_SPV_DIR}")
+    target_compile_definitions(ggml-vulkan PRIVATE UFM_CUSTOM_KERNELS=1)
+    target_include_directories(ggml-vulkan PRIVATE "${UFM_SPV_DIR}")
+    message(STATUS "[UFM] Custom kernels ENABLED -- ${UFM_SPV_DIR}")
+    # Tell MSVC to treat source files as UTF-8 — suppresses C4828 on SPV headers
+    if(MSVC)
+        target_compile_options(ggml-vulkan PRIVATE /utf-8)
+    endif()
+else()
+    message(WARNING "[UFM] spv_out/ not found -- run scripts/compile_shaders.bat first")
+endif()

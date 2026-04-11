@@ -1,0 +1,292 @@
+This patch was last verified against llama.cpp tag b5000+.
+llama.cpp moves fast — always apply against a recent tag.
+
+Clone command (use latest tag or main):
+    git clone https://github.com/ggml-org/llama.cpp
+    cd llama.cpp
+    git checkout main   # or a specific tag e.g. b5200
+
+Apply with:
+    git apply ufm_custom_kernels.patch
+
+If hunks drift (line numbers shift), apply manually.
+Each hunk has a search anchor — grep for it in ggml-vulkan.cpp
+and insert immediately after the anchor line.
+
+Build requirements:
+    - Vulkan SDK 1.4.341+ (https://vulkan.lunarg.com/sdk/home#windows)
+    - CMake 3.21+
+    - MSVC 2022 or GCC 12+  (no ROCm required on build machine)
+    - Python 3.10+  (for header embedding step)
+
+================================================================================
+
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+
+--- HUNK 1/5  Add SPIR-V includes at top of file ---
+--- Anchor: first #include line in the file (typically #include "ggml-vulkan.h")
+
+@@ -1,0 +2 @@
++// ── UFM custom kernels ───────────────────────────────────────────────────────
++#if defined(UFM_CUSTOM_KERNELS)
++#  include "spv_out/flash_attention_kv_quant_spv.h"
++#  include "spv_out/flash_attention_paged_spv.h"
++#  include "spv_out/kvcache_update_q8_spv.h"
++#  include "spv_out/linear_coop_32_spv.h"
++#  include "spv_out/linear_coop_fp8_spv.h"
++#  include "spv_out/linear_coop_q4k_spv.h"
++#  include "spv_out/linear_coop_q4k_silu_spv.h"
++#  include "spv_out/linear_coop_q4k_w32_spv.h"
++#  include "spv_out/linear_coop_q8_spv.h"
++#  include "spv_out/linear_coop_q8_w32_spv.h"
++#endif
++// ─────────────────────────────────────────────────────────────────────────────
+
+--- HUNK 2/5  Push constant structs ---
+--- Anchor: grep for "struct vk_op_push_constants {" — add AFTER the closing
+--- brace of the last existing push_constants struct in that block.
+
++#if defined(UFM_CUSTOM_KERNELS)
++// FA with INT8 KV (non-paged): kv_stride = HEAD_DIM+2, bs_k/bs_v are byte offsets per batch
++struct vk_fa_kv_quant_push_constants {
++    uint32_t Sq, Skv, Hq, Hkv, D;
++    float    scale;
++    float    logit_softcap;  // 0.0 = disabled; ~50.0 for Gemma 4
++    uint32_t causal;
++    uint32_t kv_stride;          // (D/32)*34 bytes per KV vector (Q8_0 format)
++    uint32_t bs_q, bs_k, bs_v, bs_o;
++};
++// FA with paged KV: block_table uploaded separately to binding 4
++struct vk_fa_paged_push_constants {
++    uint32_t Sq, Skv, Hq, Hkv, D;
++    float    scale;
++    float    logit_softcap;  // 0.0 = disabled; ~50.0 for Gemma 4
++    uint32_t causal;
++    uint32_t kv_stride_per_head;   // HEAD_DIM + 2
++    uint32_t kv_heads_stride;      // kv_stride_per_head * 2
++    uint32_t token_stride;         // n_heads_kv * kv_heads_stride
++    uint32_t bytes_per_phys_block; // PKV_TOKENS_PER_BLOCK * token_stride
++    uint32_t max_block_slots;
++    uint32_t bs_q, bs_o;
++};
++// kvcache update push constants (kvcache_update_q8.glsl)
++struct vk_kvcache_push_constants { uint32_t seq_pos, max_seq, n_heads, head_dim,
++                                              head_idx, layer_idx, cache_stride; };
++// Q4_K fused dequant+WMMA GEMM (linear_coop_q4k.glsl, linear_coop_q4k_silu.glsl)
++struct vk_mul_q4k_push_constants  { uint32_t M, N, K, blocks_per_row; };
++// Q8_0 INT8 WMMA GEMM (linear_coop_q8.glsl)
++struct vk_mul_q8_push_constants   { uint32_t M, N, K, blocks_per_row; };
++// FP16 cooperative matrix GEMM (linear_coop_32.glsl)
++struct vk_mul_f16_push_constants  { uint32_t M, N, K; float alpha; };
++#endif // UFM_CUSTOM_KERNELS
+
+--- HUNK 3/5  Pipeline handles in vk_device_struct ---
+--- Anchor: grep "vk_pipeline pipeline_topk_moe" — add the block AFTER that line.
+
++#if defined(UFM_CUSTOM_KERNELS)
++    // FA INT8 KV (non-paged): keyed by head_dim
++    std::unordered_map<uint32_t, vk_pipeline> pipeline_ufm_fa_kv_quant;
++    // FA paged KV: keyed by head_dim
++    std::unordered_map<uint32_t, vk_pipeline> pipeline_ufm_fa_paged;
++    vk_pipeline pipeline_kvcache_update;
++    // Q4_K fused GEMM — per-head_dim variant not needed, one pipeline covers all sizes
++    vk_pipeline pipeline_mul_q4k;       // linear_coop_q4k.glsl
++    vk_pipeline pipeline_mul_q4k_silu;  // linear_coop_q4k_silu.glsl (fused gate)
++    vk_pipeline pipeline_mul_q4k_w32;   // linear_coop_q4k_w32.glsl  (wave32)
++    vk_pipeline pipeline_mul_q8;        // linear_coop_q8.glsl
++    vk_pipeline pipeline_mul_q8_w32;    // linear_coop_q8_w32.glsl   (wave32)
++    vk_pipeline pipeline_mul_f16;       // linear_coop_32.glsl        (fp16 GEMM)
++#endif // UFM_CUSTOM_KERNELS
+
+--- HUNK 4/5  Pipeline creation inside ggml_vk_load_shaders() ---
+--- Anchor: grep "ggml_vk_load_shaders" — add at the END of that function,
+--- just before its closing brace.
+
++#if defined(UFM_CUSTOM_KERNELS)
++    device->pipeline_kvcache_update = ggml_vk_create_pipeline(
++        ctx, "kvcache_update",
++        kvcache_update_q8_len, kvcache_update_q8_data, "main",
++        0, nullptr, sizeof(vk_kvcache_push_constants), {1,1,1}, 1);
++
++    // Linear cooperative matrix GEMM pipelines
++    device->pipeline_mul_q4k = ggml_vk_create_pipeline(
++        ctx, "mul_q4k",
++        linear_coop_q4k_len, linear_coop_q4k_data, "main",
++        0, nullptr, sizeof(vk_mul_q4k_push_constants), {64,1,1}, 1);
++
++    device->pipeline_mul_q4k_silu = ggml_vk_create_pipeline(
++        ctx, "mul_q4k_silu",
++        linear_coop_q4k_silu_len, linear_coop_q4k_silu_data, "main",
++        0, nullptr, sizeof(vk_mul_q4k_push_constants), {64,1,1}, 1);
++
++    device->pipeline_mul_q4k_w32 = ggml_vk_create_pipeline(
++        ctx, "mul_q4k_w32",
++        linear_coop_q4k_w32_len, linear_coop_q4k_w32_data, "main",
++        0, nullptr, sizeof(vk_mul_q4k_push_constants), {32,1,1}, 1);
++
++    device->pipeline_mul_q8 = ggml_vk_create_pipeline(
++        ctx, "mul_q8",
++        linear_coop_q8_len, linear_coop_q8_data, "main",
++        0, nullptr, sizeof(vk_mul_q8_push_constants), {64,1,1}, 1);
++
++    device->pipeline_mul_q8_w32 = ggml_vk_create_pipeline(
++        ctx, "mul_q8_w32",
++        linear_coop_q8_w32_len, linear_coop_q8_w32_data, "main",
++        0, nullptr, sizeof(vk_mul_q8_push_constants), {32,1,1}, 1);
++
++    device->pipeline_mul_f16 = ggml_vk_create_pipeline(
++        ctx, "mul_f16",
++        linear_coop_32_len, linear_coop_32_data, "main",
++        0, nullptr, sizeof(vk_mul_f16_push_constants), {64,1,1}, 1);
++
++    // Flash attention — two variants, one pipeline per head_dim each
++    for (uint32_t hd : {64u, 80u, 96u, 128u}) {
++        uint32_t sv[2] = {hd, 16u};
++        VkSpecializationMapEntry se[2] = {{0,0,4},{1,4,4}};
++        device->pipeline_ufm_fa_kv_quant[hd] = ggml_vk_create_pipeline(
++            ctx, "ufm_fa_kv_quant",
++            flash_attention_kv_quant_len, flash_attention_kv_quant_data, "main",
++            2, se, sizeof(vk_fa_kv_quant_push_constants), {1,1,1}, hd);
++        device->pipeline_ufm_fa_paged[hd] = ggml_vk_create_pipeline(
++            ctx, "ufm_fa_paged",
++            flash_attention_paged_len, flash_attention_paged_data, "main",
++            2, se, sizeof(vk_fa_paged_push_constants), {1,1,1}, hd);
++    }
++#endif // UFM_CUSTOM_KERNELS
+
+--- HUNK 5/5  Dispatch hooks in ggml_vk_build_graph() ---
+--- Anchor: grep "case GGML_OP_RMS_NORM:" — REPLACE that entire case block
+--- (the existing one) with the block below.  If you prefer not to replace,
+--- add the custom dispatch BEFORE the existing fallthrough.
+---
+--- IMPORTANT: verify op_params offsets with a one-time printf before shipping.
+--- See VERIFY.md in this zip for the two offsets to check.
+
++#if defined(UFM_CUSTOM_KERNELS)
++
++        case GGML_OP_MUL_MAT: {
++            // UFM fused dequant+coopmat path
++            // Fires for: Q4_K weights (most model layers on Q4_K_M quant)
++            //            Q8_0 weights, F16 weights
++            // All require: src1 (activations) F16, dst F32
++            // Dispatch: workgroups = ((N+15)/16, (M+15)/16, 1)
++            //           local_size = (64, 1, 1) for wave64; (32,1,1) for wave32
++            uint32_t M = (uint32_t)node->ne[1];   // output rows
++            uint32_t N = (uint32_t)node->ne[0];   // output cols
++            uint32_t K = (uint32_t)src0->ne[0];   // inner dim
++            bool act_ok = src1->type == GGML_TYPE_F16
++                       || src1->type == GGML_TYPE_F32;
++
++            if (act_ok && src0->type == GGML_TYPE_Q4_K
++                       && device->pipeline_mul_q4k != nullptr) {
++                uint32_t blocks_per_row = K / 256u;  // Q4_K: 256 weights per block
++                vk_mul_q4k_push_constants pc{M, N, K, blocks_per_row};
++                // Select wave32 pipeline if device prefers it (RDNA4 optimal)
++                auto& pipe = (device->properties.limits.maxComputeWorkGroupInvocations >= 64)
++                             ? device->pipeline_mul_q4k
++                             : device->pipeline_mul_q4k_w32;
++                ggml_vk_op_f32<vk_mul_q4k_push_constants>(
++                    ctx, compute_ctx, src0, src1, nullptr, node,
++                    GGML_OP_MUL_MAT, std::move(pc), pipe,
++                    (N+15u)/16u, (M+15u)/16u, 1);
++                break;
++            }
++
++            if (act_ok && src0->type == GGML_TYPE_Q8_0
++                       && device->pipeline_mul_q8 != nullptr) {
++                uint32_t blocks_per_row = K / 32u;   // Q8_0: 32 weights per block
++                vk_mul_q8_push_constants pc{M, N, K, blocks_per_row};
++                auto& pipe = (device->properties.limits.maxComputeWorkGroupInvocations >= 64)
++                             ? device->pipeline_mul_q8
++                             : device->pipeline_mul_q8_w32;
++                ggml_vk_op_f32<vk_mul_q8_push_constants>(
++                    ctx, compute_ctx, src0, src1, nullptr, node,
++                    GGML_OP_MUL_MAT, std::move(pc), pipe,
++                    (N+15u)/16u, (M+15u)/16u, 1);
++                break;
++            }
++
++            if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16
++                       && device->pipeline_mul_f16 != nullptr) {
++                vk_mul_f16_push_constants pc{M, N, K, 1.0f};
++                ggml_vk_op_f32<vk_mul_f16_push_constants>(
++                    ctx, compute_ctx, src0, src1, nullptr, node,
++                    GGML_OP_MUL_MAT, std::move(pc), device->pipeline_mul_f16,
++                    (N+31u)/32u, (M+31u)/32u, 1);
++                break;
++            }
++        }
++        // (existing GGML_OP_MUL_MAT handling continues here)
++
++        case GGML_OP_CPY: {
++            // UFM KV write: intercept Q8_0 KV cache writes (-ctk q8_0 -ctv q8_0)
++            // src0 = F16 new KV vector, dst = Q8_0 view into KV cache buffer.
++            // Detection heuristic: dst type Q8_0, src type F16, matching head_dim.
++            // NOTE: seq_pos/layer extraction requires KV cache metadata not yet
++            // available here. Stub present — falls through to standard copy path.
++            // Full wiring: see paged_kv_upload.h pkv_push_constants().
++            if (dst->type  == GGML_TYPE_Q8_0
++             && src0->type == GGML_TYPE_F16
++             && src0->ne[0] == dst->ne[0]
++             && device->pipeline_kvcache_update != nullptr) {
++                // TODO: wire full dispatch when KV metadata is accessible
++            }
++        }
++        // (existing GGML_OP_CPY handling continues here)
++
++        case GGML_OP_FLASH_ATTN_EXT: {
++            // UFM FA path: fires when KV cache is Q8_0 (-ctk q8_0 -ctv q8_0)
++            // op_params layout (ggml.c ggml_flash_attn_ext, confirmed current):
++            //   [0] float scale         = 1/sqrt(D), passed from llama-graph.cpp
++            //   [1] float max_bias      = 0.0 (ALiBi bias, unused for LLaMA)
++            //   [2] float logit_softcap = ~50.0 Gemma 4, 0.0 LLaMA
++            //   [3] uint32 prec         = 0 DEFAULT or 1 F32
++            // Causal: src[3]==nullptr (no mask = causal, mask present = encoder)
++            // Fires when: -ctk q8_0 -ctv q8_0 -fa
++            uint32_t D = (uint32_t)src0->ne[0];
++            bool can_ufm = src0->type == GGML_TYPE_F16
++                        && src1->type == GGML_TYPE_Q8_0  // -ctk q8_0
++                        && device->pipeline_ufm_fa_kv_quant.count(D);
++
++            if (can_ufm) {
++                uint32_t Sq   = (uint32_t)src0->ne[1];
++                uint32_t Hq   = (uint32_t)src0->ne[2];
++                uint32_t B    = (uint32_t)src0->ne[3];
++                uint32_t Skv  = (uint32_t)src1->ne[1];
++                uint32_t Hkv  = (uint32_t)src1->ne[2];
++                // Causal = no mask. Encoder attention passes a mask tensor as src[3].
++                bool causal = (node->src[3] == nullptr);
++                // Scale from op_params[0] — use that rather than recomputing
++                float scale    = *(const float*)(node->op_params + 0);
++                // op_params[2] = logit_softcap (Gemma 4: ~50.0, others: 0.0)
++                float softcap  = *(const float*)(node->op_params + 8);
++                // Q8_0: (HEAD_DIM/32) blocks * 34 bytes/block
++                uint32_t n_blocks  = D / 32u;
++                uint32_t kv_stride = n_blocks * 34u;
++                // Batch strides (in bytes — Q8_0 KV tensors are byte buffers)
++                // K/V layout: [batch][head_kv][token][kv_stride bytes]
++                uint32_t bs_kv = Hkv * Skv * kv_stride;
++                vk_fa_kv_quant_push_constants pc{
++                    Sq, Skv, Hq, Hkv, D,
++                    scale,
++                    softcap,
++                    causal ? 1u : 0u,
++                    kv_stride,
++                    Sq * Hq * D,    // bs_q  (fp16 elements per batch item)
++                    bs_kv,          // bs_k
++                    bs_kv,          // bs_v  (K and V stored separately, same stride)
++                    Sq * Hq * D     // bs_o
++                };
++                ggml_vk_op_f32<vk_fa_kv_quant_push_constants>(
++                    ctx, compute_ctx, src0, src1, src2, node,
++                    GGML_OP_FLASH_ATTN_EXT, std::move(pc),
++                    device->pipeline_ufm_fa_kv_quant[D],
++                    Sq, Hq, B);
++                break;
++            }
++            // NOTE: paged KV dispatch is not yet wired — see TODO in AGENT_GUIDE.md Step 9.
++            // The paged path will need a separate block-table tensor check here.
++        }
++        // (existing GGML_OP_FLASH_ATTN_EXT handling continues — catches standard F16 KV)
++#endif // UFM_CUSTOM_KERNELS
