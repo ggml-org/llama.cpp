@@ -2651,6 +2651,8 @@ extern "C" {
     GGML_API struct ggml_tensor ** ggml_graph_nodes  (struct ggml_cgraph * cgraph);
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph * cgraph);
 
+    GGML_API void ggml_graph_set_reused(struct ggml_cgraph * cgraph, bool reused);
+
     GGML_API void   ggml_graph_add_node(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor);
 
     GGML_API size_t ggml_graph_overhead(void);
