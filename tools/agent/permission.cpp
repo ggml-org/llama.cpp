@@ -8,6 +8,7 @@
 #if defined(_WIN32)
 #include <conio.h>
 #else
+#include <cerrno>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -17,13 +18,29 @@ static char read_single_char() {
 #if defined(_WIN32)
     return static_cast<char>(_getch());
 #else
+    // Use raw read(2) instead of getchar() here: the advanced console
+    // (non --simple-io mode) uses getwchar() for readline, which sets
+    // stdin's orientation to "wide". Mixing with the narrow getchar() is
+    // undefined and in practice returns EOF immediately, causing the
+    // permission prompt to not wait for input. Reading from the file
+    // descriptor directly bypasses both FILE* buffering and stream
+    // orientation.
     struct termios oldt, newt;
     tcgetattr(STDIN_FILENO, &oldt);
     newt = oldt;
     newt.c_lflag &= ~(ICANON | ECHO);
+    newt.c_cc[VMIN]  = 1;
+    newt.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    char ch = static_cast<char>(getchar());
+    char ch = 0;
+    ssize_t n;
+    do {
+        n = read(STDIN_FILENO, &ch, 1);
+    } while (n < 0 && errno == EINTR);
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    if (n <= 0) {
+        return 0;
+    }
     return ch;
 #endif
 }
