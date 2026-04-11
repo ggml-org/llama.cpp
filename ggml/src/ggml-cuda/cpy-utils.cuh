@@ -228,35 +228,17 @@ __constant__ static const float TQ3_0_SIGNS_CUDA[32] = {
 };
 
 static __device__ void quantize_f32_tq3_0_block(const float * __restrict__ x, block_tq3_0 * __restrict__ y) {
-    float buf[32];
-
-    // 1. RMS scale
+    // V-only KV cache: no WHT rotation. Direct RMS normalize + nearest centroid.
     float sum_sq = 0.0f;
     for (int i = 0; i < 32; i++) sum_sq += x[i] * x[i];
     float rms = sqrtf(sum_sq / 32.0f);
     if (rms < 1e-10f) rms = 1.0f;
     y->d = __float2half(rms);
-    float inv_rms = 1.0f / rms;
+    const float inv_rms = 1.0f / rms;
 
-    // 2. Normalize + sign flips
-    for (int i = 0; i < 32; i++) buf[i] = x[i] * inv_rms * TQ3_0_SIGNS_CUDA[i];
-
-    // 3. WHT butterfly (5 stages)
-    for (int step = 1; step < 32; step <<= 1) {
-        for (int i = 0; i < 32; i += step << 1) {
-            for (int j = i; j < i + step; j++) {
-                float a = buf[j], b = buf[j + step];
-                buf[j] = a + b; buf[j + step] = a - b;
-            }
-        }
-    }
-    const float norm = 1.0f / sqrtf(32.0f);
-    for (int i = 0; i < 32; i++) buf[i] *= norm;
-
-    // 4. Quantize to nearest centroid
     uint8_t indices[32];
     for (int i = 0; i < 32; i++) {
-        float v = buf[i];
+        float v = x[i] * inv_rms;
         uint8_t idx = 0;
         for (int b = 0; b < 7; b++) {
             if (v > TQ3_0_BOUNDARIES_CUDA[b]) idx = b + 1;
@@ -264,7 +246,6 @@ static __device__ void quantize_f32_tq3_0_block(const float * __restrict__ x, bl
         indices[i] = idx;
     }
 
-    // 5. Pack 3-bit indices (8 indices -> 3 bytes)
     for (int g = 0; g < 4; g++) {
         const uint8_t * idx = indices + g * 8;
         uint8_t * qp = y->qs + g * 3;
