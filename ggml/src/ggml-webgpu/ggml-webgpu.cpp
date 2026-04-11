@@ -79,7 +79,7 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* Constants */
 
-#define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 32u
+#define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 64u
 #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
@@ -437,34 +437,25 @@ static void ggml_backend_webgpu_check_wait_status(wgpu::WaitStatus wait_status,
 }
 
 #ifdef __EMSCRIPTEN__
-// iOS browsers seem to have very strict limits on the number of in-flight GPU commands, so we need to throttle to avoid failures.
 EM_JS(int, ggml_webgpu_is_ios_browser, (), {
     const ua = navigator.userAgent;
     return (ua.includes('iPhone') || ua.includes('iPad')) ? 1 : 0;
 });
 #endif
 
-static uint32_t ggml_backend_webgpu_get_max_inflight_batches(const wgpu::AdapterInfo & info) {
+// TODO: these next two functions may want tuning across different platforms and workloads,
+static uint32_t ggml_backend_webgpu_get_max_inflight_batches() {
 #ifdef __EMSCRIPTEN__
+    // iOS has very strict limits on the number of in-flight GPU commands,
+    // so we need to throttle to avoid failures.
     if (ggml_webgpu_is_ios_browser()) {
         return 1;
     }
-#else
-    GGML_UNUSED(info);
 #endif
-
     return UINT32_MAX;
 }
 
-static uint32_t ggml_backend_webgpu_get_command_submit_batch_size(const wgpu::AdapterInfo & info) {
-#ifdef __EMSCRIPTEN__
-    if (ggml_webgpu_is_ios_browser()) {
-        return 16;
-    }
-#else
-    GGML_UNUSED(info);
-#endif
-
+static uint32_t ggml_backend_webgpu_get_command_submit_batch_size() {
     return WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
 }
 
