@@ -38,6 +38,10 @@ void quantize_row_q5_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q5_1_ref(x, y, k);
 }
 
+void quantize_row_q1_0_g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q1_0_g128_ref(x, y, k);
+}
+
 void quantize_row_q8_0_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_0_ref(x, y, k);
 }
@@ -330,6 +334,127 @@ void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 
     *s = sumf;
+}
+
+void ggml_vec_dot_q1_0_g128_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    static_assert(QK1_0_g128 % QK8_0 == 0, "Q1_0_g128 must align with Q8_0 blocks");
+
+    const int blocks_per_q1 = QK1_0_g128 / QK8_0;
+    const int nb = n / QK1_0_g128;
+
+    assert(n % QK1_0_g128 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q1_0_g128 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        float block_sum = 0.0f;
+
+        for (int jb = 0; jb < blocks_per_q1; ++jb) {
+            const block_q8_0 * yb = &y[ib*blocks_per_q1 + jb];
+            int sumi = 0;
+
+            for (int j = 0; j < QK8_0; ++j) {
+                const int idx = jb*QK8_0 + j;
+                const int sign = ((x[ib].qs[idx / 8] >> (idx % 8)) & 1) ? 1 : -1;
+                sumi += sign * yb->qs[j];
+            }
+
+            block_sum += GGML_CPU_FP16_TO_FP32(yb->d) * (float) sumi;
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * block_sum;
+    }
+
+    *s = sumf;
+}
+
+#if defined(__ARM_NEON)
+static const uint8_t k_q1_0_g128_bit_masks[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
+
+static inline int8x8_t ggml_q1_0_g128_signs_neon(uint8_t packed_signs) {
+    const uint8x8_t sign_bits = vcgt_u8(
+        vand_u8(vdup_n_u8(packed_signs), vld1_u8(k_q1_0_g128_bit_masks)),
+        vdup_n_u8(0)
+    );
+    return vreinterpret_s8_u8(
+        vbsl_u8(
+            sign_bits,
+            vreinterpret_u8_s8(vdup_n_s8(1)),
+            vreinterpret_u8_s8(vdup_n_s8(-1))
+        )
+    );
+}
+
+static inline int32_t ggml_vec_dot_q1_0_g128_q8_0_neon_16(int8x16_t signs, int8x16_t activations) {
+#if defined(__ARM_FEATURE_DOTPROD)
+    return vaddvq_s32(ggml_vdotq_s32(vdupq_n_s32(0), signs, activations));
+#else
+    const int16x8_t prod_lo = vmull_s8(vget_low_s8(signs), vget_low_s8(activations));
+    const int16x8_t prod_hi = vmull_s8(vget_high_s8(signs), vget_high_s8(activations));
+    return vaddlvq_s16(vaddq_s16(prod_lo, prod_hi));
+#endif
+}
+#endif
+
+void ggml_vec_dot_q1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined(__ARM_NEON)
+    static_assert(QK1_0_g128 % QK8_0 == 0, "Q1_0_g128 must align with Q8_0 blocks");
+
+    const int blocks_per_q1 = QK1_0_g128 / QK8_0;
+    const int nb = n / QK1_0_g128;
+
+    assert(n % QK1_0_g128 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q1_0_g128 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        float block_sum = 0.0f;
+
+        for (int jb = 0; jb < blocks_per_q1; ++jb) {
+            const block_q8_0 * yb = &y[ib*blocks_per_q1 + jb];
+            const uint8_t * packed_signs = x[ib].qs + jb*(QK8_0 / 8);
+
+            const int8x16_t signs0 = vcombine_s8(
+                ggml_q1_0_g128_signs_neon(packed_signs[0]),
+                ggml_q1_0_g128_signs_neon(packed_signs[1])
+            );
+            const int8x16_t signs1 = vcombine_s8(
+                ggml_q1_0_g128_signs_neon(packed_signs[2]),
+                ggml_q1_0_g128_signs_neon(packed_signs[3])
+            );
+            const int8x16_t qy0 = vld1q_s8(yb->qs);
+            const int8x16_t qy1 = vld1q_s8(yb->qs + 16);
+
+            const int sumi =
+                ggml_vec_dot_q1_0_g128_q8_0_neon_16(signs0, qy0) +
+                ggml_vec_dot_q1_0_g128_q8_0_neon_16(signs1, qy1);
+
+            block_sum += GGML_CPU_FP16_TO_FP32(yb->d) * (float) sumi;
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * block_sum;
+    }
+
+    *s = sumf;
+#else
+    ggml_vec_dot_q1_0_g128_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
 }
 
 void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
