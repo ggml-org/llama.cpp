@@ -22,8 +22,13 @@ target_link_libraries(ggml-rknpu2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/librknnrt.so
 )
 
+target_link_options(ggml-rknpu2 PUBLIC
+    "-Wl,-rpath-link,${CMAKE_CURRENT_SOURCE_DIR}/libs"
+)
+
 # Adding OpenMP in build
 if(OpenMP_FOUND)
     add_definitions(-DHAVE_OPENMP=1)
-    list(APPEND CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS}")
+    target_compile_options(ggml-rknpu2 PRIVATE ${OpenMP_CXX_FLAGS})
+    target_link_libraries(ggml-rknpu2 PRIVATE ${OpenMP_CXX_FLAGS})
 endif()
