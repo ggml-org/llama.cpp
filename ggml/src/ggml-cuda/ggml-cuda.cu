@@ -3070,16 +3070,18 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
         ggml_cuda_graph::node_properties prop = {};
         memcpy(&prop.node, cgraph->nodes[i], sizeof(ggml_tensor));
 
-        // if the backend scheduler is making copies of CPU tensors, the src pointers can be the same but with different data, see:
-        // https://github.com/ggml-org/llama.cpp/pull/21472#discussion_r3052235188
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j] ? cgraph->nodes[i]->src[j]->data : nullptr;
+            if (cgraph->nodes[i]->src[j]) {
+                prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
+                memcpy(prop.node_src_ne[j], cgraph->nodes[i]->src[j]->ne, sizeof(prop.node_src_ne[j]));
+                memcpy(prop.node_src_nb[j], cgraph->nodes[i]->src[j]->nb, sizeof(prop.node_src_nb[j]));
+            }
         }
 
-        if (!res && memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
+        if (res || memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
+            graph->node_props[i] = prop;
             res = true;
         }
-        graph->node_props[i] = prop;
     }
 
     return res;
