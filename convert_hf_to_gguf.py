@@ -11279,6 +11279,48 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
 
+@ModelBase.register("MERaLiON2ForConditionalGeneration")
+class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("speech_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MERALION)
+        self.gguf_writer.add_audio_stack_factor(self.global_config.get("speech_mlp_scale_factor", 15))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("text_decoder."):
+            return
+
+        if name.startswith("speech_encoder."):
+            name = name.replace("speech_encoder.", "audio_tower.")
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        suffix = "." + name.rsplit(".", 1)[-1]
+
+        if name.startswith("ln_speech."):
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MM_NORM_PRE, suffix=suffix), data_torch)
+            return
+
+        if name.startswith("speech_audio_adapter."):
+            if ".mlp_adapter.0." in name:
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 0, suffix=suffix), data_torch)
+            elif ".gate_proj." in name:
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 1, suffix=suffix), data_torch)
+            elif ".pool_proj." in name:
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 2, suffix=suffix), data_torch)
+            elif ".out_proj." in name:
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 3, suffix=suffix), data_torch)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("VoxtralForConditionalGeneration")
 class VoxtralWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder
