@@ -84,6 +84,14 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+std::string ltrim(std::string s) {
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
+        return !std::isspace(ch) && !std::ispunct(ch);
+    }));
+
+    return s;
+}
+
 //
 // lora utils
 //
