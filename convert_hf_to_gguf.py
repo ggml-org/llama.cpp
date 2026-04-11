@@ -11279,6 +11279,55 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
 
+@ModelBase.register("MERaLiON2ForConditionalGeneration")
+class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("speech_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MERALION)
+        # scale_factor = 15: stacks 15 frames → 1 token (1500 → 100 timesteps)
+        self.gguf_writer.add_audio_stack_factor(self.global_config.get("speech_mlp_scale_factor", 15))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip text decoder tensors
+        if name.startswith("text_decoder."):
+            return
+
+        # Map speech_encoder.* → audio_tower.*
+        if name.startswith("speech_encoder."):
+            name = name.replace("speech_encoder.", "audio_tower.")
+
+        # Map ln_speech.* → audio.multi_modal_projector.ln_pre.*
+        if name.startswith("ln_speech."):
+            name = name.replace("ln_speech.", "audio.multi_modal_projector.ln_pre.")
+
+        # Map speech_audio_adapter.* → audio.multi_modal_projector.*
+        # Use indexed linear_{bid} naming to fit A_MMPROJ tensor mapping:
+        #   linear_0 = frame compression (19200 → 6400) + SiLU
+        #   linear_1 = gate_proj (6400 → 6400) for GLU
+        #   linear_2 = pool_proj (6400 → 6400) for GLU
+        #   linear_3 = out_proj  (6400 → 3584)
+        if name.startswith("speech_audio_adapter."):
+            name = name.replace("speech_audio_adapter.", "audio.multi_modal_projector.")
+            if ".mlp_adapter.0." in name:
+                name = name.replace(".mlp_adapter.0.", ".linear_0.")
+            elif ".gate_proj." in name:
+                name = name.replace(".gate_proj.", ".linear_1.")
+            elif ".pool_proj." in name:
+                name = name.replace(".pool_proj.", ".linear_2.")
+            elif ".out_proj." in name:
+                name = name.replace(".out_proj.", ".linear_3.")
+
+        # Note: conv bias unsqueeze is handled by parent WhisperEncoderModel
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("VoxtralForConditionalGeneration")
 class VoxtralWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder

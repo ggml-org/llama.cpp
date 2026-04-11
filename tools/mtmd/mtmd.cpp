@@ -476,6 +476,7 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
             case PROJECTOR_TYPE_GLMA:
+            case PROJECTOR_TYPE_MERALION:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 } break;
