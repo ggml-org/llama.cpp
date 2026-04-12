@@ -28,7 +28,7 @@
     "react-dropzone": "^14.3.8",
     "react-hot-toast": "^2.5.2",
     "react-markdown": "^9.0.3",
-    "react-router": "^7.1.5",
+    "react-router": "^7.12.0",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
@@ -54,7 +54,7 @@
     "sass-embedded": "^1.83.4",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.18.2",
-    "vite": "^6.0.5"
+    "vite": "^6.4.1"
   },
   "prettier": {
     "trailingComma": "es5",
