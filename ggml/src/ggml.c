@@ -53,6 +53,11 @@
 
 #define UNUSED GGML_UNUSED
 
+uint64_t ggml_graph_next_version(void) {
+    static uint64_t counter = 1;
+    return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED); // TODO: make portable
+}
+
 // Needed for ggml_fp32_to_bf16_row()
 #if defined(__AVX512BF16__)
 #if defined(_MSC_VER)
