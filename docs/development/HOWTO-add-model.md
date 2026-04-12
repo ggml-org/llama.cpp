@@ -5,6 +5,7 @@ Adding a model requires few steps:
 1. Convert the model to GGUF
 2. Define the model architecture in `llama.cpp`
 3. Build the GGML graph implementation
+4. Optional: Add multimodal encoder implementation
 
 After following these steps, you can open PR.
 
@@ -113,6 +114,21 @@ Then, in the `llama_model::build_graph` method, add a case for your architecture
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 
 Note: to debug the inference graph: you can use [llama-eval-callback](/examples/eval-callback/).
+
+### 4. Optional: Add multimodal encoder implementation
+
+If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../multimodal.md) and in the `tools/mtmd` source directory.
+
+1. In the conversion script, make sure you add a subclass that extends `MmprojModel` or another class that inherits from the same base class.
+2. Add the encoder definition in `clip.cpp`.
+3. Implement the preprocessor in `mtmd.cpp`. In most cases, you can reuse an existing preprocessor.
+4. Implement the encoder GGML graph, either in a dedicated file if the model is truly different from existing ones, or by reusing an existing implementation (for example: siglip, pixtral, or qwen) and adding a model-specific projector.
+
+Note:
+- Many multimodal encoders are based on models that are already supported. Make sure to read the existing encoder definitions in `tools/mtmd/models` before adding a new one. In `libmtmd`, it is generally better to extend an existing model than to duplicate code.
+- To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
+- Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
+- In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
 
 ## GGUF specification
 
