@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
