@@ -315,7 +315,7 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
         const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
-        // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
+        // Dummy DMA transition for sequencing (interleaving dst,src,dst,...)
         dma_queue_push_vtcm_to_ddr(dma_queue,
             dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
             dst_row_size, dst_row_size_aligned, 0);
