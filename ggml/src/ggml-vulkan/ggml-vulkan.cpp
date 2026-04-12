@@ -10733,7 +10733,7 @@ static void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, gg
         0.0f, 0.0f,
     };
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_ARRANGE);
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_ARANGE);
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -16321,11 +16321,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
         } else if (tensor->op == GGML_OP_ADD1) {
             tensor_clone = ggml_add1(ggml_ctx, src_clone[0], src_clone[1]);
-        } else if (tensor->op == GGML_OP_ARRANGE) {
+        } else if (tensor->op == GGML_OP_ARANGE) {
             const float start = ggml_get_op_params_f32(tensor, 0);
             const float stop = ggml_get_op_params_f32(tensor, 1);
             const float step = ggml_get_op_params_f32(tensor, 2);
-            tensor_clone = ggml_arrange(ggml_ctx, start, stop, step);
+            tensor_clone = ggml_arange(ggml_ctx, start, stop, step);
         } else if (tensor->op == GGML_OP_FILL) {
             const float value = ggml_get_op_params_f32(tensor, 0);
             tensor_clone = ggml_fill(ggml_ctx, src_clone[0], value);
