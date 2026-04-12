@@ -782,7 +782,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add1_f16_f32;
     vk_pipeline pipeline_add1_f32_f32;
 
-    vk_pipeline pipeline_arange_f32;
+    vk_pipeline pipeline_arrange_f32;
 
     vk_pipeline pipeline_fill_f32;
 
@@ -4493,7 +4493,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f32, "add1_f16_f32", add1_f16_f32_len, add1_f16_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_add1_f32_f32, "add1_f32_f32", add1_f32_f32_len, add1_f32_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_arange_f32, "arange_f32", arange_f32_len, arange_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_arrange_f32, "arrange_f32", arrange_f32_len, arrange_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
@@ -5901,7 +5901,7 @@ static void ggml_vk_instance_init() {
                     vk_instance.device_indices.push_back(i);
                 } else {
                     // There can be two physical devices corresponding to the same GPU if there are 2 different drivers
-                    // This can cause error when splitting layers aross the devices, need to keep only 1
+                    // This can cause error when splitting layers across the devices, need to keep only 1
                     VK_LOG_DEBUG("Device " << i << " and device " << *old_device << " have the same deviceUUID");
 
                     vk::PhysicalDeviceProperties2 old_props;
@@ -9740,9 +9740,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_add1_f32_f32;
         }
         return nullptr;
-    case GGML_OP_ARANGE:
+    case GGML_OP_ARRANGE:
         if (dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_arange_f32;
+            return ctx->device->pipeline_arrange_f32;
         }
         return nullptr;
     case GGML_OP_FILL:
@@ -10032,7 +10032,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_DIV:
     case GGML_OP_MUL:
     case GGML_OP_ADD1:
-    case GGML_OP_ARANGE:
+    case GGML_OP_ARRANGE:
     case GGML_OP_FILL:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
@@ -10722,8 +10722,8 @@ static void ggml_vk_add1(ggml_backend_vk_context * ctx, vk_context& subctx, cons
     });
 }
 
-static void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
-    VK_LOG_DEBUG("ggml_vk_arange(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
+static void ggml_vk_arrange(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_arrange(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
 
     vk_op_push_constants pc = {
         (uint32_t)ggml_nelements(dst),
@@ -10733,7 +10733,7 @@ static void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, gg
         0.0f, 0.0f,
     };
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_ARANGE);
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_ARRANGE);
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -12987,8 +12987,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_add1(ctx, compute_ctx, src0, src1, node);
 
         break;
-    case GGML_OP_ARANGE:
-        ggml_vk_arange(ctx, compute_ctx, node);
+    case GGML_OP_ARRANGE:
+        ggml_vk_arrange(ctx, compute_ctx, node);
 
         break;
     case GGML_OP_FILL:
@@ -15611,7 +15611,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32)
                 || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32)
                 || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16);
-        case GGML_OP_ARANGE:
+        case GGML_OP_ARRANGE:
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_SCALE:
@@ -16321,11 +16321,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
         } else if (tensor->op == GGML_OP_ADD1) {
             tensor_clone = ggml_add1(ggml_ctx, src_clone[0], src_clone[1]);
-        } else if (tensor->op == GGML_OP_ARANGE) {
+        } else if (tensor->op == GGML_OP_ARRANGE) {
             const float start = ggml_get_op_params_f32(tensor, 0);
             const float stop = ggml_get_op_params_f32(tensor, 1);
             const float step = ggml_get_op_params_f32(tensor, 2);
-            tensor_clone = ggml_arange(ggml_ctx, start, stop, step);
+            tensor_clone = ggml_arrange(ggml_ctx, start, stop, step);
         } else if (tensor->op == GGML_OP_FILL) {
             const float value = ggml_get_op_params_f32(tensor, 0);
             tensor_clone = ggml_fill(ggml_ctx, src_clone[0], value);
