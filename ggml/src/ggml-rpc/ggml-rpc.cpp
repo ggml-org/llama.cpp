@@ -415,7 +415,8 @@ static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
 }
 
 static bool send_msg(sockfd_t sockfd, const void * msg, size_t msg_size) {
-    if (!send_data(sockfd, &msg_size, sizeof(msg_size))) {
+    uint64_t size = msg_size;
+    if (!send_data(sockfd, &size, sizeof(size))) {
         return false;
     }
     return send_data(sockfd, msg, msg_size);
@@ -463,7 +464,8 @@ static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cm
     if (!send_data(sock->fd, &cmd_byte, sizeof(cmd_byte))) {
         return false;
     }
-    if (!send_data(sock->fd, &input_size, sizeof(input_size))) {
+    uint64_t size = input_size;
+    if (!send_data(sock->fd, &size, sizeof(size))) {
         return false;
     }
     if (!send_data(sock->fd, input, input_size)) {
@@ -578,8 +580,8 @@ static bool ggml_backend_buffer_is_rpc(ggml_backend_buffer_t buffer) {
 
 static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     rpc_tensor result;
+    memset(&result, 0, sizeof(result));
     if (!tensor) {
-        memset(&result, 0, sizeof(result));
         return result;
     }
 
@@ -653,9 +655,10 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     // input serialization format: | rpc_tensor | offset (8 bytes) | data (size bytes)
     size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
     std::vector<uint8_t> input(input_size, 0);
+    uint64_t offset_u64 = offset;
     memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
-    memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
-    memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
+    memcpy(input.data() + sizeof(rpc_tensor), &offset_u64, sizeof(offset_u64));
+    memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset_u64), data, size);
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
     RPC_STATUS_ASSERT(status);
 }
@@ -859,7 +862,8 @@ static void serialize_graph(uint32_t device, const ggml_cgraph * cgraph, std::ve
     memcpy(dest, &n_nodes, sizeof(n_nodes));
     dest += sizeof(n_nodes);
     for (uint32_t i = 0; i < n_nodes; i++) {
-        memcpy(dest + i * sizeof(uint64_t), &cgraph->nodes[i], sizeof(uint64_t));
+        uint64_t node_ptr = reinterpret_cast<uint64_t>(cgraph->nodes[i]);
+        memcpy(dest + i * sizeof(uint64_t), &node_ptr, sizeof(uint64_t));
     }
     dest += n_nodes * sizeof(uint64_t);
     memcpy(dest, &n_tensors, sizeof(n_tensors));
