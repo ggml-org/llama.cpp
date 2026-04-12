@@ -31,7 +31,7 @@ extern "C" {
 void ggml_print_backtrace(void);
 
 static inline uint64_t ggml_graph_next_version(void) {
-    static uint64_t counter = 0;
+    static uint64_t counter = 1;
     return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
 }
 

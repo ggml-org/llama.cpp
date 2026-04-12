@@ -864,6 +864,8 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
     return -1;
 }
 
+#define GGML_SCHED_MAX_SPLITS_BITS 12
+
 #if 0
 #define GGML_SCHED_MAX_SPLITS_DEBUG 4096
 static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML_SCHED_MAX_SPLIT_INPUTS][128]; // debug only
@@ -1892,7 +1894,7 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
     }
 
     for (int i = 0; i < sched->n_splits; i++) {
-        sched->splits[i].graph.version = graph->version;
+        sched->splits[i].graph.version = graph->version | ((uint64_t)(i + 1) << (64 - GGML_SCHED_MAX_SPLITS_BITS));
     }
 
     return ggml_backend_sched_compute_splits(sched);
