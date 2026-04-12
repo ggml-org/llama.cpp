@@ -17,6 +17,10 @@
 
 #define HMX_INLINE_ALWAYS inline __attribute__((unused, always_inline))
 
+static HMX_INLINE_ALWAYS void hmx_set_output_scales(const void *scales) {
+    asm volatile("bias = mxmem2(%0)" :: "r"(scales));
+}
+
 // Initialise aligned 256-byte area with scale vector + zero padding.
 static HMX_INLINE_ALWAYS void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) {
     HVX_Vector *pv = (HVX_Vector *)out_scales;

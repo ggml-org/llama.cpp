@@ -52,11 +52,13 @@ if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
         hmx-queue.c
         hmx-matmul-ops.c
+        hmx-flash-attn-ops.c
     )
 
     # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)
     set_source_files_properties(
         hmx-matmul-ops.c
+        hmx-flash-attn-ops.c
         PROPERTIES COMPILE_OPTIONS "-mhmx"
     )
 

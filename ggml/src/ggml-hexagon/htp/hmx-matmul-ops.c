@@ -58,12 +58,6 @@ static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned
 #define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
 #define HMX_X4X2_MXFP4_EBLK_SIZE 8   // 8 * 1 byte  (E8M0 scales for MXFP4)
 
-static inline void swap_ptr(void **p1, void **p2) {
-    void *t = *p1;
-    *p1     = *p2;
-    *p2     = t;
-}
-
 typedef struct {
     uint8_t       *dst;
     const uint8_t *src;

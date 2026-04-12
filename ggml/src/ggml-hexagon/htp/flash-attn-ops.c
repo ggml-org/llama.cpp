@@ -621,6 +621,16 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+#ifdef HTP_HAS_HMX
+    // HMX path: prefill (neq1 >= 32), head_dim multiple of 32, F16 KV
+    if (k->type == HTP_TYPE_F16 && v->type == HTP_TYPE_F16 &&
+        k->ne[0] % 32 == 0 && q->ne[1] >= 32) {
+        int ret = op_hmx_flash_attn_ext(octx);
+        if (ret == HTP_STATUS_OK) return ret;
+        // VTCM too small or other failure -> fall through to HVX path
+    }
+#endif
+
     struct htp_fa_context factx;
     factx.octx = octx;
 
