@@ -335,9 +335,16 @@ static constexpr __host__ __device__ mmq_config mmq_get_config_cdna3(
 
 // CDNA2 (gfx90a, MI210): wavefront64, 512 VGPRs/SIMD.
 // Default min_blocks=2 targets <=256 VGPRs/wave (2 waves/SIMD).
-// No per-type overrides yet - needs benchmarking on actual hardware.
+// Overrides below tested on gfx90a (MI210).
 static constexpr __host__ __device__ mmq_config mmq_get_config_cdna2(
         const ggml_type type, const int mmq_x) {
+    // IQ3_XXS mmq_x=112: 260 VGPRs total -> only 1 wave/SIMD (10% occupancy). Disable.
+    GGML_CUDA_MMQ_CONFIG_CASE(GGML_TYPE_IQ3_XXS, 112, 1, false);
+    // IQ3_XXS mmq_x=128: 128 arch + 128 AccVGPR at min_blocks=2 (412B scratch spill).
+    // Disabling forces tile=64, doubling stream-k parallelism.
+    // Benchmarked on MI210: n=128 drops from 12068 to 4815 us (-60%).
+    GGML_CUDA_MMQ_CONFIG_CASE(GGML_TYPE_IQ3_XXS, 128, 2, false);
+
     GGML_UNUSED(type);
     GGML_UNUSED(mmq_x);
     return mmq_config{2, true};
