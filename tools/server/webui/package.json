@@ -54,7 +54,7 @@
     "sass-embedded": "^1.83.4",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.18.2",
-    "vite": "^6.4.1"
+    "vite": "^6.4.2"
   },
   "prettier": {
     "trailingComma": "es5",
