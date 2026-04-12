@@ -1893,6 +1893,7 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         }
     }
 
+    GGML_ASSERT(sched->n_splits < (1 << GGML_SCHED_MAX_SPLITS_BITS));
     for (int i = 0; i < sched->n_splits; i++) {
         sched->splits[i].graph.version = graph->version | ((uint64_t)(i + 1) << (64 - GGML_SCHED_MAX_SPLITS_BITS));
     }
