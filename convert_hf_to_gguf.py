@@ -4992,6 +4992,8 @@ class Step3VLVisionModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
+        if ("mm.0." in new_name or "mm.1." in new_name) and new_name.endswith(".weight"):
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
