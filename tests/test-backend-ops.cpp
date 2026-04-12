@@ -8836,7 +8836,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, true));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {10, 10, 10, 10}, {3, 10, 10, 10}, 0.0f, false));
 
-    test_cases.emplace_back(new test_lightning_indexer());
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q4_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_BF16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
 
     return test_cases;
 }
@@ -9119,7 +9125,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, true));
     test_cases.emplace_back(new test_scatter(GGML_TYPE_F16, GGML_TYPE_I32, {65536, 1, 1, 1}, {2048, 1, 1, 1}, 0.0f, false));
 
-    test_cases.emplace_back(new test_lightning_indexer());
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q4_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_BF16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
 
     return test_cases;
 }

@@ -11400,7 +11400,6 @@ void ggml_compute_forward_lightning_indexer(
 
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F16);
     GGML_ASSERT(src2->type == GGML_TYPE_F32);
 
     GGML_TENSOR_TERNARY_OP_LOCALS
@@ -11414,9 +11413,15 @@ void ggml_compute_forward_lightning_indexer(
     int n_stream = src0->ne[3];
     int n_kv     = src1->ne[2];
 
+    ggml_to_float_t const k_to_float = ggml_get_type_traits(src1->type)->to_float;
+    GGML_ASSERT((src1->type == GGML_TYPE_F32 || k_to_float) && "lightning indexer: unsupported K-type");
+
     const int nr  = n_kv;
     const int ith = params->ith;
     const int nth = params->nth;
+
+    // (temporary) buffer for K converted to float
+    float * src1_row_f32 = (float *) params->wdata + ith*(1*n_embd + CACHE_LINE_SIZE_F32);
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -11430,7 +11435,12 @@ void ggml_compute_forward_lightning_indexer(
     for (int i_stream = 0; i_stream < n_stream; ++i_stream) {
         for (int i_batch = 0; i_batch < n_batch; ++i_batch) {
             for (int i_kv = ir0; i_kv < ir1; ++i_kv) {
-                ggml_fp16_t * src1_row = (ggml_fp16_t *) ((char *) src1->data + i_kv*nb12 + i_stream*nb13);
+                char * src1_row = (char *) src1->data + i_kv*nb12 + i_stream*nb13;
+                if (k_to_float) {
+                    k_to_float(src1_row, src1_row_f32, n_embd);
+                } else {
+                    src1_row_f32 = (float *) src1_row;
+                }
                 float * src2_row = (float *) ((char *) src2->data + i_batch*nb21 + i_stream*nb23);
                 float * dst_row = (float *) ((char *) dst->data + i_batch*nb1 + i_stream*nb3);
                 float score = 0.0f;
@@ -11438,11 +11448,7 @@ void ggml_compute_forward_lightning_indexer(
                     // dot product of q and k for head i_head
                     float qk = 0.0f;
                     float * src0_row = (float *) ((char *) src0->data + i_head*nb01 + i_batch*nb02 + i_stream*nb03);
-                    for(int i_embd = 0; i_embd < n_embd; ++i_embd) {
-                        const float q = src0_row[i_embd];
-                        const float k = GGML_CPU_FP16_TO_FP32(src1_row[i_embd]);
-                        qk += q*k;
-                    }
+                    ggml_vec_dot_f32(n_embd, &qk, 0, src0_row, 0, src1_row_f32, 0, 1);
                     qk *= scale_embd;
                     // ReLU and weights
                     score += MAX(qk, 0.0f) * src2_row[i_head];

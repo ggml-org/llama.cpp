@@ -6250,7 +6250,6 @@ struct ggml_tensor * ggml_lightning_indexer(
         float                 scale_heads) {
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(k->type == GGML_TYPE_F16);
     GGML_ASSERT(weights->type == GGML_TYPE_F32);
     GGML_ASSERT(q->ne[0] == k->ne[0]);
     GGML_ASSERT(q->ne[1] == weights->ne[0]);

@@ -2945,8 +2945,9 @@ struct ggml_cplan ggml_graph_plan(
                     }
                 case GGML_OP_LIGHTNING_INDEXER:
                     {
-                        const int64_t ne00 = node->src[0]->ne[0];
-                        cur += sizeof(float)*ne00*n_tasks;
+                        // temp buffer for dequantizing lightning indexer keys
+                        const int64_t ne10 = node->src[1]->ne[0];
+                        cur += sizeof(float)*ne10*n_tasks;
                     } break;
                 default:
                     break;
