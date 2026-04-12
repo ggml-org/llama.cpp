@@ -22,7 +22,7 @@ LOAD_MODE='--mmap'
 if [ $# -gt 0 ]; then
     GGML_SYCL_DEVICE=$1
     echo "use $GGML_SYCL_DEVICE as main GPU"
-    #use signle GPU only
+    #use single GPU only
     ZES_ENABLE_SYSMAN=1 ./build/bin/llama-completion -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s 0 -c ${CONTEXT} -mg $GGML_SYCL_DEVICE -sm none ${LOAD_MODE}
 
 else
