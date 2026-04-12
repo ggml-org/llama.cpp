@@ -10,7 +10,9 @@
 
 #ifdef LLAMA_BUILD_WEBUI
 // auto generated files (see README.md for details)
-#include "index.html.gz.hpp"
+#include "index.html.hpp"
+#include "bundle.js.hpp"
+#include "bundle.css.hpp"
 #include "loading.html.hpp"
 #endif
 
@@ -141,7 +143,11 @@ bool server_http_context::init(const common_params & params) {
             "/v1/health",
             "/models",
             "/v1/models",
-            "/api/tags"
+            "/api/tags",
+            "/",
+            "/index.html",
+            "/bundle.js",
+            "/bundle.css",
         };
 
         // If API key is not set, skip validation
@@ -149,8 +155,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or is static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/") {
+        // If path is public or static file, skip validation
+        if (public_endpoints.find(req.path) != public_endpoints.end()) {
             return true;
         }
 
@@ -272,16 +278,19 @@ bool server_http_context::init(const common_params & params) {
         } else {
 #ifdef LLAMA_BUILD_WEBUI
             // using embedded static index.html
-            srv->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
-                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
-                } else {
-                    res.set_header("Content-Encoding", "gzip");
-                    // COEP and COOP headers, required by pyodide (python interpreter)
-                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-                }
+            srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
+                return false;
+            });
+            srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+                return false;
+            });
+            srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
                 return false;
             });
 #endif
@@ -388,8 +397,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
-                sink.write(chunk.data(), chunk.size());
+                if (!sink.write(chunk.data(), chunk.size())) {
+                    return false;
+                }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {

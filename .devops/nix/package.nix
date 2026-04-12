@@ -16,7 +16,7 @@
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
-  curl,
+  openssl,
   shaderc,
   useBlas ?
     builtins.all (x: !x) [
@@ -160,7 +160,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
-    ++ optionals useVulkan vulkanBuildInputs;
+    ++ optionals useVulkan vulkanBuildInputs
+    ++ [ openssl ];
 
   cmakeFlags =
     [

@@ -98,6 +98,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
+        preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
     }
 }
@@ -1194,6 +1195,10 @@ server_http_proxy::server_http_proxy(
         for (const auto & [key, value] : headers) {
             if (key == "Accept-Encoding") {
                 // disable Accept-Encoding to avoid compressed responses
+                continue;
+            }
+            if (key == "Transfer-Encoding") {
+                // the body is already decoded
                 continue;
             }
             if (key == "Host" || key == "host") {

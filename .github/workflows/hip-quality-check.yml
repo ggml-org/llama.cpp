@@ -35,7 +35,7 @@ env:
 jobs:
   ubuntu-22-hip-quality-check:
     runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:7.2
+    container: rocm/dev-ubuntu-22.04:7.2.1
     steps:
       - name: Clone
         id: checkout
@@ -59,7 +59,7 @@ jobs:
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DGPU_TARGETS=gfx908 \
+            -DGPU_TARGETS=gfx942 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=Off \
             -DCMAKE_HIP_FLAGS="-Werror -Wno-tautological-compare" \

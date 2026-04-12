@@ -43,11 +43,11 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
-
-    common_init();
 
     const int W = 15; // lookahead window
     const int N = 5;  // n-gram size
