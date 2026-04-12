@@ -2,8 +2,8 @@
 #define HTP_CTX_H
 
 #include "hex-dma.h"
+#include "hmx-queue.h"
 #include "htp-ops.h"
-#include "hmx-worker.h"
 #include "worker-pool.h"
 
 #include <assert.h>
@@ -77,7 +77,7 @@ struct htp_context {
     struct htp_ops_context octx;
 
 #ifdef HTP_HAS_HMX
-    hmx_worker_context_t   hmx_worker; // Async HMX worker for pipeline overlap
+    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
 #endif
 };
 

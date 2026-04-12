@@ -18,8 +18,9 @@
 #include <remote.h>
 #include <string.h>
 
-#include "hex-dma.h"
 #include "hex-utils.h"
+#include "hex-dma.h"
+#include "hmx-queue.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -324,12 +325,12 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
 #ifdef HTP_HAS_HMX
     ctx->hmx_enabled = use_hmx;
-    ctx->hmx_worker  = NULL;
+    ctx->hmx_queue   = NULL;
     if (use_hmx) {
-        AEEResult hmx_worker_err = hmx_worker_init(&ctx->hmx_worker, 8192, ctx->vtcm_rctx);
-        if (hmx_worker_err != AEE_SUCCESS) {
-            FARF(ERROR, "hmx_worker_init failed: %d", hmx_worker_err);
-            return hmx_worker_err;
+        ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
+        if (!ctx->hmx_queue) {
+            FARF(ERROR, "hmx-queue-create failed");
+            ctx->hmx_enabled = false;
         }
     }
     FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
@@ -397,13 +398,11 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     }
 
 #ifdef HTP_HAS_HMX
-    if (ctx->hmx_enabled) {
-        if (ctx->hmx_worker) {
-            hmx_worker_release(ctx->hmx_worker);
-            ctx->hmx_worker = NULL;
-        }
-        ctx->hmx_enabled = 0;
+    if (ctx->hmx_queue) {
+        hmx_queue_delete(ctx->hmx_queue);
+        ctx->hmx_queue = NULL;
     }
+    ctx->hmx_enabled = false;
 #endif
 
     vtcm_free(ctx);

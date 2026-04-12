@@ -25,7 +25,7 @@
 
 #include "hmx-ops.h"
 #include "hmx-utils.h"
-#include "hmx-worker.h"
+#include "hmx-queue.h"
 #include "hmx-profile.h"
 
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
@@ -1398,12 +1398,11 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
         // Async timeline (C overlaps B+D):
         //   main+HVX:   [A0][Act][B0][A1][sub C0][B1‖C0][A2][wait,sub C1][D0+B2‖C1][wait,sub C2][D1‖C2][wait][D2]
-        //   HMX worker:                   [████ C0 ████████][████ C1 ████████████][████ C2 ████████]
+        //   HMX queue:                   [████ C0 ████████][████ C1 ████████████][████ C2 ████████]
 
         int n_chunk_cnt = hmx_ceil_div(n, n_chunk_n_cols);
         hmx_matmul_job_t job_slots[2];  // persistent double-buffered job descriptors
 
-        hmx_worker_begin(ctx->hmx_worker);
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
             const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
 
@@ -1442,7 +1441,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                                     (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
                                     hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
                                     hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                hmx_worker_submit(ctx->hmx_worker, hmx_matmul_worker_fn, &job_slots[0]);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
 
                 // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
                 if (1 < n_chunk_cnt) {
@@ -1468,7 +1467,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                 }
 
                 // wait C_i: block until prologue/previous C completes
-                hmx_worker_wait(ctx->hmx_worker);
+                hmx_queue_pop(ctx->hmx_queue);
 
                 // submit C_{i+1} (non-blocking, overlaps with D_i + B_{i+2} below)
                 // job_slots[(i+1)%2] is safe: C_i just completed, freeing slot i%2's
@@ -1479,7 +1478,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                                         (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[(i + 1) % 2],
                                         vtcm_scales, hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
                                         hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                    hmx_worker_submit(ctx->hmx_worker, hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]);
+                    hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]));
                 }
 
                 // D_i: store output (multi-thread HVX, parallel with C_{i+1})
@@ -1494,7 +1493,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
             }
         }
 
-        hmx_worker_end(ctx->hmx_worker);
+        hmx_queue_suspend(ctx->hmx_queue);
     }
 
     TIMER_STOP(total);
