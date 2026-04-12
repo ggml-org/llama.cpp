@@ -12,7 +12,7 @@ export function getPreviewText(content: string, max = 150): string {
  */
 export function generateConversationTitle(content: string, useFirstLine: boolean = false): string {
 	if (useFirstLine) {
-		const firstLine = content.split('\n').find((line) => line.trim().length > 0);
+		const firstLine = content.split(NEWLINE_SEPARATOR).find((line) => line.trim().length > 0);
 		return firstLine ? firstLine.trim() : content.trim();
 	}
 	return content.trim();
