@@ -361,6 +361,14 @@ llama_kv_cache::llama_kv_cache(
                 }
                 ggml_tallocr_alloc(&tallocr, t);
             }
+
+            // Update tensor data pointers because views were created before allocation
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr;
+                    t = ggml_get_next_tensor(ctx.get(), t)) {
+                if (t->view_src != nullptr && t->view_src->data != nullptr) {
+                    t->data = (char *) t->view_src->data + t->view_offs;
+                }
+            }
         }
 #else // LLAMA_KV_MMAP_SUPPORTED
         else if (mmap_path != nullptr) {

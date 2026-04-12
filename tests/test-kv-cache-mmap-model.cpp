@@ -221,6 +221,60 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // test 6: state serialization
+    printf("[6] state serialization... ");
+    {
+        // create a context with mmap, decode something, then try to save state
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx        = 128;
+        cp.n_batch      = 64;
+        cp.offload_kqv  = false;
+        cp.kv_mmap_path = mmap_path.c_str();
+
+        llama_context * ctx = llama_init_from_model(model, cp);
+        if (!ctx) {
+            printf("FAIL (could not create context)\n");
+            failures++;
+        } else {
+            // decode a short prompt to populate KV cache
+            const char * prompt = "Hello world";
+            const llama_vocab * vocab = llama_model_get_vocab(model);
+            std::vector<llama_token> toks(32);
+            int32_t n = llama_tokenize(vocab, prompt, (int32_t) strlen(prompt),
+                                       toks.data(), (int32_t) toks.size(), true, false);
+            toks.resize(n);
+
+            llama_batch batch = llama_batch_init(n, 0, 1);
+            for (int32_t i = 0; i < n; i++) {
+                batch.token[i]    = toks[i];
+                batch.pos[i]      = i;
+                batch.n_seq_id[i] = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]   = (i == n - 1) ? 1 : 0;
+            }
+            batch.n_tokens = n;
+            llama_decode(ctx, batch);
+            llama_batch_free(batch);
+
+            // try to serialize state for seq 0
+            size_t state_size = llama_state_seq_get_size(ctx, 0);
+            if (state_size == 0) {
+                printf("FAIL (state_seq_get_size returned 0)\n");
+                failures++;
+            } else {
+                std::vector<uint8_t> state_buf(state_size);
+                size_t written = llama_state_seq_get_data(ctx, state_buf.data(), state_size, 0);
+                if (written == 0) {
+                    printf("FAIL (state_seq_get_data returned 0)\n");
+                    failures++;
+                } else {
+                    printf("ok (serialized %zu bytes for seq 0)\n", written);
+                }
+            }
+            llama_free(ctx);
+        }
+    }
+
     // cleanup
     unlink(mmap_path.c_str());
     unlink(meta_path.c_str());
