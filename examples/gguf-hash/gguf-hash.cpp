@@ -682,7 +682,7 @@ int main(int argc, const char ** argv) {
         params.manifest_is_usable = true;
     }
 
-    // By default if no swich argument provided, assume xxh64
+    // By default if no switch argument provided, assume xxh64
     if (!params.xxh64 && !params.sha1 && !params.uuid && !params.sha256) {
         params.xxh64 = true;
     }
