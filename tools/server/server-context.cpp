@@ -2071,6 +2071,13 @@ private:
                 }
 
                 slot.truncated = true;
+
+                // reinitialize speculative decoding state after context shift:
+                // the ngram map tracks prompt positions (idx_last_check, size_last_begin)
+                // and will GGML_ABORT if prompt shrinks without a re-begin
+                if (slot.can_speculate()) {
+                    common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                }
             }
         }
 
