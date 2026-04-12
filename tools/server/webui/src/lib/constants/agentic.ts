@@ -15,6 +15,11 @@ export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	maxToolPreviewLines: 25
 } as const;
 
+export const REASONING_TAGS = {
+	START: '<think>',
+	END: '</think>'
+} as const;
+
 /**
  * @deprecated Legacy marker tags - only used for migration of old stored messages.
  * New messages use structured fields (reasoningContent, toolCalls, toolCallId).
