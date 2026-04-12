@@ -15,5 +15,6 @@ export function generateConversationTitle(content: string, useFirstLine: boolean
 		const firstLine = content.split(NEWLINE_SEPARATOR).find((line) => line.trim().length > 0);
 		return firstLine ? firstLine.trim() : content.trim();
 	}
+
 	return content.trim();
 }
