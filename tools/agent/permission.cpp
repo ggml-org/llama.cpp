@@ -33,12 +33,12 @@ static char read_single_char() {
     newt.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &newt);
     char ch = 0;
-    ssize_t n;
-    do {
-        n = read(STDIN_FILENO, &ch, 1);
-    } while (n < 0 && errno == EINTR);
+    ssize_t n = read(STDIN_FILENO, &ch, 1);
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
     if (n <= 0) {
+        // n == -1 with errno == EINTR means a signal (e.g. Ctrl-C /
+        // SIGINT) interrupted the read.  Return 0 so the caller treats
+        // it as "deny" and the outer loop can check g_is_interrupted.
         return 0;
     }
     return ch;
