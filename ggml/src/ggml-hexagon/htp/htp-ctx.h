@@ -31,6 +31,8 @@ struct htp_spad {
     uint32_t                  size_per_thread; // size per thread
 };
 
+struct htp_context;
+
 // Context while processing an Op
 // TODO: fold this into the main context
 struct htp_ops_context {
