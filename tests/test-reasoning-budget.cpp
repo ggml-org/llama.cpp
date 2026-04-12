@@ -61,8 +61,6 @@ static void test_reasoning_budget(
 
     // Feed the sequence and track when forcing occurs
     for (size_t i = 0; i < sequence.size(); i++) {
-        llama_sampler_accept(sampler, sequence[i]);
-
         // Check if we're in forcing state by applying and seeing if logits are modified
         cur_p.selected = -1;
         for (size_t j = 0; j < cur.size(); j++) {
@@ -80,6 +78,8 @@ static void test_reasoning_budget(
                 finite_token = cur[j].id;
             }
         }
+
+        llama_sampler_accept(sampler, sequence[i]);
 
         fprintf(stderr, "    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
 
@@ -167,9 +167,9 @@ int main(void) {
     }
 
     // Test 2: Budget exhausted, forcing should occur
-    // Flow: i=0 accept(100)->COUNTING, i=1 accept(50)->remaining=1, i=2 accept(51)->remaining=0->FORCING
-    // Forcing is active at i=2 and i=3 (when apply() is called while in FORCING state)
-    // At i=4, force_pos becomes 2 which equals forced_tokens.size(), so state becomes DONE
+    // Flow: i=0 apply()->passthrough, accept(100)->COUNTING; i=1 accept(50)->remaining=1
+    // i=2 accept(51)->remaining=0->FORCING; i=3 apply() forces token[0]; i=4 apply() forces token[1]
+    // At i=4, accept() advances force_pos to 2 which equals forced_tokens.size(), so state becomes DONE
     {
         const std::vector<llama_token> start = {100};
         const std::vector<llama_token> end = {101};
@@ -179,13 +179,12 @@ int main(void) {
         test_reasoning_budget("budget exhausted forcing", sequence, start, end, forced,
             2,      // budget of 2 tokens
             REASONING_BUDGET_IDLE,
-            2,      // forcing starts at i=2 (after accept(51) depletes budget, apply() forces)
-            3);     // forcing continues through i=3 (at i=4 state becomes DONE)
+            3,      // forcing starts at i=3 (accept at i=2 depletes budget, apply at i=3 forces)
+            4);     // forcing continues through i=4 (accept at i=4 transitions to DONE)
     }
 
     // Test 3: Activate immediately with budget=0, forcing should start right away
-    // Flow: Since no start token in sequence, state stays IDLE (no start/end configured means passthrough)
-    // This test needs start token to be in the sequence or use activate_immediately with start token present
+    // Flow: init promotes COUNTING+budget=0 to FORCING, so apply() sees FORCING at i=0
     {
         const std::vector<llama_token> start = {100};
         const std::vector<llama_token> end = {101};
@@ -195,8 +194,8 @@ int main(void) {
         test_reasoning_budget("activate immediately budget=0", sequence, start, end, forced,
             0,      // budget of 0 tokens
             REASONING_BUDGET_COUNTING, // starts counting, promoted to FORCING since budget=0
-            0,      // forcing starts at i=0 (after accept(100), budget=0 goes straight to FORCING)
-            1);     // forcing continues through i=1 (at i=2 state becomes DONE)
+            0,      // forcing starts at i=0 (initialized in FORCING, apply forces immediately)
+            1);     // forcing continues through i=1 (accept at i=1 transitions to DONE)
     }
 
     // Test 4: No start/end tokens configured - passthrough (no forcing)
@@ -214,7 +213,7 @@ int main(void) {
 
     // Test 5: Activate immediately with budget > 0, count down then force
     // Flow: i=0 accept(50)->remaining=1, i=1 accept(51)->remaining=0->FORCING
-    // So forcing starts at i=1 (apply after accept sees FORCING with force_pos=0)
+    // Forcing starts at i=2 (apply sees FORCING after accept at i=1 transitioned)
     {
         const std::vector<llama_token> start = {100};
         const std::vector<llama_token> end = {101};
@@ -224,8 +223,8 @@ int main(void) {
         test_reasoning_budget("activate immediately with budget", sequence, start, end, forced,
             2,      // budget of 2 tokens
             REASONING_BUDGET_COUNTING,
-            1,      // forcing starts at i=1 (after 2 accepts deplete budget)
-            2);     // forcing continues through i=2
+            2,      // forcing starts at i=2 (after 2 accepts deplete budget, apply at i=2 forces)
+            3);     // forcing continues through i=3
     }
 
     printf("OK (5 tests passed)\n");

@@ -16,14 +16,14 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "hex-dma.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
 
-#define htp_ssm_conv_tensors_preamble                        \
-    struct htp_tensor * restrict src0    = &octx->src0;      \
-    struct htp_tensor * restrict src1    = &octx->src1;      \
-    struct htp_tensor * restrict dst     = &octx->dst;       \
+#define htp_ssm_conv_tensors_preamble                          \
+    const struct htp_tensor * restrict src0    = octx->src[0]; \
+    const struct htp_tensor * restrict src1    = octx->src[1]; \
+    const struct htp_tensor * restrict dst     = octx->dst;    \
     struct htp_spad * restrict src0_spad = &octx->src0_spad; \
     struct htp_spad * restrict src1_spad = &octx->src1_spad; \
     struct htp_spad * restrict dst_spad  = &octx->dst_spad;  \
@@ -151,7 +151,7 @@ static void ssm_conv_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
     const int dr = scctx->nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = MIN(ir0 + dr, d_inner);
-    const int      ir  = ir1 - ir0;
+    const uint32_t ir  = ir1 - ir0;
 
     if (ir0 >= ir1) {
         return;  // No work for this thread
@@ -205,10 +205,10 @@ static void ssm_conv_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
                 HVX_Vector acc_vec = Q6_V_vsplat_R(0);
 
                 for (uint32_t i0 = 0; i0 < d_conv; ++i0) {
-                    Q6_vgather_ARMVw(src0_vec, GATHER_TYPE(spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0])),
-                                     src0_gather_len, (*(const HVX_Vector *) src0_offsets));
-                    Q6_vgather_ARMVw(src1_vec, GATHER_TYPE(spad_src1 + (i0 + i1 * nc) * sizeof(float)),
-                                     src1_gather_len, (*(const HVX_Vector *) src1_offsets));
+                    uint32_t src0_base = (uint32_t) spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0]);
+                    uint32_t src1_base = (uint32_t) spad_src1 + (i0 + i1 * nc)  * sizeof(float);
+                    Q6_vgather_ARMVw(src0_vec, src0_base, src0_gather_len, (*(const HVX_Vector *) src0_offsets));
+                    Q6_vgather_ARMVw(src1_vec, src1_base, src1_gather_len, (*(const HVX_Vector *) src1_offsets));
 
                     HVX_Vector prod = Q6_Vqf32_vmpy_VsfVsf(*(const HVX_Vector *) src0_vec, *(const HVX_Vector *) src1_vec);
                     acc_vec = Q6_Vqf32_vadd_Vqf32Vqf32(acc_vec, prod);
@@ -222,10 +222,10 @@ static void ssm_conv_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
                 HVX_Vector acc_vec = Q6_V_vsplat_R(0);
 
                 for (uint32_t i0 = 0; i0 < d_conv; ++i0) {
-                    Q6_vgather_ARMVw(src0_vec, GATHER_TYPE(spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0])),
-                                     src0_gather_len, (*(const HVX_Vector *) src0_offsets));
-                    Q6_vgather_ARMVw(src1_vec, GATHER_TYPE(spad_src1 + (i0 + i1 * nc) * sizeof(float)),
-                                     src1_gather_len, (*(const HVX_Vector *) src1_offsets));
+                    uint32_t src0_base = (uint32_t) spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0]);
+                    uint32_t src1_base = (uint32_t) spad_src1 + (i0 + i1 * nc)  * sizeof(float);
+                    Q6_vgather_ARMVw(src0_vec, src0_base, src0_gather_len, (*(const HVX_Vector *) src0_offsets));
+                    Q6_vgather_ARMVw(src1_vec, src1_base, src1_gather_len, (*(const HVX_Vector *) src1_offsets));
 
                     HVX_Vector prod = Q6_Vqf32_vmpy_VsfVsf(*(const HVX_Vector *) src0_vec, *(const HVX_Vector *) src1_vec);
                     acc_vec = Q6_Vqf32_vadd_Vqf32Vqf32(acc_vec, prod);
@@ -289,9 +289,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             // Compute gather scratchpad size for src0 and src1
             const size_t gather_spad_size = n_threads * VLEN * 2;
 
-            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;
-            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;     octx->src0_spad.src = NULL;
+            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size; octx->dst_spad.src  = NULL;
 
             FARF(HIGH, "ssm_conv-f32: gather-spad:%zu spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
                 gather_spad_size, octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread,
@@ -323,8 +323,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
 }
 
 int op_ssm_conv(struct htp_ops_context * octx) {
-    int                 err = HTP_STATUS_OK;
-    struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * dst = octx->dst;
+
+    int err = HTP_STATUS_OK;
 
     switch (dst->type) {
         case HTP_TYPE_F32:

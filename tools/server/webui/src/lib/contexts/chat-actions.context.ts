@@ -1,4 +1,5 @@
 import { getContext, setContext } from 'svelte';
+import { CONTEXT_KEY_CHAT_ACTIONS } from '$lib/constants';
 
 export interface ChatActionsContext {
 	copy: (message: DatabaseMessage) => void;
@@ -21,9 +22,13 @@ export interface ChatActionsContext {
 	) => void;
 	regenerateWithBranching: (message: DatabaseMessage, modelOverride?: string) => void;
 	continueAssistantMessage: (message: DatabaseMessage) => void;
+	forkConversation: (
+		message: DatabaseMessage,
+		options: { name: string; includeAttachments: boolean }
+	) => void;
 }
 
-const CHAT_ACTIONS_KEY = Symbol.for('chat-actions');
+const CHAT_ACTIONS_KEY = Symbol.for(CONTEXT_KEY_CHAT_ACTIONS);
 
 export function setChatActionsContext(ctx: ChatActionsContext): ChatActionsContext {
 	return setContext(CHAT_ACTIONS_KEY, ctx);

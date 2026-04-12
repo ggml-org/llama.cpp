@@ -37,6 +37,7 @@ import {
 	SETTING_CONFIG_DEFAULT,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
@@ -121,6 +122,13 @@ class SettingsStore {
 				...SETTING_CONFIG_DEFAULT,
 				...savedVal
 			};
+
+			// Default sendOnEnter to false on mobile when the user has no saved preference
+			if (!('sendOnEnter' in savedVal)) {
+				if (new IsMobile().current) {
+					this.config.sendOnEnter = false;
+				}
+			}
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(
@@ -287,8 +295,12 @@ class SettingsStore {
 	 */
 	resetParameterToServerDefault(key: string): void {
 		const serverDefaults = this.getServerDefaults();
+		const webuiSettings = serverStore.webuiSettings;
 
-		if (serverDefaults[key] !== undefined) {
+		if (webuiSettings && key in webuiSettings) {
+			// UI setting from admin config: write actual value
+			setConfigValue(this.config, key, webuiSettings[key]);
+		} else if (serverDefaults[key] !== undefined) {
 			// sampling param known by server: clear it, let server decide
 			setConfigValue(this.config, key, '');
 		} else if (key in SETTING_CONFIG_DEFAULT) {
@@ -327,6 +339,17 @@ class SettingsStore {
 			}
 		}
 
+		// webui settings need actual values in config (no placeholder mechanism),
+		// so write them for non-overridden keys
+		const webuiSettings = serverStore.webuiSettings;
+		if (webuiSettings) {
+			for (const [key, value] of Object.entries(webuiSettings)) {
+				if (!this.userOverrides.has(key) && value !== undefined) {
+					setConfigValue(this.config, key, value);
+				}
+			}
+		}
+
 		this.saveConfig();
 		console.log('User overrides after sync:', Array.from(this.userOverrides));
 	}
@@ -338,8 +361,14 @@ class SettingsStore {
 	 */
 	forceSyncWithServerDefaults(): void {
 		const propsDefaults = this.getServerDefaults();
+		const webuiSettings = serverStore.webuiSettings;
+
 		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
-			if (propsDefaults[key] !== undefined) {
+			if (webuiSettings && key in webuiSettings) {
+				// UI setting from admin config: write actual value
+				setConfigValue(this.config, key, webuiSettings[key]);
+			} else if (propsDefaults[key] !== undefined) {
+				// sampling param: clear it, let server decide
 				setConfigValue(this.config, key, '');
 			} else if (key in SETTING_CONFIG_DEFAULT) {
 				setConfigValue(this.config, key, getConfigValue(SETTING_CONFIG_DEFAULT, key));

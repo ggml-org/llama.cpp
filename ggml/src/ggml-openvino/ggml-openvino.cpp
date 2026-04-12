@@ -97,6 +97,8 @@ struct ggml_backend_openvino_buffer_context {
             ov_buffer = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
         } else {
             data = ggml_aligned_malloc(size);
+            GGML_ASSERT(data);
+            memset(data, 0, size);
             ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
         }
 
@@ -410,6 +412,8 @@ static const ggml_backend_buffer_i ggml_backend_openvino_buffer_interface = {
     /* .memset_tensor   = */ ggml_backend_openvino_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_openvino_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_openvino_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_openvino_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_openvino_buffer_clear,
     /* .reset           = */ NULL,
@@ -615,6 +619,8 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
     /* .free                    = */ ggml_backend_openvino_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ NULL,
     /* .graph_plan_create       = */ NULL,

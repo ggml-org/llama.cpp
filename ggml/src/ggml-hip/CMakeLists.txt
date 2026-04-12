@@ -47,6 +47,10 @@ find_package(hip     REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocblas REQUIRED)
 
+if (GGML_HIP_RCCL)
+    find_package(rccl REQUIRED)
+endif()
+
 if (${hip_VERSION} VERSION_LESS 6.1)
     message(FATAL_ERROR "At least ROCM/HIP V6.1 is required")
 endif()
@@ -71,12 +75,11 @@ if (GGML_CUDA_FA_ALL_QUANTS)
     list(APPEND GGML_SOURCES_ROCM ${SRCS})
     add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
 else()
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
+    list(APPEND GGML_SOURCES_ROCM
+        ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
@@ -119,6 +122,10 @@ if (NOT GGML_HIP_MMQ_MFMA)
     add_compile_definitions(GGML_HIP_NO_MMQ_MFMA)
 endif()
 
+if (GGML_HIP_RCCL)
+    add_compile_definitions(GGML_USE_NCCL) # RCCL has the same interface as NCCL.
+endif()
+
 if (GGML_HIP_EXPORT_METRICS)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -Rpass-analysis=kernel-resource-usage --save-temps")
 endif()
@@ -141,6 +148,10 @@ endif()
 
 if (GGML_STATIC)
     message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
+endif()
+
+if (GGML_HIP_RCCL)
+    target_link_libraries(ggml-hip PRIVATE ggml-base roc::rccl)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)

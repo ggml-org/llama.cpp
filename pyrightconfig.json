@@ -1,5 +1,5 @@
 {
-  "extraPaths": ["gguf-py", "examples/model-conversion/scripts"],
+  "extraPaths": ["gguf-py", "examples/model-conversion/scripts", "examples/model-conversion/scripts/utils"],
   "pythonVersion": "3.9",
   "pythonPlatform": "All",
   "reportUnusedImport": "warning",
