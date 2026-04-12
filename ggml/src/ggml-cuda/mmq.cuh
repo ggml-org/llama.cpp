@@ -300,6 +300,122 @@ static constexpr __device__ int mmq_get_nwarps_device() {
 #endif // AMD_MFMA_AVAILABLE
 }
 
+// Per-(type, mmq_x, arch) kernel configuration for __launch_bounds__ and tile selection.
+// min_blocks: occupancy target passed to __launch_bounds__(threads, min_blocks).
+//             Controls register allocation and spill behavior.
+// enabled:    whether the host tile selection loop may pick this (type, mmq_x) combination.
+//             Disabled tiles are also skipped in device code via if constexpr.
+struct mmq_config {
+    int  min_blocks;
+    bool enabled;
+};
+
+#define GGML_CUDA_MMQ_CONFIG_CASE(type_, mmq_x_, min_blocks_, enabled_) \
+    if (type == (type_) && mmq_x == (mmq_x_)) {              \
+        return mmq_config{(min_blocks_), (enabled_)};         \
+    }
+
+// CDNA4 (gfx950, MI350X/MI355X): wavefront64, 1536 VGPRs/CU across 4 SIMDs.
+// No per-type overrides yet - needs benchmarking on actual hardware.
+static constexpr __host__ __device__ mmq_config mmq_get_config_cdna4(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{2, true};
+}
+
+// CDNA3 (gfx942, MI300): wavefront64, 512 VGPRs/SIMD.
+// No per-type overrides yet - needs benchmarking on actual hardware.
+static constexpr __host__ __device__ mmq_config mmq_get_config_cdna3(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{2, true};
+}
+
+// CDNA2 (gfx90a, MI210): wavefront64, 512 VGPRs/SIMD.
+// Default min_blocks=2 targets <=256 VGPRs/wave (2 waves/SIMD).
+// No per-type overrides yet - needs benchmarking on actual hardware.
+static constexpr __host__ __device__ mmq_config mmq_get_config_cdna2(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{2, true};
+}
+
+// CDNA1 (gfx908, MI100): wavefront64, (256 VGPRs + 256 AccGPRs)/SIMD.
+// Default min_blocks=2 targets <=256 VGPRs/wave (2 waves/SIMD).
+// No per-type overrides yet - needs benchmarking on actual hardware.
+static constexpr __host__ __device__ mmq_config mmq_get_config_cdna1(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{2, true};
+}
+
+// NVIDIA Volta+ (sm_70+): min_blocks=1 targets higher register usage per thread.
+static constexpr __host__ __device__ mmq_config mmq_get_config_nvidia_volta_up(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{1, true};
+}
+
+// RDNA1 (gfx1010/gfx1012): wavefront32, dp4a only.
+// min_blocks=1 preserves the pre-existing behavior (no __launch_bounds__ second arg).
+static constexpr __host__ __device__ mmq_config mmq_get_config_rdna1(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{1, true};
+}
+
+// Default for all other architectures (pre-Volta NVIDIA, RDNA2-4, GCN, dp4a).
+static constexpr __host__ __device__ mmq_config mmq_get_config_default(
+        const ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
+    return mmq_config{2, true};
+}
+
+// Host dispatch: uses runtime compute capability to select the right config table.
+static constexpr mmq_config mmq_get_config_host(const ggml_type type, const int mmq_x, const int cc) {
+    if (GGML_CUDA_CC_IS_CDNA4(cc)) {
+        return mmq_get_config_cdna4(type, mmq_x);
+    } else if (GGML_CUDA_CC_IS_CDNA3(cc)) {
+        return mmq_get_config_cdna3(type, mmq_x);
+    } else if (GGML_CUDA_CC_IS_CDNA2(cc)) {
+        return mmq_get_config_cdna2(type, mmq_x);
+    } else if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+        return mmq_get_config_cdna1(type, mmq_x);
+    } else if (GGML_CUDA_CC_IS_RDNA1(cc)) {
+        return mmq_get_config_rdna1(type, mmq_x);
+    } else if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) {
+        return mmq_get_config_nvidia_volta_up(type, mmq_x);
+    }
+    return mmq_get_config_default(type, mmq_x);
+}
+
+// Device dispatch: uses compile-time #ifdef to select the right config table.
+// Plain constexpr function (not a template) so it can be used in __launch_bounds__.
+static constexpr __device__ mmq_config mmq_get_config_device(const ggml_type type, const int mmq_x) {
+#if defined(CDNA4)
+    return mmq_get_config_cdna4(type, mmq_x);
+#elif defined(CDNA3)
+    return mmq_get_config_cdna3(type, mmq_x);
+#elif defined(CDNA2)
+    return mmq_get_config_cdna2(type, mmq_x);
+#elif defined(CDNA1)
+    return mmq_get_config_cdna1(type, mmq_x);
+#elif defined(RDNA1)
+    return mmq_get_config_rdna1(type, mmq_x);
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+    return mmq_get_config_nvidia_volta_up(type, mmq_x);
+#else
+    return mmq_get_config_default(type, mmq_x);
+#endif
+}
+
 // ------------------------------------------------------------
 
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_q4_0(
@@ -3540,17 +3656,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
 template <ggml_type type, int mmq_x, bool need_check>
-#if defined(GGML_USE_HIP)
-#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
-    __launch_bounds__(ggml_cuda_get_physical_warp_size()*mmq_get_nwarps_device(), 2)
-#endif // defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
-#else
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-    __launch_bounds__(ggml_cuda_get_physical_warp_size()*mmq_get_nwarps_device(), 1)
-#else
-    __launch_bounds__(ggml_cuda_get_physical_warp_size()*mmq_get_nwarps_device(), 2)
-#endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-#endif // defined(GGML_USE_HIP)
+    __launch_bounds__(
+        ggml_cuda_get_physical_warp_size()*mmq_get_nwarps_device(),
+        mmq_get_config_device(type, mmq_x).min_blocks)
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
         const int32_t * __restrict__ expert_bounds, float * __restrict__ dst, float * __restrict__ tmp_fixup,
@@ -3560,7 +3668,9 @@ static __global__ void mul_mat_q(
         const int ncols_max) {
 
     // Skip unused template specializations for faster compilation:
-    if (mmq_x > get_mmq_x_max_device() || mmq_x % mmq_get_granularity_device(mmq_x) != 0) {
+    if constexpr (mmq_x > get_mmq_x_max_device()
+            || mmq_x % mmq_get_granularity_device(mmq_x) != 0
+            || !mmq_get_config_device(type, mmq_x).enabled) {
         NO_DEVICE_CODE;
         return;
     }
@@ -3645,7 +3755,7 @@ static __global__ void mul_mat_q(
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
         return;
     }
-#endif // (defined(GGML_USE_HIP) && !defined(CDNA4) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+#endif // (defined(GGML_USE_HIP) && !defined(CDNA)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
 
     constexpr int ITER_K = get_iter_k(type);
 
@@ -4082,7 +4192,9 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
         const int granularity = mmq_get_granularity_host(mmq_x, cc);
 
-        if (mmq_x % granularity != 0 || mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps) > smpbo) {
+        if (mmq_x % granularity != 0
+                || mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps) > smpbo
+                || !mmq_get_config_host(type, mmq_x, cc).enabled) {
             continue;
         }
 
