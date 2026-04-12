@@ -13,6 +13,14 @@
 #include <map>
 #include <stdexcept>
 
+#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#define LLAMA_KV_MMAP_SUPPORTED
+#endif // defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
@@ -76,6 +84,45 @@ static ggml_tensor * ggml_mul_mat_aux(
 // llama_kv_cache
 //
 
+llama_kv_cache::~llama_kv_cache() {
+#ifdef LLAMA_KV_MMAP_SUPPORTED
+    if (kv_mmap_fd >= 0) {
+        // save cell metadata so a new process can resume from this state
+        if (!kv_mmap_path.empty()) {
+            const std::string meta_path = kv_mmap_path + ".meta";
+            FILE * f = fopen(meta_path.c_str(), "wb");
+            if (f) {
+                const uint32_t magic     = 0x4B564D54; // 'KVMT'
+                const uint32_t n_streams = (uint32_t) v_cells.size();
+                fwrite(&magic,     sizeof(magic),     1, f);
+                fwrite(&n_streams, sizeof(n_streams), 1, f);
+
+                for (uint32_t s = 0; s < n_streams; s++) {
+                    const uint32_t n_cells = v_cells[s].size();
+                    const uint32_t head    = v_heads[s];
+                    fwrite(&n_cells, sizeof(n_cells), 1, f);
+                    fwrite(&head,    sizeof(head),    1, f);
+
+                    for (uint32_t i = 0; i < n_cells; i++) {
+                        const llama_pos p = v_cells[s].is_empty(i) ? (llama_pos) -1 : v_cells[s].pos_get(i);
+                        fwrite(&p, sizeof(p), 1, f);
+                    }
+                }
+
+                fclose(f);
+                LLAMA_LOG_INFO("%s: saved cell metadata to %s\n", __func__, meta_path.c_str());
+            }
+        }
+
+        if (kv_mmap_base != nullptr) {
+            msync(kv_mmap_base, kv_mmap_size, MS_SYNC);
+            munmap(kv_mmap_base, kv_mmap_size);
+        }
+        close(kv_mmap_fd);
+    }
+#endif // LLAMA_KV_MMAP_SUPPORTED
+}
+
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
                 ggml_type   type_k,
@@ -89,7 +136,8 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+     const layer_reuse_cb & reuse,
+               const char * mmap_path) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -257,7 +305,70 @@ llama_kv_cache::llama_kv_cache(
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                 t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
             }
-        } else {
+        }
+#ifdef LLAMA_KV_MMAP_SUPPORTED
+        else if (mmap_path != nullptr && !offload) {
+            // back all non-view tensors in this context with a single MAP_SHARED file
+            // views inherit their data pointer from their source tensor automatically
+            size_t total_size = 0;
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr;
+                    t = ggml_get_next_tensor(ctx.get(), t)) {
+                if (t->view_src != nullptr) {
+                    continue;
+                }
+                total_size += ggml_nbytes(t);
+                total_size  = (total_size + 63) & ~(size_t)63;
+            }
+
+            LLAMA_LOG_INFO("%s: mmap KV cache to %s (%.2f MiB)\n",
+                    __func__, mmap_path, (double)total_size / (1024.0 * 1024.0));
+
+            int fd = open(mmap_path, O_RDWR | O_CREAT, 0644);
+            if (fd < 0) {
+                throw std::runtime_error("mmap KV cache: open() failed");
+            }
+
+            if (ftruncate(fd, (off_t) total_size) < 0) {
+                close(fd);
+                throw std::runtime_error("mmap KV cache: ftruncate() failed");
+            }
+
+            void * base = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (base == MAP_FAILED) {
+                close(fd);
+                throw std::runtime_error("mmap KV cache: mmap() failed");
+            }
+
+            kv_mmap_base = base;
+            kv_mmap_size = total_size;
+            kv_mmap_fd   = fd;
+            kv_mmap_path = mmap_path;
+
+            buf = ggml_backend_cpu_buffer_from_ptr(base, total_size);
+            if (!buf) {
+                munmap(base, total_size);
+                close(fd);
+                kv_mmap_base = nullptr;
+                kv_mmap_fd   = -1;
+                throw std::runtime_error("mmap KV cache: ggml_backend_cpu_buffer_from_ptr() failed");
+            }
+
+            ggml_tallocr tallocr = ggml_tallocr_new(buf);
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr;
+                    t = ggml_get_next_tensor(ctx.get(), t)) {
+                if (t->view_src != nullptr) {
+                    continue;
+                }
+                ggml_tallocr_alloc(&tallocr, t);
+            }
+        }
+#else // LLAMA_KV_MMAP_SUPPORTED
+        else if (mmap_path != nullptr) {
+            GGML_UNUSED(mmap_path);
+            throw std::runtime_error("mmap KV cache is not supported on this platform");
+        }
+#endif // LLAMA_KV_MMAP_SUPPORTED
+        else {
             buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
         }
         if (!buf) {
@@ -324,6 +435,42 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+
+#ifdef LLAMA_KV_MMAP_SUPPORTED
+    // restore cell metadata from a previous session if available
+    if (mmap_path != nullptr) {
+        const std::string meta_path = std::string(mmap_path) + ".meta";
+        FILE * f = fopen(meta_path.c_str(), "rb");
+        if (f) {
+            uint32_t magic = 0, n_streams = 0;
+            if (fread(&magic, sizeof(magic), 1, f) == 1 && magic == 0x4B564D54 &&
+                fread(&n_streams, sizeof(n_streams), 1, f) == 1 &&
+                n_streams == (uint32_t) v_cells.size()) {
+
+                for (uint32_t s = 0; s < n_streams; s++) {
+                    uint32_t n_cells = 0, head = 0;
+                    fread(&n_cells, sizeof(n_cells), 1, f);
+                    fread(&head,    sizeof(head),    1, f);
+
+                    if (n_cells == v_cells[s].size()) {
+                        v_heads[s] = head;
+                        for (uint32_t i = 0; i < n_cells; i++) {
+                            llama_pos p = -1;
+                            fread(&p, sizeof(p), 1, f);
+                            if (p >= 0) {
+                                v_cells[s].pos_set(i, p);
+                                v_cells[s].seq_add(i, 0);
+                            }
+                        }
+                    }
+                }
+
+                LLAMA_LOG_INFO("%s: restored cell metadata from %s\n", __func__, meta_path.c_str());
+            }
+            fclose(f);
+        }
+    }
+#endif // LLAMA_KV_MMAP_SUPPORTED
 }
 
 void llama_kv_cache::clear(bool data) {

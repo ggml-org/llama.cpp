@@ -1991,6 +1991,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"--kv-cache-mmap"}, "PATH",
+        "back the KV cache with a MAP_SHARED file for session persistence (POSIX, CPU-only)",
+        [](common_params & params, const std::string & value) {
+            params.kv_mmap_path = value;
+            params.no_kv_offload = true;
+        }
+    ).set_env("LLAMA_ARG_KV_CACHE_MMAP"));
+    add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},
         string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),

@@ -376,6 +376,11 @@ extern "C" {
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
         // [EXPERIMENTAL]
+        // back KV cache with a MAP_SHARED file (POSIX, CPU-only)
+        // note: NULL = heap (default); set path to enable persistence
+        const char * kv_mmap_path;
+
+        // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;

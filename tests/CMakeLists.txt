@@ -292,6 +292,12 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
 
+if (NOT WIN32)
+    llama_build_and_test(test-kv-cache-mmap.cpp)
+    llama_build_and_test(test-kv-cache-mmap-model.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+    set_tests_properties(test-kv-cache-mmap-model PROPERTIES FIXTURES_REQUIRED test-download-model)
+endif ()
+
 llama_build(export-graph-ops.cpp)
 target_include_directories(export-graph-ops PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
 if (TARGET gguf-model-data)
