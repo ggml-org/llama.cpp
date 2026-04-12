@@ -423,6 +423,12 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             continue;
         }
 
+        // Using next power of two for M for efficient caching
+        int M_op = M;
+        if (M > 1) {
+            M_op = rknpu2_calibration::next_power_of_two(M);
+        }
+
         const auto* pipeline = config.resolve_op_support(src0);
         if (!pipeline) continue;
 
@@ -515,7 +521,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
                         // Getting matmul context from cache
                         matmul_ctxs[idx] = backend_ctx->get_matmul_ctx(
-                            (uintptr_t)tensor_virt_addr, offset_in_dma, M, K_seg_op, n_seg.size_n,
+                            (uintptr_t)tensor_virt_addr, offset_in_dma, M_op, K_seg_op, n_seg.size_n,
                             n_seg.core_id, matmul_type, b_domain_id
                         );
                         if (!matmul_ctxs[idx] || matmul_ctxs[idx]->ctx == 0) return GGML_STATUS_FAILED;
@@ -556,7 +562,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             // ===========================================
             std::vector<float> scales_A(M);
             {
-                auto cache_key = std::make_tuple(M, K_seg_op, (int)pipeline->npu_type_a, b_domain_id);
+                auto cache_key = std::make_tuple(M_op, K_seg_op, (int)pipeline->npu_type_a, b_domain_id);
                 auto& matmul_ctx_0 = matmul_ctxs[0];
 
                 // Getting A-buffer from cache
@@ -624,7 +630,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             {
                 for (size_t idx = 0; idx < num_active_segments; idx++) {
                     auto& matmul_ctx = matmul_ctxs[idx];
-                    auto cache_key = std::make_tuple(M, active_n_segments[idx].size_n, active_n_segments[idx].core_id, (int)pipeline->npu_type_c, b_domain_id);
+                    auto cache_key = std::make_tuple(M_op, active_n_segments[idx].size_n, active_n_segments[idx].core_id, (int)pipeline->npu_type_c, b_domain_id);
 
                     // Getting C-buffer from cache
                     mem_C_segments[idx] = get_tensor_buffer(backend_ctx, matmul_ctx->ctx, matmul_ctx->io_attr.C.size, cache_key, backend_ctx->c_buffer_cache);
