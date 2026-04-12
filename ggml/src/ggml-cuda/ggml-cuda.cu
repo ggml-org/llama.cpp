@@ -3061,8 +3061,8 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     if (cgraph->version != 0 &&
-        cgraph->version == graph->last_graph_version &&
-        (int)graph->node_props.size() == cgraph->n_nodes) {
+        cgraph->version == graph->last_graph_version) {
+        GGML_ASSERT((int)graph->node_props.size() == cgraph->n_nodes);
         return false;
     }
 
