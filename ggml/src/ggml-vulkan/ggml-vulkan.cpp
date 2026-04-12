@@ -782,7 +782,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add1_f16_f32;
     vk_pipeline pipeline_add1_f32_f32;
 
-    vk_pipeline pipeline_arrange_f32;
+    vk_pipeline pipeline_arange_f32;
 
     vk_pipeline pipeline_fill_f32;
 
@@ -4493,7 +4493,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f32, "add1_f16_f32", add1_f16_f32_len, add1_f16_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_add1_f32_f32, "add1_f32_f32", add1_f32_f32_len, add1_f32_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_arrange_f32, "arrange_f32", arrange_f32_len, arrange_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_arange_f32, "arange_f32", arange_f32_len, arange_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
@@ -9740,9 +9740,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_add1_f32_f32;
         }
         return nullptr;
-    case GGML_OP_ARRANGE:
+    case GGML_OP_ARANGE:
         if (dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_arrange_f32;
+            return ctx->device->pipeline_arange_f32;
         }
         return nullptr;
     case GGML_OP_FILL:
@@ -10032,7 +10032,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_DIV:
     case GGML_OP_MUL:
     case GGML_OP_ADD1:
-    case GGML_OP_ARRANGE:
+    case GGML_OP_ARANGE:
     case GGML_OP_FILL:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
@@ -12987,7 +12987,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_add1(ctx, compute_ctx, src0, src1, node);
 
         break;
-    case GGML_OP_ARRANGE:
+    case GGML_OP_ARANGE:
         ggml_vk_arrange(ctx, compute_ctx, node);
 
         break;
@@ -15611,7 +15611,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32)
                 || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32)
                 || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16);
-        case GGML_OP_ARRANGE:
+        case GGML_OP_ARANGE:
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_SCALE:
