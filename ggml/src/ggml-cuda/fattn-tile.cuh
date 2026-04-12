@@ -1051,7 +1051,7 @@ static __global__ void flash_attn_tile(
             return;
         }
 
-        const float scale = gridDim.y == 1 ? 1.0f/KQ_sum[jc0] : 1.0f;
+        const float scale = dst_meta == nullptr ? 1.0f/KQ_sum[jc0] : 1.0f;
 
         const int j_dst_unrolled = ((sequence*int(ne01.z) + col_Q_0 + j)*ne02 + head0 + c)*gridDim.y + blockIdx.y;
 
@@ -1087,7 +1087,7 @@ static __global__ void flash_attn_tile(
         }
 #endif // FAST_FP16_AVAILABLE
 
-        if (gridDim.y != 1 && threadIdx.x == 0) {
+        if (dst_meta != nullptr && threadIdx.x == 0) {
             dst_meta[j_dst_unrolled] = make_float2(KQ_max[jc0], KQ_sum[jc0]);
         }
     }
