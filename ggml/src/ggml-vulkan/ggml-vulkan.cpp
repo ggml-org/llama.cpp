@@ -10722,8 +10722,8 @@ static void ggml_vk_add1(ggml_backend_vk_context * ctx, vk_context& subctx, cons
     });
 }
 
-static void ggml_vk_arrange(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
-    VK_LOG_DEBUG("ggml_vk_arrange(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
+static void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_arange(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
 
     vk_op_push_constants pc = {
         (uint32_t)ggml_nelements(dst),
@@ -12988,7 +12988,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
     case GGML_OP_ARANGE:
-        ggml_vk_arrange(ctx, compute_ctx, node);
+        ggml_vk_arange(ctx, compute_ctx, node);
 
         break;
     case GGML_OP_FILL:
