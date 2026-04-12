@@ -455,6 +455,7 @@ struct mtmd_context {
         // set preprocessor
         switch (proj) {
             case PROJECTOR_TYPE_QWEN2A:
+            case PROJECTOR_TYPE_QWEN3A:
             case PROJECTOR_TYPE_QWEN25O:
                 {
                     // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
@@ -1027,6 +1028,10 @@ bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
 }
 
 bool mtmd_decode_use_mrope(mtmd_context * ctx) {
+    if (ctx->ctx_v == nullptr && ctx->proj_type_a() == PROJECTOR_TYPE_QWEN3A) {
+        // qwen3-asr
+        return true;
+    }
     switch (ctx->proj_type_v()) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
