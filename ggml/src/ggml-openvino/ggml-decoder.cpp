@@ -300,7 +300,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
-        if (node->op == GGML_OP_FLASH_ATTN_EXT || node->op == GGML_OP_SOFT_MAX) {
+        if (node->op == GGML_OP_FLASH_ATTN_EXT || (node->op == GGML_OP_SOFT_MAX && node->src[1] != nullptr)) {
             compute_params.input_len = node->src[0]->ne[1];
 
             auto * q_perm = node->src[0];
