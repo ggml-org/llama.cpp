@@ -706,15 +706,15 @@ typedef struct {
     const __fp16 * activation;
     const __fp16 * weight;
     const __fp16 * scales;
-    int            n_row_tiles;
-    int            n_col_tiles;
-    int            n_dot_tiles;
+    uint32_t       n_row_tiles;
+    uint32_t       n_col_tiles;
+    uint32_t       n_dot_tiles;
 } hmx_matmul_job_t;
 
 static void hmx_matmul_worker_fn(void * data) {
     hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
-    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles,
-                        job->n_dot_tiles);
+    FARF(HIGH, "hmx-mm-job: n_row_tiles %u n_col_tiles %u n_dot_tiles %u", job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
+    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
 }
 
 static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
