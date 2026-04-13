@@ -130,7 +130,10 @@ jobs:
     name: Test on QDC Android Device (${{ matrix.device }})
     needs: [android-ndk, check-snapdragon]
     # Run on Snapdragon path changes, or always when manually dispatched.
-    if: github.event_name == 'workflow_dispatch' || needs.check-snapdragon.outputs.changed == 'true'
+    # Skip when QDC_API_KEY secret is not available (e.g., PRs from forks).
+    if: |
+      secrets.QDC_API_KEY != '' &&
+      (github.event_name == 'workflow_dispatch' || needs.check-snapdragon.outputs.changed == 'true')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
