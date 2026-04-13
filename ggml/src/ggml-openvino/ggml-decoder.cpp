@@ -300,7 +300,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
-        if (node->op == GGML_OP_FLASH_ATTN_EXT || (node->op == GGML_OP_SOFT_MAX && node->src[1] != nullptr)) {
+        if (node->op == GGML_OP_FLASH_ATTN_EXT || (node->op == GGML_OP_SOFT_MAX && node->src[1] != nullptr && node->src[0]->src[1] != nullptr)) {
             compute_params.input_len = node->src[0]->ne[1];
 
             auto * q_perm = node->src[0];
@@ -356,6 +356,15 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.token_len_per_seq = 1;
             }
         }
+
+        if (node->op == GGML_OP_MUL_MAT && node->src[0]->op == GGML_OP_PERMUTE &&
+            node->src[0]->src[0]->op == GGML_OP_VIEW && is_kvcache(node->src[0]->view_src, node->view_src)) {
+            if (node->src[1]->op == GGML_OP_PERMUTE && node->src[1]->src[0]->op == GGML_OP_VIEW &&
+                node->src[1]->src[0]->src[0]->op == GGML_OP_ROPE) {
+                compute_params.attention_size = node->ne[0];
+            }
+        }
+
         // if the node op is TRANSPOSE and its input is PERMUTE and the source of the PERMUTE is VIEW, then get the attention size with the TRANSPOSE node ne[0] (in case no GGML_OP_FLASH_ATTN_EXT)
         if (node->op == GGML_OP_TRANSPOSE && node->src[0]->op == GGML_OP_PERMUTE &&
             node->src[0]->src[0]->op == GGML_OP_VIEW) {

@@ -248,8 +248,8 @@ public:
     }
 
     inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return (op->op == GGML_OP_SET_ROWS && op->src[2] == tensor) ||
-               tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
+        return tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY ||
+               (op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
     inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
