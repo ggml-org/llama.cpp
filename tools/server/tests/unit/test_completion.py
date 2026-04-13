@@ -135,7 +135,7 @@ def test_completion_stream_with_openai_library_stops():
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.completions.create(
         model="davinci-002",
-        prompt="System: You are helpfull assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
+        prompt="System: You are helpful assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
         stop=["User:\n", "Assistant:\n"],
         max_tokens=200,
         stream=True,

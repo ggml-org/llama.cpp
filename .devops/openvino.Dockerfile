@@ -78,7 +78,7 @@ ARG http_proxy
 ARG https_proxy
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 libtbb12 curl\
+    && apt-get install -y libgomp1 libtbb12 curl \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

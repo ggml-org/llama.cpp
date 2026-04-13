@@ -641,6 +641,7 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
+    ggml_free(opt_ctx->ctx_copy);
     delete opt_ctx;
 }
 

@@ -213,6 +213,27 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
+  ggml-ci-win-intel-vulkan:
+    runs-on: [self-hosted, Windows, X64, Intel]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        shell: C:\msys64\usr\bin\bash.exe --noprofile --norc -eo pipefail "{0}"
+        env:
+          MSYSTEM: UCRT64
+          CHERE_INVOKING: 1
+          PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
+        run: |
+          vulkaninfo --summary
+          # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
+          # a valid python environment for testing
+          LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
+
   ggml-ci-intel-openvino-gpu-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 

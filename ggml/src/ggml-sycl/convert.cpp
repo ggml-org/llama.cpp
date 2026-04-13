@@ -482,6 +482,18 @@ static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t 
         });
 }
 
+template <typename dst_t>
+static void dequantize_row_nvfp4_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+    GGML_ASSERT(k % QK_NVFP4 == 0);
+    const int nb = k / QK_NVFP4;
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
+        [=](sycl::nd_item<3> /*item_ct1*/) {
+            dequantize_block_nvfp4(vx, y, k);
+        });
+}
+
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void dequantize_block_nc(const void * __restrict__ vx, dst_t * __restrict__ y,
         const int64_t ne00, const int64_t ne01, const int64_t ne02,
@@ -641,6 +653,8 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
             return dequantize_row_iq4_nl_sycl;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_sycl;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_sycl;
         case GGML_TYPE_F32:
             return convert_unary_sycl<float>;
 #ifdef GGML_SYCL_HAS_BF16
@@ -648,6 +662,7 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
         default:
+            GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
             return nullptr;
     }
 }
@@ -708,6 +723,8 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
             return dequantize_row_iq4_nl_sycl;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_sycl;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_sycl;
         case GGML_TYPE_F16:
             return convert_unary_sycl<sycl::half>;
 #ifdef GGML_SYCL_HAS_BF16
@@ -715,6 +732,7 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
         default:
+            GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
             return nullptr;
     }
 }

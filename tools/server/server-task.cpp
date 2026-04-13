@@ -239,6 +239,7 @@ task_params server_task::params_from_json_cmpl(
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data) {
     task_params params;
 
@@ -383,6 +384,8 @@ task_params server_task::params_from_json_cmpl(
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     } else {
+        params.sampling.grammar = defaults.sampling.grammar;
+
         std::string grammar_str = json_value(data, "grammar", std::string());
         if (!grammar_str.empty()) {
             // grammar_type key is set by the server when converting chat template grammars
@@ -478,19 +481,17 @@ task_params server_task::params_from_json_cmpl(
     // Parse reasoning budget sampler parameters
     {
         const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
-        if (budget >= 0) {
-            const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
-            const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
-            const auto message   = json_value(data, "reasoning_budget_message", std::string());
-            params.sampling.reasoning_budget_tokens = budget;
+        const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
+        const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
+        const auto message   = json_value(data, "reasoning_budget_message", std::string());
+        params.sampling.reasoning_budget_tokens = budget;
 
-            if (!start_tag.empty()) {
-                params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
-            }
-            if (!end_tag.empty()) {
-                params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
-                params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
-            }
+        if (!start_tag.empty()) {
+            params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
+        }
+        if (!end_tag.empty()) {
+            params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
+            params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
 
             SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
                 budget, params.sampling.generation_prompt.c_str(),
@@ -564,7 +565,7 @@ task_params server_task::params_from_json_cmpl(
         if (params.sampling.ignore_eos) {
             params.sampling.logit_bias.insert(
                     params.sampling.logit_bias.end(),
-                    defaults.sampling.logit_bias_eog.begin(), defaults.sampling.logit_bias_eog.end());
+                    logit_bias_eog.begin(), logit_bias_eog.end());
         }
     }
 
@@ -2010,7 +2011,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
 bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
-    float f_keep_best = float(lcp_best) / prompt.tokens.size();
+    float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float sim_best    = float(lcp_best) / tokens_new.size();
 
     SRV_WRN(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);

@@ -110,6 +110,97 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
 
 #if defined(DATA_A_Q4_0)
 #define BLOCK_BYTE_SIZE 18
+#elif defined(DATA_A_Q4_1)
+#define BLOCK_BYTE_SIZE 20
+#endif
+
+#if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
+        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
+        uint shift = (iqs & 0x10) >> 2;
+        vui_lo >>= shift;
+        vui_hi >>= shift;
+
+        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
+#ifdef DATA_A_Q4_1
+        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
+#else
+        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
+#endif
+    } else {
+        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
+        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
+        uint shift = (iqs & 0x10) >> 2;
+        vui_lo >>= shift;
+        vui_hi >>= shift;
+
+        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
+#ifdef DATA_A_Q4_1
+        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
+#else
+        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
+#endif
+    }
+}
+#endif
+
+#if defined(DATA_A_Q5_0)
+#define BLOCK_BYTE_SIZE 22
+#elif defined(DATA_A_Q5_1)
+#define BLOCK_BYTE_SIZE 24
+#endif
+
+#if defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
+        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
+        uint shift = (iqs & 0x10) >> 2;
+        vui_lo >>= shift;
+        vui_hi >>= shift;
+
+#ifdef DATA_A_Q5_1
+        uint qh = k_packed.k_data_packed16[a_offset + ib].qh;
+#else
+        uint qh = uint(k_packed.k_data_packed16[a_offset + ib].qh[0]) | (uint(k_packed.k_data_packed16[a_offset + ib].qh[1]) << 16);
+#endif
+        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
+
+        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
+#ifdef DATA_A_Q5_1
+        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
+#else
+        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
+#endif
+    } else {
+        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
+        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
+        uint shift = (iqs & 0x10) >> 2;
+        vui_lo >>= shift;
+        vui_hi >>= shift;
+
+#ifdef DATA_A_Q5_1
+        uint qh = v_packed.v_data_packed16[a_offset + ib].qh;
+#else
+        uint qh = uint(v_packed.v_data_packed16[a_offset + ib].qh[0]) | (uint(v_packed.v_data_packed16[a_offset + ib].qh[1]) << 16);
+#endif
+        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
+
+        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
+#ifdef DATA_A_Q5_1
+        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
+#else
+        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
+#endif
+    }
+}
+#endif
+
+
+#if defined(DATA_A_IQ4_NL)
+#define BLOCK_BYTE_SIZE 18
 
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
@@ -119,7 +210,11 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
         vui_lo >>= shift;
         vui_hi >>= shift;
 
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF) - FLOAT_TYPE(8.0f));
+        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
+            kvalues_iq4nl[vui_lo & 0xF],
+            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
+            kvalues_iq4nl[vui_hi & 0xF],
+            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
     } else {
         uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
         uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
@@ -127,11 +222,14 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
         vui_lo >>= shift;
         vui_hi >>= shift;
 
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF) - FLOAT_TYPE(8.0f));
+        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
+            kvalues_iq4nl[vui_lo & 0xF],
+            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
+            kvalues_iq4nl[vui_hi & 0xF],
+            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
     }
 }
 #endif
-
 #if defined(DATA_A_Q8_0)
 #define BLOCK_BYTE_SIZE 34
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
