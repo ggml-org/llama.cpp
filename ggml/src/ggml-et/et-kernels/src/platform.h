@@ -546,4 +546,30 @@ evict_to_l2(const void *addr, uint64_t nlines, uint64_t stride)
     );
 }
 
+// Evict nlines cache lines at stride apart starting at addr from BOTH L1
+// and L2. Uses EvictVA (CSR 0x89F) with dest=10 (L3/DRAM). Guarantees the
+// line is NOT present in L1 or L2 after the operation — subsequent loads
+// will fetch from L3 or DRAM. Needed because both L1 and L2 are incoherent
+// on ET-SoC-1 (L2 is per-shire).
+// Caller must FENCE before and WAIT_CACHEOPS after.
+//
+// NOTE: nlines is encoded in a 4-bit field (max 16). DO NOT pass nlines > 16.
+static inline void __attribute__((always_inline))
+evict_past_l2(const void *addr, uint64_t nlines, uint64_t stride)
+{
+    // dest=10 in bits 59:58, VA in bits 47:6, numlines-1 in bits 3:0
+    uint64_t csr_val = (0x2ULL << 58) |
+                       ((uint64_t)addr & 0xFFFFFFFFFFC0ULL) |
+                       ((nlines - 1) & 0xF);
+    uint64_t x31_val = stride & 0xFFFFFFFFFFC0ULL;
+
+    __asm__ __volatile__(
+        "mv x31, %[x31]\n"
+        "csrw 0x89F, %[val]\n"
+        :
+        : [x31] "r"(x31_val), [val] "r"(csr_val)
+        : "x31", "memory"
+    );
+}
+
 #endif // PLATFORM_H

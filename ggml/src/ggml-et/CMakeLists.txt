@@ -75,6 +75,8 @@ set(KERNELS
 
 set(UBERKERNEL_SUPPORTED_KERNELS
     el_map_f32
+    rms_norm_f32
+    rms_norm_mul_f32
     unary_f32
 )
 
