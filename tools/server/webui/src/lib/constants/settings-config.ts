@@ -8,7 +8,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
-	showThoughtInProgress: false,
+	showThoughtInProgress: true,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,
 	showRawOutputSwitch: false,

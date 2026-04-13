@@ -770,8 +770,7 @@ class ChatStore {
 
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
 
-		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
-		if (agenticConfig.enabled) {
+		{
 			const agenticResult = await agenticStore.runAgenticFlow({
 				conversationId: convId,
 				messages: allMessages,

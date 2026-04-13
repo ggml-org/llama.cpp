@@ -69,6 +69,7 @@ export interface AgenticSession {
 	totalToolCalls: number;
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
+	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
 }
 
 /**

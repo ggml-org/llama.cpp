@@ -8,9 +8,14 @@
 		ChevronLeft,
 		ChevronRight,
 		ListRestart,
-		Sliders
+		Sliders,
+		PencilRuler
 	} from '@lucide/svelte';
-	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
+	import {
+		ChatSettingsFooter,
+		ChatSettingsFields,
+		ChatSettingsToolsTab
+	} from '$lib/components/app';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
 		SETTINGS_SECTION_TITLES,
@@ -35,7 +40,7 @@
 	let { class: className, onSave, initialSection }: Props = $props();
 
 	const settingSections: Array<{
-		fields: SettingsFieldConfig[];
+		fields?: SettingsFieldConfig[];
 		icon: Component;
 		title: SettingsSectionTitle;
 	}> = [
@@ -272,6 +277,10 @@
 					type: SettingsFieldType.INPUT
 				}
 			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.TOOLS,
+			icon: PencilRuler
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.DEVELOPER,
@@ -514,13 +523,15 @@
 		<div class="mx-auto max-w-3xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
-					<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
+					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
 
 						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
 
-					{#if currentSection.fields}
+					{#if currentSection.title === SETTINGS_SECTION_TITLES.TOOLS}
+						<ChatSettingsToolsTab />
+					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<ChatSettingsFields
 								fields={currentSection.fields}

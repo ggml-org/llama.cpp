@@ -25,6 +25,7 @@ import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
+import { permissionsStore, type ToolPermissionDecision } from '$lib/stores/permissions.svelte';
 import { ToolSource } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 import { isAbortError } from '$lib/utils';
@@ -87,7 +88,8 @@ function createDefaultSession(): AgenticSession {
 		currentTurn: 0,
 		totalToolCalls: 0,
 		lastError: null,
-		streamingToolCall: null
+		streamingToolCall: null,
+		pendingPermissionRequest: null
 	};
 }
 
@@ -124,6 +126,12 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 class AgenticStore {
 	private _sessions = $state<Map<string, AgenticSession>>(new Map());
+	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
+	private _pendingPermissions = $state<
+		Map<string, { toolName: string; serverLabel: string } | null>
+	>(new Map());
+	/** Non-reactive: stores resolve functions for pending permission Promises */
+	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
 
 	get isReady(): boolean {
 		return true;
@@ -181,6 +189,20 @@ class AgenticStore {
 		return this.getSession(conversationId).streamingToolCall;
 	}
 
+	pendingPermissionRequest(
+		conversationId: string
+	): { toolName: string; serverLabel: string } | null {
+		return this._pendingPermissions.get(conversationId) ?? null;
+	}
+
+	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
+		const resolver = this._permissionResolvers.get(conversationId);
+		if (resolver) {
+			this._permissionResolvers.delete(conversationId);
+			resolver(decision);
+		}
+	}
+
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
 	}
@@ -207,8 +229,55 @@ class AgenticStore {
 		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
+	private async requestPermission(
+		conversationId: string,
+		toolName: string,
+		serverLabel: string,
+		signal?: AbortSignal
+	): Promise<ToolPermissionDecision> {
+		if (permissionsStore.isAlwaysAllowed(toolName)) {
+			return 'once';
+		}
+
+		this._pendingPermissions.set(conversationId, { toolName, serverLabel });
+
+		return new Promise<ToolPermissionDecision>((resolve) => {
+			if (signal?.aborted) {
+				this._pendingPermissions.set(conversationId, null);
+				resolve('deny');
+				return;
+			}
+
+			this._permissionResolvers.set(conversationId, (decision) => {
+				this._pendingPermissions.set(conversationId, null);
+				if (decision === 'always') {
+					permissionsStore.alwaysAllow(toolName);
+				}
+				resolve(decision);
+			});
+
+			signal?.addEventListener(
+				'abort',
+				() => {
+					const resolver = this._permissionResolvers.get(conversationId);
+					if (resolver) {
+						this._permissionResolvers.delete(conversationId);
+						this._pendingPermissions.set(conversationId, null);
+						resolve('deny');
+					}
+				},
+				{ once: true }
+			);
+		});
+	}
+
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
+
+		// Ensure built-in tools are fetched before checking if agentic is enabled
+		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
+			await toolsStore.fetchBuiltinTools();
+		}
 
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
@@ -220,11 +289,6 @@ class AgenticStore {
 			if (!initialized) {
 				console.log('[AgenticStore] MCP not initialized');
 			}
-		}
-
-		// Ensure built-in tools are fetched
-		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-			await toolsStore.fetchBuiltinTools();
 		}
 
 		const tools = toolsStore.getEnabledToolsForLLM();
@@ -512,37 +576,60 @@ class AgenticStore {
 					return;
 				}
 
-				const toolStartTime = performance.now();
 				const toolName = toolCall.function.name;
+				const serverLabel = toolsStore.getToolServerLabel(toolName);
+
+				// Ask for permission before executing the tool
+				const permission = await this.requestPermission(
+					conversationId,
+					toolName,
+					serverLabel,
+					signal
+				);
+
+				// Yield to allow Svelte to flush the UI update (hide permission dialog)
+				await new Promise((r) => setTimeout(r, 0));
+
+				if (signal?.aborted) {
+					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					return;
+				}
+
+				const toolStartTime = performance.now();
 				const toolSource = toolsStore.getToolSource(toolName);
 
 				let result: string;
 				let toolSuccess = true;
 
-				try {
-					if (toolSource === ToolSource.BUILTIN) {
-						const args = this.parseToolArguments(toolCall.function.arguments);
-						const executionResult = await ToolsService.executeTool(toolName, args, signal);
-
-						result = executionResult.content;
-
-						if (executionResult.isError) toolSuccess = false;
-					} else {
-						const mcpCall: MCPToolCall = {
-							id: toolCall.id,
-							function: { name: toolName, arguments: toolCall.function.arguments }
-						};
-						const executionResult = await mcpStore.executeTool(mcpCall, signal);
-
-						result = executionResult.content;
-					}
-				} catch (error) {
-					if (isAbortError(error)) {
-						onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-						return;
-					}
-					result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+				if (permission === 'deny') {
+					result = 'Tool execution was denied by the user.';
 					toolSuccess = false;
+				} else {
+					try {
+						if (toolSource === ToolSource.BUILTIN) {
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+							result = executionResult.content;
+
+							if (executionResult.isError) toolSuccess = false;
+						} else {
+							const mcpCall: MCPToolCall = {
+								id: toolCall.id,
+								function: { name: toolName, arguments: toolCall.function.arguments }
+							};
+							const executionResult = await mcpStore.executeTool(mcpCall, signal);
+
+							result = executionResult.content;
+						}
+					} catch (error) {
+						if (isAbortError(error)) {
+							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+							return;
+						}
+						result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+						toolSuccess = false;
+					}
 				}
 
 				const toolDurationMs = performance.now() - toolStartTime;
@@ -717,6 +804,14 @@ export function agenticLastError(conversationId: string) {
 
 export function agenticStreamingToolCall(conversationId: string) {
 	return agenticStore.streamingToolCall(conversationId);
+}
+
+export function agenticPendingPermissionRequest(conversationId: string) {
+	return agenticStore.pendingPermissionRequest(conversationId);
+}
+
+export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
+	agenticStore.resolvePermission(conversationId, decision);
 }
 
 export function agenticIsAnyRunning() {

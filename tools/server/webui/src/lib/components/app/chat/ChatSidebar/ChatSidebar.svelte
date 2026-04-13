@@ -17,7 +17,6 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
-	import ChatSidebarFooter from './ChatSidebarFooter.svelte';
 	import { APP_NAME } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
@@ -224,10 +223,6 @@
 				</Sidebar.Menu>
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
-
-		<Sidebar.Footer class="sticky bottom-0 z-10 mt-2 bg-sidebar/50 p-3 backdrop-blur-lg">
-			<ChatSidebarFooter />
-		</Sidebar.Footer>
 	</ScrollArea>
 </div>
 

@@ -41,6 +41,9 @@ class ToolsStore {
 		} catch {
 			throw new Error('Failed to load disabled tools from localStorage');
 		}
+
+		// Initialize builtin tools on startup
+		this.fetchBuiltinTools();
 	}
 
 	private persistDisabledTools(): void {
@@ -331,6 +334,16 @@ class ToolsStore {
 			}
 		}
 		return null;
+	}
+
+	/** Get the display label for the server that owns a given tool (empty string for built-in/custom). */
+	getToolServerLabel(toolName: string): string {
+		for (const entry of this.allTools) {
+			if (entry.definition.function.name === toolName && entry.serverName) {
+				return mcpStore.getServerDisplayName(entry.serverName);
+			}
+		}
+		return '';
 	}
 
 	/** Check if there are any enabled tools available (builtin, MCP, or custom). */

@@ -717,6 +717,11 @@ export { default as ChatSettingsParameterSourceIndicator } from './ChatSettings/
 
 /**
  *
+ */
+export { default as ChatSettingsToolsTab } from './ChatSettings/ChatSettingsToolsTab.svelte';
+
+/**
+ *
  * SIDEBAR
  *
  * The sidebar integrates with ShadCN's sidebar component system

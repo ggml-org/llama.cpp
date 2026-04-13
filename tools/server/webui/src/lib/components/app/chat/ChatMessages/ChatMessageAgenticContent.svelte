@@ -6,7 +6,7 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, Brain } from '@lucide/svelte';
+	import { Wrench, Loader2, Brain, ShieldQuestion } from '@lucide/svelte';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
 	import {
@@ -18,20 +18,57 @@
 	import type { DatabaseMessage } from '$lib/types/database';
 	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
 	import { ChatMessageStatsView } from '$lib/enums';
+	import {
+		agenticPendingPermissionRequest,
+		agenticResolvePermission
+	} from '$lib/stores/agentic.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import * as ButtonGroup from '$lib/components/ui/button-group/index.js';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
 	interface Props {
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
+		isLatestMessage?: boolean;
 		highlightTurns?: boolean;
 	}
 
-	let { message, toolMessages = [], isStreaming = false, highlightTurns = false }: Props = $props();
+	let {
+		message,
+		toolMessages = [],
+		isStreaming = false,
+		isLatestMessage = false,
+		highlightTurns = false
+	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+
+	let permissionDismissed = $state(false);
+
+	const pendingPermission = $derived(
+		isStreaming && isLatestMessage ? agenticPendingPermissionRequest(message.convId) : null
+	);
+
+	// Reset dismissed when pendingPermission changes (new request or cleared)
+	let prevPendingRef: typeof pendingPermission = null;
+	$effect(() => {
+		if (pendingPermission !== prevPendingRef) {
+			prevPendingRef = pendingPermission;
+			if (pendingPermission) {
+				permissionDismissed = false;
+			}
+		}
+	});
+
+	function handlePermission(decision: 'once' | 'always' | 'deny') {
+		permissionDismissed = true;
+		agenticResolvePermission(message.convId, decision);
+	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
@@ -288,6 +325,63 @@
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
+	{/if}
+
+	{#if pendingPermission && !permissionDismissed}
+		<div class="permission-request my-2 rounded-lg border border-border bg-card p-3">
+			<div class="mb-3 flex items-center gap-2 text-sm">
+				<ShieldQuestion class="h-4 w-4 shrink-0 text-muted-foreground" />
+				<span>
+					Allow use of
+					<span class="font-semibold">{pendingPermission.toolName}</span>
+					{#if pendingPermission.serverLabel}
+						from <span class="font-semibold">{pendingPermission.serverLabel}</span>
+					{/if}
+					?
+				</span>
+			</div>
+			<div class="flex flex-wrap items-center gap-2">
+				<DropdownMenu.Root>
+					<ButtonGroup.Root
+						class="overflow-hidden rounded-md bg-foreground text-white shadow-sm dark:bg-secondary dark:text-foreground"
+					>
+						<Button
+							class="rounded-none! shadow-none!"
+							size="sm"
+							onclick={() => handlePermission('once')}
+						>
+							Allow once
+						</Button>
+
+						<ButtonGroup.Separator />
+
+						<DropdownMenu.Trigger>
+							<Button size="sm" class="rounded-none! !ps-2 shadow-none!">
+								<ChevronDown class="h-3.5 w-3.5" />
+							</Button>
+						</DropdownMenu.Trigger>
+					</ButtonGroup.Root>
+
+					<DropdownMenu.Content align="start" class="min-w-[8rem]">
+						<DropdownMenu.Item onclick={() => handlePermission('once')}>
+							Allow once
+						</DropdownMenu.Item>
+						<DropdownMenu.Item onclick={() => handlePermission('always')}>
+							Always allow
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
+
+				<Button
+					variant="destructive"
+					size="sm"
+					class="text-destructive hover:text-destructive"
+					onclick={() => handlePermission('deny')}
+				>
+					Deny
+				</Button>
+			</div>
+		</div>
 	{/if}
 </div>
 
